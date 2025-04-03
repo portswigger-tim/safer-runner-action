@@ -18,6 +18,7 @@ jobs:
     - run: |
         ssh git@github.com || true
         dig portswigger.net
+        sleep 5
     - run: |
         sudo cat /var/log/snort/*
         journalctl -u snort
