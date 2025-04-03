@@ -9,3 +9,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install snort -y
         sudo cat /etc/snort/snort.conf
+        snort -V
+        sudo ls -la /etc/snort
+        sudo systemctl enable snort
+        sudo systemctl start snort
