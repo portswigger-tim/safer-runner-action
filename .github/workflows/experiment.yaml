@@ -2,35 +2,6 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  snort:
-    runs-on: ubuntu-latest
-    steps:
-    - run: |
-        sudo apt-get install snort -y > /dev/null 2>&1
-        sudo tee /etc/snort/snort.debian.conf > /dev/null << EOF
-        DEBIAN_SNORT_STARTUP="boot"
-        DEBIAN_SNORT_HOME_NET="10.0.0.0/8"
-        DEBIAN_SNORT_OPTIONS=""
-        DEBIAN_SNORT_INTERFACE="eth0"
-        DEBIAN_SNORT_SEND_STATS="false"
-        EOF
-        sudo systemctl enable snort > /dev/null 2>&1
-        sudo systemctl start snort
-        sudo systemctl status snort
-    - run: |
-        echo 'alert tcp any any <> any 22 (msg: "SSH Connection Attempts"; sid:9000001; rev:1;)' | sudo tee -a /etc/snort/rules/local.rules
-        echo 'alert udp any any <> any 53 (msg: "DNS Request Detected"; sid:9000000; rev:1;)' | sudo tee -a /etc/snort/rules/local.rules
-        echo 'alert tcp any any -> any 443 (msg:"TLS connection to github.com detected"; content:"github.com"; sid:9000002; rev:1;)' | sudo tee -a /etc/snort/rules/local.rules
-        
-        sudo systemctl reload snort
-
-    - run: |
-        ssh git@github.com || true
-        curl https://github.com
-        dig portswigger.net
-        sleep 5
-    - run: |
-        sudo cat /var/log/snort/*
   iptables:
     runs-on: ubuntu-latest
     steps:
@@ -46,7 +17,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - run: |
-        sudo cat /etc/NetworkManager/NetworkManager.conf
+        sudo apt-get install dnsmasq -y
+        sudo systemctl disable systemd-resolved
+        sudo systemctl stop systemd-resolved
+
+        sudo unlink /etc/resolv.conf
+        sudo tee /etc/resolv.conf > /dev/null <<EOF
+        nameserver 1.1.1.3
+        nameserver 1.0.0.3
+        EOF
+
+        sudo systemctl enable dnsmasq
+        sudo systemctl start dnsmasq
+        sudo cat /etc/dnsmasq.conf
+
     - run: |
         ssh git@github.com || true
         curl https://github.com
