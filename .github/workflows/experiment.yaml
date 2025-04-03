@@ -13,7 +13,7 @@ jobs:
         dig portswigger.net
     - run: |
         grep iptables_output /var/log/syslog
-  unbbound:
+  unbound:
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -47,4 +47,4 @@ jobs:
         curl https://github.com
         dig portswigger.net
     - run: |
-        journalctl -u dnsmasq
+        journalctl -u unbound
