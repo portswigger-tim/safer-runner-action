@@ -19,6 +19,7 @@ jobs:
     - run: |
         sudo apt-get install dnsmasq -y
         
+        sudo mkdir -p /etc/systemd/resolved.conf.d
         sudo tee /etc/systemd/resolved.conf.d/no-stub.conf > /dev/null <<EOF
         [Resolve]
         DNS=127.0.0.1
