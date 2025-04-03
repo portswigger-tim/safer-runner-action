@@ -11,7 +11,7 @@ jobs:
         sudo systemctl enable snort > /dev/null 2>&1
         sudo systemctl start snort
         sudo systemctl status snort
-        sudo cat /etc/init.d/snort
+        sudo cat /etc/snort/snort.debian.conf
     - run: |
         echo "alert tcp any any <> any 22 (msg: “SSH Connection Attempts”; sid:9000001;)" | sudo tee -a /etc/snort/rules/local.rules
         echo "alert udp any any <> any 53 (msg: "DNS Request Detected"; sid:9000000;)" | sudo tee -a /etc/snort/rules/local.rules
