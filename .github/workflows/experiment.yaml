@@ -29,7 +29,7 @@ jobs:
 
         sudo tee -a /etc/unbound/unbound.conf.d/server.conf > /dev/null <<EOF
         server:
-          verbosity: 2
+          verbosity: 4
           log-tag-queryreply: yes
           log-replies: yes
           interface: 127.0.0.1
