@@ -18,22 +18,31 @@ jobs:
     steps:
     - run: |
         sudo apt-get install dnsmasq -y
-        sudo systemctl disable systemd-resolved
-        sudo systemctl stop systemd-resolved
+        
+        sudo tee /etc/systemd/resolved.conf.d/no-stub.conf > /dev/null <<EOF
+        [Resolve]
+        DNS=127.0.0.1
+        DNSSEC=yes
+        DNSStubListener=no
+        EOF
 
         sudo unlink /etc/resolv.conf
         sudo tee /etc/resolv.conf > /dev/null <<EOF
         nameserver 1.1.1.3
         nameserver 1.0.0.3
         EOF
+        sudo systemctl restart systemd-resolved
 
+        sudo tee /etc/dnsmasq.conf > /dev/null <<EOF
+        log-queries
+        EOF
+        
         sudo systemctl enable dnsmasq
         sudo systemctl start dnsmasq
-        sudo cat /etc/dnsmasq.conf
 
     - run: |
         ssh git@github.com || true
         curl https://github.com
         dig portswigger.net
     - run: |
-        true
+        journalctl -u dnsmasq
