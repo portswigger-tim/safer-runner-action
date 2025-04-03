@@ -6,10 +6,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - run: |
-        sudo apt-get update
         sudo apt-get install snort -y
-        sudo cat /etc/snort/snort.conf
-        snort -V
-        sudo ls -la /etc/snort
+        sudo ls -la /etc/snort/rules
         sudo systemctl enable snort
         sudo systemctl start snort
+        sudo systemctl status snort
+
