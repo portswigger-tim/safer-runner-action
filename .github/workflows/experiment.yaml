@@ -38,7 +38,7 @@ jobs:
         sudo systemctl start unbound-resolvconf
         sudo systemctl enable unbound
         sudo systemctl start unbound
-        cst /etc/resolv.conf
+        cat /etc/resolv.conf
     - run: |
         ssh git@github.com || true
         curl -I https://github.com
