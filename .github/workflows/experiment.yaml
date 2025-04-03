@@ -11,4 +11,5 @@ jobs:
         sudo systemctl enable snort
         sudo systemctl start snort
         sudo systemctl status snort
-
+        sudo cat /etc/snort/rules/bad-traffic.rules
+        sudo cat /etc/snort/rules/local.rules
