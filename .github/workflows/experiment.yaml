@@ -15,7 +15,7 @@ jobs:
         sudo systemctl reload snort
 
     - run: |
-        ssh git@github.com
+        ssh git@github.com || true
         dig portswigger.net
     - run: |
         sudo cat /var/log/snort/*
