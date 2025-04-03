@@ -21,6 +21,7 @@ jobs:
         
         sudo systemctl stop systemd-resolved
         sudo systemctl disable systemd-resolved
+        sudo unlink /etc/resolv.conf
 
         sudo tee -a /etc/unbound/unbound.conf.d/server.conf > /dev/null <<EOF
         server:
