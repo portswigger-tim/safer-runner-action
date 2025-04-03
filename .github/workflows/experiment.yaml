@@ -22,13 +22,6 @@ jobs:
         sudo systemctl stop systemd-resolved
         sudo systemctl disable systemd-resolved
 
-        sudo unlink /etc/resolv.conf
-        sudo tee /etc/resolv.conf > /dev/null <<EOF
-        nameserver 127.0.0.1
-        EOF
-
-        cat /etc/unbound/unbound.conf
-
         sudo tee -a /etc/unbound/unbound.conf.d/server.conf > /dev/null <<EOF
         server:
           verbosity: 4
@@ -40,7 +33,8 @@ jobs:
           server=1.1.1.3:853
           server=1.0.0.3:853
         EOF
-        
+
+        sudo systemctl start unbound-resolvconf
         sudo systemctl enable unbound
         sudo systemctl start unbound
 
