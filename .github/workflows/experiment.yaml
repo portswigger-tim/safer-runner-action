@@ -1,0 +1,10 @@
+on:
+  workflow_dispatch: {}
+
+jobs:
+  secure-runner:
+    runs-on: ubuntu-latest
+    steps:
+    - run: |
+        apt-get install snort -y
+        cat /etc/snort/snort.conf
