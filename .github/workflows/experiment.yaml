@@ -8,6 +8,13 @@ jobs:
     - run: |
         ip a sh eth0
         sudo apt-get install snort -y > /dev/null 2>&1
+        sudo tee /etc/snort/snort.debian.conf > /dev/null << EOF
+        DEBIAN_SNORT_STARTUP="boot"
+        DEBIAN_SNORT_HOME_NET="10.0.0.0/8"
+        DEBIAN_SNORT_OPTIONS=""
+        DEBIAN_SNORT_INTERFACE="eth0"
+        DEBIAN_SNORT_SEND_STATS="false"
+        EOF
         sudo systemctl enable snort > /dev/null 2>&1
         sudo systemctl start snort
         sudo systemctl status snort
