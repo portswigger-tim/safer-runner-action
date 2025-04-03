@@ -42,3 +42,14 @@ jobs:
         dig portswigger.net
     - run: |
         grep iptables_output /var/log/syslog
+  dnsmasq:
+    runs-on: ubuntu-latest
+    steps:
+    - run: |
+        sudo cat /etc/NetworkManager/NetworkManager.conf
+    - run: |
+        ssh git@github.com || true
+        curl https://github.com
+        dig portswigger.net
+    - run: |
+        true
