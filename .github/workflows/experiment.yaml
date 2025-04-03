@@ -47,3 +47,5 @@ jobs:
         dig portswigger.net
     - run: |
         journalctl -u unbound
+        sudo cat /var/log/syslog | grep unbound
+
