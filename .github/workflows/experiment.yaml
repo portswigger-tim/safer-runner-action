@@ -10,8 +10,8 @@ jobs:
         sudo systemctl enable snort > /dev/null 2>&1
         sudo systemctl start snort
     - run: |
-        echo "alert tcp any any -> any 22 (msg: “SSH Connection Attempts”; sid:100002; )" | sudo tee -a /etc/snort/rules/local.rules
-        echo "alert udp any any -> any 53 (msg: “DNS Requests”; sid:100003; )" | sudo tee -a /etc/snort/rules/local.rules
+        echo "alert tcp any any <> any 22 (msg: “SSH Connection Attempts”; sid:100002;)" | sudo tee -a /etc/snort/rules/local.rules
+        echo "alert udp any any <> any 53 (msg: "DNS Request Detected"; sid:9000000;)" | sudo tee -a /etc/snort/rules/local.rules
         sudo systemctl reload snort
         sudo cat /etc/snort/rules/local.rules
 
