@@ -6,10 +6,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - run: |
-        sudo apt-get install snort -y
-        sudo ls -la /etc/snort/rules
-        sudo systemctl enable snort
+        sudo apt-get install snort -y > /dev/null 2>&1
+        sudo systemctl enable snort > /dev/null 2>&1
         sudo systemctl start snort
-        sudo systemctl status snort
-        sudo cat /etc/snort/rules/bad-traffic.rules
-        sudo cat /etc/snort/rules/local.rules
+    - run: |
+        echo "alert tcp $HOME_NET any -> any 22 (msg: “SSH Connection Attempts”; sid:100002; )" | sudo tee -a /etc/snort/rules/local.rules
+        echo "alert udp $HOME_NET any -> any 53 (msg: “DNS Requests”; sid:100002; )" | sudo tee -a /etc/snort/rules/local.rules
+        sudo systemctl reload snort
+
+    - run: |
+        ssh git@github.com
+        dig portswigger.net
+    - run: |
+        sudo cat /var/log/snort/*
+
