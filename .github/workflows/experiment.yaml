@@ -6,7 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - run: |
-        ip a
+        ip a sh eth0
         sudo apt-get install snort -y > /dev/null 2>&1
         sudo systemctl enable snort > /dev/null 2>&1
         sudo systemctl start snort
