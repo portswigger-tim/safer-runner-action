@@ -19,4 +19,5 @@ jobs:
         dig portswigger.net
     - run: |
         sudo cat /var/log/snort/*
+        journalctl -u snort
 
