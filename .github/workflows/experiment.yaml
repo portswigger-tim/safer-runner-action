@@ -27,6 +27,8 @@ jobs:
         nameserver 127.0.0.1
         EOF
 
+        cat /etc/unbound/unbound.conf
+
         sudo tee -a /etc/unbound/unbound.conf.d/server.conf > /dev/null <<EOF
         server:
           verbosity: 4
@@ -44,7 +46,7 @@ jobs:
 
     - run: |
         ssh git@github.com || true
-        curl https://github.com
+        curl -I https://github.com
         dig portswigger.net
     - run: |
         journalctl -u unbound
