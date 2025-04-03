@@ -2,7 +2,7 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  secure-runner:
+  snort:
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -31,4 +31,14 @@ jobs:
         sleep 5
     - run: |
         sudo cat /var/log/snort/*
-
+  iptables:
+    runs-on: ubuntu-latest
+    steps:
+    - run: |
+        sudo iptables -A OUTPUT -m state --state NEW -j LOG --log-prefix='iptables_output'
+    - run: |
+        ssh git@github.com || true
+        curl https://github.com
+        dig portswigger.net
+    - run: |
+        grep iptables_output /var/log/syslog
