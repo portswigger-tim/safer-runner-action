@@ -35,8 +35,6 @@ jobs:
           interface: 127.0.0.1
           access-control: 127.0.0.1/24 allow
           prefetch: yes
-          server=1.1.1.3:853
-          server=1.0.0.3:853
         EOF
 
         sudo systemctl enable unbound
