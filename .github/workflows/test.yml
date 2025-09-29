@@ -191,15 +191,24 @@ jobs:
       - name: Final security audit
         run: |
           echo "=== Final Security Audit ==="
+          echo "Network Interfaces:"
+          ip link show
+
+          echo "Routing Table:"
+          ip route show
+
+          echo "Default Gateway Interface:"
+          ip route get 8.8.8.8 | grep dev
+
           echo "IPTables rules:"
           sudo iptables -L OUTPUT -n -v | head -20
-          
+
           echo "Active IPSets:"
           sudo ipset list github | head -10 || echo "GitHub ipset empty"
           sudo ipset list user | head -10 || echo "User ipset empty"
-          
+
           echo "DNS Configuration:"
           cat /etc/resolv.conf
-          
+
           echo "DNSMasq status:"
           sudo systemctl status dnsmasq --no-pager -l
