@@ -249,6 +249,13 @@ jobs:
         with:
           mode: 'analyze'
           allowed-domains: 'httpbin.org'
+     
+      - name: Start Falco
+        uses: falcosecurity/falco-actions/start@c44e5c23b3cc1cb0a90e69cee21f14400207f818
+        with:
+          mode: live
+          falco-version: '0.39.0'
+          verbose: true
 
       - name: Verify baseline was captured
         run: |
@@ -316,57 +323,6 @@ jobs:
 
           echo "File was tampered with - post-action should detect this!"
 
-      - name: Check iptables rules
-        run: |
-          echo "=== Current iptables rules ==="
-          sudo iptables -L OUTPUT -n --line-numbers | head -20
-
-          echo "=== IPSet contents ==="
-          sudo ipset list github | head -10 || echo "GitHub ipset is empty"
-          sudo ipset list user | head -10 || echo "User ipset is empty"
-
-      - name: Verify baseline integrity (should pass before tampering)
-        run: |
-          echo "=== Manual integrity check ==="
-
-          # Build our validation module for testing
-          cd ${{ github.workspace }}
-          npm run build > /dev/null 2>&1
-
-          # Create a simple test script
-          cat > test-integrity.js << 'EOF'
-          const { SystemValidator } = require('./lib/validation.js');
-
-          async function testIntegrity() {
-            try {
-              const validator = new SystemValidator();
-              console.log('Testing system integrity validation...');
-              const result = await validator.verifyAgainstBaseline();
-              console.log('Validation result:', result ? '✅ PASSED' : '❌ FAILED');
-
-              console.log('\nGenerating validation report...');
-              const report = await validator.generateValidationReport();
-              console.log('Report preview (first 500 chars):');
-              console.log(report.substring(0, 500) + '...');
-
-              if (!result) {
-                console.log('❌ Tampering detected as expected!');
-                process.exit(0); // This is expected due to our intentional modification
-              } else {
-                console.log('⚠️  No tampering detected - unexpected!');
-                process.exit(1);
-              }
-            } catch (error) {
-              console.error('Error during integrity test:', error);
-              process.exit(1);
-            }
-          }
-
-          testIntegrity();
-          EOF
-
-          node test-integrity.js
-
       - name: Check system logs for validation activity
         if: always()
         run: |
@@ -387,3 +343,9 @@ jobs:
           echo ""
           echo "Check the job summary below for the System Integrity Validation Report!"
           echo "It should show ❌ Tampered status for /etc/dnsmasq.conf"
+
+      - name: Stop Falco
+        uses: falcosecurity/falco-actions/stop@c44e5c23b3cc1cb0a90e69cee21f14400207f818
+        with:
+          mode: live
+          verbose: true
