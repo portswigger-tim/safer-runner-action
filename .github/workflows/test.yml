@@ -126,10 +126,26 @@ jobs:
 
   test-edge-cases:
     name: Test Edge Cases
-    runs-on: ubuntu-latest  
+    runs-on: ubuntu-latest
+    services:
+      nginx:
+        image: nginx:alpine
+        ports:
+          - 8080:80
+        options: >-
+          --health-cmd "curl -f http://localhost:80 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 3
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      
+      - name: Verify nginx service is ready
+        run: |
+          echo "Waiting for nginx service to be ready..."
+          timeout 30 bash -c 'until curl -f http://127.0.0.1:8080 > /dev/null 2>&1; do sleep 1; done'
+          echo "Nginx service is ready!"
       
       - name: Apply Safer Runner Action (Enforce Mode)
         uses: ./
@@ -153,8 +169,11 @@ jobs:
       
       - name: Test localhost access
         run: |
-          echo "Testing localhost access..."
-          curl -I http://127.0.0.1:8080 || echo "Localhost failed (expected - no service running)"
+          echo "Testing localhost access to nginx service..."
+          curl -I http://127.0.0.1:8080 || { echo "Localhost nginx failed"; exit 1; }
+          
+          echo "Testing localhost access to different port (should fail)..."
+          timeout 5 curl -I http://127.0.0.1:9999 && echo "ERROR: Unexpected service responded!" || echo "SUCCESS: No service on port 9999 as expected"
       
       - name: Final security audit
         run: |
