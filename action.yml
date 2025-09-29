@@ -1,0 +1,244 @@
+name: 'Safer Runner Action'
+description: 'Add network security layer with DNS filtering and iptables rules to prevent communication with malicious domains'
+author: 'PortSwigger'
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  mode:
+    description: 'Operation mode: "analyze" to log traffic without blocking, "enforce" to block unauthorized domains'
+    required: false
+    default: 'analyze'
+  allowed-domains:
+    description: 'Space-separated list of additional domains to allow (beyond GitHub required domains)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y dnsmasq ipset
+
+    - name: Configure iptables rules
+      shell: bash
+      run: |
+        # Allow established and related connections
+        sudo iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        
+        # Allow Azure metadata service (required for GitHub Actions)
+        sudo iptables -A OUTPUT -o eth0 -d 168.63.129.16 -j ACCEPT
+        sudo iptables -A OUTPUT -o eth0 -d 169.254.169.254 -j ACCEPT
+        
+        # Allow localhost traffic
+        sudo iptables -A OUTPUT -o lo -s 127.0.0.1 -d 127.0.0.1 -j ACCEPT
+        
+        # Log processing for debugging
+        sudo iptables -A OUTPUT -j LOG --log-prefix='Processing: '
+        
+        # Create ipset for GitHub Actions required domains
+        sudo ipset create gha hash:ip
+        sudo iptables -A OUTPUT -m set --match-set gha dst -j LOG --log-prefix='GitHub-Allow: '
+        sudo iptables -A OUTPUT -m set --match-set gha dst -j ACCEPT
+        
+        # Create ipset for allowed allowed domains
+        sudo ipset create allowed hash:ip
+        sudo iptables -A OUTPUT -m set --match-set allowed dst -j LOG --log-prefix='Custom-Allow: '
+        sudo iptables -A OUTPUT -m set --match-set allowed dst -j ACCEPT
+
+    - name: Configure DNS filtering
+      shell: bash
+      run: |
+        # Configure systemd-resolved to use our DNS server
+        sudo mkdir -p /etc/systemd/resolved.conf.d
+        sudo tee /etc/systemd/resolved.conf.d/no-stub.conf > /dev/null <<EOF
+        [Resolve]
+        DNS=127.0.0.1
+        DNSSEC=yes
+        DNSStubListener=no
+        EOF
+        
+        # Update resolv.conf to use localhost
+        sudo unlink /etc/resolv.conf
+        sudo tee /etc/resolv.conf > /dev/null <<EOF
+        nameserver 127.0.0.1
+        EOF
+
+    - name: Configure DNSMasq
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        ALLOWED_DOMAINS: ${{ inputs.allowed-domains }}
+        DNS_SERVER: '9.9.9.9'
+      run: |
+        # Base dnsmasq configuration
+        sudo tee /etc/dnsmasq.conf > /dev/null <<EOF
+        # Enable query logging for summary generation
+        log-queries=extra
+        
+        EOF
+        
+        # Configure DNS policy based on mode
+        if [ "$MODE" = "enforce" ]; then
+          # NXDOMAIN all unlisted DNS (default deny)
+          echo "server=" | sudo tee -a /etc/dnsmasq.conf
+        else
+          # Analyze mode: allow all DNS queries to go through
+          echo "server=/$DNS_SERVER" | sudo tee -a /etc/dnsmasq.conf
+        fi
+        
+        # Add configuration for allowed domains
+        sudo tee -a /etc/dnsmasq.conf > /dev/null <<EOF
+        
+        # Required GitHub Actions domains - Essential Operations
+        server=/github.com/$DNS_SERVER
+        ipset=/github.com/gha
+        
+        server=/actions.githubusercontent.com/$DNS_SERVER  
+        ipset=/actions.githubusercontent.com/gha
+        
+        server=/api.github.com/$DNS_SERVER
+        ipset=/api.github.com/gha
+        
+        # Downloading Actions
+        server=/codeload.github.com/$DNS_SERVER
+        ipset=/codeload.github.com/gha
+        
+        server=/pkg.actions.githubusercontent.com/$DNS_SERVER
+        ipset=/pkg.actions.githubusercontent.com/gha
+        
+        # Publishing & Container Registry
+        server=/ghcr.io/$DNS_SERVER
+        ipset=/ghcr.io/gha
+        
+        # Artifact Upload/Download
+        server=/results-receiver.actions.githubusercontent.com/$DNS_SERVER
+        ipset=/results-receiver.actions.githubusercontent.com/gha
+        
+        # GitHub Actions specific Azure blob storage accounts (from GitHub API)
+        server=/productionresultssa0.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa0.blob.core.windows.net/gha
+        server=/productionresultssa1.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa1.blob.core.windows.net/gha
+        server=/productionresultssa2.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa2.blob.core.windows.net/gha
+        server=/productionresultssa3.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa3.blob.core.windows.net/gha
+        server=/productionresultssa4.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa4.blob.core.windows.net/gha
+        server=/productionresultssa5.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa5.blob.core.windows.net/gha
+        server=/productionresultssa6.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa6.blob.core.windows.net/gha
+        server=/productionresultssa7.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa7.blob.core.windows.net/gha
+        server=/productionresultssa8.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa8.blob.core.windows.net/gha
+        server=/productionresultssa9.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa9.blob.core.windows.net/gha
+        server=/productionresultssa10.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa10.blob.core.windows.net/gha
+        server=/productionresultssa11.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa11.blob.core.windows.net/gha
+        server=/productionresultssa12.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa12.blob.core.windows.net/gha
+        server=/productionresultssa13.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa13.blob.core.windows.net/gha
+        server=/productionresultssa14.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa14.blob.core.windows.net/gha
+        server=/productionresultssa15.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa15.blob.core.windows.net/gha
+        server=/productionresultssa16.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa16.blob.core.windows.net/gha
+        server=/productionresultssa17.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa17.blob.core.windows.net/gha
+        server=/productionresultssa18.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa18.blob.core.windows.net/gha
+        server=/productionresultssa19.blob.core.windows.net/$DNS_SERVER
+        ipset=/productionresultssa19.blob.core.windows.net/gha
+        
+        # Runner Version Updates
+        server=/objects.githubusercontent.com/$DNS_SERVER
+        ipset=/objects.githubusercontent.com/gha
+        
+        server=/objects-origin.githubusercontent.com/$DNS_SERVER
+        ipset=/objects-origin.githubusercontent.com/gha
+        
+        server=/github-releases.githubusercontent.com/$DNS_SERVER
+        ipset=/github-releases.githubusercontent.com/gha
+        
+        server=/github-registry-files.githubusercontent.com/$DNS_SERVER
+        ipset=/github-registry-files.githubusercontent.com/gha
+        
+        # Package Management
+        server=/pkg.github.com/$DNS_SERVER
+        ipset=/pkg.github.com/gha
+        
+        server=/pkg-containers.githubusercontent.com/$DNS_SERVER
+        ipset=/pkg-containers.githubusercontent.com/gha
+        
+        # Git Large File Storage
+        server=/github-cloud.githubusercontent.com/$DNS_SERVER
+        ipset=/github-cloud.githubusercontent.com/gha
+        
+        server=/github-cloud.s3.amazonaws.com/$DNS_SERVER
+        ipset=/github-cloud.s3.amazonaws.com/gha
+        
+        # Additional Required Services
+        server=/dependabot-actions.githubapp.com/$DNS_SERVER
+        ipset=/dependabot-actions.githubapp.com/gha
+        
+        server=/release-assets.githubusercontent.com/$DNS_SERVER
+        ipset=/release-assets.githubusercontent.com/gha
+        
+        server=/api.snapcraft.io/$DNS_SERVER
+        ipset=/api.snapcraft.io/gha
+        EOF
+        
+        # Add custom allowed domains if provided
+        if [ -n "$ALLOWED_DOMAINS" ]; then
+          for domain in $ALLOWED_DOMAINS; do
+            if [ -n "$domain" ]; then
+              echo "server=/$domain/$DNS_SERVER" | sudo tee -a /etc/dnsmasq.conf
+              echo "ipset=/$domain/allowed" | sudo tee -a /etc/dnsmasq.conf
+            fi
+          done
+        fi
+
+    - name: Start services
+      shell: bash
+      env:
+        DNS_SERVER: '9.9.9.9'
+      run: |
+        # Restart systemd-resolved and start dnsmasq
+        sudo systemctl restart systemd-resolved
+        sudo systemctl enable dnsmasq
+        sudo systemctl start dnsmasq
+        
+        # Allow DNS traffic to our upstream server
+        sudo iptables -A OUTPUT -o eth0 -d "$DNS_SERVER" -p udp --dport 53 -m owner --uid-owner $(id -u dnsmasq) -j ACCEPT
+
+    - name: Finalize security rules
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        if [ "$MODE" = "enforce" ]; then
+          # Log dropped packets for debugging
+          sudo iptables -A OUTPUT -j LOG --log-prefix='Dropped: '
+          
+          # DEFAULT DENY: Drop all other outbound traffic not explicitly allowed
+          sudo iptables -A OUTPUT -j DROP
+        else
+          # Analyze mode: allow DNS traffic but log it
+          sudo iptables -A OUTPUT -p udp --dport 53 -j LOG --log-prefix='DNS-Analyze: '
+          sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+          
+          # Log other traffic for analysis but allow it
+          sudo iptables -A OUTPUT -j LOG --log-prefix='Allow-Analyze: '
+          sudo iptables -A OUTPUT -j ACCEPT
+        fi
