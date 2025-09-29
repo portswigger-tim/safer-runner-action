@@ -88,7 +88,7 @@ runs:
           echo "server=" | sudo tee -a /etc/dnsmasq.conf
         else
           # Analyze mode: allow all DNS queries to go through
-          echo "server=/$DNS_SERVER" | sudo tee -a /etc/dnsmasq.conf
+          echo "server=$DNS_SERVER" | sudo tee -a /etc/dnsmasq.conf
         fi
         
         # Add configuration for allowed domains
