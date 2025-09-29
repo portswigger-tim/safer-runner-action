@@ -174,7 +174,7 @@ jobs:
           timeout 5 dig localhost || { echo "Localhost DNS resolution failed"; exit 1; }
           
           echo "Testing localhost access to nginx service..."
-          timeout 5 curl -I http://127.0.0.1:8080 || { echo "Localhost nginx failed"; exit 1; }
+          timeout 5 curl -I http://127.0.0.1:${{ job.services.nginx.ports['8080'] }} || { echo "Localhost nginx failed"; exit 1; }
           
           echo "Testing localhost access to different port (should fail)..."
           timeout 5 curl -I http://127.0.0.1:9999 && echo "ERROR: Unexpected service responded!" || echo "SUCCESS: No service on port 9999 as expected"
@@ -195,8 +195,8 @@ jobs:
           sudo iptables -L OUTPUT -n -v | head -20
           
           echo "Active IPSets:"
-          sudo ipset list gha | head -10 || echo "GHA ipset empty"
-          sudo ipset list allowed | head -10 || echo "Allowed ipset empty"
+          sudo ipset list github | head -10 || echo "GitHub ipset empty"
+          sudo ipset list user | head -10 || echo "User ipset empty"
           
           echo "DNS Configuration:"
           cat /etc/resolv.conf

@@ -41,14 +41,14 @@ runs:
         sudo iptables -A OUTPUT -j LOG --log-prefix='Processing: '
         
         # Create ipset for GitHub Actions required domains
-        sudo ipset create gha hash:ip
-        sudo iptables -A OUTPUT -m set --match-set gha dst -j LOG --log-prefix='GitHub-Allow: '
-        sudo iptables -A OUTPUT -m set --match-set gha dst -j ACCEPT
+        sudo ipset create github hash:ip
+        sudo iptables -A OUTPUT -m set --match-set github dst -j LOG --log-prefix='GitHub-Allow: '
+        sudo iptables -A OUTPUT -m set --match-set github dst -j ACCEPT
         
-        # Create ipset for allowed allowed domains
-        sudo ipset create allowed hash:ip
-        sudo iptables -A OUTPUT -m set --match-set allowed dst -j LOG --log-prefix='Custom-Allow: '
-        sudo iptables -A OUTPUT -m set --match-set allowed dst -j ACCEPT
+        # Create ipset for user allowed domains
+        sudo ipset create user hash:ip
+        sudo iptables -A OUTPUT -m set --match-set user dst -j LOG --log-prefix='User-Allow: '
+        sudo iptables -A OUTPUT -m set --match-set user dst -j ACCEPT
 
     - name: Configure DNS filtering
       shell: bash
@@ -96,107 +96,107 @@ runs:
         
         # Required GitHub Actions domains - Essential Operations
         server=/github.com/$DNS_SERVER
-        ipset=/github.com/gha
+        ipset=/github.com/github
         
         server=/actions.githubusercontent.com/$DNS_SERVER  
-        ipset=/actions.githubusercontent.com/gha
+        ipset=/actions.githubusercontent.com/github
         
         server=/api.github.com/$DNS_SERVER
-        ipset=/api.github.com/gha
+        ipset=/api.github.com/github
         
         # Downloading Actions
         server=/codeload.github.com/$DNS_SERVER
-        ipset=/codeload.github.com/gha
+        ipset=/codeload.github.com/github
         
         server=/pkg.actions.githubusercontent.com/$DNS_SERVER
-        ipset=/pkg.actions.githubusercontent.com/gha
+        ipset=/pkg.actions.githubusercontent.com/github
         
         # Publishing & Container Registry
         server=/ghcr.io/$DNS_SERVER
-        ipset=/ghcr.io/gha
+        ipset=/ghcr.io/github
         
         # Artifact Upload/Download
         server=/results-receiver.actions.githubusercontent.com/$DNS_SERVER
-        ipset=/results-receiver.actions.githubusercontent.com/gha
+        ipset=/results-receiver.actions.githubusercontent.com/github
         
         # GitHub Actions specific Azure blob storage accounts (from GitHub API)
         server=/productionresultssa0.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa0.blob.core.windows.net/gha
+        ipset=/productionresultssa0.blob.core.windows.net/github
         server=/productionresultssa1.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa1.blob.core.windows.net/gha
+        ipset=/productionresultssa1.blob.core.windows.net/github
         server=/productionresultssa2.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa2.blob.core.windows.net/gha
+        ipset=/productionresultssa2.blob.core.windows.net/github
         server=/productionresultssa3.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa3.blob.core.windows.net/gha
+        ipset=/productionresultssa3.blob.core.windows.net/github
         server=/productionresultssa4.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa4.blob.core.windows.net/gha
+        ipset=/productionresultssa4.blob.core.windows.net/github
         server=/productionresultssa5.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa5.blob.core.windows.net/gha
+        ipset=/productionresultssa5.blob.core.windows.net/github
         server=/productionresultssa6.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa6.blob.core.windows.net/gha
+        ipset=/productionresultssa6.blob.core.windows.net/github
         server=/productionresultssa7.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa7.blob.core.windows.net/gha
+        ipset=/productionresultssa7.blob.core.windows.net/github
         server=/productionresultssa8.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa8.blob.core.windows.net/gha
+        ipset=/productionresultssa8.blob.core.windows.net/github
         server=/productionresultssa9.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa9.blob.core.windows.net/gha
+        ipset=/productionresultssa9.blob.core.windows.net/github
         server=/productionresultssa10.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa10.blob.core.windows.net/gha
+        ipset=/productionresultssa10.blob.core.windows.net/github
         server=/productionresultssa11.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa11.blob.core.windows.net/gha
+        ipset=/productionresultssa11.blob.core.windows.net/github
         server=/productionresultssa12.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa12.blob.core.windows.net/gha
+        ipset=/productionresultssa12.blob.core.windows.net/github
         server=/productionresultssa13.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa13.blob.core.windows.net/gha
+        ipset=/productionresultssa13.blob.core.windows.net/github
         server=/productionresultssa14.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa14.blob.core.windows.net/gha
+        ipset=/productionresultssa14.blob.core.windows.net/github
         server=/productionresultssa15.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa15.blob.core.windows.net/gha
+        ipset=/productionresultssa15.blob.core.windows.net/github
         server=/productionresultssa16.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa16.blob.core.windows.net/gha
+        ipset=/productionresultssa16.blob.core.windows.net/github
         server=/productionresultssa17.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa17.blob.core.windows.net/gha
+        ipset=/productionresultssa17.blob.core.windows.net/github
         server=/productionresultssa18.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa18.blob.core.windows.net/gha
+        ipset=/productionresultssa18.blob.core.windows.net/github
         server=/productionresultssa19.blob.core.windows.net/$DNS_SERVER
-        ipset=/productionresultssa19.blob.core.windows.net/gha
+        ipset=/productionresultssa19.blob.core.windows.net/github
         
         # Runner Version Updates
         server=/objects.githubusercontent.com/$DNS_SERVER
-        ipset=/objects.githubusercontent.com/gha
+        ipset=/objects.githubusercontent.com/github
         
         server=/objects-origin.githubusercontent.com/$DNS_SERVER
-        ipset=/objects-origin.githubusercontent.com/gha
+        ipset=/objects-origin.githubusercontent.com/github
         
         server=/github-releases.githubusercontent.com/$DNS_SERVER
-        ipset=/github-releases.githubusercontent.com/gha
+        ipset=/github-releases.githubusercontent.com/github
         
         server=/github-registry-files.githubusercontent.com/$DNS_SERVER
-        ipset=/github-registry-files.githubusercontent.com/gha
+        ipset=/github-registry-files.githubusercontent.com/github
         
         # Package Management
         server=/pkg.github.com/$DNS_SERVER
-        ipset=/pkg.github.com/gha
+        ipset=/pkg.github.com/github
         
         server=/pkg-containers.githubusercontent.com/$DNS_SERVER
-        ipset=/pkg-containers.githubusercontent.com/gha
+        ipset=/pkg-containers.githubusercontent.com/github
         
         # Git Large File Storage
         server=/github-cloud.githubusercontent.com/$DNS_SERVER
-        ipset=/github-cloud.githubusercontent.com/gha
+        ipset=/github-cloud.githubusercontent.com/github
         
         server=/github-cloud.s3.amazonaws.com/$DNS_SERVER
-        ipset=/github-cloud.s3.amazonaws.com/gha
+        ipset=/github-cloud.s3.amazonaws.com/github
         
         # Additional Required Services
         server=/dependabot-actions.githubapp.com/$DNS_SERVER
-        ipset=/dependabot-actions.githubapp.com/gha
+        ipset=/dependabot-actions.githubapp.com/github
         
         server=/release-assets.githubusercontent.com/$DNS_SERVER
-        ipset=/release-assets.githubusercontent.com/gha
+        ipset=/release-assets.githubusercontent.com/github
         
         server=/api.snapcraft.io/$DNS_SERVER
-        ipset=/api.snapcraft.io/gha
+        ipset=/api.snapcraft.io/github
         EOF
         
         # Add custom allowed domains if provided
@@ -204,7 +204,7 @@ runs:
           for domain in $ALLOWED_DOMAINS; do
             if [ -n "$domain" ]; then
               echo "server=/$domain/$DNS_SERVER" | sudo tee -a /etc/dnsmasq.conf
-              echo "ipset=/$domain/allowed" | sudo tee -a /etc/dnsmasq.conf
+              echo "ipset=/$domain/user" | sudo tee -a /etc/dnsmasq.conf
             fi
           done
         fi
@@ -229,14 +229,11 @@ runs:
       run: |
         if [ "$MODE" = "enforce" ]; then
           # Log dropped packets for debugging
-          sudo iptables -A OUTPUT -j LOG --log-prefix='Dropped: '
+          sudo iptables -A OUTPUT -j LOG --log-prefix='Drop-Enforce: '
           
           # DEFAULT DENY: Drop all other outbound traffic not explicitly allowed
           sudo iptables -A OUTPUT -j DROP
         else
-          # Analyze mode: allow DNS traffic but log it
-          sudo iptables -A OUTPUT -p udp --dport 53 -j LOG --log-prefix='DNS-Analyze: '
-          sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
           
           # Log other traffic for analysis but allow it
           sudo iptables -A OUTPUT -j LOG --log-prefix='Allow-Analyze: '
