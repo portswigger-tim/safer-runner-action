@@ -236,3 +236,154 @@ jobs:
 
           echo "DNSMasq status:"
           sudo systemctl status dnsmasq --no-pager -l
+
+  test-system-integrity:
+    name: Test System Integrity Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Apply Safer Runner Action (Analyze Mode)
+        uses: ./
+        with:
+          mode: 'analyze'
+          allowed-domains: 'httpbin.org'
+
+      - name: Verify baseline was captured
+        run: |
+          echo "=== Verifying baseline capture ==="
+          if [ -f /tmp/safer-runner-validation-state.json ]; then
+            echo "✅ Baseline file exists"
+            echo "📋 Baseline contents:"
+            sudo cat /tmp/safer-runner-validation-state.json | jq '.' || echo "Not valid JSON"
+          else
+            echo "❌ ERROR: Baseline file not found!"
+            exit 1
+          fi
+
+      - name: Test normal operation (no tampering)
+        run: |
+          echo "=== Testing normal operation ==="
+          echo "Making allowed network requests..."
+          curl -I https://api.github.com || echo "GitHub API request failed"
+          curl -I https://httpbin.org/get || echo "Custom domain request failed"
+
+      - name: Verify system files exist
+        run: |
+          echo "=== Verifying critical system files ==="
+          echo "Checking /etc/dnsmasq.conf..."
+          if [ -f /etc/dnsmasq.conf ]; then
+            echo "✅ dnsmasq.conf exists"
+            echo "First 10 lines:"
+            sudo head -10 /etc/dnsmasq.conf
+          else
+            echo "❌ ERROR: dnsmasq.conf missing!"
+            exit 1
+          fi
+
+          echo "Checking /etc/resolv.conf..."
+          if [ -f /etc/resolv.conf ]; then
+            echo "✅ resolv.conf exists"
+            cat /etc/resolv.conf
+          else
+            echo "❌ ERROR: resolv.conf missing!"
+            exit 1
+          fi
+
+          echo "Checking systemd resolved config..."
+          if [ -f /etc/systemd/resolved.conf.d/no-stub.conf ]; then
+            echo "✅ no-stub.conf exists"
+            sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
+          else
+            echo "❌ ERROR: no-stub.conf missing!"
+            exit 1
+          fi
+
+      - name: Test tampering detection (simulate file modification)
+        run: |
+          echo "=== Testing tampering detection ==="
+
+          # Get original checksum for comparison
+          echo "Original dnsmasq.conf checksum:"
+          sudo sha256sum /etc/dnsmasq.conf
+
+          # Simulate tampering by appending to dnsmasq.conf
+          echo "# MALICIOUS MODIFICATION FOR TESTING" | sudo tee -a /etc/dnsmasq.conf
+
+          echo "Modified dnsmasq.conf checksum:"
+          sudo sha256sum /etc/dnsmasq.conf
+
+          echo "File was tampered with - post-action should detect this!"
+
+      - name: Check iptables rules
+        run: |
+          echo "=== Current iptables rules ==="
+          sudo iptables -L OUTPUT -n --line-numbers | head -20
+
+          echo "=== IPSet contents ==="
+          sudo ipset list github | head -10 || echo "GitHub ipset is empty"
+          sudo ipset list user | head -10 || echo "User ipset is empty"
+
+      - name: Verify baseline integrity (should pass before tampering)
+        run: |
+          echo "=== Manual integrity check ==="
+
+          # Build our validation module for testing
+          cd ${{ github.workspace }}
+          npm run build > /dev/null 2>&1
+
+          # Create a simple test script
+          cat > test-integrity.js << 'EOF'
+          const { SystemValidator } = require('./lib/validation.js');
+
+          async function testIntegrity() {
+            try {
+              const validator = new SystemValidator();
+              console.log('Testing system integrity validation...');
+              const result = await validator.verifyAgainstBaseline();
+              console.log('Validation result:', result ? '✅ PASSED' : '❌ FAILED');
+
+              console.log('\nGenerating validation report...');
+              const report = await validator.generateValidationReport();
+              console.log('Report preview (first 500 chars):');
+              console.log(report.substring(0, 500) + '...');
+
+              if (!result) {
+                console.log('❌ Tampering detected as expected!');
+                process.exit(0); // This is expected due to our intentional modification
+              } else {
+                console.log('⚠️  No tampering detected - unexpected!');
+                process.exit(1);
+              }
+            } catch (error) {
+              console.error('Error during integrity test:', error);
+              process.exit(1);
+            }
+          }
+
+          testIntegrity();
+          EOF
+
+          node test-integrity.js
+
+      - name: Check system logs for validation activity
+        if: always()
+        run: |
+          echo "=== System Integrity Validation Logs ==="
+          sudo grep -E 'Capturing|Verifying|integrity|baseline|checksum' /var/log/syslog | tail -20 || echo "No validation logs found in syslog"
+
+          echo "=== Application Logs ==="
+          # Look for our validation messages in GitHub Actions logs
+          echo "Validation should appear in the action output above"
+
+      - name: Final validation test
+        run: |
+          echo "=== Final validation summary ==="
+          echo "✅ Baseline capture: Should be completed during action setup"
+          echo "🔍 Tampering detection: Intentionally modified dnsmasq.conf"
+          echo "📊 Validation report: Should show tampering in job summary"
+          echo "🚨 Expected result: Post-action should detect and report tampering"
+          echo ""
+          echo "Check the job summary below for the System Integrity Validation Report!"
+          echo "It should show ❌ Tampered status for /etc/dnsmasq.conf"
