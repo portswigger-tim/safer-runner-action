@@ -185,7 +185,7 @@ function parseDnsLogLine(line) {
         };
     }
     // Parse NXDOMAIN responses (blocked domains)
-    const nxdomainMatch = line.match(/dnsmasq.*reply ([^\s]+) is NXDOMAIN/);
+    const nxdomainMatch = line.match(/dnsmasq.*(?:reply|config) ([^\s]+) is NXDOMAIN/);
     if (nxdomainMatch) {
         return {
             domain: nxdomainMatch[1],
@@ -292,7 +292,8 @@ async function generateJobSummary(connections, dnsResolutions) {
         summary += `|--------|----|---------|\n`;
         for (const dns of dnsResolutions) {
             const statusIcon = getDnsStatusIcon(dns.status);
-            summary += `| ${dns.domain} | ${dns.ip} | ${statusIcon} ${dns.status} |\n`;
+            const formattedIp = dns.ip.includes(', ') ? dns.ip.replace(/, /g, '<br/>') : dns.ip;
+            summary += `| ${dns.domain} | ${formattedIp} | ${statusIcon} ${dns.status} |\n`;
         }
         summary += `\n`;
     }
