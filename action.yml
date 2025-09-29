@@ -234,52 +234,8 @@ runs:
           # DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
           sudo iptables -A OUTPUT -o eth0 -j DROP
         else
-
+          
           # Log other traffic for analysis but allow it
           sudo iptables -A OUTPUT -j LOG --log-prefix='Allow-Analyze: '
           sudo iptables -A OUTPUT -j ACCEPT
         fi
-
-    - name: Generate Network Access Summary
-      shell: bash
-      run: |
-        echo "## Network Access Provenance" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Domain/IP | Port | Status |" >> $GITHUB_STEP_SUMMARY
-        echo "|-----------|------|--------|" >> $GITHUB_STEP_SUMMARY
-
-        # Parse GitHub allowed connections
-        sudo grep "GitHub-Allow: " /var/log/syslog 2>/dev/null | while read -r line; do
-          if [[ $line =~ DST=([0-9.]+) ]]; then
-            ip="${BASH_REMATCH[1]}"
-            port="443"
-            if [[ $line =~ DPT=([0-9]+) ]]; then
-              port="${BASH_REMATCH[1]}"
-            fi
-            echo "| $ip | $port | ALLOWED |" >> $GITHUB_STEP_SUMMARY
-          fi
-        done
-
-        # Parse user allowed connections
-        sudo grep "User-Allow: " /var/log/syslog 2>/dev/null | while read -r line; do
-          if [[ $line =~ DST=([0-9.]+) ]]; then
-            ip="${BASH_REMATCH[1]}"
-            port="443"
-            if [[ $line =~ DPT=([0-9]+) ]]; then
-              port="${BASH_REMATCH[1]}"
-            fi
-            echo "| $ip | $port | ALLOWED |" >> $GITHUB_STEP_SUMMARY
-          fi
-        done
-
-        # Parse blocked connections
-        sudo grep "Drop-Enforce: " /var/log/syslog 2>/dev/null | while read -r line; do
-          if [[ $line =~ DST=([0-9.]+) ]]; then
-            ip="${BASH_REMATCH[1]}"
-            port="443"
-            if [[ $line =~ DPT=([0-9]+) ]]; then
-              port="${BASH_REMATCH[1]}"
-            fi
-            echo "| $ip | $port | DENIED |" >> $GITHUB_STEP_SUMMARY
-          fi
-        done
