@@ -24,18 +24,18 @@ jobs:
       - name: Test GitHub domain access
         run: |
           echo "Testing GitHub domain access..."
-          curl -I https://api.github.com/user || echo "GitHub API failed"
-          curl -I https://github.com || echo "GitHub main failed"
+          curl -I https://api.github.com/user || { echo "GitHub API failed"; exit 1; }
+          curl -I https://github.com || { echo "GitHub main failed"; exit 1; }
       
       - name: Test custom allowed domain
         run: |
           echo "Testing custom allowed domain..."
-          curl -I https://httpbin.org/get || echo "Custom domain failed"
+          curl -I https://httpbin.org/get || { echo "Custom domain failed"; exit 1; }
       
       - name: Test unauthorized domain (should be logged but allowed)
         run: |
           echo "Testing unauthorized domain in analyze mode..."
-          curl -I https://example.com || echo "Example.com failed"
+          curl -I https://example.com || { echo "Example.com failed"; exit 1; }
       
       - name: Check logs
         run: |
@@ -58,13 +58,13 @@ jobs:
       - name: Test GitHub domain access (should work)
         run: |
           echo "Testing GitHub domain access in enforce mode..."
-          curl -I https://api.github.com/user || echo "GitHub API blocked (unexpected)"
-          curl -I https://github.com || echo "GitHub main blocked (unexpected)"
+          curl -I https://api.github.com/user || { echo "GitHub API blocked (unexpected)"; exit 1; }
+          curl -I https://github.com || { echo "GitHub main blocked (unexpected)"; exit 1; }
       
       - name: Test custom allowed domain (should work)
         run: |
           echo "Testing custom allowed domain..."
-          curl -I https://httpbin.org/get || echo "Custom domain blocked (unexpected)"
+          curl -I https://httpbin.org/get || { echo "Custom domain blocked (unexpected)"; exit 1; }
       
       - name: Test unauthorized domain (should be blocked)
         run: |
