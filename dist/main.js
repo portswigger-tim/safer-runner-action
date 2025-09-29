@@ -186,6 +186,21 @@ run();
 
 "use strict";
 
+/**
+ * System Integrity Validation for Safer Runner Action
+ *
+ * This module provides SHA256 checksum-based validation to ensure that critical
+ * security configurations (dnsmasq.conf, resolv.conf, iptables rules) are not
+ * tampered with between setup completion and action end.
+ *
+ * Validation Flow:
+ * 1. Setup completes (main.ts) → Capture post-setup baseline checksums
+ * 2. User workflow runs (potentially malicious code could run here)
+ * 3. Post-action (post.ts) → Verify current state matches baseline
+ *
+ * This detects tampering by external processes during the action run, ensuring
+ * that DNS filtering and firewall rules maintain their integrity.
+ */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
