@@ -141,9 +141,9 @@ jobs:
     runs-on: ubuntu-latest
     services:
       nginx:
-        image: nginxinc/nginx-unprivileged:alpine
+        image: nginx:alpine
         ports:
-          - 8080/tcp
+          - 80/tcp
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -174,7 +174,7 @@ jobs:
           timeout 5 dig localhost || { echo "Localhost DNS resolution failed"; exit 1; }
           
           echo "Testing localhost access to nginx service..."
-          timeout 5 curl -I http://127.0.0.1:${{ job.services.nginx.ports['8080'] }} || { echo "Localhost nginx failed"; exit 1; }
+          timeout 5 curl -I http://127.0.0.1:${{ job.services.nginx.ports['80'] }} || { echo "Localhost nginx failed"; exit 1; }
           
           echo "Testing localhost access to different port (should fail)..."
           timeout 5 curl -I http://127.0.0.1:9999 && echo "ERROR: Unexpected service responded!" || echo "SUCCESS: No service on port 9999 as expected"
