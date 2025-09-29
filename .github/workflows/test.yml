@@ -179,6 +179,15 @@ jobs:
           echo "Testing localhost access to different port (should fail)..."
           timeout 5 curl -I http://127.0.0.1:9999 && echo "ERROR: Unexpected service responded!" || echo "SUCCESS: No service on port 9999 as expected"
       
+      - name: Check localhost test logs
+        if: always()
+        run: |
+          echo "=== Localhost Test Logs ==="
+          sudo grep -E 'Processing: |GitHub-Allow: |Custom-Allow: |Dropped: |DNS-Analyze: |Allow-Analyze: ' /var/log/syslog | tail -30 || echo "No localhost test logs found"
+          
+          echo "=== DNS Resolution Logs ==="
+          sudo grep -E 'reply|NXDOMAIN|localhost' /var/log/syslog | tail -10 || echo "No DNS logs found"
+      
       - name: Final security audit
         run: |
           echo "=== Final Security Audit ==="
