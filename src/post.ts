@@ -26,9 +26,16 @@ async function run(): Promise<void> {
     const connections = await parseNetworkLogs();
     const dnsResolutions = await parseDnsLogs();
 
-    // Generate system integrity report
+    // Verify system integrity against post-setup baseline
     const validator = new SystemValidator();
+    const integrityValid = await validator.verifyAgainstBaseline();
     const validationReport = await validator.generateValidationReport();
+
+    if (!integrityValid) {
+      core.error('🚨 System integrity validation failed - potential tampering detected!');
+      // Note: We don't fail the action here as this is post-cleanup
+      // The validation report will show the tampering details
+    }
 
     await generateJobSummary(connections, dnsResolutions, validationReport);
 

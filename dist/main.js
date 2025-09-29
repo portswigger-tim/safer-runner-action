@@ -48,9 +48,6 @@ async function run() {
         const mode = core.getInput('mode') || 'analyze';
         const allowedDomains = core.getInput('allowed-domains') || '';
         core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
-        // Step 0: Initialize validation system and capture pre-run state
-        const validator = new validation_1.SystemValidator();
-        await validator.capturePreRunState();
         // Step 1: Install dependencies
         core.info('Installing dependencies...');
         await exec.exec('sudo', ['apt-get', 'update', '-qq']);
@@ -70,12 +67,10 @@ async function run() {
         // Step 6: Finalize security rules
         core.info('Finalizing security rules...');
         await finalizeSecurityRules(mode);
-        // Step 7: Verify system integrity
-        core.info('Verifying system integrity...');
-        const validationPassed = await validator.verifyPostRunState();
-        if (!validationPassed) {
-            throw new Error('System integrity validation failed - potential tampering detected!');
-        }
+        // Step 7: Capture post-setup baseline for integrity monitoring
+        core.info('Capturing post-setup security baseline...');
+        const validator = new validation_1.SystemValidator();
+        await validator.capturePostSetupBaseline();
         core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
     }
     catch (error) {
@@ -235,16 +230,17 @@ class SystemValidator {
         this.validationStateFile = '/tmp/safer-runner-validation-state.json';
     }
     /**
-     * Capture pre-run checksums of critical system files and iptables rules
+     * Capture post-setup baseline checksums after all configuration is complete
+     * This baseline will be verified in the post-action to detect tampering
      */
-    async capturePreRunState() {
-        core.info('📋 Capturing pre-run validation state...');
+    async capturePostSetupBaseline() {
+        core.info('📋 Capturing post-setup security baseline...');
         const state = {
             files: [],
             iptablesRules: [],
             timestamp: new Date().toISOString()
         };
-        // Critical files to monitor
+        // Critical files to monitor (these should all exist after setup)
         const criticalFiles = [
             '/etc/dnsmasq.conf',
             '/etc/resolv.conf',
@@ -260,58 +256,48 @@ class SystemValidator {
                         checksum,
                         timestamp: new Date().toISOString()
                     });
-                    core.info(`✅ Captured checksum for ${filePath}: ${checksum.substring(0, 16)}...`);
+                    core.info(`✅ Captured baseline checksum for ${filePath}: ${checksum.substring(0, 16)}...`);
+                }
+                else {
+                    core.error(`❌ Expected file ${filePath} not found after setup - this indicates a setup failure`);
+                    throw new Error(`Critical file ${filePath} missing after setup completion`);
                 }
             }
             catch (error) {
-                // File may not exist yet, that's expected for some files
-                core.info(`ℹ️  File ${filePath} not found (expected for pre-run): ${error}`);
-                state.files.push({
-                    path: filePath,
-                    checksum: 'FILE_NOT_EXISTS',
-                    timestamp: new Date().toISOString()
-                });
+                core.error(`❌ Failed to capture baseline for ${filePath}: ${error}`);
+                throw error;
             }
         }
         // Capture iptables state
         await this.captureIptablesState(state);
         // Save validation state
         (0, fs_1.writeFileSync)(this.validationStateFile, JSON.stringify(state, null, 2));
-        core.info(`💾 Validation state saved to ${this.validationStateFile}`);
+        core.info(`💾 Security baseline saved to ${this.validationStateFile}`);
     }
     /**
-     * Verify post-run checksums against pre-run state
+     * Verify current state against post-setup baseline to detect tampering
      */
-    async verifyPostRunState() {
-        core.info('🔍 Verifying post-run validation state...');
+    async verifyAgainstBaseline() {
+        core.info('🔍 Verifying system integrity against baseline...');
         if (!(0, fs_1.existsSync)(this.validationStateFile)) {
-            core.warning('⚠️  No validation state file found - cannot verify integrity');
+            core.warning('⚠️  No baseline state file found - cannot verify integrity');
             return false;
         }
-        let preRunState;
+        let baselineState;
         try {
-            preRunState = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
+            baselineState = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
         }
         catch (error) {
-            core.error(`❌ Failed to read validation state: ${error}`);
+            core.error(`❌ Failed to read baseline state: ${error}`);
             return false;
         }
         let allValid = true;
-        // Verify file checksums
-        for (const fileState of preRunState.files) {
+        // Verify file checksums against baseline
+        for (const fileState of baselineState.files) {
             try {
                 const currentChecksum = await this.calculateFileChecksum(fileState.path);
-                if (fileState.checksum === 'FILE_NOT_EXISTS') {
-                    if (currentChecksum) {
-                        core.info(`✅ File ${fileState.path} was created as expected`);
-                    }
-                    else {
-                        core.warning(`⚠️  File ${fileState.path} was expected to be created but still doesn't exist`);
-                    }
-                    continue;
-                }
                 if (!currentChecksum) {
-                    core.error(`❌ File ${fileState.path} was deleted unexpectedly!`);
+                    core.error(`❌ Critical file ${fileState.path} was deleted after setup!`);
                     allValid = false;
                     continue;
                 }
@@ -319,9 +305,9 @@ class SystemValidator {
                     core.info(`✅ File ${fileState.path} integrity verified`);
                 }
                 else {
-                    core.error(`❌ File ${fileState.path} has been tampered with!`);
-                    core.error(`   Expected: ${fileState.checksum}`);
-                    core.error(`   Actual:   ${currentChecksum}`);
+                    core.error(`❌ File ${fileState.path} has been tampered with after setup!`);
+                    core.error(`   Baseline:  ${fileState.checksum}`);
+                    core.error(`   Current:   ${currentChecksum}`);
                     allValid = false;
                 }
             }
@@ -330,9 +316,9 @@ class SystemValidator {
                 allValid = false;
             }
         }
-        // Verify iptables rules
+        // Verify iptables rules against baseline
         const currentIptablesState = await this.getCurrentIptablesState();
-        for (const ruleState of preRunState.iptablesRules) {
+        for (const ruleState of baselineState.iptablesRules) {
             const currentRule = currentIptablesState.find(r => r.chain === ruleState.chain);
             if (!currentRule) {
                 core.error(`❌ iptables chain ${ruleState.chain} is missing!`);
@@ -343,9 +329,9 @@ class SystemValidator {
                 core.info(`✅ iptables chain ${ruleState.chain} integrity verified`);
             }
             else {
-                core.error(`❌ iptables chain ${ruleState.chain} has been tampered with!`);
-                core.error(`   Expected: ${ruleState.checksum}`);
-                core.error(`   Actual:   ${currentRule.checksum}`);
+                core.error(`❌ iptables chain ${ruleState.chain} has been tampered with after setup!`);
+                core.error(`   Baseline: ${ruleState.checksum}`);
+                core.error(`   Current:  ${currentRule.checksum}`);
                 allValid = false;
             }
         }
@@ -445,23 +431,23 @@ class SystemValidator {
         let report = '## 🔒 System Integrity Validation Report\n\n';
         try {
             const state = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
-            report += `**Validation Timestamp:** ${state.timestamp}\n\n`;
+            report += `**Baseline Captured:** ${state.timestamp}\n`;
+            report += `**Verification Time:** ${new Date().toISOString()}\n\n`;
             // File integrity report
-            report += '### 📁 File Integrity\n\n';
-            report += '| File | Status | Checksum (first 16 chars) |\n';
-            report += '|------|--------|---------------------------|\n';
+            report += '### 📁 File Integrity (Post-Setup → Current)\n\n';
+            report += '| File | Status | Baseline → Current (first 16 chars) |\n';
+            report += '|------|--------|---------------------------------|\n';
             for (const file of state.files) {
                 const currentChecksum = await this.calculateFileChecksum(file.path);
                 let status = '❓ Unknown';
-                let displayChecksum = file.checksum === 'FILE_NOT_EXISTS' ? 'N/A' : file.checksum.substring(0, 16);
-                if (file.checksum === 'FILE_NOT_EXISTS') {
-                    status = currentChecksum ? '✅ Created' : '⚠️  Not Created';
-                }
-                else if (!currentChecksum) {
+                let displayChecksum = file.checksum.substring(0, 16);
+                if (!currentChecksum) {
                     status = '❌ Deleted';
+                    displayChecksum = `${displayChecksum} → MISSING`;
                 }
                 else if (currentChecksum === file.checksum) {
                     status = '✅ Verified';
+                    displayChecksum = `${displayChecksum} ✓`;
                 }
                 else {
                     status = '❌ Tampered';
@@ -470,9 +456,9 @@ class SystemValidator {
                 report += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
             }
             // iptables integrity report
-            report += '\n### 🛡️ iptables Rules Integrity\n\n';
-            report += '| Chain | Status | Checksum (first 16 chars) |\n';
-            report += '|-------|--------|---------------------------|\n';
+            report += '\n### 🛡️ iptables Rules Integrity (Post-Setup → Current)\n\n';
+            report += '| Chain | Status | Baseline → Current (first 16 chars) |\n';
+            report += '|-------|--------|---------------------------------|\n';
             const currentIptablesState = await this.getCurrentIptablesState();
             for (const rule of state.iptablesRules) {
                 const currentRule = currentIptablesState.find(r => r.chain === rule.chain);
@@ -480,9 +466,11 @@ class SystemValidator {
                 let displayChecksum = rule.checksum.substring(0, 16);
                 if (!currentRule) {
                     status = '❌ Missing';
+                    displayChecksum = `${displayChecksum} → MISSING`;
                 }
                 else if (currentRule.checksum === rule.checksum) {
                     status = '✅ Verified';
+                    displayChecksum = `${displayChecksum} ✓`;
                 }
                 else {
                     status = '❌ Tampered';

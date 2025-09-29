@@ -9,10 +9,6 @@ async function run(): Promise<void> {
 
     core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
 
-    // Step 0: Initialize validation system and capture pre-run state
-    const validator = new SystemValidator();
-    await validator.capturePreRunState();
-
     // Step 1: Install dependencies
     core.info('Installing dependencies...');
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
@@ -38,13 +34,10 @@ async function run(): Promise<void> {
     core.info('Finalizing security rules...');
     await finalizeSecurityRules(mode);
 
-    // Step 7: Verify system integrity
-    core.info('Verifying system integrity...');
-    const validationPassed = await validator.verifyPostRunState();
-
-    if (!validationPassed) {
-      throw new Error('System integrity validation failed - potential tampering detected!');
-    }
+    // Step 7: Capture post-setup baseline for integrity monitoring
+    core.info('Capturing post-setup security baseline...');
+    const validator = new SystemValidator();
+    await validator.capturePostSetupBaseline();
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
 

@@ -24,14 +24,14 @@ async function testValidationSystem(): Promise<void> {
     const expectedChecksum = crypto.createHash('sha256').update(testContent).digest('hex');
     console.log(`✅ Test file created with expected checksum: ${expectedChecksum.substring(0, 16)}...`);
 
-    // Test 2: Capture pre-run state (simulated)
-    console.log('\nTest 2: Pre-run state capture');
-    await validator.capturePreRunState();
-    console.log('✅ Pre-run state captured successfully');
+    // Test 2: Capture post-setup baseline (simulated)
+    console.log('\nTest 2: Post-setup baseline capture');
+    await validator.capturePostSetupBaseline();
+    console.log('✅ Post-setup baseline captured successfully');
 
-    // Test 3: Verify unchanged state
-    console.log('\nTest 3: Post-run validation (unchanged)');
-    const validationResult = await validator.verifyPostRunState();
+    // Test 3: Verify against baseline
+    console.log('\nTest 3: Baseline validation (unchanged)');
+    const validationResult = await validator.verifyAgainstBaseline();
     console.log(`Validation result: ${validationResult ? '✅ PASSED' : '❌ FAILED'}`);
 
     // Test 4: Generate validation report
