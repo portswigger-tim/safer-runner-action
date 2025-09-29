@@ -48,7 +48,8 @@ async function run() {
         // Wait for logs to be written
         await new Promise(resolve => setTimeout(resolve, 2000));
         const connections = await parseNetworkLogs();
-        await generateJobSummary(connections);
+        const dnsResolutions = await parseDnsLogs();
+        await generateJobSummary(connections, dnsResolutions);
         core.info('✅ Network access summary generated');
     }
     catch (error) {
@@ -120,14 +121,87 @@ function deduplicateConnections(connections) {
     }
     return Array.from(seen.values());
 }
-async function generateJobSummary(connections) {
+async function parseDnsLogs() {
+    const resolutions = [];
+    try {
+        // Get DNS-related logs from syslog
+        let syslogOutput = '';
+        await exec.exec('sudo', ['grep', '-E', 'reply|NXDOMAIN|dnsmasq', '/var/log/syslog'], {
+            listeners: {
+                stdout: (data) => { syslogOutput += data.toString(); }
+            },
+            ignoreReturnCode: true
+        });
+        const lines = syslogOutput.split('\n').filter(line => line.trim());
+        for (const line of lines) {
+            const resolution = parseDnsLogLine(line);
+            if (resolution) {
+                resolutions.push(resolution);
+            }
+        }
+        // Remove duplicates and limit results
+        return deduplicateDnsResolutions(resolutions).slice(0, 20);
+    }
+    catch (error) {
+        core.warning(`Failed to parse DNS logs: ${error}`);
+        return [];
+    }
+}
+function parseDnsLogLine(line) {
+    // Parse dnsmasq log format for replies
+    const replyMatch = line.match(/dnsmasq.*reply ([^\s]+) is ([0-9.]+)/);
+    if (replyMatch) {
+        return {
+            domain: replyMatch[1],
+            ip: replyMatch[2],
+            status: 'RESOLVED'
+        };
+    }
+    // Parse NXDOMAIN responses (blocked domains)
+    const nxdomainMatch = line.match(/dnsmasq.*reply ([^\s]+) is NXDOMAIN/);
+    if (nxdomainMatch) {
+        return {
+            domain: nxdomainMatch[1],
+            ip: 'NXDOMAIN',
+            status: 'BLOCKED'
+        };
+    }
+    // Parse other DNS query patterns
+    const queryMatch = line.match(/dnsmasq.*query\[A\] ([^\s]+) from/);
+    if (queryMatch) {
+        return {
+            domain: queryMatch[1],
+            ip: 'PENDING',
+            status: 'QUERIED'
+        };
+    }
+    return null;
+}
+function deduplicateDnsResolutions(resolutions) {
+    var _a, _b;
+    const seen = new Map();
+    for (const resolution of resolutions) {
+        const key = resolution.domain;
+        // Keep the most informative status (RESOLVED > BLOCKED > QUERIED)
+        if (!seen.has(key) ||
+            (resolution.status === 'RESOLVED' && ((_a = seen.get(key)) === null || _a === void 0 ? void 0 : _a.status) !== 'RESOLVED') ||
+            (resolution.status === 'BLOCKED' && ((_b = seen.get(key)) === null || _b === void 0 ? void 0 : _b.status) === 'QUERIED')) {
+            seen.set(key, resolution);
+        }
+    }
+    return Array.from(seen.values());
+}
+async function generateJobSummary(connections, dnsResolutions) {
     const mode = core.getInput('mode') || 'analyze';
     let summary = `## 🛡️ Network Access Provenance\n\n`;
-    summary += `**Mode:** \`${mode}\` | **DNS:** Quad9 (9.9.9.9) | **Connections:** ${connections.length}\n\n`;
+    summary += `**Mode:** \`${mode}\` | **DNS:** Quad9 (9.9.9.9) | **Connections:** ${connections.length} | **DNS Queries:** ${dnsResolutions.length}\n\n`;
+    // Network connections table
     if (connections.length === 0) {
+        summary += `### Network Connections\n`;
         summary += `*No network connections logged during this run.*\n\n`;
     }
     else {
+        summary += `### Network Connections\n`;
         summary += `| Domain/IP | Port | Status | Source |\n`;
         summary += `|-----------|------|--------|--------|\n`;
         for (const conn of connections) {
@@ -136,13 +210,35 @@ async function generateJobSummary(connections) {
         }
         summary += `\n`;
     }
+    // DNS resolutions table
+    if (dnsResolutions.length === 0) {
+        summary += `### DNS Resolutions\n`;
+        summary += `*No DNS resolutions logged during this run.*\n\n`;
+    }
+    else {
+        summary += `### DNS Resolutions\n`;
+        summary += `| Domain | IP | Status |\n`;
+        summary += `|--------|----|---------|\n`;
+        for (const dns of dnsResolutions) {
+            const statusIcon = getDnsStatusIcon(dns.status);
+            summary += `| ${dns.domain} | ${dns.ip} | ${statusIcon} ${dns.status} |\n`;
+        }
+        summary += `\n`;
+    }
     // Add summary statistics
     const stats = calculateStats(connections);
+    const dnsStats = calculateDnsStats(dnsResolutions);
     summary += `### Summary\n\n`;
-    summary += `- **Total connections:** ${stats.total}\n`;
+    summary += `**Network Connections:**\n`;
+    summary += `- **Total:** ${stats.total}\n`;
     summary += `- **Allowed:** ${stats.allowed}\n`;
     summary += `- **Denied:** ${stats.denied}\n`;
     summary += `- **Analyzed:** ${stats.analyzed}\n\n`;
+    summary += `**DNS Resolutions:**\n`;
+    summary += `- **Total:** ${dnsStats.total}\n`;
+    summary += `- **Resolved:** ${dnsStats.resolved}\n`;
+    summary += `- **Blocked:** ${dnsStats.blocked}\n`;
+    summary += `- **Queried:** ${dnsStats.queried}\n\n`;
     summary += `---\n`;
     summary += `*🔒 Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
     await core.summary.addRaw(summary).write();
@@ -155,12 +251,28 @@ function getStatusIcon(status) {
         default: return '❓';
     }
 }
+function getDnsStatusIcon(status) {
+    switch (status) {
+        case 'RESOLVED': return '✅';
+        case 'BLOCKED': return '🚫';
+        case 'QUERIED': return '❓';
+        default: return '❓';
+    }
+}
 function calculateStats(connections) {
     return {
         total: connections.length,
         allowed: connections.filter(c => c.status === 'ALLOWED').length,
         denied: connections.filter(c => c.status === 'DENIED').length,
         analyzed: connections.filter(c => c.status === 'ANALYZED').length
+    };
+}
+function calculateDnsStats(resolutions) {
+    return {
+        total: resolutions.length,
+        resolved: resolutions.filter(r => r.status === 'RESOLVED').length,
+        blocked: resolutions.filter(r => r.status === 'BLOCKED').length,
+        queried: resolutions.filter(r => r.status === 'QUERIED').length
     };
 }
 run();
