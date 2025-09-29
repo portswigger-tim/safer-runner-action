@@ -140,8 +140,11 @@ async function parseDnsLogs(): Promise<DnsResolution[]> {
 }
 
 function parseDnsLogLine(line: string): DnsResolution | null {
-  // Parse standard IP address replies
-  const replyMatch = line.match(/dnsmasq.*reply ([^\s]+) is ([0-9.]+)/);
+  // IPv4 address pattern: matches valid IPv4 addresses only (0-255.0-255.0-255.0-255)
+  const ipv4Pattern = '(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)';
+
+  // Parse reply lines with IPv4 addresses
+  const replyMatch = line.match(new RegExp(`dnsmasq.*reply ([^\\s]+) is (${ipv4Pattern})`));
   if (replyMatch) {
     return {
       domain: replyMatch[1],
@@ -150,64 +153,13 @@ function parseDnsLogLine(line: string): DnsResolution | null {
     };
   }
 
-  // Parse cached responses
-  const cachedMatch = line.match(/dnsmasq.*cached ([^\s]+) is ([0-9.]+)/);
-  if (cachedMatch) {
-    return {
-      domain: cachedMatch[1],
-      ip: cachedMatch[2],
-      status: 'RESOLVED'
-    };
-  }
-
-  // Parse /etc/hosts responses
-  const hostsMatch = line.match(/dnsmasq.*\/etc\/hosts ([^\s]+) is ([0-9.]+)/);
-  if (hostsMatch) {
-    return {
-      domain: hostsMatch[1],
-      ip: hostsMatch[2],
-      status: 'RESOLVED'
-    };
-  }
-
-  // Parse CNAME responses
-  const cnameMatch = line.match(/dnsmasq.*reply ([^\s]+) is <CNAME>/);
-  if (cnameMatch) {
-    return {
-      domain: cnameMatch[1],
-      ip: 'CNAME',
-      status: 'RESOLVED'
-    };
-  }
-
-
   // Parse NXDOMAIN responses (blocked domains)
-  const nxdomainMatch = line.match(/dnsmasq.*(?:reply|config) ([^\s]+) is NXDOMAIN/);
+  const nxdomainMatch = line.match(/dnsmasq.*config ([^\s]+) is NXDOMAIN/);
   if (nxdomainMatch) {
     return {
       domain: nxdomainMatch[1],
       ip: 'NXDOMAIN',
       status: 'BLOCKED'
-    };
-  }
-
-  // Parse ipset additions (extracts domain and IP from ipset add lines)
-  const ipsetMatch = line.match(/dnsmasq.*ipset add \w+ ([0-9.]+) ([^\s]+)/);
-  if (ipsetMatch) {
-    return {
-      domain: ipsetMatch[2],
-      ip: ipsetMatch[1],
-      status: 'RESOLVED'
-    };
-  }
-
-  // Parse DNS queries (A record types only)
-  const queryMatch = line.match(/dnsmasq.*query\[A\] ([^\s]+) from/);
-  if (queryMatch) {
-    return {
-      domain: queryMatch[1],
-      ip: 'PENDING',
-      status: 'QUERIED'
     };
   }
 
