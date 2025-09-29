@@ -148,12 +148,39 @@ async function parseDnsLogs() {
     }
 }
 function parseDnsLogLine(line) {
-    // Parse dnsmasq log format for replies
+    // Parse standard IP address replies
     const replyMatch = line.match(/dnsmasq.*reply ([^\s]+) is ([0-9.]+)/);
     if (replyMatch) {
         return {
             domain: replyMatch[1],
             ip: replyMatch[2],
+            status: 'RESOLVED'
+        };
+    }
+    // Parse cached responses
+    const cachedMatch = line.match(/dnsmasq.*cached ([^\s]+) is ([0-9.]+)/);
+    if (cachedMatch) {
+        return {
+            domain: cachedMatch[1],
+            ip: cachedMatch[2],
+            status: 'RESOLVED'
+        };
+    }
+    // Parse /etc/hosts responses
+    const hostsMatch = line.match(/dnsmasq.*\/etc\/hosts ([^\s]+) is ([0-9.]+)/);
+    if (hostsMatch) {
+        return {
+            domain: hostsMatch[1],
+            ip: hostsMatch[2],
+            status: 'RESOLVED'
+        };
+    }
+    // Parse CNAME responses
+    const cnameMatch = line.match(/dnsmasq.*reply ([^\s]+) is <CNAME>/);
+    if (cnameMatch) {
+        return {
+            domain: cnameMatch[1],
+            ip: 'CNAME',
             status: 'RESOLVED'
         };
     }
@@ -166,7 +193,16 @@ function parseDnsLogLine(line) {
             status: 'BLOCKED'
         };
     }
-    // Parse other DNS query patterns
+    // Parse ipset additions (extracts domain and IP from ipset add lines)
+    const ipsetMatch = line.match(/dnsmasq.*ipset add \w+ ([0-9.]+) ([^\s]+)/);
+    if (ipsetMatch) {
+        return {
+            domain: ipsetMatch[2],
+            ip: ipsetMatch[1],
+            status: 'RESOLVED'
+        };
+    }
+    // Parse DNS queries (A record types only)
     const queryMatch = line.match(/dnsmasq.*query\[A\] ([^\s]+) from/);
     if (queryMatch) {
         return {
@@ -178,18 +214,53 @@ function parseDnsLogLine(line) {
     return null;
 }
 function deduplicateDnsResolutions(resolutions) {
-    var _a, _b;
-    const seen = new Map();
+    const domainMap = new Map();
+    // Group resolutions by domain
     for (const resolution of resolutions) {
-        const key = resolution.domain;
-        // Keep the most informative status (RESOLVED > BLOCKED > QUERIED)
-        if (!seen.has(key) ||
-            (resolution.status === 'RESOLVED' && ((_a = seen.get(key)) === null || _a === void 0 ? void 0 : _a.status) !== 'RESOLVED') ||
-            (resolution.status === 'BLOCKED' && ((_b = seen.get(key)) === null || _b === void 0 ? void 0 : _b.status) === 'QUERIED')) {
-            seen.set(key, resolution);
+        if (!domainMap.has(resolution.domain)) {
+            domainMap.set(resolution.domain, []);
+        }
+        domainMap.get(resolution.domain).push(resolution);
+    }
+    const result = [];
+    // Process each domain's resolutions
+    for (const [domain, domainResolutions] of domainMap) {
+        // Sort by priority: RESOLVED > BLOCKED > QUERIED
+        const priorityMap = { 'RESOLVED': 3, 'BLOCKED': 2, 'QUERIED': 1 };
+        const sortedResolutions = domainResolutions.sort((a, b) => (priorityMap[b.status] || 0) - (priorityMap[a.status] || 0));
+        const highestPriority = sortedResolutions[0];
+        if (highestPriority.status === 'RESOLVED') {
+            // For resolved domains, collect all unique IPs
+            const resolvedIps = sortedResolutions
+                .filter(r => r.status === 'RESOLVED' && r.ip !== 'CNAME')
+                .map(r => r.ip);
+            const uniqueIps = [...new Set(resolvedIps)];
+            if (uniqueIps.length === 1) {
+                // Single IP - use that resolution
+                result.push(highestPriority);
+            }
+            else if (uniqueIps.length > 1) {
+                // Multiple IPs - create summary entry
+                result.push({
+                    domain: domain,
+                    ip: uniqueIps.join(', '),
+                    status: 'RESOLVED'
+                });
+            }
+            else {
+                // No concrete IPs (only CNAME) - use first resolved entry
+                const resolvedEntry = sortedResolutions.find(r => r.status === 'RESOLVED');
+                if (resolvedEntry) {
+                    result.push(resolvedEntry);
+                }
+            }
+        }
+        else {
+            // Non-resolved status - use highest priority entry
+            result.push(highestPriority);
         }
     }
-    return Array.from(seen.values());
+    return result;
 }
 async function generateJobSummary(connections, dnsResolutions) {
     const mode = core.getInput('mode') || 'analyze';
