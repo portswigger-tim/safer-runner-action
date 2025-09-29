@@ -178,6 +178,101 @@ This action provides network-level defense against such attacks by:
 - **s1ngularity attack**: Used malicious network requests to exfiltrate data to attacker-controlled repositories
 - **Shai-Hulud worm**: Self-replicated through network-based communication that could have been detected and blocked
 
+## Limitations and Attacker Workarounds
+
+While this action provides strong network-level protection, sophisticated attackers may attempt workarounds. **Network filtering alone is not sufficient** - combine with additional runtime security tooling:
+
+### Potential Attack Vectors
+
+**🚨 Data Exfiltration via Allowed Domains**
+- Attackers could abuse legitimate allowed domains (GitHub, npm, PyPI) to exfiltrate data
+- Example: Uploading secrets to a public repository or package registry
+- **Mitigation**: Use runtime monitoring to detect unusual data patterns
+
+**🚨 DNS Tunneling and Alternative Protocols**
+- Advanced attackers might use DNS queries to encode and exfiltrate data
+- Non-HTTP protocols (raw sockets, custom ports) could bypass HTTP-focused filtering
+- **Mitigation**: Comprehensive network monitoring and anomaly detection
+
+**🚨 Local File System Attacks**
+- Malicious code could write sensitive data to shared file systems or container volumes
+- Data could be staged for later exfiltration by other processes
+- **Mitigation**: File system monitoring and access controls
+
+**🚨 Process and System Call Abuse**
+- Attackers might attempt privilege escalation or container escapes
+- System resource abuse (CPU, memory) for cryptocurrency mining
+- **Mitigation**: Runtime behavior analysis and system call monitoring
+
+### Recommended Complementary Tooling
+
+**🛡️ Falco for Runtime Security**
+```yaml
+- name: Runtime Security with Falco
+  uses: falcosecurity/falco-action@v1
+  with:
+    rules: |
+      - rule: Detect Sensitive File Access
+        desc: Detect access to sensitive files
+        condition: >
+          open_read and fd.filename in (/etc/passwd, /etc/shadow, /home/*/.ssh/*, /root/.ssh/*)
+        output: Sensitive file accessed (user=%user.name command=%proc.cmdline file=%fd.name)
+        priority: WARNING
+
+      - rule: Unexpected Network Activity
+        desc: Detect unusual network connections
+        condition: >
+          inbound or outbound and not fd.net.cip in (github_ips, allowed_ips)
+        output: Unexpected network activity (user=%user.name command=%proc.cmdline connection=%fd.net.cip.name:%fd.net.sport->%fd.net.sip.name:%fd.net.dport)
+        priority: WARNING
+
+      - rule: Suspicious Process Execution
+        desc: Detect potentially malicious process execution
+        condition: >
+          spawned_process and (proc.name in (nc, ncat, socat, wget, curl) and proc.args contains "shell")
+        output: Suspicious process execution (user=%user.name command=%proc.cmdline)
+        priority: CRITICAL
+```
+
+**🛡️ Additional Security Layers**
+- **Container Security**: Use distroless images, read-only filesystems, non-root users
+- **Secrets Management**: Use GitHub's native secrets, avoid hardcoded credentials
+- **Dependency Scanning**: Tools like Snyk, Dependabot, or GitHub's native scanning
+- **Action Security**: Pin actions to specific commits, use trusted publishers only
+- **SIEM Integration**: Forward logs to security information and event management systems
+
+### Defense in Depth Strategy
+
+```yaml
+# Example comprehensive security workflow
+steps:
+  # Layer 1: Network Security
+  - uses: portswigger-tim/safer-runner-action@v1
+    with:
+      mode: 'enforce'
+      allowed-domains: 'api.trusted-service.com'
+
+  # Layer 2: Runtime Security
+  - uses: falcosecurity/falco-action@v1
+    with:
+      rules_file: .github/falco-rules.yaml
+
+  # Layer 3: Container Security
+  - uses: securecodewarrior/github-action-add-sarif@v1
+    with:
+      sarif-file: container-scan-results.sarif
+
+  # Layer 4: Your Application
+  - name: Run application with minimal privileges
+    run: |
+      # Your secure application logic
+    env:
+      # Use GitHub secrets, never hardcode
+      API_KEY: ${{ secrets.API_KEY }}
+```
+
+**Remember**: Network filtering is your first line of defense, but attackers adapt. Combine multiple security layers for maximum protection.
+
 ## Debugging
 
 You can check DNS and firewall logs:
