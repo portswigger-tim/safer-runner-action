@@ -10,6 +10,7 @@ A GitHub composite action that adds a network security layer to GitHub Actions r
 - **GitHub Actions Compatible**: Pre-configured to allow all required GitHub domains
 - **Custom Domain Support**: Add your own trusted domains via input parameters
 - **Automatic Log Analysis**: Automatic network access provenance reports after each run
+- **Supply Chain Protection**: Helps defend against malicious network requests in compromised dependencies
 
 ## Usage
 
@@ -124,6 +125,8 @@ The action automatically generates a **Network Access Provenance** table in your
 - **Source** (GitHub Required, User Defined, etc.)
 - **Summary statistics** of connection attempts
 
+**Analyze Mode Bonus**: Automatically suggests an `allowed-domains` configuration based on the non-GitHub domains accessed during your run, making it easy to transition to enforce mode.
+
 No configuration needed - the report appears automatically after each run!
 
 ## Security Model
@@ -141,6 +144,39 @@ No configuration needed - the report appears automatically after each run!
 ### Both Modes
 - **Azure Metadata**: Preserves access to Azure metadata service (required for GitHub Actions)
 - **Established Connections**: Allows return traffic for established connections
+
+## Debugging
+
+You can check DNS and firewall logs:
+
+```bash
+# View recent DNS queries and firewall actions
+sudo grep -E 'Processing: |GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ' /var/log/syslog
+```
+
+## Supply Chain Security Context
+
+GitHub Actions supply chain attacks have increased significantly, with several major incidents in 2024-2025 affecting thousands of repositories. These attacks often follow a pattern:
+
+1. **Compromise**: Malicious code gets injected through compromised dependencies, PR injections, or compromised GitHub Actions
+2. **Network Exfiltration**: The malicious code makes HTTP requests to attacker-controlled domains to steal secrets, tokens, or sensitive data
+3. **Persistence**: Attackers use stolen credentials to maintain access or compromise additional repositories
+
+### Real-World Protection
+
+This action provides network-level defense against such attacks by:
+
+- **Blocking data exfiltration** to unauthorized domains in enforce mode
+- **Detecting suspicious activity** through comprehensive DNS and network logging in analyze mode
+- **Preventing malicious downloads** by controlling which domains can be accessed
+
+**Note**: This action focuses on network-level protection and should be part of a comprehensive security strategy that includes action pinning, input validation, and minimal permissions.
+
+### Recent Attack Examples
+
+- **tj-actions/changed-files (CVE-2025-30066)**: Affected 23,000+ repositories through malicious Python script downloads that would have been blocked by network filtering
+- **s1ngularity attack**: Used malicious network requests to exfiltrate data to attacker-controlled repositories
+- **Shai-Hulud worm**: Self-replicated through network-based communication that could have been detected and blocked
 
 ## Debugging
 
