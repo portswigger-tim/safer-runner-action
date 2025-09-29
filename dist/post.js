@@ -159,6 +159,15 @@ function parseDnsLogLine(line) {
             status: 'RESOLVED'
         };
     }
+    // Parse CNAME responses
+    const cnameMatch = line.match(/dnsmasq.*reply ([^\s]+) is <CNAME>/);
+    if (cnameMatch) {
+        return {
+            domain: cnameMatch[1],
+            ip: 'CNAME',
+            status: 'RESOLVED'
+        };
+    }
     // Parse NXDOMAIN responses (blocked domains)
     const nxdomainMatch = line.match(/dnsmasq.*config ([^\s]+) is NXDOMAIN/);
     if (nxdomainMatch) {
