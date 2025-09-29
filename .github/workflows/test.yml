@@ -183,12 +183,25 @@ jobs:
         run: |
           echo "Testing localhost DNS resolution..."
           timeout 5 dig localhost || { echo "Localhost DNS resolution failed"; exit 1; }
-          
+
           echo "Testing localhost access to nginx service..."
           timeout 5 curl -I http://127.0.0.1:${{ job.services.nginx.ports['80'] }} || { echo "Localhost nginx failed"; exit 1; }
-          
+
           echo "Testing localhost access to different port (should fail)..."
           timeout 5 curl -I http://127.0.0.1:9999 && echo "ERROR: Unexpected service responded!" || echo "SUCCESS: No service on port 9999 as expected"
+
+      - name: Test direct IP address blocking
+        run: |
+          echo "Testing direct IP address communication blocking..."
+
+          echo "Testing DNS query to Google DNS server 8.8.8.8 (should be blocked)..."
+          timeout 1 dig @8.8.8.8 google.com && { echo "ERROR: Direct IP DNS query was allowed!"; exit 1; } || echo "SUCCESS: Direct IP DNS query blocked as expected"
+
+          echo "Testing HTTP request to direct IP address (should be blocked)..."
+          timeout 1 curl -I http://8.8.8.8 && { echo "ERROR: Direct IP HTTP request was allowed!"; exit 1; } || echo "SUCCESS: Direct IP HTTP request blocked as expected"
+
+          echo "Testing HTTPS request to direct IP address (should be blocked)..."
+          timeout 1 curl -I https://1.1.1.1 && { echo "ERROR: Direct IP HTTPS request was allowed!"; exit 1; } || echo "SUCCESS: Direct IP HTTPS request blocked as expected"
       
       - name: Check localhost test logs
         if: always()
