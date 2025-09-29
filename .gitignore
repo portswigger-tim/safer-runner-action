@@ -91,6 +91,12 @@ out
 .nuxt
 dist
 
+# Allow GitHub Actions built files
+!safer-runner/dist/main.js
+!safer-runner/dist/main.js.map
+!safer-runner/dist/post.js
+!safer-runner/dist/post.js.map
+
 # Gatsby files
 .cache/
 # Comment in the public line in if your project uses Gatsby and not Next.js
