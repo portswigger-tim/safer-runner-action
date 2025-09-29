@@ -252,11 +252,14 @@ function getGitHubRequiredDomains(): string[] {
 
 function generateAllowedDomainsConfig(dnsResolutions: DnsResolution[]): string[] {
   const githubDomains = new Set(getGitHubRequiredDomains());
+  const excludePatterns = ['github.com', 'store.core.windows.net', 'trafficmanager.net'];
   const allowedDomains = new Set<string>();
 
   for (const dns of dnsResolutions) {
-    // Include resolved domains (both IPv4 and CNAME) that are not GitHub required domains
-    if (dns.status === 'RESOLVED' && !githubDomains.has(dns.domain)) {
+    // Include resolved domains (both IPv4 and CNAME) that are not GitHub/Azure domains
+    if (dns.status === 'RESOLVED' &&
+        !githubDomains.has(dns.domain) &&
+        !excludePatterns.some(pattern => dns.domain.includes(pattern))) {
       allowedDomains.add(dns.domain);
     }
   }
