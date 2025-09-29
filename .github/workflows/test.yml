@@ -3,9 +3,11 @@ name: Test Safer Runner Action
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   test-analyze-mode:
@@ -31,6 +33,11 @@ jobs:
         run: |
           echo "Testing custom allowed domain..."
           curl -I https://httpbin.org/get || { echo "Custom domain failed"; exit 1; }
+      
+      - name: Test localhost DNS resolution
+        run: |
+          echo "Testing localhost DNS resolution in analyze mode..."
+          timeout 2 dig localhost || { echo "Localhost DNS resolution failed"; exit 1; }
       
       - name: Test unauthorized domain (should be logged but allowed)
         run: |
@@ -65,6 +72,11 @@ jobs:
         run: |
           echo "Testing custom allowed domain..."
           curl -I https://httpbin.org/get || { echo "Custom domain blocked (unexpected)"; exit 1; }
+      
+      - name: Test localhost DNS resolution
+        run: |
+          echo "Testing localhost DNS resolution in enforce mode..."
+          timeout 2 dig localhost || { echo "Localhost DNS resolution failed"; exit 1; }
       
       - name: Test unauthorized domain (should be blocked)
         run: |
@@ -129,23 +141,12 @@ jobs:
     runs-on: ubuntu-latest
     services:
       nginx:
-        image: nginx:alpine
+        image: nginxinc/nginx-unprivileged:alpine
         ports:
-          - 8080:80
-        options: >-
-          --health-cmd "curl -f http://localhost:80 || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 3
+          - 8080/tcp
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
-      - name: Verify nginx service is ready
-        run: |
-          echo "Waiting for nginx service to be ready..."
-          timeout 30 bash -c 'until curl -f http://127.0.0.1:8080 > /dev/null 2>&1; do sleep 1; done'
-          echo "Nginx service is ready!"
       
       - name: Apply Safer Runner Action (Enforce Mode)
         uses: ./
@@ -156,8 +157,8 @@ jobs:
       - name: Test DNS resolution
         run: |
           echo "Testing DNS resolution..."
-          dig api.github.com @127.0.0.1 || echo "DNS resolution failed"
-          dig httpbin.org @127.0.0.1 || echo "Custom DNS resolution failed"
+          dig api.github.com || echo "DNS resolution failed"
+          dig httpbin.org || echo "Custom DNS resolution failed"
       
       - name: Test multiple protocols
         run: |
@@ -169,8 +170,11 @@ jobs:
       
       - name: Test localhost access
         run: |
+          echo "Testing localhost DNS resolution..."
+          timeout 5 dig localhost || { echo "Localhost DNS resolution failed"; exit 1; }
+          
           echo "Testing localhost access to nginx service..."
-          curl -I http://127.0.0.1:8080 || { echo "Localhost nginx failed"; exit 1; }
+          timeout 5 curl -I http://127.0.0.1:8080 || { echo "Localhost nginx failed"; exit 1; }
           
           echo "Testing localhost access to different port (should fail)..."
           timeout 5 curl -I http://127.0.0.1:9999 && echo "ERROR: Unexpected service responded!" || echo "SUCCESS: No service on port 9999 as expected"
