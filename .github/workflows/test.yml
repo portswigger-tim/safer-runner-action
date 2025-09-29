@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Apply Safer Runner Action (Analyze Mode)
-        uses: ./
+        uses: ./safer-runnersafer-runner
         with:
           mode: 'analyze'
           allowed-domains: 'httpbin.org api.github.com'
@@ -57,7 +57,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Apply Safer Runner Action (Enforce Mode)
-        uses: ./
+        uses: ./safer-runner
         with:
           mode: 'enforce'
           allowed-domains: 'httpbin.org'
@@ -104,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Apply Safer Runner Action (Enforce Mode)
-        uses: ./
+        uses: ./safer-runner
         with:
           mode: 'enforce'
       
@@ -149,7 +149,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Apply Safer Runner Action (Enforce Mode)
-        uses: ./
+        uses: ./safer-runner
         with:
           mode: 'enforce'
           allowed-domains: 'api.github.com httpbin.org'
