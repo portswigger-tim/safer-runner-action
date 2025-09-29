@@ -233,6 +233,37 @@ function deduplicateDnsResolutions(resolutions: DnsResolution[]): DnsResolution[
   return result;
 }
 
+function getGitHubRequiredDomains(): string[] {
+  // GitHub required domains (must match main.ts)
+  return [
+    'github.com', 'actions.githubusercontent.com', 'api.github.com',
+    'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
+    'results-receiver.actions.githubusercontent.com',
+    // Add all the productionresultssa domains...
+    ...Array.from({length: 20}, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
+    'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
+    'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
+    'pkg.github.com', 'pkg-containers.githubusercontent.com',
+    'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
+    'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
+    'api.snapcraft.io'
+  ];
+}
+
+function generateAllowedDomainsConfig(dnsResolutions: DnsResolution[]): string[] {
+  const githubDomains = new Set(getGitHubRequiredDomains());
+  const allowedDomains = new Set<string>();
+
+  for (const dns of dnsResolutions) {
+    // Include resolved domains (both IPv4 and CNAME) that are not GitHub required domains
+    if (dns.status === 'RESOLVED' && !githubDomains.has(dns.domain)) {
+      allowedDomains.add(dns.domain);
+    }
+  }
+
+  return Array.from(allowedDomains).sort();
+}
+
 async function generateJobSummary(connections: NetworkConnection[], dnsResolutions: DnsResolution[]): Promise<void> {
   const mode = core.getInput('mode') || 'analyze';
 
@@ -287,6 +318,24 @@ async function generateJobSummary(connections: NetworkConnection[], dnsResolutio
   summary += `- **Resolved:** ${dnsStats.resolved}\n`;
   summary += `- **Blocked:** ${dnsStats.blocked}\n`;
   summary += `- **Queried:** ${dnsStats.queried}\n\n`;
+
+  // Add suggested allowed-domains configuration for analyze mode
+  if (mode === 'analyze') {
+    const suggestedDomains = generateAllowedDomainsConfig(dnsResolutions);
+    if (suggestedDomains.length > 0) {
+      summary += `### 🔧 Suggested Configuration for Enforce Mode\n\n`;
+      summary += `Based on this run, to enable enforce mode with the domains you accessed, use:\n\n`;
+      summary += `\`\`\`yaml\n`;
+      summary += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+      summary += `  with:\n`;
+      summary += `    mode: 'enforce'\n`;
+      summary += `    allowed-domains: >-\n`;
+      for (const domain of suggestedDomains) {
+        summary += `      ${domain}\n`;
+      }
+      summary += `\`\`\`\n\n`;
+    }
+  }
 
   summary += `---\n`;
   summary += `*🔒 Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
