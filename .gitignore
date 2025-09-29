@@ -87,17 +87,8 @@ web_modules/
 .next
 out
 
-# Nuxt.js build / generate output
-.nuxt
-dist
-
-# Allow GitHub Actions built files
-!dist/main.js
-!dist/post.js
-
-# Exclude build artifacts
-dist/main/
-dist/post/
+# Build outputs
+lib/
 
 # Gatsby files
 .cache/
