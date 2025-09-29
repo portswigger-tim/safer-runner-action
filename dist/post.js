@@ -42,6 +42,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
+const validation_1 = __nccwpck_require__(8449);
 async function run() {
     try {
         core.info('🔍 Analyzing network access logs...');
@@ -49,7 +50,10 @@ async function run() {
         await new Promise(resolve => setTimeout(resolve, 2000));
         const connections = await parseNetworkLogs();
         const dnsResolutions = await parseDnsLogs();
-        await generateJobSummary(connections, dnsResolutions);
+        // Generate system integrity report
+        const validator = new validation_1.SystemValidator();
+        const validationReport = await validator.generateValidationReport();
+        await generateJobSummary(connections, dnsResolutions, validationReport);
         core.info('✅ Network access summary generated');
     }
     catch (error) {
@@ -258,7 +262,7 @@ function generateAllowedDomainsConfig(dnsResolutions) {
     }
     return Array.from(allowedDomains).sort();
 }
-async function generateJobSummary(connections, dnsResolutions) {
+async function generateJobSummary(connections, dnsResolutions, validationReport) {
     const mode = core.getInput('mode') || 'analyze';
     let summary = `## 🛡️ Network Access Provenance\n\n`;
     summary += `**Mode:** \`${mode}\` | **DNS:** Quad9 (9.9.9.9) | **Connections:** ${connections.length} | **DNS Queries:** ${dnsResolutions.length}\n\n`;
@@ -324,6 +328,8 @@ async function generateJobSummary(connections, dnsResolutions) {
             summary += `\`\`\`\n\n`;
         }
     }
+    // Add system integrity validation report
+    summary += `${validationReport}\n`;
     summary += `---\n`;
     summary += `*🔒 Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
     await core.summary.addRaw(summary).write();
@@ -361,6 +367,323 @@ function calculateDnsStats(resolutions) {
     };
 }
 run();
+
+
+/***/ }),
+
+/***/ 8449:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SystemValidator = void 0;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const crypto = __importStar(__nccwpck_require__(6982));
+const fs_1 = __nccwpck_require__(9896);
+class SystemValidator {
+    constructor() {
+        this.validationStateFile = '/tmp/safer-runner-validation-state.json';
+    }
+    /**
+     * Capture pre-run checksums of critical system files and iptables rules
+     */
+    async capturePreRunState() {
+        core.info('📋 Capturing pre-run validation state...');
+        const state = {
+            files: [],
+            iptablesRules: [],
+            timestamp: new Date().toISOString()
+        };
+        // Critical files to monitor
+        const criticalFiles = [
+            '/etc/dnsmasq.conf',
+            '/etc/resolv.conf',
+            '/etc/systemd/resolved.conf.d/no-stub.conf'
+        ];
+        // Capture file checksums
+        for (const filePath of criticalFiles) {
+            try {
+                const checksum = await this.calculateFileChecksum(filePath);
+                if (checksum) {
+                    state.files.push({
+                        path: filePath,
+                        checksum,
+                        timestamp: new Date().toISOString()
+                    });
+                    core.info(`✅ Captured checksum for ${filePath}: ${checksum.substring(0, 16)}...`);
+                }
+            }
+            catch (error) {
+                // File may not exist yet, that's expected for some files
+                core.info(`ℹ️  File ${filePath} not found (expected for pre-run): ${error}`);
+                state.files.push({
+                    path: filePath,
+                    checksum: 'FILE_NOT_EXISTS',
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+        // Capture iptables state
+        await this.captureIptablesState(state);
+        // Save validation state
+        (0, fs_1.writeFileSync)(this.validationStateFile, JSON.stringify(state, null, 2));
+        core.info(`💾 Validation state saved to ${this.validationStateFile}`);
+    }
+    /**
+     * Verify post-run checksums against pre-run state
+     */
+    async verifyPostRunState() {
+        core.info('🔍 Verifying post-run validation state...');
+        if (!(0, fs_1.existsSync)(this.validationStateFile)) {
+            core.warning('⚠️  No validation state file found - cannot verify integrity');
+            return false;
+        }
+        let preRunState;
+        try {
+            preRunState = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
+        }
+        catch (error) {
+            core.error(`❌ Failed to read validation state: ${error}`);
+            return false;
+        }
+        let allValid = true;
+        // Verify file checksums
+        for (const fileState of preRunState.files) {
+            try {
+                const currentChecksum = await this.calculateFileChecksum(fileState.path);
+                if (fileState.checksum === 'FILE_NOT_EXISTS') {
+                    if (currentChecksum) {
+                        core.info(`✅ File ${fileState.path} was created as expected`);
+                    }
+                    else {
+                        core.warning(`⚠️  File ${fileState.path} was expected to be created but still doesn't exist`);
+                    }
+                    continue;
+                }
+                if (!currentChecksum) {
+                    core.error(`❌ File ${fileState.path} was deleted unexpectedly!`);
+                    allValid = false;
+                    continue;
+                }
+                if (currentChecksum === fileState.checksum) {
+                    core.info(`✅ File ${fileState.path} integrity verified`);
+                }
+                else {
+                    core.error(`❌ File ${fileState.path} has been tampered with!`);
+                    core.error(`   Expected: ${fileState.checksum}`);
+                    core.error(`   Actual:   ${currentChecksum}`);
+                    allValid = false;
+                }
+            }
+            catch (error) {
+                core.error(`❌ Failed to verify ${fileState.path}: ${error}`);
+                allValid = false;
+            }
+        }
+        // Verify iptables rules
+        const currentIptablesState = await this.getCurrentIptablesState();
+        for (const ruleState of preRunState.iptablesRules) {
+            const currentRule = currentIptablesState.find(r => r.chain === ruleState.chain);
+            if (!currentRule) {
+                core.error(`❌ iptables chain ${ruleState.chain} is missing!`);
+                allValid = false;
+                continue;
+            }
+            if (currentRule.checksum === ruleState.checksum) {
+                core.info(`✅ iptables chain ${ruleState.chain} integrity verified`);
+            }
+            else {
+                core.error(`❌ iptables chain ${ruleState.chain} has been tampered with!`);
+                core.error(`   Expected: ${ruleState.checksum}`);
+                core.error(`   Actual:   ${currentRule.checksum}`);
+                allValid = false;
+            }
+        }
+        if (allValid) {
+            core.info('✅ All validation checks passed - no tampering detected');
+        }
+        else {
+            core.error('❌ Validation failed - potential tampering detected!');
+        }
+        return allValid;
+    }
+    /**
+     * Calculate SHA256 checksum of a file
+     */
+    async calculateFileChecksum(filePath) {
+        try {
+            const fileContent = (0, fs_1.readFileSync)(filePath);
+            return crypto.createHash('sha256').update(fileContent).digest('hex');
+        }
+        catch (error) {
+            if (error.code === 'ENOENT') {
+                return null; // File doesn't exist
+            }
+            throw error;
+        }
+    }
+    /**
+     * Calculate checksum of iptables rules content
+     */
+    calculateRulesChecksum(rules) {
+        return crypto.createHash('sha256').update(rules).digest('hex');
+    }
+    /**
+     * Capture current iptables state
+     */
+    async captureIptablesState(state) {
+        const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
+        for (const chain of chains) {
+            try {
+                let rulesOutput = '';
+                await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+                    listeners: {
+                        stdout: (data) => { rulesOutput += data.toString(); }
+                    },
+                    ignoreReturnCode: true
+                });
+                const checksum = this.calculateRulesChecksum(rulesOutput);
+                state.iptablesRules.push({
+                    chain,
+                    rules: rulesOutput,
+                    checksum,
+                    timestamp: new Date().toISOString()
+                });
+                core.info(`✅ Captured iptables ${chain} chain: ${checksum.substring(0, 16)}...`);
+            }
+            catch (error) {
+                core.warning(`⚠️  Failed to capture iptables ${chain} chain: ${error}`);
+            }
+        }
+    }
+    /**
+     * Get current iptables state for comparison
+     */
+    async getCurrentIptablesState() {
+        const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
+        const currentState = [];
+        for (const chain of chains) {
+            try {
+                let rulesOutput = '';
+                await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+                    listeners: {
+                        stdout: (data) => { rulesOutput += data.toString(); }
+                    },
+                    ignoreReturnCode: true
+                });
+                const checksum = this.calculateRulesChecksum(rulesOutput);
+                currentState.push({
+                    chain,
+                    rules: rulesOutput,
+                    checksum,
+                    timestamp: new Date().toISOString()
+                });
+            }
+            catch (error) {
+                core.warning(`⚠️  Failed to get current iptables ${chain} chain: ${error}`);
+            }
+        }
+        return currentState;
+    }
+    /**
+     * Generate detailed validation report
+     */
+    async generateValidationReport() {
+        if (!(0, fs_1.existsSync)(this.validationStateFile)) {
+            return '⚠️  No validation data available';
+        }
+        let report = '## 🔒 System Integrity Validation Report\n\n';
+        try {
+            const state = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
+            report += `**Validation Timestamp:** ${state.timestamp}\n\n`;
+            // File integrity report
+            report += '### 📁 File Integrity\n\n';
+            report += '| File | Status | Checksum (first 16 chars) |\n';
+            report += '|------|--------|---------------------------|\n';
+            for (const file of state.files) {
+                const currentChecksum = await this.calculateFileChecksum(file.path);
+                let status = '❓ Unknown';
+                let displayChecksum = file.checksum === 'FILE_NOT_EXISTS' ? 'N/A' : file.checksum.substring(0, 16);
+                if (file.checksum === 'FILE_NOT_EXISTS') {
+                    status = currentChecksum ? '✅ Created' : '⚠️  Not Created';
+                }
+                else if (!currentChecksum) {
+                    status = '❌ Deleted';
+                }
+                else if (currentChecksum === file.checksum) {
+                    status = '✅ Verified';
+                }
+                else {
+                    status = '❌ Tampered';
+                    displayChecksum = `${displayChecksum} → ${currentChecksum.substring(0, 16)}`;
+                }
+                report += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
+            }
+            // iptables integrity report
+            report += '\n### 🛡️ iptables Rules Integrity\n\n';
+            report += '| Chain | Status | Checksum (first 16 chars) |\n';
+            report += '|-------|--------|---------------------------|\n';
+            const currentIptablesState = await this.getCurrentIptablesState();
+            for (const rule of state.iptablesRules) {
+                const currentRule = currentIptablesState.find(r => r.chain === rule.chain);
+                let status = '❓ Unknown';
+                let displayChecksum = rule.checksum.substring(0, 16);
+                if (!currentRule) {
+                    status = '❌ Missing';
+                }
+                else if (currentRule.checksum === rule.checksum) {
+                    status = '✅ Verified';
+                }
+                else {
+                    status = '❌ Tampered';
+                    displayChecksum = `${displayChecksum} → ${currentRule.checksum.substring(0, 16)}`;
+                }
+                report += `| ${rule.chain} | ${status} | ${displayChecksum} |\n`;
+            }
+            report += '\n---\n*🔒 Generated by System Integrity Validator*\n';
+        }
+        catch (error) {
+            report += `❌ Failed to generate report: ${error}\n`;
+        }
+        return report;
+    }
+}
+exports.SystemValidator = SystemValidator;
 
 
 /***/ }),

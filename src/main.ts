@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
+import { SystemValidator } from './validation';
 
 async function run(): Promise<void> {
   try {
@@ -7,6 +8,10 @@ async function run(): Promise<void> {
     const allowedDomains = core.getInput('allowed-domains') || '';
 
     core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
+
+    // Step 0: Initialize validation system and capture pre-run state
+    const validator = new SystemValidator();
+    await validator.capturePreRunState();
 
     // Step 1: Install dependencies
     core.info('Installing dependencies...');
@@ -32,6 +37,14 @@ async function run(): Promise<void> {
     // Step 6: Finalize security rules
     core.info('Finalizing security rules...');
     await finalizeSecurityRules(mode);
+
+    // Step 7: Verify system integrity
+    core.info('Verifying system integrity...');
+    const validationPassed = await validator.verifyPostRunState();
+
+    if (!validationPassed) {
+      throw new Error('System integrity validation failed - potential tampering detected!');
+    }
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
 

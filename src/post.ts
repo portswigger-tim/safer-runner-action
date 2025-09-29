@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import { readFileSync } from 'fs';
+import { SystemValidator } from './validation';
 
 interface NetworkConnection {
   ip: string;
@@ -24,7 +25,12 @@ async function run(): Promise<void> {
 
     const connections = await parseNetworkLogs();
     const dnsResolutions = await parseDnsLogs();
-    await generateJobSummary(connections, dnsResolutions);
+
+    // Generate system integrity report
+    const validator = new SystemValidator();
+    const validationReport = await validator.generateValidationReport();
+
+    await generateJobSummary(connections, dnsResolutions, validationReport);
 
     core.info('✅ Network access summary generated');
 
@@ -267,7 +273,7 @@ function generateAllowedDomainsConfig(dnsResolutions: DnsResolution[]): string[]
   return Array.from(allowedDomains).sort();
 }
 
-async function generateJobSummary(connections: NetworkConnection[], dnsResolutions: DnsResolution[]): Promise<void> {
+async function generateJobSummary(connections: NetworkConnection[], dnsResolutions: DnsResolution[], validationReport: string): Promise<void> {
   const mode = core.getInput('mode') || 'analyze';
 
   let summary = `## 🛡️ Network Access Provenance\n\n`;
@@ -339,6 +345,9 @@ async function generateJobSummary(connections: NetworkConnection[], dnsResolutio
       summary += `\`\`\`\n\n`;
     }
   }
+
+  // Add system integrity validation report
+  summary += `${validationReport}\n`;
 
   summary += `---\n`;
   summary += `*🔒 Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
