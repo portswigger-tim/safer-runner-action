@@ -356,7 +356,14 @@ function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
     if (dns.status === 'BLOCKED') {
       status = `🚫 NXDOMAIN (Filtered)`;
     }
-    details += `| ${dns.domain} | ${dns.ip} | ${status} |\n`;
+
+    // Format IP addresses with <br/> separation for readability
+    let formattedIps = dns.ip;
+    if (dns.ip.includes(', ')) {
+      formattedIps = dns.ip.split(', ').join('<br/>');
+    }
+
+    details += `| ${dns.domain} | ${formattedIps} | ${status} |\n`;
   }
 
   details += `\n**Total domains:** ${dnsResolutions.length}`;
