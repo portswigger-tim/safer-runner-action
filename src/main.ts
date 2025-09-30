@@ -128,7 +128,8 @@ log-queries=extra
 
   // Add custom allowed domains if provided
   if (allowedDomains) {
-    for (const domain of allowedDomains.split(' ').filter(d => d.trim())) {
+    // Split on both spaces and newlines to handle both formats: 'domain1 domain2' and YAML | multiline
+    for (const domain of allowedDomains.split(/[\s\n]+/).filter(d => d.trim())) {
       dnsmasqConfig += `server=/${domain}/${dnsServer}\n`;
       dnsmasqConfig += `ipset=/${domain}/user\n`;
     }
