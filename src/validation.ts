@@ -128,8 +128,6 @@ export class SystemValidator {
           core.info(`✅ File ${fileState.path} integrity verified`);
         } else {
           core.error(`❌ File ${fileState.path} has been tampered with after setup!`);
-          core.error(`   Baseline:  ${fileState.checksum}`);
-          core.error(`   Current:   ${currentChecksum}`);
           allValid = false;
         }
       } catch (error) {
@@ -153,16 +151,12 @@ export class SystemValidator {
         core.info(`✅ iptables chain ${ruleState.chain} integrity verified`);
       } else {
         core.error(`❌ iptables chain ${ruleState.chain} has been tampered with after setup!`);
-        core.error(`   Baseline: ${ruleState.checksum}`);
-        core.error(`   Current:  ${currentRule.checksum}`);
         allValid = false;
       }
     }
 
     if (allValid) {
       core.info('✅ All validation checks passed - no tampering detected');
-    } else {
-      core.error('❌ Validation failed - potential tampering detected!');
     }
 
     return allValid;

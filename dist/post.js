@@ -54,11 +54,8 @@ async function run() {
         const validator = new validation_1.SystemValidator();
         const integrityValid = await validator.verifyAgainstBaseline();
         const validationReport = await validator.generateValidationReport();
-        if (!integrityValid) {
-            core.error('🚨 System integrity validation failed - potential tampering detected!');
-            // Note: We don't fail the action here as this is post-cleanup
-            // The validation report will show the tampering details
-        }
+        // Note: We don't fail the action if integrity validation fails as this is post-cleanup
+        // The validation report will show any tampering details
         await generateJobSummary(connections, dnsResolutions, validationReport);
         core.info('✅ Network access summary generated');
     }
@@ -736,8 +733,6 @@ class SystemValidator {
                 }
                 else {
                     core.error(`❌ File ${fileState.path} has been tampered with after setup!`);
-                    core.error(`   Baseline:  ${fileState.checksum}`);
-                    core.error(`   Current:   ${currentChecksum}`);
                     allValid = false;
                 }
             }
@@ -760,16 +755,11 @@ class SystemValidator {
             }
             else {
                 core.error(`❌ iptables chain ${ruleState.chain} has been tampered with after setup!`);
-                core.error(`   Baseline: ${ruleState.checksum}`);
-                core.error(`   Current:  ${currentRule.checksum}`);
                 allValid = false;
             }
         }
         if (allValid) {
             core.info('✅ All validation checks passed - no tampering detected');
-        }
-        else {
-            core.error('❌ Validation failed - potential tampering detected!');
         }
         return allValid;
     }

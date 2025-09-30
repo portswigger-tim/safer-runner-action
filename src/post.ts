@@ -31,11 +31,8 @@ async function run(): Promise<void> {
     const integrityValid = await validator.verifyAgainstBaseline();
     const validationReport = await validator.generateValidationReport();
 
-    if (!integrityValid) {
-      core.error('🚨 System integrity validation failed - potential tampering detected!');
-      // Note: We don't fail the action here as this is post-cleanup
-      // The validation report will show the tampering details
-    }
+    // Note: We don't fail the action if integrity validation fails as this is post-cleanup
+    // The validation report will show any tampering details
 
     await generateJobSummary(connections, dnsResolutions, validationReport);
 
