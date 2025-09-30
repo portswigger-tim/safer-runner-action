@@ -31,8 +31,8 @@ async function run(): Promise<void> {
     const integrityValid = await validator.verifyAgainstBaseline();
     const validationReport = await validator.generateValidationReport();
 
-    // Check if we should fail on tampering
-    const failOnTampering = core.getInput('fail-on-tampering') === 'true';
+    // Check if we should fail on tampering (GitHub Actions converts boolean inputs to strings)
+    const failOnTampering = core.getBooleanInput('fail-on-tampering');
 
     if (!integrityValid && failOnTampering) {
       core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');

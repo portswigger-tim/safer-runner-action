@@ -74,7 +74,7 @@ For security-critical workflows where any tampering should fail the workflow:
 - uses: portswigger-tim/safer-runner-action@v1
   with:
     mode: 'enforce'
-    fail-on-tampering: 'true'
+    fail-on-tampering: true
     allowed-domains: |
       api.trusted-service.com
       secure.partner.com
