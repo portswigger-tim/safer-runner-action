@@ -270,44 +270,86 @@ function generateAllowedDomainsConfig(dnsResolutions) {
 }
 async function generateJobSummary(connections, dnsResolutions, validationReport) {
     const mode = core.getInput('mode') || 'analyze';
-    // Calculate comprehensive stats
-    const stats = calculateStats(connections);
-    const dnsStats = calculateDnsStats(dnsResolutions);
-    // Group domains by type for better presentation
-    const domainGroups = categorizeDomains(dnsResolutions);
-    let summary = `# 🛡️ Safer Runner Security Report\n\n`;
-    // Executive Summary
-    summary += generateExecutiveSummary(mode, stats, dnsStats);
-    // Security Status (most important first)
-    summary += generateSecurityStatus(mode, stats, dnsStats);
-    // Domain Access Details (grouped logically)
-    summary += generateDomainAccessDetails(domainGroups, mode, connections, dnsResolutions);
-    // Show blocked/denied activity if any exists
-    if (stats.denied > 0 || dnsStats.blocked > 0) {
-        summary += generateThreatDetails(connections, dnsResolutions);
-    }
-    // Add suggested allowed-domains configuration for analyze mode
-    if (mode === 'analyze') {
-        const suggestedDomains = generateAllowedDomainsConfig(dnsResolutions);
-        if (suggestedDomains.length > 0) {
-            summary += `### 🔧 Suggested Configuration for Enforce Mode\n\n`;
-            summary += `Based on this run, to enable enforce mode with the domains you accessed, use:\n\n`;
-            summary += `\`\`\`yaml\n`;
-            summary += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-            summary += `  with:\n`;
-            summary += `    mode: 'enforce'\n`;
-            summary += `    allowed-domains: >-\n`;
-            for (const domain of suggestedDomains) {
-                summary += `      ${domain}\n`;
-            }
-            summary += `\`\`\`\n\n`;
-        }
-    }
-    // Add system integrity validation report
+    let summary = `# Safer Runner Security Report\n\n`;
+    const modeIcon = mode === 'enforce' ? '🔒' : '📊';
+    summary += `**Mode:** ${modeIcon} ${mode.toUpperCase()}\n`;
+    summary += `**Generated:** ${new Date().toISOString()}\n\n`;
+    // 1. Network Connection Details
+    summary += generateNetworkConnectionDetails(connections);
+    // 2. DNS Information
+    summary += generateDnsDetails(dnsResolutions);
+    // 3. Config File Tamper Detection
     summary += `${validationReport}\n`;
-    summary += `---\n`;
-    summary += `*🔒 Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
+    // 4. Configuration Advice (for analyze mode)
+    if (mode === 'analyze') {
+        summary += generateConfigurationAdvice(dnsResolutions);
+    }
+    summary += `---\n*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
     await core.summary.addRaw(summary).write();
+}
+function generateNetworkConnectionDetails(connections) {
+    let details = `## Network Connection Details\n\n`;
+    if (connections.length === 0) {
+        details += `No network connections recorded.\n\n`;
+        return details;
+    }
+    details += `| IP Address | Port | Status | Source |\n`;
+    details += `|------------|------|--------|--------|\n`;
+    const deniedCount = connections.filter(c => c.status === 'DENIED').length;
+    for (const conn of connections) {
+        let statusDisplay = conn.status;
+        if (conn.status === 'DENIED') {
+            statusDisplay = `🚫 ${conn.status}`;
+        }
+        details += `| ${conn.ip} | ${conn.port} | ${statusDisplay} | ${conn.source} |\n`;
+    }
+    details += `\n**Total connections:** ${connections.length}`;
+    if (deniedCount > 0) {
+        details += ` (🛡️ ${deniedCount} blocked)`;
+    }
+    details += `\n\n`;
+    return details;
+}
+function generateDnsDetails(dnsResolutions) {
+    let details = `## DNS Information\n\n`;
+    if (dnsResolutions.length === 0) {
+        details += `No DNS resolutions recorded.\n\n`;
+        return details;
+    }
+    details += `| Domain | IP Address(es) | Status |\n`;
+    details += `|--------|----------------|--------|\n`;
+    const blockedCount = dnsResolutions.filter(d => d.status === 'BLOCKED').length;
+    for (const dns of dnsResolutions) {
+        let status = dns.status;
+        if (dns.status === 'BLOCKED') {
+            status = `🚫 NXDOMAIN (Filtered)`;
+        }
+        details += `| ${dns.domain} | ${dns.ip} | ${status} |\n`;
+    }
+    details += `\n**Total domains:** ${dnsResolutions.length}`;
+    if (blockedCount > 0) {
+        details += ` (🛡️ ${blockedCount} filtered)`;
+    }
+    details += `\n\n`;
+    return details;
+}
+function generateConfigurationAdvice(dnsResolutions) {
+    const suggestedDomains = generateAllowedDomainsConfig(dnsResolutions);
+    if (suggestedDomains.length === 0) {
+        return `## Configuration Advice\n\nNo additional domains detected for allowlist configuration.\n\n`;
+    }
+    let advice = `## Configuration Advice\n\n`;
+    advice += `To run in enforce mode with the domains accessed in this workflow, add these domains to your configuration:\n\n`;
+    advice += `\`\`\`yaml\n`;
+    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+    advice += `  with:\n`;
+    advice += `    mode: 'enforce'\n`;
+    advice += `    allowed-domains: |\n`;
+    for (const domain of suggestedDomains) {
+        advice += `      ${domain}\n`;
+    }
+    advice += `\`\`\`\n\n`;
+    return advice;
 }
 function getStatusIcon(status) {
     switch (status) {
@@ -809,62 +851,62 @@ class SystemValidator {
      */
     async generateValidationReport() {
         if (!(0, fs_1.existsSync)(this.validationStateFile)) {
-            return '⚠️  No validation data available';
+            return '## Config File Tamper Detection\n\nNo validation data available.\n\n';
         }
-        let report = '## 🔒 System Integrity Validation Report\n\n';
+        let report = '## Config File Tamper Detection\n\n';
         try {
             const state = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
-            report += `**Baseline Captured:** ${state.timestamp}\n`;
-            report += `**Verification Time:** ${new Date().toISOString()}\n\n`;
+            report += `**Baseline:** ${state.timestamp}\n`;
+            report += `**Verified:** ${new Date().toISOString()}\n\n`;
             // File integrity report
-            report += '### 📁 File Integrity (Post-Setup → Current)\n\n';
-            report += '| File | Status | Baseline → Current (first 16 chars) |\n';
-            report += '|------|--------|---------------------------------|\n';
+            report += '### Configuration Files\n\n';
+            report += '| File | Status | Checksum Comparison |\n';
+            report += '|------|--------|--------------------|\n';
             for (const file of state.files) {
                 const currentChecksum = await this.calculateFileChecksum(file.path);
-                let status = '❓ Unknown';
+                let status = 'Unknown';
                 let displayChecksum = file.checksum.substring(0, 16);
                 if (!currentChecksum) {
-                    status = '❌ Deleted';
-                    displayChecksum = `${displayChecksum} → MISSING`;
+                    status = '🚨 DELETED';
+                    displayChecksum = `${displayChecksum} -> MISSING`;
                 }
                 else if (currentChecksum === file.checksum) {
-                    status = '✅ Verified';
-                    displayChecksum = `${displayChecksum} ✓`;
+                    status = 'VERIFIED';
+                    displayChecksum = `${displayChecksum} (unchanged)`;
                 }
                 else {
-                    status = '❌ Tampered';
-                    displayChecksum = `${displayChecksum} → ${currentChecksum.substring(0, 16)}`;
+                    status = '⚠️ TAMPERED';
+                    displayChecksum = `${displayChecksum} -> ${currentChecksum.substring(0, 16)}`;
                 }
                 report += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
             }
             // iptables integrity report
-            report += '\n### 🛡️ iptables Rules Integrity (Post-Setup → Current)\n\n';
-            report += '| Chain | Status | Baseline → Current (first 16 chars) |\n';
-            report += '|-------|--------|---------------------------------|\n';
+            report += '\n### Firewall Rules\n\n';
+            report += '| Chain | Status | Checksum Comparison |\n';
+            report += '|-------|--------|--------------|\n';
             const currentIptablesState = await this.getCurrentIptablesState();
             for (const rule of state.iptablesRules) {
                 const currentRule = currentIptablesState.find(r => r.chain === rule.chain);
-                let status = '❓ Unknown';
+                let status = 'Unknown';
                 let displayChecksum = rule.checksum.substring(0, 16);
                 if (!currentRule) {
-                    status = '❌ Missing';
-                    displayChecksum = `${displayChecksum} → MISSING`;
+                    status = '🚨 MISSING';
+                    displayChecksum = `${displayChecksum} -> MISSING`;
                 }
                 else if (currentRule.checksum === rule.checksum) {
-                    status = '✅ Verified';
-                    displayChecksum = `${displayChecksum} ✓`;
+                    status = 'VERIFIED';
+                    displayChecksum = `${displayChecksum} (unchanged)`;
                 }
                 else {
-                    status = '❌ Tampered';
-                    displayChecksum = `${displayChecksum} → ${currentRule.checksum.substring(0, 16)}`;
+                    status = '⚠️ TAMPERED';
+                    displayChecksum = `${displayChecksum} -> ${currentRule.checksum.substring(0, 16)}`;
                 }
                 report += `| ${rule.chain} | ${status} | ${displayChecksum} |\n`;
             }
-            report += '\n---\n*🔒 Generated by System Integrity Validator*\n';
+            report += '\n';
         }
         catch (error) {
-            report += `❌ Failed to generate report: ${error}\n`;
+            report += `Failed to generate report: ${error}\n`;
         }
         return report;
     }
