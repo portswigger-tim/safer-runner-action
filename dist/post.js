@@ -54,8 +54,12 @@ async function run() {
         const validator = new validation_1.SystemValidator();
         const integrityValid = await validator.verifyAgainstBaseline();
         const validationReport = await validator.generateValidationReport();
-        // Note: We don't fail the action if integrity validation fails as this is post-cleanup
-        // The validation report will show any tampering details
+        // Check if we should fail on tampering
+        const failOnTampering = core.getInput('fail-on-tampering') === 'true';
+        if (!integrityValid && failOnTampering) {
+            core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
+            return; // Exit early - the validation report will still be in the logs above
+        }
         await generateJobSummary(connections, dnsResolutions, validationReport);
         core.info('✅ Network access summary generated');
     }

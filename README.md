@@ -66,12 +66,36 @@ steps:
       curl https://api.trusted-service.com/data
 ```
 
+### Security-Critical Workflows
+
+For security-critical workflows where any tampering should fail the workflow:
+
+```yaml
+- uses: portswigger-tim/safer-runner-action@v1
+  with:
+    mode: 'enforce'
+    fail-on-tampering: 'true'
+    allowed-domains: |
+      api.trusted-service.com
+      secure.partner.com
+
+- name: Security-critical deployment
+  run: |
+    # Your workflow steps will complete normally
+    ./deploy-to-production.sh
+
+# Note: If tampering is detected, the workflow will fail in the post-job
+# after all your workflow steps have completed, ensuring you get the
+# security report while still marking the workflow as failed.
+```
+
 ## Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `mode` | Operation mode: `analyze` logs traffic without blocking, `enforce` blocks unauthorized domains | No | `analyze` |
 | `allowed-domains` | Space-separated list of additional domains to allow (beyond GitHub required domains) | No | `''` |
+| `fail-on-tampering` | Whether to fail the workflow after job completion if security configuration tampering is detected | No | `false` |
 
 ## Pre-configured GitHub Domains
 
