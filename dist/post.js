@@ -1,11 +1,18 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 5960:
+/***/ 1106:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+/**
+ * DNS Log Parser
+ *
+ * Parses dnsmasq logs from syslog to extract DNS resolutions.
+ * Tracks request chains by request ID to map domains to their final
+ * IP addresses, filtering out intermediate CNAME records.
+ */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -40,98 +47,15 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDnsLogs = parseDnsLogs;
+exports.parseDnsLogsFromString = parseDnsLogsFromString;
+exports.parseRequestChains = parseRequestChains;
+exports.deduplicateDnsResolutions = deduplicateDnsResolutions;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
-const validation_1 = __nccwpck_require__(8449);
-async function run() {
-    try {
-        core.info('🔍 Analyzing network access logs...');
-        // Wait for logs to be written
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const connections = await parseNetworkLogs();
-        const dnsResolutions = await parseDnsLogs();
-        // Verify system integrity against post-setup baseline
-        const validator = new validation_1.SystemValidator();
-        const integrityValid = await validator.verifyAgainstBaseline();
-        const validationReport = await validator.generateValidationReport();
-        // Check if we should fail on tampering (GitHub Actions converts boolean inputs to strings)
-        const failOnTampering = core.getBooleanInput('fail-on-tampering');
-        if (!integrityValid && failOnTampering) {
-            core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
-            return; // Exit early - the validation report will still be in the logs above
-        }
-        await generateJobSummary(connections, dnsResolutions, validationReport);
-        core.info('✅ Network access summary generated');
-    }
-    catch (error) {
-        core.warning(`Failed to generate network summary: ${error}`);
-        // Don't fail the entire action if log analysis fails
-    }
-}
-async function parseNetworkLogs() {
-    const connections = [];
-    try {
-        // Get syslog content
-        let syslogOutput = '';
-        await exec.exec('sudo', ['grep', '-E', 'GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ', '/var/log/syslog'], {
-            listeners: {
-                stdout: (data) => { syslogOutput += data.toString(); }
-            },
-            ignoreReturnCode: true
-        });
-        const lines = syslogOutput.split('\n').filter(line => line.trim());
-        for (const line of lines) {
-            const connection = parseLogLine(line);
-            if (connection) {
-                connections.push(connection);
-            }
-        }
-        // Remove duplicates and limit results
-        return deduplicateConnections(connections).slice(0, 20);
-    }
-    catch (error) {
-        core.warning(`Failed to parse logs: ${error}`);
-        return [];
-    }
-}
-function parseLogLine(line) {
-    // Parse iptables log format
-    const ipMatch = line.match(/DST=([0-9.]+)/);
-    const portMatch = line.match(/DPT=([0-9]+)/);
-    if (!ipMatch)
-        return null;
-    const ip = ipMatch[1];
-    const port = portMatch ? portMatch[1] : '443';
-    let status = 'UNKNOWN';
-    let source = 'Unknown';
-    if (line.includes('GitHub-Allow: ')) {
-        status = 'ALLOWED';
-        source = 'GitHub Required';
-    }
-    else if (line.includes('User-Allow: ')) {
-        status = 'ALLOWED';
-        source = 'User Defined';
-    }
-    else if (line.includes('Drop-Enforce: ')) {
-        status = 'DENIED';
-        source = 'Firewall Drop';
-    }
-    else if (line.includes('Allow-Analyze: ')) {
-        status = 'ANALYZED';
-        source = 'Monitor Only';
-    }
-    return { ip, port, status, source };
-}
-function deduplicateConnections(connections) {
-    const seen = new Map();
-    for (const conn of connections) {
-        const key = `${conn.ip}:${conn.port}`;
-        if (!seen.has(key)) {
-            seen.set(key, conn);
-        }
-    }
-    return Array.from(seen.values());
-}
+/**
+ * Parse DNS logs from syslog to extract domain resolutions
+ */
 async function parseDnsLogs() {
     try {
         // Get DNS-related logs from syslog
@@ -142,17 +66,26 @@ async function parseDnsLogs() {
             },
             ignoreReturnCode: true
         });
-        const lines = syslogOutput.split('\n').filter(line => line.trim());
-        // Group log entries by request ID and extract final resolutions
-        const resolutions = parseRequestChains(lines);
-        // Remove duplicates and limit results
-        return deduplicateDnsResolutions(resolutions).slice(0, 20);
+        return parseDnsLogsFromString(syslogOutput);
     }
     catch (error) {
         core.warning(`Failed to parse DNS logs: ${error}`);
         return [];
     }
 }
+/**
+ * Parse DNS logs from a string (for testing)
+ */
+function parseDnsLogsFromString(logContent) {
+    const lines = logContent.split('\n').filter(line => line.trim());
+    // Group log entries by request ID and extract final resolutions
+    const resolutions = parseRequestChains(lines);
+    // Remove duplicates and limit results
+    return deduplicateDnsResolutions(resolutions).slice(0, 20);
+}
+/**
+ * Parse DNS log lines and track request chains to identify final resolutions
+ */
 function parseRequestChains(lines) {
     // Map of request ID to request chain
     const requestChains = new Map();
@@ -170,7 +103,7 @@ function parseRequestChains(lines) {
             if (!requestChains.has(requestId)) {
                 requestChains.set(requestId, {
                     queriedDomain: queryMatch[1],
-                    finalIp: null,
+                    ips: [],
                     status: 'QUERIED'
                 });
             }
@@ -180,7 +113,7 @@ function parseRequestChains(lines) {
         const ipReplyMatch = line.match(new RegExp(`reply [^\\s]+ is (${ipv4Pattern})`));
         if (ipReplyMatch && requestChains.has(requestId)) {
             const chain = requestChains.get(requestId);
-            chain.finalIp = ipReplyMatch[1];
+            chain.ips.push(ipReplyMatch[1]);
             chain.status = 'RESOLVED';
             continue;
         }
@@ -188,7 +121,7 @@ function parseRequestChains(lines) {
         const nxdomainMatch = line.match(/config ([^\s]+) is NXDOMAIN/);
         if (nxdomainMatch && requestChains.has(requestId)) {
             const chain = requestChains.get(requestId);
-            chain.finalIp = 'NXDOMAIN';
+            chain.ips = ['NXDOMAIN'];
             chain.status = 'BLOCKED';
             continue;
         }
@@ -197,16 +130,19 @@ function parseRequestChains(lines) {
     // Convert request chains to DnsResolution objects
     const resolutions = [];
     for (const chain of requestChains.values()) {
-        if (chain.finalIp) {
+        if (chain.ips.length > 0) {
             resolutions.push({
                 domain: chain.queriedDomain,
-                ip: chain.finalIp,
+                ip: chain.ips.length === 1 ? chain.ips[0] : chain.ips.join(', '),
                 status: chain.status
             });
         }
     }
     return resolutions;
 }
+/**
+ * Deduplicate DNS resolutions, prioritizing RESOLVED > BLOCKED > QUERIED
+ */
 function deduplicateDnsResolutions(resolutions) {
     const domainMap = new Map();
     // Group resolutions by domain
@@ -255,6 +191,213 @@ function deduplicateDnsResolutions(resolutions) {
         }
     }
     return result;
+}
+
+
+/***/ }),
+
+/***/ 8089:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Network Log Parser
+ *
+ * Parses iptables logs from syslog to extract network connection attempts.
+ * Identifies connections by status (ALLOWED, DENIED, ANALYZED) and source
+ * (GitHub Required, User Defined, Firewall Drop, Monitor Only).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseNetworkLogs = parseNetworkLogs;
+exports.parseNetworkLogsFromString = parseNetworkLogsFromString;
+exports.parseLogLine = parseLogLine;
+exports.deduplicateConnections = deduplicateConnections;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+/**
+ * Parse network logs from syslog to extract connection attempts
+ */
+async function parseNetworkLogs() {
+    try {
+        // Get syslog content
+        let syslogOutput = '';
+        await exec.exec('sudo', ['grep', '-E', 'GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ', '/var/log/syslog'], {
+            listeners: {
+                stdout: (data) => { syslogOutput += data.toString(); }
+            },
+            ignoreReturnCode: true
+        });
+        return parseNetworkLogsFromString(syslogOutput);
+    }
+    catch (error) {
+        core.warning(`Failed to parse logs: ${error}`);
+        return [];
+    }
+}
+/**
+ * Parse network logs from a string (for testing)
+ */
+function parseNetworkLogsFromString(logContent) {
+    const connections = [];
+    const lines = logContent.split('\n').filter(line => line.trim());
+    for (const line of lines) {
+        const connection = parseLogLine(line);
+        if (connection) {
+            connections.push(connection);
+        }
+    }
+    // Remove duplicates and limit results
+    return deduplicateConnections(connections).slice(0, 20);
+}
+/**
+ * Parse a single iptables log line to extract connection details
+ */
+function parseLogLine(line) {
+    // Parse iptables log format
+    const ipMatch = line.match(/DST=([0-9.]+)/);
+    const portMatch = line.match(/DPT=([0-9]+)/);
+    if (!ipMatch)
+        return null;
+    const ip = ipMatch[1];
+    const port = portMatch ? portMatch[1] : '443';
+    let status = 'UNKNOWN';
+    let source = 'Unknown';
+    if (line.includes('GitHub-Allow: ')) {
+        status = 'ALLOWED';
+        source = 'GitHub Required';
+    }
+    else if (line.includes('User-Allow: ')) {
+        status = 'ALLOWED';
+        source = 'User Defined';
+    }
+    else if (line.includes('Drop-Enforce: ')) {
+        status = 'DENIED';
+        source = 'Firewall Drop';
+    }
+    else if (line.includes('Allow-Analyze: ')) {
+        status = 'ANALYZED';
+        source = 'Monitor Only';
+    }
+    return { ip, port, status, source };
+}
+/**
+ * Remove duplicate connections (same IP:port combination)
+ */
+function deduplicateConnections(connections) {
+    const seen = new Map();
+    for (const conn of connections) {
+        const key = `${conn.ip}:${conn.port}`;
+        if (!seen.has(key)) {
+            seen.set(key, conn);
+        }
+    }
+    return Array.from(seen.values());
+}
+
+
+/***/ }),
+
+/***/ 5960:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const core = __importStar(__nccwpck_require__(7484));
+const validation_1 = __nccwpck_require__(8449);
+const network_parser_1 = __nccwpck_require__(8089);
+const dns_parser_1 = __nccwpck_require__(1106);
+async function run() {
+    try {
+        core.info('🔍 Analyzing network access logs...');
+        // Wait for logs to be written
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const connections = await (0, network_parser_1.parseNetworkLogs)();
+        const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)();
+        // Verify system integrity against post-setup baseline
+        const validator = new validation_1.SystemValidator();
+        const integrityValid = await validator.verifyAgainstBaseline();
+        const validationReport = await validator.generateValidationReport();
+        // Check if we should fail on tampering (GitHub Actions converts boolean inputs to strings)
+        const failOnTampering = core.getBooleanInput('fail-on-tampering');
+        if (!integrityValid && failOnTampering) {
+            core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
+            return; // Exit early - the validation report will still be in the logs above
+        }
+        await generateJobSummary(connections, dnsResolutions, validationReport);
+        core.info('✅ Network access summary generated');
+    }
+    catch (error) {
+        core.warning(`Failed to generate network summary: ${error}`);
+        // Don't fail the entire action if log analysis fails
+    }
 }
 function getGitHubRequiredDomains() {
     // GitHub required domains (must match main.ts)
