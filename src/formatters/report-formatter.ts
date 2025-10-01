@@ -7,7 +7,7 @@
 
 import { NetworkConnection } from '../parsers/network-parser';
 import { DnsResolution } from '../parsers/dns-parser';
-import { getGitHubRequiredDomains, isGitHubInfrastructure } from '../parsers/github-parser';
+import { getGitHubRequiredDomains, isGitHubInfrastructure, isGitHubRelated } from '../parsers/github-parser';
 
 /**
  * Format network connections into markdown table
@@ -135,12 +135,33 @@ export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
 }
 
 /**
+ * Extract allowed domains from DNS resolutions (excludes GitHub-related domains)
+ *
+ * @param dnsResolutions - List of DNS resolutions
+ * @returns Array of non-GitHub domains that should be allowlisted
+ */
+function extractAllowedDomains(dnsResolutions: DnsResolution[]): string[] {
+  const allowedDomains = new Set<string>();
+
+  for (const dns of dnsResolutions) {
+    // Include resolved domains (both IPv4 and CNAME) that are not GitHub-related
+    if (dns.status === 'RESOLVED' && !isGitHubRelated(dns.domain)) {
+      allowedDomains.add(dns.domain);
+    }
+  }
+
+  return Array.from(allowedDomains).sort();
+}
+
+/**
  * Generate configuration advice for analyze mode
  *
- * @param suggestedDomains - List of domains to suggest for allowlist
+ * @param dnsResolutions - List of DNS resolutions to analyze
  * @returns Markdown-formatted configuration advice
  */
-export function generateConfigurationAdvice(suggestedDomains: string[]): string {
+export function generateConfigurationAdvice(dnsResolutions: DnsResolution[]): string {
+  const suggestedDomains = extractAllowedDomains(dnsResolutions);
+
   if (suggestedDomains.length === 0) {
     return `## Configuration Advice\n\nNo additional domains detected for allowlist configuration.\n\n`;
   }

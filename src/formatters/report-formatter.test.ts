@@ -230,15 +230,47 @@ describe('Report Formatter', () => {
   });
 
   describe('generateConfigurationAdvice', () => {
-    it('should handle empty domain list', () => {
+    it('should handle empty DNS resolutions', () => {
       const result = generateConfigurationAdvice([]);
 
       expect(result).toContain('## Configuration Advice');
       expect(result).toContain('No additional domains detected');
     });
 
+    it('should filter out GitHub-related domains', () => {
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' },
+        { domain: 'github.com', ip: '140.82.121.3', status: 'RESOLVED' },
+        { domain: 'actions.githubusercontent.com', ip: '140.82.121.4', status: 'RESOLVED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
+
+      expect(result).toContain('example.com');
+      expect(result).not.toContain('github.com');
+      expect(result).not.toContain('actions.githubusercontent.com');
+    });
+
+    it('should only include RESOLVED domains', () => {
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' },
+        { domain: 'blocked.com', ip: 'NXDOMAIN', status: 'BLOCKED' },
+        { domain: 'queried.com', ip: '', status: 'QUERIED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
+
+      expect(result).toContain('example.com');
+      expect(result).not.toContain('blocked.com');
+      expect(result).not.toContain('queried.com');
+    });
+
     it('should generate YAML configuration for single domain', () => {
-      const result = generateConfigurationAdvice(['example.com']);
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
 
       expect(result).toContain('## Configuration Advice');
       expect(result).toContain('```yaml');
@@ -249,16 +281,27 @@ describe('Report Formatter', () => {
     });
 
     it('should generate YAML configuration for multiple domains', () => {
-      const result = generateConfigurationAdvice(['example.com', 'test.org', 'api.service.io']);
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' },
+        { domain: 'test.org', ip: '5.6.7.8', status: 'RESOLVED' },
+        { domain: 'api.service.io', ip: '9.10.11.12', status: 'RESOLVED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
 
       expect(result).toContain('example.com');
       expect(result).toContain('test.org');
       expect(result).toContain('api.service.io');
     });
 
-    it('should maintain domain order', () => {
-      const domains = ['aaa.com', 'bbb.com', 'ccc.com'];
-      const result = generateConfigurationAdvice(domains);
+    it('should maintain alphabetical order', () => {
+      const resolutions: DnsResolution[] = [
+        { domain: 'ccc.com', ip: '1.2.3.4', status: 'RESOLVED' },
+        { domain: 'aaa.com', ip: '5.6.7.8', status: 'RESOLVED' },
+        { domain: 'bbb.com', ip: '9.10.11.12', status: 'RESOLVED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
 
       const aaaIndex = result.indexOf('aaa.com');
       const bbbIndex = result.indexOf('bbb.com');
@@ -268,15 +311,35 @@ describe('Report Formatter', () => {
       expect(bbbIndex).toBeLessThan(cccIndex);
     });
 
+    it('should deduplicate domains', () => {
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' },
+        { domain: 'example.com', ip: '5.6.7.8', status: 'RESOLVED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
+
+      const matches = result.match(/example\.com/g);
+      expect(matches?.length).toBe(1);
+    });
+
     it('should use correct YAML indentation', () => {
-      const result = generateConfigurationAdvice(['example.com']);
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
 
       // Check proper YAML indentation (6 spaces before domain)
       expect(result).toContain('      example.com');
     });
 
     it('should include action reference', () => {
-      const result = generateConfigurationAdvice(['example.com']);
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions);
 
       expect(result).toContain('portswigger-tim/safer-runner-action@v1');
     });

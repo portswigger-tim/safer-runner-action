@@ -413,6 +413,10 @@ const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs_1 = __nccwpck_require__(9896);
+/**
+ * Standard iptables chains to monitor for tampering
+ */
+const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'];
 class SystemValidator {
     constructor(criticalFiles) {
         this.validationStateFile = '/tmp/safer-runner-validation-state.json';
@@ -563,8 +567,7 @@ class SystemValidator {
      * Capture current iptables state
      */
     async captureIptablesState(state) {
-        const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
-        for (const chain of chains) {
+        for (const chain of IPTABLES_CHAINS) {
             try {
                 const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);
@@ -585,9 +588,8 @@ class SystemValidator {
      * Get current iptables state for comparison
      */
     async getCurrentIptablesState() {
-        const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
         const currentState = [];
-        for (const chain of chains) {
+        for (const chain of IPTABLES_CHAINS) {
             try {
                 const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);

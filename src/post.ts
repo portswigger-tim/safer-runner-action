@@ -4,7 +4,6 @@ import { readFileSync } from 'fs';
 import { SystemValidator } from './validation';
 import { parseNetworkLogs, NetworkConnection } from './parsers/network-parser';
 import { parseDnsLogs, DnsResolution } from './parsers/dns-parser';
-import { isGitHubRelated } from './parsers/github-parser';
 import {
   generateNetworkConnectionDetails,
   generateDnsDetails,
@@ -44,19 +43,6 @@ async function run(): Promise<void> {
   }
 }
 
-function generateAllowedDomainsConfig(dnsResolutions: DnsResolution[]): string[] {
-  const allowedDomains = new Set<string>();
-
-  for (const dns of dnsResolutions) {
-    // Include resolved domains (both IPv4 and CNAME) that are not GitHub-related
-    if (dns.status === 'RESOLVED' && !isGitHubRelated(dns.domain)) {
-      allowedDomains.add(dns.domain);
-    }
-  }
-
-  return Array.from(allowedDomains).sort();
-}
-
 async function generateJobSummary(connections: NetworkConnection[], dnsResolutions: DnsResolution[], validationReport: string): Promise<void> {
   const mode = core.getInput('mode') || 'analyze';
   const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
@@ -91,8 +77,7 @@ async function generateJobSummary(connections: NetworkConnection[], dnsResolutio
 
   // 4. Configuration Advice (for analyze mode)
   if (mode === 'analyze') {
-    const suggestedDomains = generateAllowedDomainsConfig(dnsResolutions);
-    summary += generateConfigurationAdvice(suggestedDomains);
+    summary += generateConfigurationAdvice(dnsResolutions);
   }
 
   summary += `---\n*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;

@@ -38,6 +38,11 @@ interface ValidationState {
   timestamp: string;
 }
 
+/**
+ * Standard iptables chains to monitor for tampering
+ */
+const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'] as const;
+
 export class SystemValidator {
   private validationStateFile = '/tmp/safer-runner-validation-state.json';
   private criticalFiles: string[];
@@ -204,9 +209,7 @@ export class SystemValidator {
    * Capture current iptables state
    */
   private async captureIptablesState(state: ValidationState): Promise<void> {
-    const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
-
-    for (const chain of chains) {
+    for (const chain of IPTABLES_CHAINS) {
       try {
         const rulesOutput = await this.getIptablesChainOutput(chain);
 
@@ -229,10 +232,9 @@ export class SystemValidator {
    * Get current iptables state for comparison
    */
   private async getCurrentIptablesState(): Promise<IptablesRuleChecksum[]> {
-    const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
     const currentState: IptablesRuleChecksum[] = [];
 
-    for (const chain of chains) {
+    for (const chain of IPTABLES_CHAINS) {
       try {
         const rulesOutput = await this.getIptablesChainOutput(chain);
 

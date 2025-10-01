@@ -123,12 +123,29 @@ function generateDnsDetails(dnsResolutions) {
     return details;
 }
 /**
+ * Extract allowed domains from DNS resolutions (excludes GitHub-related domains)
+ *
+ * @param dnsResolutions - List of DNS resolutions
+ * @returns Array of non-GitHub domains that should be allowlisted
+ */
+function extractAllowedDomains(dnsResolutions) {
+    const allowedDomains = new Set();
+    for (const dns of dnsResolutions) {
+        // Include resolved domains (both IPv4 and CNAME) that are not GitHub-related
+        if (dns.status === 'RESOLVED' && !(0, github_parser_1.isGitHubRelated)(dns.domain)) {
+            allowedDomains.add(dns.domain);
+        }
+    }
+    return Array.from(allowedDomains).sort();
+}
+/**
  * Generate configuration advice for analyze mode
  *
- * @param suggestedDomains - List of domains to suggest for allowlist
+ * @param dnsResolutions - List of DNS resolutions to analyze
  * @returns Markdown-formatted configuration advice
  */
-function generateConfigurationAdvice(suggestedDomains) {
+function generateConfigurationAdvice(dnsResolutions) {
+    const suggestedDomains = extractAllowedDomains(dnsResolutions);
     if (suggestedDomains.length === 0) {
         return `## Configuration Advice\n\nNo additional domains detected for allowlist configuration.\n\n`;
     }
@@ -670,7 +687,6 @@ const core = __importStar(__nccwpck_require__(7484));
 const validation_1 = __nccwpck_require__(8449);
 const network_parser_1 = __nccwpck_require__(8089);
 const dns_parser_1 = __nccwpck_require__(1106);
-const github_parser_1 = __nccwpck_require__(9170);
 const report_formatter_1 = __nccwpck_require__(5601);
 async function run() {
     try {
@@ -696,16 +712,6 @@ async function run() {
         core.warning(`Failed to generate network summary: ${error}`);
         // Don't fail the entire action if log analysis fails
     }
-}
-function generateAllowedDomainsConfig(dnsResolutions) {
-    const allowedDomains = new Set();
-    for (const dns of dnsResolutions) {
-        // Include resolved domains (both IPv4 and CNAME) that are not GitHub-related
-        if (dns.status === 'RESOLVED' && !(0, github_parser_1.isGitHubRelated)(dns.domain)) {
-            allowedDomains.add(dns.domain);
-        }
-    }
-    return Array.from(allowedDomains).sort();
 }
 async function generateJobSummary(connections, dnsResolutions, validationReport) {
     const mode = core.getInput('mode') || 'analyze';
@@ -734,8 +740,7 @@ async function generateJobSummary(connections, dnsResolutions, validationReport)
     summary += `${validationReport}\n`;
     // 4. Configuration Advice (for analyze mode)
     if (mode === 'analyze') {
-        const suggestedDomains = generateAllowedDomainsConfig(dnsResolutions);
-        summary += (0, report_formatter_1.generateConfigurationAdvice)(suggestedDomains);
+        summary += (0, report_formatter_1.generateConfigurationAdvice)(dnsResolutions);
     }
     summary += `---\n*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
     await core.summary.addRaw(summary).write();
@@ -804,6 +809,10 @@ const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs_1 = __nccwpck_require__(9896);
+/**
+ * Standard iptables chains to monitor for tampering
+ */
+const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'];
 class SystemValidator {
     constructor(criticalFiles) {
         this.validationStateFile = '/tmp/safer-runner-validation-state.json';
@@ -954,8 +963,7 @@ class SystemValidator {
      * Capture current iptables state
      */
     async captureIptablesState(state) {
-        const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
-        for (const chain of chains) {
+        for (const chain of IPTABLES_CHAINS) {
             try {
                 const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);
@@ -976,9 +984,8 @@ class SystemValidator {
      * Get current iptables state for comparison
      */
     async getCurrentIptablesState() {
-        const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
         const currentState = [];
-        for (const chain of chains) {
+        for (const chain of IPTABLES_CHAINS) {
             try {
                 const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);
