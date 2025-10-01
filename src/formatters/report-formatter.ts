@@ -7,7 +7,7 @@
 
 import { NetworkConnection } from '../parsers/network-parser';
 import { DnsResolution } from '../parsers/dns-parser';
-import { getGitHubRequiredDomains, isGitHubInfrastructure, isGitHubRelated } from '../parsers/github-parser';
+import { isGitHubRelated } from '../parsers/github-parser';
 
 /**
  * Format network connections into markdown table
@@ -82,15 +82,9 @@ export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
     return details;
   }
 
-  const githubDomains = new Set(getGitHubRequiredDomains());
-
   // Separate GitHub and non-GitHub DNS resolutions
-  const githubDns = dnsResolutions.filter(d =>
-    githubDomains.has(d.domain) || isGitHubInfrastructure(d.domain)
-  );
-  const userDns = dnsResolutions.filter(d =>
-    !githubDomains.has(d.domain) && !isGitHubInfrastructure(d.domain)
-  );
+  const githubDns = dnsResolutions.filter(d => isGitHubRelated(d.domain));
+  const userDns = dnsResolutions.filter(d => !isGitHubRelated(d.domain));
   const blockedDns = dnsResolutions.filter(d => d.status === 'BLOCKED');
 
   // Show user-defined and blocked DNS first (most important)

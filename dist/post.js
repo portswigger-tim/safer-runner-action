@@ -83,10 +83,9 @@ function generateDnsDetails(dnsResolutions) {
         details += `No DNS resolutions recorded.\n\n`;
         return details;
     }
-    const githubDomains = new Set((0, github_parser_1.getGitHubRequiredDomains)());
     // Separate GitHub and non-GitHub DNS resolutions
-    const githubDns = dnsResolutions.filter(d => githubDomains.has(d.domain) || (0, github_parser_1.isGitHubInfrastructure)(d.domain));
-    const userDns = dnsResolutions.filter(d => !githubDomains.has(d.domain) && !(0, github_parser_1.isGitHubInfrastructure)(d.domain));
+    const githubDns = dnsResolutions.filter(d => (0, github_parser_1.isGitHubRelated)(d.domain));
+    const userDns = dnsResolutions.filter(d => !(0, github_parser_1.isGitHubRelated)(d.domain));
     const blockedDns = dnsResolutions.filter(d => d.status === 'BLOCKED');
     // Show user-defined and blocked DNS first (most important)
     if (userDns.length > 0 || blockedDns.length > 0) {
