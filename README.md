@@ -5,7 +5,8 @@ A GitHub composite action that adds a network security layer to GitHub Actions r
 ## Features
 
 - **Dual Operation Modes**: `analyze` mode for traffic monitoring, `enforce` mode for active blocking
-- **DNS Filtering**: Uses DNSMasq with Quad9 (9.9.9.9) - 98% malware blocking with real-time threat intelligence
+- **DNS Filtering**: Uses DNSMasq with Quad9 (9.9.9.9) - 98% malware blocking rate (September 2024 independent testing) with real-time threat intelligence from 12+ security vendors
+- **Risky Subdomain Blocking**: Automatically blocks gist.github.com, gist.githubusercontent.com, and raw.githubusercontent.com in enforce mode to prevent CVE-2025-30066 style attacks
 - **Firewall Rules**: Configures iptables to control outbound network traffic
 - **GitHub Actions Compatible**: Pre-configured to allow all required GitHub domains
 - **Custom Domain Support**: Add your own trusted domains via input parameters
@@ -96,6 +97,7 @@ For security-critical workflows where any tampering should fail the workflow:
 | `mode` | Operation mode: `analyze` logs traffic without blocking, `enforce` blocks unauthorized domains | No | `analyze` |
 | `allowed-domains` | Space-separated list of additional domains to allow (beyond GitHub required domains) | No | `''` |
 | `fail-on-tampering` | Whether to fail the workflow after job completion if security configuration tampering is detected | No | `false` |
+| `block-risky-github-subdomains` | Whether to block risky GitHub subdomains (gist.github.com, gist.githubusercontent.com, raw.githubusercontent.com) in enforce mode to prevent CVE-2025-30066 style attacks. Set to `false` if you need these domains. | No | `true` |
 
 ## Pre-configured GitHub Domains
 
@@ -180,7 +182,7 @@ sudo grep -E 'Processing: |GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Anal
 
 ## Supply Chain Security Context
 
-GitHub Actions supply chain attacks have increased significantly, with several major incidents in 2024-2025 affecting thousands of repositories. These attacks often follow a pattern:
+GitHub Actions supply chain attacks have increased significantly, with several major incidents in 2025 affecting thousands of repositories. These attacks often follow a pattern:
 
 1. **Compromise**: Malicious code gets injected through compromised dependencies, PR injections, or compromised GitHub Actions
 2. **Network Exfiltration**: The malicious code makes HTTP requests to attacker-controlled domains to steal secrets, tokens, or sensitive data
@@ -196,11 +198,24 @@ This action provides network-level defense against such attacks by:
 
 **Note**: This action focuses on network-level protection and should be part of a comprehensive security strategy that includes action pinning, input validation, and minimal permissions.
 
-### Recent Attack Examples
+### Recent Attack Examples (2025)
 
-- **tj-actions/changed-files (CVE-2025-30066)**: Affected 23,000+ repositories through malicious Python script downloads that would have been blocked by network filtering
-- **s1ngularity attack**: Used malicious network requests to exfiltrate data to attacker-controlled repositories
-- **Shai-Hulud worm**: Self-replicated through network-based communication that could have been detected and blocked
+- **tj-actions/changed-files (CVE-2025-30066, March 2025)**: Affected 23,000+ repositories through malicious Python scripts downloaded from `gist.githubusercontent.com`. **This action's default configuration would block this attack** by preventing access to the malicious script, stopping the memory-scraping payload from executing.
+
+- **s1ngularity attack (August 2025)**: Compromised Nx npm packages (versions 20.9.0-21.8.0) affecting 2,180 accounts and 7,200 repositories. Attack exploited a vulnerable GitHub Actions workflow in the Nx repository that allowed pull request title injection. Stolen credentials were exfiltrated to attacker-controlled public repositories named "s1ngularity-repository". Network filtering would have detected and could have blocked the data exfiltration to unauthorized repositories.
+
+- **Shai-Hulud worm (September 2025)**: Self-replicating worm that compromised 187 npm packages across 40+ developer accounts. The worm injected malicious GitHub Actions workflows (`.github/workflows/shai-hulud-workflow.yml`) that executed on push events to steal secrets and publish them to public "Shai-Hulud" repositories. Network filtering combined with workflow monitoring would have detected the automated repository creation and secret exfiltration patterns.
+
+**Protection Level with Default Settings**:
+
+- **✅ tj-actions/changed-files (CVE-2025-30066)**: **BLOCKED** - The malicious script download from `gist.githubusercontent.com` would be blocked by default risky subdomain filtering in enforce mode.
+
+- **⚠️ s1ngularity & Shai-Hulud**: **PARTIAL PROTECTION** - These attacks used `api.github.com` for repository creation and data exfiltration, which cannot be blocked as it's required for GitHub Actions functionality. However, this action provides:
+  - **Analyze mode**: Detects and logs the suspicious repository creation patterns
+  - **Enforce mode**: Blocks alternative exfiltration channels, limiting attacker options
+  - **Defense in depth**: Forces attackers to use monitored GitHub infrastructure
+
+**Note**: If you disable subdomain blocking (`block-risky-github-subdomains: false`), you lose protection against CVE-2025-30066 style attacks. For comprehensive protection against attacks that abuse GitHub infrastructure, combine with runtime security monitoring tools like Falco (see recommendations below).
 
 ## Limitations and Attacker Workarounds
 

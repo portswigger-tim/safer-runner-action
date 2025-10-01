@@ -18,6 +18,10 @@ inputs:
     description: 'Whether to fail the workflow after job completion if security configuration tampering is detected'
     required: false
     default: 'false'
+  block-risky-github-subdomains:
+    description: 'Whether to block risky GitHub subdomains (gist.github.com, gist.githubusercontent.com, raw.githubusercontent.com) in enforce mode. Set to "false" if you need these domains.'
+    required: false
+    default: 'true'
 
 runs:
   using: 'node20'

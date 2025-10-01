@@ -47,7 +47,11 @@ async function run() {
     try {
         const mode = core.getInput('mode') || 'analyze';
         const allowedDomains = core.getInput('allowed-domains') || '';
+        const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
         core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
+        if (mode === 'enforce' && blockRiskySubdomains) {
+            core.info('🔒 Risky GitHub subdomain blocking: ENABLED');
+        }
         // Step 1: Install dependencies
         core.info('Installing dependencies...');
         await exec.exec('sudo', ['apt-get', 'update', '-qq']);
@@ -60,7 +64,7 @@ async function run() {
         await setupDNSConfig();
         // Step 4: Configure DNSMasq
         core.info('Configuring DNSMasq...');
-        await setupDNSMasq(mode, allowedDomains);
+        await setupDNSMasq(mode, allowedDomains, blockRiskySubdomains);
         // Step 5: Start services
         core.info('Starting services...');
         await startServices();
@@ -112,7 +116,7 @@ DNSStubListener=no`;
         input: Buffer.from('nameserver 127.0.0.1\n')
     });
 }
-async function setupDNSMasq(mode, allowedDomains) {
+async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains) {
     const dnsServer = '9.9.9.9';
     let dnsmasqConfig = `# Enable query logging for summary generation
 log-queries=extra
@@ -124,6 +128,22 @@ log-queries=extra
     }
     else {
         dnsmasqConfig += `server=${dnsServer}\n`; // Analyze mode: allow all DNS queries
+    }
+    // Block risky GitHub subdomains in enforce mode (if enabled)
+    // These subdomains are commonly abused for malicious payloads and data exfiltration
+    const riskySubdomains = [
+        'gist.github.com', // Gist web interface
+        'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
+        'raw.githubusercontent.com' // Common vector for serving malicious raw file content
+    ];
+    if (mode === 'enforce' && blockRiskySubdomains) {
+        core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
+        for (const subdomain of riskySubdomains) {
+            // address directive without IP returns NXDOMAIN (blocks the domain)
+            // This MUST come BEFORE the parent domain server directive
+            dnsmasqConfig += `address=/${subdomain}/\n`;
+            core.info(`  🚫 Blocked: ${subdomain}`);
+        }
     }
     // Add GitHub required domains
     const githubDomains = [
@@ -140,6 +160,10 @@ log-queries=extra
         'api.snapcraft.io'
     ];
     for (const domain of githubDomains) {
+        // Skip domains that are in the risky subdomain blocklist
+        if (mode === 'enforce' && riskySubdomains.includes(domain)) {
+            continue;
+        }
         dnsmasqConfig += `server=/${domain}/${dnsServer}\n`;
         dnsmasqConfig += `ipset=/${domain}/github\n`;
     }
