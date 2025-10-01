@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import { SystemValidator } from './validation';
-import { buildDnsConfig } from './config/dns-config-builder';
+import { buildDnsConfig, DEFAULT_DNS_SERVER } from './config/dns-config-builder';
 
 async function run(): Promise<void> {
   try {
@@ -119,15 +119,13 @@ async function setupDNSMasq(mode: string, allowedDomains: string, blockRiskySubd
 }
 
 async function startServices(): Promise<void> {
-  const dnsServer = '9.9.9.9';
-
   // Restart systemd-resolved and start dnsmasq
   await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
   await exec.exec('sudo', ['systemctl', 'enable', 'dnsmasq']);
   await exec.exec('sudo', ['systemctl', 'start', 'dnsmasq']);
 
   // Allow DNS traffic to our upstream server
-  await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dnsServer, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', 'dnsmasq', '-j', 'ACCEPT']);
+  await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', 'dnsmasq', '-j', 'ACCEPT']);
 }
 
 async function finalizeSecurityRules(mode: string): Promise<void> {

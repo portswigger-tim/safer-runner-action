@@ -245,13 +245,12 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains) {
     });
 }
 async function startServices() {
-    const dnsServer = '9.9.9.9';
     // Restart systemd-resolved and start dnsmasq
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
     await exec.exec('sudo', ['systemctl', 'enable', 'dnsmasq']);
     await exec.exec('sudo', ['systemctl', 'start', 'dnsmasq']);
     // Allow DNS traffic to our upstream server
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dnsServer, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', 'dnsmasq', '-j', 'ACCEPT']);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', 'dnsmasq', '-j', 'ACCEPT']);
 }
 async function finalizeSecurityRules(mode) {
     if (mode === 'enforce') {
