@@ -1,0 +1,232 @@
+/**
+ * Report Formatter for Safer Runner Action
+ *
+ * Generates markdown-formatted security reports from network connections and DNS resolutions.
+ * All functions are pure (no I/O, no side effects) for maximum testability.
+ */
+
+import { NetworkConnection } from '../parsers/network-parser';
+import { DnsResolution } from '../parsers/dns-parser';
+import { getGitHubRequiredDomains, isGitHubInfrastructure } from '../parsers/github-parser';
+
+/**
+ * Format network connections into markdown table
+ *
+ * @param connections - List of network connections
+ * @returns Markdown-formatted network connection details
+ */
+export function generateNetworkConnectionDetails(connections: NetworkConnection[]): string {
+  let details = `## Network Connection Details\n\n`;
+
+  if (connections.length === 0) {
+    details += `No network connections recorded.\n\n`;
+    return details;
+  }
+
+  // Separate GitHub and non-GitHub connections
+  const githubConnections = connections.filter(c => c.source === 'GitHub Required');
+  const userConnections = connections.filter(c => c.source === 'User Defined');
+  const deniedConnections = connections.filter(c => c.status === 'DENIED');
+  const analyzedConnections = connections.filter(c => c.status === 'ANALYZED');
+
+  // Show user-defined and denied connections first (most important)
+  if (userConnections.length > 0 || deniedConnections.length > 0 || analyzedConnections.length > 0) {
+    const importantConnections = [...userConnections, ...deniedConnections, ...analyzedConnections];
+    // Remove duplicates
+    const uniqueImportant = Array.from(new Map(importantConnections.map(c => [`${c.ip}:${c.port}`, c])).values());
+
+    details += `| IP Address | Port | Status | Source |\n`;
+    details += `|------------|------|--------|--------|\n`;
+
+    for (const conn of uniqueImportant) {
+      const statusDisplay = formatConnectionStatus(conn.status);
+      details += `| ${conn.ip} | ${conn.port} | ${statusDisplay} | ${conn.source} |\n`;
+    }
+    details += `\n`;
+  }
+
+  // Show GitHub connections in collapsed section
+  if (githubConnections.length > 0) {
+    details += `<details>\n<summary>📋 GitHub Infrastructure Connections (${githubConnections.length}) - Click to expand</summary>\n\n`;
+    details += `| IP Address | Port | Status | Source |\n`;
+    details += `|------------|------|--------|--------|\n`;
+
+    for (const conn of githubConnections) {
+      const statusDisplay = formatConnectionStatus(conn.status);
+      details += `| ${conn.ip} | ${conn.port} | ${statusDisplay} | ${conn.source} |\n`;
+    }
+    details += `\n</details>\n\n`;
+  }
+
+  const deniedCount = connections.filter(c => c.status === 'DENIED').length;
+  details += `**Total connections:** ${connections.length}`;
+  if (deniedCount > 0) {
+    details += ` (🛡️ ${deniedCount} blocked)`;
+  }
+  details += `\n\n`;
+
+  return details;
+}
+
+/**
+ * Format DNS resolutions into markdown table
+ *
+ * @param dnsResolutions - List of DNS resolutions
+ * @returns Markdown-formatted DNS details
+ */
+export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
+  let details = `## DNS Information\n\n`;
+
+  if (dnsResolutions.length === 0) {
+    details += `No DNS resolutions recorded.\n\n`;
+    return details;
+  }
+
+  const githubDomains = new Set(getGitHubRequiredDomains());
+
+  // Separate GitHub and non-GitHub DNS resolutions
+  const githubDns = dnsResolutions.filter(d =>
+    githubDomains.has(d.domain) || isGitHubInfrastructure(d.domain)
+  );
+  const userDns = dnsResolutions.filter(d =>
+    !githubDomains.has(d.domain) && !isGitHubInfrastructure(d.domain)
+  );
+  const blockedDns = dnsResolutions.filter(d => d.status === 'BLOCKED');
+
+  // Show user-defined and blocked DNS first (most important)
+  if (userDns.length > 0 || blockedDns.length > 0) {
+    const importantDns = [...userDns, ...blockedDns];
+    // Remove duplicates
+    const uniqueImportant = Array.from(new Map(importantDns.map(d => [d.domain, d])).values());
+
+    details += `| Domain | IP Address(es) | Status |\n`;
+    details += `|--------|----------------|--------|\n`;
+
+    for (const dns of uniqueImportant) {
+      const status = formatDnsStatus(dns.status);
+      const formattedIps = formatIpAddresses(dns.ip);
+      details += `| ${dns.domain} | ${formattedIps} | ${status} |\n`;
+    }
+    details += `\n`;
+  }
+
+  // Show GitHub DNS in collapsed section
+  if (githubDns.length > 0) {
+    details += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
+    details += `| Domain | IP Address(es) | Status |\n`;
+    details += `|--------|----------------|--------|\n`;
+
+    for (const dns of githubDns) {
+      const status = formatDnsStatus(dns.status);
+      const formattedIps = formatIpAddresses(dns.ip);
+      details += `| ${dns.domain} | ${formattedIps} | ${status} |\n`;
+    }
+    details += `\n</details>\n\n`;
+  }
+
+  const blockedCount = dnsResolutions.filter(d => d.status === 'BLOCKED').length;
+  details += `**Total domains:** ${dnsResolutions.length}`;
+  if (blockedCount > 0) {
+    details += ` (🛡️ ${blockedCount} filtered)`;
+  }
+  details += `\n\n`;
+
+  return details;
+}
+
+/**
+ * Generate configuration advice for analyze mode
+ *
+ * @param suggestedDomains - List of domains to suggest for allowlist
+ * @returns Markdown-formatted configuration advice
+ */
+export function generateConfigurationAdvice(suggestedDomains: string[]): string {
+  if (suggestedDomains.length === 0) {
+    return `## Configuration Advice\n\nNo additional domains detected for allowlist configuration.\n\n`;
+  }
+
+  let advice = `## Configuration Advice\n\n`;
+  advice += `To run in enforce mode with the domains accessed in this workflow, add these domains to your configuration:\n\n`;
+  advice += `\`\`\`yaml\n`;
+  advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+  advice += `  with:\n`;
+  advice += `    mode: 'enforce'\n`;
+  advice += `    allowed-domains: |\n`;
+
+  for (const domain of suggestedDomains) {
+    advice += `      ${domain}\n`;
+  }
+
+  advice += `\`\`\`\n\n`;
+  return advice;
+}
+
+/**
+ * Format connection status with appropriate emoji
+ *
+ * @param status - Connection status
+ * @returns Formatted status string with emoji
+ */
+export function formatConnectionStatus(status: string): string {
+  if (status === 'DENIED') {
+    return `🚫 ${status}`;
+  }
+  return status;
+}
+
+/**
+ * Format DNS status with appropriate emoji
+ *
+ * @param status - DNS resolution status
+ * @returns Formatted status string with emoji
+ */
+export function formatDnsStatus(status: string): string {
+  if (status === 'BLOCKED') {
+    return `🚫 BLOCKED`;
+  }
+  return status;
+}
+
+/**
+ * Format IP addresses for markdown display
+ * Converts comma-separated IPs to line-break separated for readability
+ *
+ * @param ipString - IP address string (may be comma-separated)
+ * @returns Formatted IP address string with HTML line breaks
+ */
+export function formatIpAddresses(ipString: string): string {
+  if (ipString.includes(', ')) {
+    return ipString.split(', ').join('<br/>');
+  }
+  return ipString;
+}
+
+/**
+ * Get status icon for network connections
+ *
+ * @param status - Connection status
+ * @returns Emoji icon for status
+ */
+export function getStatusIcon(status: string): string {
+  switch (status) {
+    case 'ALLOWED': return '✅';
+    case 'DENIED': return '❌';
+    case 'ANALYZED': return '📊';
+    default: return '❓';
+  }
+}
+
+/**
+ * Get status icon for DNS resolutions
+ *
+ * @param status - DNS resolution status
+ * @returns Emoji icon for status
+ */
+export function getDnsStatusIcon(status: string): string {
+  switch (status) {
+    case 'RESOLVED': return '✅';
+    case 'BLOCKED': return '🚫';
+    case 'QUERIED': return '❓';
+    default: return '❓';
+  }
+}
