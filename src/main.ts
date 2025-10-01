@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import { SystemValidator } from './validation';
+import { buildDnsConfig } from './config/dns-config-builder';
 
 async function run(): Promise<void> {
   try {
@@ -96,71 +97,22 @@ DNSStubListener=no`;
 }
 
 async function setupDNSMasq(mode: string, allowedDomains: string, blockRiskySubdomains: boolean): Promise<void> {
-  const dnsServer = '9.9.9.9';
+  // Build DNS configuration using the config builder module
+  const { config: dnsmasqConfig, blockedSubdomains } = buildDnsConfig({
+    mode: mode as 'analyze' | 'enforce',
+    allowedDomains,
+    blockRiskySubdomains
+  });
 
-  let dnsmasqConfig = `# Enable query logging for summary generation
-log-queries=extra
-
-`;
-
-  // Configure DNS policy based on mode
-  if (mode === 'enforce') {
-    dnsmasqConfig += 'server=\n'; // NXDOMAIN all unlisted DNS (default deny)
-  } else {
-    dnsmasqConfig += `server=${dnsServer}\n`; // Analyze mode: allow all DNS queries
-  }
-
-  // Block risky GitHub subdomains in enforce mode (if enabled)
-  // These subdomains are commonly abused for malicious payloads and data exfiltration
-  const riskySubdomains = [
-    'gist.github.com',              // Gist web interface
-    'gist.githubusercontent.com',   // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
-    'raw.githubusercontent.com'     // Common vector for serving malicious raw file content
-  ];
-
-  if (mode === 'enforce' && blockRiskySubdomains) {
+  // Log blocked subdomains if any
+  if (blockedSubdomains.length > 0) {
     core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
-    for (const subdomain of riskySubdomains) {
-      // address directive without IP returns NXDOMAIN (blocks the domain)
-      // This MUST come BEFORE the parent domain server directive
-      dnsmasqConfig += `address=/${subdomain}/\n`;
+    for (const subdomain of blockedSubdomains) {
       core.info(`  🚫 Blocked: ${subdomain}`);
     }
   }
 
-  // Add GitHub required domains
-  const githubDomains = [
-    'github.com', 'actions.githubusercontent.com', 'api.github.com',
-    'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
-    'results-receiver.actions.githubusercontent.com',
-    // Add all the productionresultssa domains...
-    ...Array.from({length: 20}, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
-    'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
-    'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
-    'pkg.github.com', 'pkg-containers.githubusercontent.com',
-    'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
-    'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
-    'api.snapcraft.io'
-  ];
-
-  for (const domain of githubDomains) {
-    // Skip domains that are in the risky subdomain blocklist
-    if (mode === 'enforce' && riskySubdomains.includes(domain)) {
-      continue;
-    }
-    dnsmasqConfig += `server=/${domain}/${dnsServer}\n`;
-    dnsmasqConfig += `ipset=/${domain}/github\n`;
-  }
-
-  // Add custom allowed domains if provided
-  if (allowedDomains) {
-    // Split on both spaces and newlines to handle both formats: 'domain1 domain2' and YAML | multiline
-    for (const domain of allowedDomains.split(/[\s\n]+/).filter(d => d.trim())) {
-      dnsmasqConfig += `server=/${domain}/${dnsServer}\n`;
-      dnsmasqConfig += `ipset=/${domain}/user\n`;
-    }
-  }
-
+  // Write configuration to file
   await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
     input: Buffer.from(dnsmasqConfig)
   });

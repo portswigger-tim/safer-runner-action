@@ -3,10 +3,42 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
 
+// Mock SystemValidator that provides test iptables output instead of calling sudo
+class TestSystemValidator extends SystemValidator {
+  private mockIptablesOutput: Map<string, string> = new Map();
+
+  // Override to provide mock iptables output
+  protected async getIptablesChainOutput(chain: string): Promise<string> {
+    return this.mockIptablesOutput.get(chain) || '';
+  }
+
+  // Helper method to set mock iptables output for tests
+  setMockIptablesOutput(chain: string, output: string): void {
+    this.mockIptablesOutput.set(chain, output);
+  }
+}
+
 describe('SystemValidator', () => {
-  let validator: SystemValidator;
+  let validator: TestSystemValidator;
   let testFiles: string[];
   const testDir = '/tmp/safer-runner-test';
+
+  // Sample iptables output for testing
+  const sampleIptablesOutput = {
+    INPUT: `Chain INPUT (policy ACCEPT)
+num  target     prot opt source               destination
+1    ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0
+2    DROP       all  --  192.168.1.0/24       0.0.0.0/0
+`,
+    OUTPUT: `Chain OUTPUT (policy ACCEPT)
+num  target     prot opt source               destination
+1    ACCEPT     all  --  0.0.0.0/0            10.0.0.0/8
+2    ACCEPT     all  --  0.0.0.0/0            172.16.0.0/12
+`,
+    FORWARD: `Chain FORWARD (policy DROP)
+num  target     prot opt source               destination
+`
+  };
 
   beforeEach(() => {
     // Create test directory
@@ -25,8 +57,11 @@ describe('SystemValidator', () => {
       fs.writeFileSync(file, `test content ${idx}\n`);
     });
 
-    // Initialize validator with test files
-    validator = new SystemValidator(testFiles);
+    // Initialize test validator with mock iptables output
+    validator = new TestSystemValidator(testFiles);
+    validator.setMockIptablesOutput('INPUT', sampleIptablesOutput.INPUT);
+    validator.setMockIptablesOutput('OUTPUT', sampleIptablesOutput.OUTPUT);
+    validator.setMockIptablesOutput('FORWARD', sampleIptablesOutput.FORWARD);
   });
 
   afterEach(() => {

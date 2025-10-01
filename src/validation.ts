@@ -186,6 +186,21 @@ export class SystemValidator {
   }
 
   /**
+   * Get iptables rules output for a specific chain
+   * Extracted for testability - can be overridden in tests
+   */
+  protected async getIptablesChainOutput(chain: string): Promise<string> {
+    let rulesOutput = '';
+    await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+      listeners: {
+        stdout: (data) => { rulesOutput += data.toString(); }
+      },
+      ignoreReturnCode: true
+    });
+    return rulesOutput;
+  }
+
+  /**
    * Capture current iptables state
    */
   private async captureIptablesState(state: ValidationState): Promise<void> {
@@ -193,13 +208,7 @@ export class SystemValidator {
 
     for (const chain of chains) {
       try {
-        let rulesOutput = '';
-        await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
-          listeners: {
-            stdout: (data) => { rulesOutput += data.toString(); }
-          },
-          ignoreReturnCode: true
-        });
+        const rulesOutput = await this.getIptablesChainOutput(chain);
 
         const checksum = this.calculateRulesChecksum(rulesOutput);
         state.iptablesRules.push({
@@ -225,13 +234,7 @@ export class SystemValidator {
 
     for (const chain of chains) {
       try {
-        let rulesOutput = '';
-        await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
-          listeners: {
-            stdout: (data) => { rulesOutput += data.toString(); }
-          },
-          ignoreReturnCode: true
-        });
+        const rulesOutput = await this.getIptablesChainOutput(chain);
 
         const checksum = this.calculateRulesChecksum(rulesOutput);
         currentState.push({

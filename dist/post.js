@@ -196,6 +196,89 @@ function deduplicateDnsResolutions(resolutions) {
 
 /***/ }),
 
+/***/ 9170:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * GitHub Domain Parser
+ *
+ * Identifies GitHub infrastructure domains and filters them from configuration suggestions.
+ * This prevents legitimate GitHub domains from appearing in user configuration advice.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
+exports.isGitHubDomain = isGitHubDomain;
+exports.isGitHubInfrastructure = isGitHubInfrastructure;
+exports.isGitHubRelated = isGitHubRelated;
+/**
+ * Get the list of GitHub required domains that are always allowed.
+ * These must match the list in main.ts to ensure consistency.
+ */
+function getGitHubRequiredDomains() {
+    // GitHub required domains (must match main.ts)
+    return [
+        'github.com', 'actions.githubusercontent.com', 'api.github.com',
+        'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
+        'results-receiver.actions.githubusercontent.com',
+        // Add all the productionresultssa domains...
+        ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
+        'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
+        'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
+        'pkg.github.com', 'pkg-containers.githubusercontent.com',
+        'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
+        'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
+        'api.snapcraft.io'
+    ];
+}
+/**
+ * Check if a domain is a GitHub domain (exact match or subdomain).
+ * Examples:
+ * - 'actions.githubusercontent.com' matches 'actions.githubusercontent.com'
+ * - 'run-actions-3-azure-eastus.actions.githubusercontent.com' is a subdomain of 'actions.githubusercontent.com'
+ *
+ * @param domain - The domain to check
+ * @param githubDomains - List of GitHub required domains
+ * @returns true if domain is an exact match or subdomain of any GitHub domain
+ */
+function isGitHubDomain(domain, githubDomains) {
+    // Check exact match or if domain is a subdomain of any GitHub domain
+    return githubDomains.some(ghDomain => domain === ghDomain || domain.endsWith('.' + ghDomain));
+}
+/**
+ * Check if a domain is GitHub infrastructure using pattern matching.
+ * This catches domains not in the explicit list but are clearly GitHub-related.
+ *
+ * Note: Excludes raw.githubusercontent.com and gist.githubusercontent.com (security risk)
+ *
+ * @param domain - The domain to check
+ * @returns true if domain matches GitHub infrastructure patterns
+ */
+function isGitHubInfrastructure(domain) {
+    // Pattern-based detection for GitHub infrastructure not in explicit list
+    // Note: Excludes raw.githubusercontent.com and gist.githubusercontent.com (security risk)
+    const patterns = [
+        'blob.core.windows.net', // Azure blob storage for GitHub
+        'trafficmanager.net' // Azure traffic manager
+    ];
+    return patterns.some(pattern => domain.includes(pattern));
+}
+/**
+ * Check if a domain should be excluded from configuration suggestions.
+ * A domain is excluded if it's a GitHub domain or GitHub infrastructure.
+ *
+ * @param domain - The domain to check
+ * @returns true if domain should be excluded from suggestions
+ */
+function isGitHubRelated(domain) {
+    const githubDomains = getGitHubRequiredDomains();
+    return isGitHubDomain(domain, githubDomains) || isGitHubInfrastructure(domain);
+}
+
+
+/***/ }),
+
 /***/ 8089:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -374,6 +457,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const validation_1 = __nccwpck_require__(8449);
 const network_parser_1 = __nccwpck_require__(8089);
 const dns_parser_1 = __nccwpck_require__(1106);
+const github_parser_1 = __nccwpck_require__(9170);
 async function run() {
     try {
         core.info('🔍 Analyzing network access logs...');
@@ -399,31 +483,11 @@ async function run() {
         // Don't fail the entire action if log analysis fails
     }
 }
-function getGitHubRequiredDomains() {
-    // GitHub required domains (must match main.ts)
-    return [
-        'github.com', 'actions.githubusercontent.com', 'api.github.com',
-        'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
-        'results-receiver.actions.githubusercontent.com',
-        // Add all the productionresultssa domains...
-        ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
-        'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
-        'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
-        'pkg.github.com', 'pkg-containers.githubusercontent.com',
-        'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
-        'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
-        'api.snapcraft.io'
-    ];
-}
 function generateAllowedDomainsConfig(dnsResolutions) {
-    const githubDomains = new Set(getGitHubRequiredDomains());
-    const excludePatterns = ['github.com', 'store.core.windows.net', 'trafficmanager.net'];
     const allowedDomains = new Set();
     for (const dns of dnsResolutions) {
-        // Include resolved domains (both IPv4 and CNAME) that are not GitHub/Azure domains
-        if (dns.status === 'RESOLVED' &&
-            !githubDomains.has(dns.domain) &&
-            !excludePatterns.some(pattern => dns.domain.includes(pattern))) {
+        // Include resolved domains (both IPv4 and CNAME) that are not GitHub-related
+        if (dns.status === 'RESOLVED' && !(0, github_parser_1.isGitHubRelated)(dns.domain)) {
             allowedDomains.add(dns.domain);
         }
     }
@@ -516,10 +580,10 @@ function generateDnsDetails(dnsResolutions) {
         details += `No DNS resolutions recorded.\n\n`;
         return details;
     }
-    const githubDomains = new Set(getGitHubRequiredDomains());
+    const githubDomains = new Set((0, github_parser_1.getGitHubRequiredDomains)());
     // Separate GitHub and non-GitHub DNS resolutions
-    const githubDns = dnsResolutions.filter(d => githubDomains.has(d.domain) || isGitHubInfrastructure(d.domain));
-    const userDns = dnsResolutions.filter(d => !githubDomains.has(d.domain) && !isGitHubInfrastructure(d.domain));
+    const githubDns = dnsResolutions.filter(d => githubDomains.has(d.domain) || (0, github_parser_1.isGitHubInfrastructure)(d.domain));
+    const userDns = dnsResolutions.filter(d => !githubDomains.has(d.domain) && !(0, github_parser_1.isGitHubInfrastructure)(d.domain));
     const blockedDns = dnsResolutions.filter(d => d.status === 'BLOCKED');
     // Show user-defined and blocked DNS first (most important)
     if (userDns.length > 0 || blockedDns.length > 0) {
@@ -602,225 +666,6 @@ function getDnsStatusIcon(status) {
         case 'QUERIED': return '❓';
         default: return '❓';
     }
-}
-function calculateStats(connections) {
-    return {
-        total: connections.length,
-        allowed: connections.filter(c => c.status === 'ALLOWED').length,
-        denied: connections.filter(c => c.status === 'DENIED').length,
-        analyzed: connections.filter(c => c.status === 'ANALYZED').length
-    };
-}
-function calculateDnsStats(resolutions) {
-    return {
-        total: resolutions.length,
-        resolved: resolutions.filter(r => r.status === 'RESOLVED').length,
-        blocked: resolutions.filter(r => r.status === 'BLOCKED').length,
-        queried: resolutions.filter(r => r.status === 'QUERIED').length
-    };
-}
-function categorizeDomains(dnsResolutions) {
-    const githubDomains = new Set(getGitHubRequiredDomains());
-    const categories = {
-        github: [],
-        user: [],
-        blocked: []
-    };
-    for (const dns of dnsResolutions) {
-        if (dns.status === 'BLOCKED') {
-            categories.blocked.push(dns);
-        }
-        else if (githubDomains.has(dns.domain) || isGitHubInfrastructure(dns.domain)) {
-            categories.github.push(dns);
-        }
-        else {
-            categories.user.push(dns);
-        }
-    }
-    return categories;
-}
-function isGitHubInfrastructure(domain) {
-    const patterns = [
-        'github.com',
-        'githubusercontent.com',
-        'github.io',
-        'blob.core.windows.net',
-        'trafficmanager.net'
-    ];
-    return patterns.some(pattern => domain.includes(pattern));
-}
-function generateExecutiveSummary(mode, stats, dnsStats) {
-    const modeIcon = mode === 'enforce' ? '🔒' : '📊';
-    const securityLevel = mode === 'enforce' ? 'ENFORCED' : 'MONITORED';
-    let summary = `## ${modeIcon} Security Status: ${securityLevel}\n\n`;
-    if (mode === 'enforce') {
-        const blocked = stats.denied;
-        if (blocked > 0) {
-            summary += `🚨 **${blocked} potential threats blocked** - Your workflow is protected!\n\n`;
-        }
-        else {
-            summary += `✅ **All network access authorized** - No threats detected\n\n`;
-        }
-    }
-    else {
-        summary += `📈 **${dnsStats.total} domains accessed** - Review suggested configuration below\n\n`;
-    }
-    return summary;
-}
-function generateSecurityStatus(mode, stats, dnsStats) {
-    let status = `### 📊 Network Activity Summary\n\n`;
-    // Create a more concise stats table
-    status += `| Metric | Count | Status |\n`;
-    status += `|--------|-------|--------|\n`;
-    status += `| **Domains Resolved** | ${dnsStats.resolved} | ${dnsStats.resolved > 0 ? '✅' : '➖'} |\n`;
-    status += `| **Connections Made** | ${stats.total} | ${stats.total > 0 ? '✅' : '➖'} |\n`;
-    if (mode === 'enforce') {
-        status += `| **Threats Blocked** | ${stats.denied + dnsStats.blocked} | ${(stats.denied + dnsStats.blocked) > 0 ? '🛡️' : '✅'} |\n`;
-    }
-    status += `| **DNS Provider** | Quad9 (9.9.9.9) | 🛡️ 98% malware blocking |\n\n`;
-    return status;
-}
-function generateDomainAccessDetails(domainGroups, mode, connections, dnsResolutions) {
-    let details = '';
-    // Create comprehensive domain-to-connection correlation
-    const domainConnections = correlateDomainConnections(dnsResolutions, connections);
-    // Only show user domains if they exist (most important)
-    if (domainGroups.user.length > 0) {
-        details += `### 🌐 External Domains Accessed\n\n`;
-        details += `| Domain | DNS Status | Connection Status | Purpose |\n`;
-        details += `|--------|------------|-------------------|--------|\n`;
-        for (const dns of domainGroups.user) {
-            const correlation = domainConnections.get(dns.domain);
-            const dnsIcon = getDnsStatusIcon(dns.status);
-            const purpose = inferDomainPurpose(dns.domain);
-            let connectionStatus = '➖ No Connection';
-            if (correlation) {
-                const connIcon = getStatusIcon(correlation.status);
-                connectionStatus = `${connIcon} ${correlation.status}`;
-                if (correlation.ips.length > 1) {
-                    connectionStatus += ` (${correlation.ips.length} IPs)`;
-                }
-            }
-            details += `| ${dns.domain} | ${dnsIcon} ${dns.status} | ${connectionStatus} | ${purpose} |\n`;
-        }
-        details += `\n`;
-    }
-    // Show GitHub infrastructure in collapsed detail (less important)
-    if (domainGroups.github.length > 0) {
-        const githubCount = domainGroups.github.length;
-        details += `<details>\n<summary>📋 GitHub Infrastructure (${githubCount} domains) - Click to expand</summary>\n\n`;
-        details += `| Domain | Status |\n`;
-        details += `|--------|---------|\n`;
-        for (const dns of domainGroups.github) {
-            const statusIcon = getDnsStatusIcon(dns.status);
-            details += `| ${dns.domain} | ${statusIcon} ${dns.status} |\n`;
-        }
-        details += `\n</details>\n\n`;
-    }
-    return details;
-}
-function generateThreatDetails(connections, dnsResolutions) {
-    let threats = `### 🚨 Security Events\n\n`;
-    const deniedConnections = connections.filter(c => c.status === 'DENIED');
-    const blockedDomains = dnsResolutions.filter(d => d.status === 'BLOCKED');
-    // Create IP-to-domain mapping for context
-    const ipToDomainMap = new Map();
-    for (const dns of dnsResolutions) {
-        if (dns.status === 'RESOLVED' && dns.ip !== 'CNAME' && dns.ip !== 'NXDOMAIN') {
-            const ips = dns.ip.includes(',') ? dns.ip.split(',').map(ip => ip.trim()) : [dns.ip];
-            for (const ip of ips) {
-                if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
-                    ipToDomainMap.set(ip, dns.domain);
-                }
-            }
-        }
-    }
-    if (blockedDomains.length > 0) {
-        threats += `**🛡️ DNS Filtering (DNSmasq):**\n`;
-        threats += `| Domain | Action | Reason |\n`;
-        threats += `|--------|--------|--------|\n`;
-        for (const dns of blockedDomains) {
-            threats += `| ${dns.domain} | ❌ NXDOMAIN | Not in allowed domains list |\n`;
-        }
-        threats += `\n`;
-    }
-    if (deniedConnections.length > 0) {
-        threats += `**🔥 Firewall Blocking (iptables):**\n`;
-        threats += `| Domain/IP | Port | Action | Reason |\n`;
-        threats += `|-----------|------|--------|--------|\n`;
-        for (const conn of deniedConnections) {
-            const domain = ipToDomainMap.get(conn.ip);
-            const target = domain ? `${domain} (${conn.ip})` : conn.ip;
-            threats += `| ${target} | ${conn.port} | ❌ DROP | Connection to unauthorized destination |\n`;
-        }
-        threats += `\n`;
-    }
-    // Show the two-layer protection model
-    if (deniedConnections.length > 0 || blockedDomains.length > 0) {
-        threats += `**🛡️ Two-Layer Protection:**\n`;
-        threats += `1. **DNS Layer (DNSmasq)**: Blocks domain resolution for unauthorized domains\n`;
-        threats += `2. **Network Layer (iptables)**: Blocks connections to unauthorized IP addresses\n\n`;
-    }
-    return threats;
-}
-function inferDomainPurpose(domain) {
-    // Infer the likely purpose of external domains
-    if (domain.includes('api.'))
-        return '🔗 API Service';
-    if (domain.includes('cdn.') || domain.includes('static.'))
-        return '📦 Content Delivery';
-    if (domain.includes('registry.') || domain.includes('npm') || domain.includes('pypi'))
-        return '📚 Package Registry';
-    if (domain.includes('auth.') || domain.includes('oauth.'))
-        return '🔐 Authentication';
-    if (domain.includes('analytics.') || domain.includes('tracking.'))
-        return '📊 Analytics';
-    if (domain.includes('storage.') || domain.includes('bucket.'))
-        return '💾 File Storage';
-    return '🌐 External Service';
-}
-function correlateDomainConnections(dnsResolutions, connections) {
-    const correlationMap = new Map();
-    // Create IP to domain mapping from DNS resolutions
-    const ipToDomainMap = new Map();
-    for (const dns of dnsResolutions) {
-        if (dns.status === 'RESOLVED' && dns.ip !== 'CNAME' && dns.ip !== 'NXDOMAIN') {
-            // Handle multiple IPs (comma-separated or single)
-            const ips = dns.ip.includes(',') ? dns.ip.split(',').map(ip => ip.trim()) : [dns.ip];
-            for (const ip of ips) {
-                // Validate IP format (basic IPv4 check)
-                if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
-                    ipToDomainMap.set(ip, dns.domain);
-                }
-            }
-        }
-    }
-    // Group connections by domain
-    for (const conn of connections) {
-        const domain = ipToDomainMap.get(conn.ip);
-        if (domain) {
-            if (!correlationMap.has(domain)) {
-                correlationMap.set(domain, {
-                    status: conn.status,
-                    ips: [conn.ip],
-                    connections: [conn]
-                });
-            }
-            else {
-                const existing = correlationMap.get(domain);
-                // Update status priority: DENIED > ALLOWED > ANALYZED
-                if (conn.status === 'DENIED' ||
-                    (conn.status === 'ALLOWED' && existing.status !== 'DENIED')) {
-                    existing.status = conn.status;
-                }
-                if (!existing.ips.includes(conn.ip)) {
-                    existing.ips.push(conn.ip);
-                }
-                existing.connections.push(conn);
-            }
-        }
-    }
-    return correlationMap;
 }
 run();
 
@@ -1019,19 +864,27 @@ class SystemValidator {
         return crypto.createHash('sha256').update(rules).digest('hex');
     }
     /**
+     * Get iptables rules output for a specific chain
+     * Extracted for testability - can be overridden in tests
+     */
+    async getIptablesChainOutput(chain) {
+        let rulesOutput = '';
+        await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+            listeners: {
+                stdout: (data) => { rulesOutput += data.toString(); }
+            },
+            ignoreReturnCode: true
+        });
+        return rulesOutput;
+    }
+    /**
      * Capture current iptables state
      */
     async captureIptablesState(state) {
         const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
         for (const chain of chains) {
             try {
-                let rulesOutput = '';
-                await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
-                    listeners: {
-                        stdout: (data) => { rulesOutput += data.toString(); }
-                    },
-                    ignoreReturnCode: true
-                });
+                const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);
                 state.iptablesRules.push({
                     chain,
@@ -1054,13 +907,7 @@ class SystemValidator {
         const currentState = [];
         for (const chain of chains) {
             try {
-                let rulesOutput = '';
-                await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
-                    listeners: {
-                        stdout: (data) => { rulesOutput += data.toString(); }
-                    },
-                    ignoreReturnCode: true
-                });
+                const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);
                 currentState.push({
                     chain,

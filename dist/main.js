@@ -1,6 +1,114 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ 1877:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * DNS Configuration Builder for DNSmasq
+ *
+ * Builds DNSmasq configuration strings based on mode (analyze/enforce),
+ * allowed domains, and security settings. This module contains pure functions
+ * for testability - it doesn't execute any commands or have side effects.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_DNS_SERVER = exports.RISKY_GITHUB_SUBDOMAINS = void 0;
+exports.parseAllowedDomains = parseAllowedDomains;
+exports.buildDnsConfig = buildDnsConfig;
+exports.getRiskySubdomains = getRiskySubdomains;
+const github_parser_1 = __nccwpck_require__(9170);
+/**
+ * Risky GitHub subdomains that can be used for malicious payloads
+ * These are blocked in enforce mode when block-risky-github-subdomains is enabled
+ */
+exports.RISKY_GITHUB_SUBDOMAINS = [
+    'gist.github.com', // Gist web interface
+    'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
+    'raw.githubusercontent.com' // Common vector for serving malicious raw file content
+];
+/**
+ * Default DNS server (Quad9 - 98% malware blocking)
+ */
+exports.DEFAULT_DNS_SERVER = '9.9.9.9';
+/**
+ * Parse user-provided allowed domains from input string
+ * Supports both space-separated and newline-separated formats
+ *
+ * @param allowedDomains - Raw domain list string
+ * @returns Array of trimmed, non-empty domains
+ */
+function parseAllowedDomains(allowedDomains) {
+    if (!allowedDomains) {
+        return [];
+    }
+    // Split on spaces, newlines, commas, and filter empty strings
+    return allowedDomains
+        .split(/[\s\n,]+/)
+        .map(d => d.trim())
+        .filter(d => d.length > 0);
+}
+/**
+ * Build DNSmasq configuration string
+ *
+ * @param options - Configuration options
+ * @returns DNSmasq configuration and list of blocked subdomains
+ */
+function buildDnsConfig(options) {
+    const { mode, allowedDomains, blockRiskySubdomains, dnsServer = exports.DEFAULT_DNS_SERVER } = options;
+    let config = `# Enable query logging for summary generation
+log-queries=extra
+
+`;
+    // Configure DNS policy based on mode
+    if (mode === 'enforce') {
+        // NXDOMAIN all unlisted DNS (default deny)
+        config += 'server=\n';
+    }
+    else {
+        // Analyze mode: allow all DNS queries
+        config += `server=${dnsServer}\n`;
+    }
+    // Track which subdomains we actually blocked
+    const blockedSubdomains = [];
+    // Block risky GitHub subdomains in enforce mode (if enabled)
+    if (mode === 'enforce' && blockRiskySubdomains) {
+        for (const subdomain of exports.RISKY_GITHUB_SUBDOMAINS) {
+            // address directive without IP returns NXDOMAIN (blocks the domain)
+            // This MUST come BEFORE the parent domain server directive
+            config += `address=/${subdomain}/\n`;
+            blockedSubdomains.push(subdomain);
+        }
+    }
+    // Add GitHub required domains
+    const githubDomains = (0, github_parser_1.getGitHubRequiredDomains)();
+    for (const domain of githubDomains) {
+        // Skip domains that are in the risky subdomain blocklist
+        if (mode === 'enforce' && exports.RISKY_GITHUB_SUBDOMAINS.includes(domain)) {
+            continue;
+        }
+        config += `server=/${domain}/${dnsServer}\n`;
+        config += `ipset=/${domain}/github\n`;
+    }
+    // Add custom allowed domains if provided
+    const userDomains = parseAllowedDomains(allowedDomains);
+    for (const domain of userDomains) {
+        config += `server=/${domain}/${dnsServer}\n`;
+        config += `ipset=/${domain}/user\n`;
+    }
+    return { config, blockedSubdomains };
+}
+/**
+ * Get risky subdomain list (for logging/reporting)
+ */
+function getRiskySubdomains() {
+    return exports.RISKY_GITHUB_SUBDOMAINS;
+}
+
+
+/***/ }),
+
 /***/ 5915:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -43,6 +151,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const validation_1 = __nccwpck_require__(8449);
+const dns_config_builder_1 = __nccwpck_require__(1877);
 async function run() {
     try {
         const mode = core.getInput('mode') || 'analyze';
@@ -117,64 +226,20 @@ DNSStubListener=no`;
     });
 }
 async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains) {
-    const dnsServer = '9.9.9.9';
-    let dnsmasqConfig = `# Enable query logging for summary generation
-log-queries=extra
-
-`;
-    // Configure DNS policy based on mode
-    if (mode === 'enforce') {
-        dnsmasqConfig += 'server=\n'; // NXDOMAIN all unlisted DNS (default deny)
-    }
-    else {
-        dnsmasqConfig += `server=${dnsServer}\n`; // Analyze mode: allow all DNS queries
-    }
-    // Block risky GitHub subdomains in enforce mode (if enabled)
-    // These subdomains are commonly abused for malicious payloads and data exfiltration
-    const riskySubdomains = [
-        'gist.github.com', // Gist web interface
-        'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
-        'raw.githubusercontent.com' // Common vector for serving malicious raw file content
-    ];
-    if (mode === 'enforce' && blockRiskySubdomains) {
+    // Build DNS configuration using the config builder module
+    const { config: dnsmasqConfig, blockedSubdomains } = (0, dns_config_builder_1.buildDnsConfig)({
+        mode: mode,
+        allowedDomains,
+        blockRiskySubdomains
+    });
+    // Log blocked subdomains if any
+    if (blockedSubdomains.length > 0) {
         core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
-        for (const subdomain of riskySubdomains) {
-            // address directive without IP returns NXDOMAIN (blocks the domain)
-            // This MUST come BEFORE the parent domain server directive
-            dnsmasqConfig += `address=/${subdomain}/\n`;
+        for (const subdomain of blockedSubdomains) {
             core.info(`  🚫 Blocked: ${subdomain}`);
         }
     }
-    // Add GitHub required domains
-    const githubDomains = [
-        'github.com', 'actions.githubusercontent.com', 'api.github.com',
-        'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
-        'results-receiver.actions.githubusercontent.com',
-        // Add all the productionresultssa domains...
-        ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
-        'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
-        'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
-        'pkg.github.com', 'pkg-containers.githubusercontent.com',
-        'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
-        'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
-        'api.snapcraft.io'
-    ];
-    for (const domain of githubDomains) {
-        // Skip domains that are in the risky subdomain blocklist
-        if (mode === 'enforce' && riskySubdomains.includes(domain)) {
-            continue;
-        }
-        dnsmasqConfig += `server=/${domain}/${dnsServer}\n`;
-        dnsmasqConfig += `ipset=/${domain}/github\n`;
-    }
-    // Add custom allowed domains if provided
-    if (allowedDomains) {
-        // Split on both spaces and newlines to handle both formats: 'domain1 domain2' and YAML | multiline
-        for (const domain of allowedDomains.split(/[\s\n]+/).filter(d => d.trim())) {
-            dnsmasqConfig += `server=/${domain}/${dnsServer}\n`;
-            dnsmasqConfig += `ipset=/${domain}/user\n`;
-        }
-    }
+    // Write configuration to file
     await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
         input: Buffer.from(dnsmasqConfig)
     });
@@ -202,6 +267,89 @@ async function finalizeSecurityRules(mode) {
     }
 }
 run();
+
+
+/***/ }),
+
+/***/ 9170:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * GitHub Domain Parser
+ *
+ * Identifies GitHub infrastructure domains and filters them from configuration suggestions.
+ * This prevents legitimate GitHub domains from appearing in user configuration advice.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
+exports.isGitHubDomain = isGitHubDomain;
+exports.isGitHubInfrastructure = isGitHubInfrastructure;
+exports.isGitHubRelated = isGitHubRelated;
+/**
+ * Get the list of GitHub required domains that are always allowed.
+ * These must match the list in main.ts to ensure consistency.
+ */
+function getGitHubRequiredDomains() {
+    // GitHub required domains (must match main.ts)
+    return [
+        'github.com', 'actions.githubusercontent.com', 'api.github.com',
+        'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
+        'results-receiver.actions.githubusercontent.com',
+        // Add all the productionresultssa domains...
+        ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
+        'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
+        'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
+        'pkg.github.com', 'pkg-containers.githubusercontent.com',
+        'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
+        'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
+        'api.snapcraft.io'
+    ];
+}
+/**
+ * Check if a domain is a GitHub domain (exact match or subdomain).
+ * Examples:
+ * - 'actions.githubusercontent.com' matches 'actions.githubusercontent.com'
+ * - 'run-actions-3-azure-eastus.actions.githubusercontent.com' is a subdomain of 'actions.githubusercontent.com'
+ *
+ * @param domain - The domain to check
+ * @param githubDomains - List of GitHub required domains
+ * @returns true if domain is an exact match or subdomain of any GitHub domain
+ */
+function isGitHubDomain(domain, githubDomains) {
+    // Check exact match or if domain is a subdomain of any GitHub domain
+    return githubDomains.some(ghDomain => domain === ghDomain || domain.endsWith('.' + ghDomain));
+}
+/**
+ * Check if a domain is GitHub infrastructure using pattern matching.
+ * This catches domains not in the explicit list but are clearly GitHub-related.
+ *
+ * Note: Excludes raw.githubusercontent.com and gist.githubusercontent.com (security risk)
+ *
+ * @param domain - The domain to check
+ * @returns true if domain matches GitHub infrastructure patterns
+ */
+function isGitHubInfrastructure(domain) {
+    // Pattern-based detection for GitHub infrastructure not in explicit list
+    // Note: Excludes raw.githubusercontent.com and gist.githubusercontent.com (security risk)
+    const patterns = [
+        'blob.core.windows.net', // Azure blob storage for GitHub
+        'trafficmanager.net' // Azure traffic manager
+    ];
+    return patterns.some(pattern => domain.includes(pattern));
+}
+/**
+ * Check if a domain should be excluded from configuration suggestions.
+ * A domain is excluded if it's a GitHub domain or GitHub infrastructure.
+ *
+ * @param domain - The domain to check
+ * @returns true if domain should be excluded from suggestions
+ */
+function isGitHubRelated(domain) {
+    const githubDomains = getGitHubRequiredDomains();
+    return isGitHubDomain(domain, githubDomains) || isGitHubInfrastructure(domain);
+}
 
 
 /***/ }),
@@ -398,19 +546,27 @@ class SystemValidator {
         return crypto.createHash('sha256').update(rules).digest('hex');
     }
     /**
+     * Get iptables rules output for a specific chain
+     * Extracted for testability - can be overridden in tests
+     */
+    async getIptablesChainOutput(chain) {
+        let rulesOutput = '';
+        await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+            listeners: {
+                stdout: (data) => { rulesOutput += data.toString(); }
+            },
+            ignoreReturnCode: true
+        });
+        return rulesOutput;
+    }
+    /**
      * Capture current iptables state
      */
     async captureIptablesState(state) {
         const chains = ['INPUT', 'OUTPUT', 'FORWARD'];
         for (const chain of chains) {
             try {
-                let rulesOutput = '';
-                await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
-                    listeners: {
-                        stdout: (data) => { rulesOutput += data.toString(); }
-                    },
-                    ignoreReturnCode: true
-                });
+                const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);
                 state.iptablesRules.push({
                     chain,
@@ -433,13 +589,7 @@ class SystemValidator {
         const currentState = [];
         for (const chain of chains) {
             try {
-                let rulesOutput = '';
-                await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
-                    listeners: {
-                        stdout: (data) => { rulesOutput += data.toString(); }
-                    },
-                    ignoreReturnCode: true
-                });
+                const rulesOutput = await this.getIptablesChainOutput(chain);
                 const checksum = this.calculateRulesChecksum(rulesOutput);
                 currentState.push({
                     chain,
