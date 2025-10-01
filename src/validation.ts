@@ -40,8 +40,16 @@ interface ValidationState {
 
 export class SystemValidator {
   private validationStateFile = '/tmp/safer-runner-validation-state.json';
+  private criticalFiles: string[];
 
-  constructor() {}
+  constructor(criticalFiles?: string[]) {
+    // Allow injection of critical files for testing
+    this.criticalFiles = criticalFiles || [
+      '/etc/dnsmasq.conf',
+      '/etc/resolv.conf',
+      '/etc/systemd/resolved.conf.d/no-stub.conf'
+    ];
+  }
 
   /**
    * Capture post-setup baseline checksums after all configuration is complete
@@ -56,15 +64,8 @@ export class SystemValidator {
       timestamp: new Date().toISOString()
     };
 
-    // Critical files to monitor (these should all exist after setup)
-    const criticalFiles = [
-      '/etc/dnsmasq.conf',
-      '/etc/resolv.conf',
-      '/etc/systemd/resolved.conf.d/no-stub.conf'
-    ];
-
     // Capture file checksums
-    for (const filePath of criticalFiles) {
+    for (const filePath of this.criticalFiles) {
       try {
         const checksum = await this.calculateFileChecksum(filePath);
         if (checksum) {

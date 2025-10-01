@@ -7,11 +7,16 @@
     "build": "tsc && ncc build lib/main.js -o dist/main --license licenses.txt && mv dist/main/index.js dist/main.js",
     "build:post": "ncc build lib/post.js -o dist/post --license licenses.txt && mv dist/post/index.js dist/post.js",
     "clean": "rm -rf dist lib",
-    "package": "npm run clean && npm run build && npm run build:post",
+    "package": "npm run clean && npm test && npm run build && npm run build:post",
     "test": "jest",
     "all": "npm run package"
   },
-  "keywords": ["security", "github-actions", "dns", "firewall"],
+  "keywords": [
+    "security",
+    "github-actions",
+    "dns",
+    "firewall"
+  ],
   "author": "PortSwigger",
   "license": "MIT",
   "dependencies": {
@@ -19,8 +24,11 @@
     "@actions/exec": "^1.1.1"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.8.0",
     "@vercel/ncc": "^0.38.1",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.4",
     "typescript": "^5.2.2"
   }
 }

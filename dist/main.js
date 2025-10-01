@@ -266,8 +266,14 @@ const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs_1 = __nccwpck_require__(9896);
 class SystemValidator {
-    constructor() {
+    constructor(criticalFiles) {
         this.validationStateFile = '/tmp/safer-runner-validation-state.json';
+        // Allow injection of critical files for testing
+        this.criticalFiles = criticalFiles || [
+            '/etc/dnsmasq.conf',
+            '/etc/resolv.conf',
+            '/etc/systemd/resolved.conf.d/no-stub.conf'
+        ];
     }
     /**
      * Capture post-setup baseline checksums after all configuration is complete
@@ -280,14 +286,8 @@ class SystemValidator {
             iptablesRules: [],
             timestamp: new Date().toISOString()
         };
-        // Critical files to monitor (these should all exist after setup)
-        const criticalFiles = [
-            '/etc/dnsmasq.conf',
-            '/etc/resolv.conf',
-            '/etc/systemd/resolved.conf.d/no-stub.conf'
-        ];
         // Capture file checksums
-        for (const filePath of criticalFiles) {
+        for (const filePath of this.criticalFiles) {
             try {
                 const checksum = await this.calculateFileChecksum(filePath);
                 if (checksum) {
