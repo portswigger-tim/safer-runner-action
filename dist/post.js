@@ -133,23 +133,18 @@ function deduplicateConnections(connections) {
     return Array.from(seen.values());
 }
 async function parseDnsLogs() {
-    const resolutions = [];
     try {
         // Get DNS-related logs from syslog
         let syslogOutput = '';
-        await exec.exec('sudo', ['grep', '-E', 'reply|NXDOMAIN|dnsmasq', '/var/log/syslog'], {
+        await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', '/var/log/syslog'], {
             listeners: {
                 stdout: (data) => { syslogOutput += data.toString(); }
             },
             ignoreReturnCode: true
         });
         const lines = syslogOutput.split('\n').filter(line => line.trim());
-        for (const line of lines) {
-            const resolution = parseDnsLogLine(line);
-            if (resolution) {
-                resolutions.push(resolution);
-            }
-        }
+        // Group log entries by request ID and extract final resolutions
+        const resolutions = parseRequestChains(lines);
         // Remove duplicates and limit results
         return deduplicateDnsResolutions(resolutions).slice(0, 20);
     }
@@ -158,37 +153,59 @@ async function parseDnsLogs() {
         return [];
     }
 }
-function parseDnsLogLine(line) {
-    // IPv4 address pattern: matches valid IPv4 addresses only (0-255.0-255.0-255.0-255)
+function parseRequestChains(lines) {
+    // Map of request ID to request chain
+    const requestChains = new Map();
+    // IPv4 address pattern
     const ipv4Pattern = '(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)';
-    // Parse reply lines with IPv4 addresses
-    const replyMatch = line.match(new RegExp(`dnsmasq.*reply ([^\\s]+) is (${ipv4Pattern})`));
-    if (replyMatch) {
-        return {
-            domain: replyMatch[1],
-            ip: replyMatch[2],
-            status: 'RESOLVED'
-        };
+    for (const line of lines) {
+        // Extract request ID: dnsmasq[<pid>]: <request-id> <src-ip>/<src-port>
+        const requestIdMatch = line.match(/dnsmasq\[\d+\]:\s+(\d+)\s+[\d.]+\/\d+/);
+        if (!requestIdMatch)
+            continue;
+        const requestId = requestIdMatch[1];
+        // Parse query[A] - this is the original domain being queried
+        const queryMatch = line.match(/query\[A\]\s+([^\s]+)\s+from/);
+        if (queryMatch) {
+            if (!requestChains.has(requestId)) {
+                requestChains.set(requestId, {
+                    queriedDomain: queryMatch[1],
+                    finalIp: null,
+                    status: 'QUERIED'
+                });
+            }
+            continue;
+        }
+        // Parse reply with IPv4 address - this is the final resolution
+        const ipReplyMatch = line.match(new RegExp(`reply [^\\s]+ is (${ipv4Pattern})`));
+        if (ipReplyMatch && requestChains.has(requestId)) {
+            const chain = requestChains.get(requestId);
+            chain.finalIp = ipReplyMatch[1];
+            chain.status = 'RESOLVED';
+            continue;
+        }
+        // Parse NXDOMAIN responses (blocked domains)
+        const nxdomainMatch = line.match(/config ([^\s]+) is NXDOMAIN/);
+        if (nxdomainMatch && requestChains.has(requestId)) {
+            const chain = requestChains.get(requestId);
+            chain.finalIp = 'NXDOMAIN';
+            chain.status = 'BLOCKED';
+            continue;
+        }
+        // Ignore CNAME entries - we only care about the final IPv4 resolution
     }
-    // Parse CNAME responses
-    const cnameMatch = line.match(/dnsmasq.*reply ([^\s]+) is <CNAME>/);
-    if (cnameMatch) {
-        return {
-            domain: cnameMatch[1],
-            ip: 'CNAME',
-            status: 'RESOLVED'
-        };
+    // Convert request chains to DnsResolution objects
+    const resolutions = [];
+    for (const chain of requestChains.values()) {
+        if (chain.finalIp) {
+            resolutions.push({
+                domain: chain.queriedDomain,
+                ip: chain.finalIp,
+                status: chain.status
+            });
+        }
     }
-    // Parse NXDOMAIN responses (blocked domains)
-    const nxdomainMatch = line.match(/dnsmasq.*config ([^\s]+) is NXDOMAIN/);
-    if (nxdomainMatch) {
-        return {
-            domain: nxdomainMatch[1],
-            ip: 'NXDOMAIN',
-            status: 'BLOCKED'
-        };
-    }
-    return null;
+    return resolutions;
 }
 function deduplicateDnsResolutions(resolutions) {
     const domainMap = new Map();
