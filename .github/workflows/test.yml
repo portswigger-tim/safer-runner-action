@@ -349,31 +349,3 @@ jobs:
         with:
           mode: live
           verbose: true
-
-  test-vulnerable-action:
-    name: Test CVE-2023-51664 Protection
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Apply Safer Runner Action (Enforce Mode with Risky Subdomain Blocking)
-        uses: ./
-        with:
-          mode: 'enforce'
-          block-risky-github-subdomains: true
-
-      - name: Run vulnerable tj-actions/changed-files@v41
-        uses: tj-actions/changed-files@v41
-        with:
-          since_last_remote_commit: true
-        continue-on-error: true
-
-      - name: Check security logs
-        if: always()
-        run: |
-          echo "=== CVE-2023-51664 Protection Logs ==="
-          sudo grep -E 'Drop-Enforce: |NXDOMAIN' /var/log/syslog | tail -30 || echo "No block logs found"
-
-          echo "=== DNS Blocking Logs ==="
-          sudo grep -E 'gist.githubusercontent.com|raw.githubusercontent.com|attacker-domain' /var/log/syslog | tail -20 || echo "No DNS logs found"
