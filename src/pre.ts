@@ -37,9 +37,9 @@ async function run(): Promise<void> {
     core.saveState('dns-uid', dnsUser.uid.toString());
     core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
 
-    // Step 3: Configure iptables rules
+    // Step 3: Configure iptables rules with Pre- log prefix
     core.info('Configuring iptables rules...');
-    await setupFirewallRules();
+    await setupFirewallRules('Pre-');
 
     // Step 4: Configure DNS filtering
     core.info('Configuring DNS filtering...');
@@ -53,9 +53,9 @@ async function run(): Promise<void> {
     core.info('Starting services...');
     await startServices(dnsUser.uid);
 
-    // Step 7: Finalize with ANALYZE mode rules (log but allow all)
+    // Step 7: Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
     core.info('Finalizing analyze mode rules...');
-    await finalizeSecurityRules('analyze');
+    await finalizeSecurityRules('analyze', 'Pre-');
 
     core.info('✅ Pre-action: Security monitoring active (analyze mode)');
     core.info('   Main action will apply user configuration...');

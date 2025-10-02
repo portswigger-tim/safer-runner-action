@@ -44,7 +44,7 @@ jobs:
       - name: Check logs
         run: |
           echo "=== Firewall Logs ==="
-          sudo grep -E 'GitHub-Allow: |User-Allow: |Allow-Analyze: |Drop-Enforce: ' /var/log/syslog | tail -20 || echo "No logs found"
+          sudo grep -E 'Pre-|GitHub-Allow: |User-Allow: |Allow-Analyze: |Drop-Enforce: ' /var/log/syslog | tail -20 || echo "No logs found"
 
       - name: Verify job summary was created
         run: |
@@ -90,7 +90,7 @@ jobs:
       - name: Check security logs
         run: |
           echo "=== Security Logs ==="
-          sudo grep -E 'GitHub-Allow: |User-Allow: |Drop-Enforce: ' /var/log/syslog | tail -30 || echo "No security logs found"
+          sudo grep -E 'Pre-|GitHub-Allow: |User-Allow: |Drop-Enforce: ' /var/log/syslog | tail -30 || echo "No security logs found"
           
           echo "=== DNS Logs ==="
           sudo grep -E 'reply|NXDOMAIN' /var/log/syslog | tail -10 || echo "No DNS logs found"
@@ -136,7 +136,7 @@ jobs:
       - name: Check GitHub Actions logs
         run: |
           echo "=== GitHub Actions Domain Access Logs ==="
-          sudo grep 'GitHub-Allow: ' /var/log/syslog | tail -20 || echo "No GitHub domain access logs found"
+          sudo grep -E 'Pre-GitHub-Allow: |GitHub-Allow: ' /var/log/syslog | tail -20 || echo "No GitHub domain access logs found"
 
   test-edge-cases:
     name: Test Edge Cases
@@ -195,7 +195,7 @@ jobs:
         if: always()
         run: |
           echo "=== Localhost Test Logs ==="
-          sudo grep -E 'Processing: |GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ' /var/log/syslog | tail -30 || echo "No localhost test logs found"
+          sudo grep -E 'Pre-|Processing: |GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ' /var/log/syslog | tail -30 || echo "No localhost test logs found"
           
           echo "=== DNS Resolution Logs ==="
           sudo grep -E 'reply|NXDOMAIN|localhost' /var/log/syslog | tail -10 || echo "No DNS logs found"

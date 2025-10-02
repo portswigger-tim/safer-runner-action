@@ -27,6 +27,13 @@ async function run(): Promise<void> {
     const preUid = core.getState('dns-uid');
     const preActionRan = preUsername && preUid;
 
+    // If pre-action ran, capture its DNS logs before we reconfigure
+    if (preActionRan) {
+      core.info('📋 Capturing pre-hook DNS logs...');
+      await exec.exec('bash', ['-c', 'sudo grep dnsmasq /var/log/syslog > /tmp/pre-hook-dns-logs.txt || true']);
+      core.info('✅ Pre-hook DNS logs saved to /tmp/pre-hook-dns-logs.txt');
+    }
+
     let dnsUser: DnsUser;
 
     if (preActionRan) {

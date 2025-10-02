@@ -300,12 +300,14 @@ const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 /**
  * Parse DNS logs from syslog to extract domain resolutions
+ * @param logFile Optional path to a specific log file (defaults to /var/log/syslog)
  */
-async function parseDnsLogs() {
+async function parseDnsLogs(logFile) {
     try {
-        // Get DNS-related logs from syslog
+        const targetFile = logFile || '/var/log/syslog';
+        // Get DNS-related logs from file
         let syslogOutput = '';
-        await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', '/var/log/syslog'], {
+        await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', targetFile], {
             listeners: {
                 stdout: (data) => { syslogOutput += data.toString(); }
             },
@@ -586,9 +588,9 @@ const exec = __importStar(__nccwpck_require__(5236));
  */
 async function parseNetworkLogs() {
     try {
-        // Get syslog content
+        // Get syslog content (including Pre- prefixed logs from pre-hook)
         let syslogOutput = '';
-        await exec.exec('sudo', ['grep', '-E', 'GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ', '/var/log/syslog'], {
+        await exec.exec('sudo', ['grep', '-E', 'GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: |Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ', '/var/log/syslog'], {
             listeners: {
                 stdout: (data) => { syslogOutput += data.toString(); }
             },
@@ -629,7 +631,20 @@ function parseLogLine(line) {
     const port = portMatch ? portMatch[1] : '443';
     let status = 'UNKNOWN';
     let source = 'Unknown';
-    if (line.includes('GitHub-Allow: ')) {
+    // Check for Pre- prefixed logs (from pre-hook monitoring)
+    if (line.includes('Pre-GitHub-Allow: ')) {
+        status = 'ANALYZED';
+        source = 'Pre-hook (GitHub)';
+    }
+    else if (line.includes('Pre-User-Allow: ')) {
+        status = 'ANALYZED';
+        source = 'Pre-hook (User)';
+    }
+    else if (line.includes('Pre-Allow-Analyze: ')) {
+        status = 'ANALYZED';
+        source = 'Pre-hook Monitor';
+    }
+    else if (line.includes('GitHub-Allow: ')) {
         status = 'ALLOWED';
         source = 'GitHub Required';
     }
@@ -715,6 +730,19 @@ async function run() {
         await new Promise(resolve => setTimeout(resolve, 2000));
         const connections = await (0, network_parser_1.parseNetworkLogs)();
         const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)();
+        // Parse pre-hook DNS logs if they exist
+        let preHookDnsResolutions = [];
+        try {
+            const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
+            if (fs.existsSync('/tmp/pre-hook-dns-logs.txt')) {
+                core.info('📋 Parsing pre-hook DNS logs...');
+                preHookDnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/pre-hook-dns-logs.txt');
+                core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
+            }
+        }
+        catch (error) {
+            core.warning(`Could not parse pre-hook DNS logs: ${error}`);
+        }
         // Verify system integrity against post-setup baseline
         const validator = new validation_1.SystemValidator();
         const integrityValid = await validator.verifyAgainstBaseline();
@@ -725,7 +753,7 @@ async function run() {
             core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
             return; // Exit early - the validation report will still be in the logs above
         }
-        await generateJobSummary(connections, dnsResolutions, validationReport);
+        await generateJobSummary(connections, dnsResolutions, preHookDnsResolutions, validationReport);
         core.info('✅ Network access summary generated');
     }
     catch (error) {
@@ -733,7 +761,88 @@ async function run() {
         // Don't fail the entire action if log analysis fails
     }
 }
-async function generateJobSummary(connections, dnsResolutions, validationReport) {
+/**
+ * Analyze pre-hook traffic to identify connections that were:
+ * 1. Seen in pre-hook but blocked later (good - action working)
+ * 2. Only seen in pre-hook (early workflow setup traffic)
+ */
+function generatePreHookAnalysis(connections, dnsResolutions, preHookDnsResolutions) {
+    // Separate pre-hook and main connections
+    const preHookConnections = connections.filter(c => c.source.startsWith('Pre-hook'));
+    const mainConnections = connections.filter(c => !c.source.startsWith('Pre-hook'));
+    // Find connections only in pre-hook
+    const preHookOnlyConnections = preHookConnections.filter(preConn => !mainConnections.some(mainConn => mainConn.ip === preConn.ip && mainConn.port === preConn.port));
+    // Find connections that were pre-hook ANALYZED but later DENIED
+    const blockedAfterPreHook = preHookConnections.filter(preConn => mainConnections.some(mainConn => mainConn.ip === preConn.ip &&
+        mainConn.port === preConn.port &&
+        mainConn.status === 'DENIED'));
+    // Find DNS resolutions only in pre-hook
+    const preHookOnlyDns = preHookDnsResolutions.filter(preDns => !dnsResolutions.some(mainDns => mainDns.domain === preDns.domain));
+    // Find DNS resolutions that were pre-hook RESOLVED but later BLOCKED
+    const blockedDnsAfterPreHook = preHookDnsResolutions.filter(preDns => preDns.status === 'RESOLVED' &&
+        dnsResolutions.some(mainDns => mainDns.domain === preDns.domain && mainDns.status === 'BLOCKED'));
+    // If no pre-hook activity, don't show the section
+    if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0) {
+        return '';
+    }
+    let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
+    if (preHookConnections.length > 0) {
+        report += `Pre-hook monitoring captured **${preHookConnections.length}** network connection(s) before user workflow execution.\n\n`;
+    }
+    if (preHookDnsResolutions.length > 0) {
+        report += `Pre-hook DNS monitoring captured **${preHookDnsResolutions.length}** DNS resolution(s).\n\n`;
+    }
+    // Show blocked connections (security working as intended)
+    if (blockedAfterPreHook.length > 0) {
+        report += `### ✅ Connections Blocked After Pre-Hook\n\n`;
+        report += `These connections were monitored during pre-hook but blocked when enforce mode activated:\n\n`;
+        report += `| IP Address | Port | Status Transition |\n`;
+        report += `|------------|------|-------------------|\n`;
+        for (const conn of blockedAfterPreHook) {
+            report += `| ${conn.ip} | ${conn.port} | Pre-hook: ANALYZED → Main: DENIED |\n`;
+        }
+        report += `\n`;
+    }
+    // Show blocked DNS domains (security working as intended)
+    if (blockedDnsAfterPreHook.length > 0) {
+        report += `### ✅ DNS Domains Blocked After Pre-Hook\n\n`;
+        report += `These DNS queries were resolved during pre-hook but blocked when enforce mode activated:\n\n`;
+        report += `| Domain | IP | Status Transition |\n`;
+        report += `|--------|----|-----------------|\n`;
+        for (const dns of blockedDnsAfterPreHook) {
+            report += `| ${dns.domain} | ${dns.ip} | Pre-hook: RESOLVED → Main: BLOCKED |\n`;
+        }
+        report += `\n`;
+    }
+    // Show pre-hook only connections
+    if (preHookOnlyConnections.length > 0) {
+        report += `### 🕐 Pre-Hook Only Connections\n\n`;
+        report += `These connections only appeared during pre-hook monitoring (before user workflow):\n\n`;
+        report += `| IP Address | Port | Source |\n`;
+        report += `|------------|------|--------|\n`;
+        for (const conn of preHookOnlyConnections) {
+            report += `| ${conn.ip} | ${conn.port} | ${conn.source} |\n`;
+        }
+        report += `\n`;
+    }
+    // Show pre-hook only DNS resolutions
+    if (preHookOnlyDns.length > 0) {
+        report += `### 🕐 Pre-Hook Only DNS Resolutions\n\n`;
+        report += `These DNS queries only appeared during pre-hook monitoring:\n\n`;
+        report += `| Domain | IP | Status |\n`;
+        report += `|--------|----|---------|\n`;
+        for (const dns of preHookOnlyDns) {
+            report += `| ${dns.domain} | ${dns.ip} | ${dns.status} |\n`;
+        }
+        report += `\n`;
+    }
+    if (preHookOnlyConnections.length > 0 || preHookOnlyDns.length > 0) {
+        report += `*Note: Pre-hook only activity typically represents GitHub Actions setup connections that occur before workflow steps run.*\n\n`;
+    }
+    report += `</details>\n\n`;
+    return report;
+}
+async function generateJobSummary(connections, dnsResolutions, preHookDnsResolutions, validationReport) {
     const mode = core.getInput('mode') || 'analyze';
     const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
     const jobName = process.env.GITHUB_JOB || 'unknown';
@@ -756,9 +865,11 @@ async function generateJobSummary(connections, dnsResolutions, validationReport)
     summary += (0, report_formatter_1.generateNetworkConnectionDetails)(connections);
     // 2. DNS Information
     summary += (0, report_formatter_1.generateDnsDetails)(dnsResolutions);
-    // 3. Config File Tamper Detection
+    // 3. Pre-Hook Security Analysis (collapsible)
+    summary += generatePreHookAnalysis(connections, dnsResolutions, preHookDnsResolutions);
+    // 4. Config File Tamper Detection
     summary += `${validationReport}\n`;
-    // 4. Configuration Advice (for analyze mode)
+    // 5. Configuration Advice (for analyze mode)
     if (mode === 'analyze') {
         summary += (0, report_formatter_1.generateConfigurationAdvice)(dnsResolutions);
     }

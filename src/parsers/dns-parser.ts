@@ -18,12 +18,15 @@ export interface DnsResolution {
 
 /**
  * Parse DNS logs from syslog to extract domain resolutions
+ * @param logFile Optional path to a specific log file (defaults to /var/log/syslog)
  */
-export async function parseDnsLogs(): Promise<DnsResolution[]> {
+export async function parseDnsLogs(logFile?: string): Promise<DnsResolution[]> {
   try {
-    // Get DNS-related logs from syslog
+    const targetFile = logFile || '/var/log/syslog';
+
+    // Get DNS-related logs from file
     let syslogOutput = '';
-    await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', '/var/log/syslog'], {
+    await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', targetFile], {
       listeners: {
         stdout: (data) => { syslogOutput += data.toString(); }
       },

@@ -21,9 +21,9 @@ export interface NetworkConnection {
  */
 export async function parseNetworkLogs(): Promise<NetworkConnection[]> {
   try {
-    // Get syslog content
+    // Get syslog content (including Pre- prefixed logs from pre-hook)
     let syslogOutput = '';
-    await exec.exec('sudo', ['grep', '-E', 'GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ', '/var/log/syslog'], {
+    await exec.exec('sudo', ['grep', '-E', 'GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: |Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ', '/var/log/syslog'], {
       listeners: {
         stdout: (data) => { syslogOutput += data.toString(); }
       },
@@ -72,7 +72,17 @@ export function parseLogLine(line: string): NetworkConnection | null {
   let status = 'UNKNOWN';
   let source = 'Unknown';
 
-  if (line.includes('GitHub-Allow: ')) {
+  // Check for Pre- prefixed logs (from pre-hook monitoring)
+  if (line.includes('Pre-GitHub-Allow: ')) {
+    status = 'ANALYZED';
+    source = 'Pre-hook (GitHub)';
+  } else if (line.includes('Pre-User-Allow: ')) {
+    status = 'ANALYZED';
+    source = 'Pre-hook (User)';
+  } else if (line.includes('Pre-Allow-Analyze: ')) {
+    status = 'ANALYZED';
+    source = 'Pre-hook Monitor';
+  } else if (line.includes('GitHub-Allow: ')) {
     status = 'ALLOWED';
     source = 'GitHub Required';
   } else if (line.includes('User-Allow: ')) {

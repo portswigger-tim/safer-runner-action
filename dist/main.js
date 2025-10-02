@@ -172,6 +172,12 @@ async function run() {
         const preUsername = core.getState('dns-user');
         const preUid = core.getState('dns-uid');
         const preActionRan = preUsername && preUid;
+        // If pre-action ran, capture its DNS logs before we reconfigure
+        if (preActionRan) {
+            core.info('📋 Capturing pre-hook DNS logs...');
+            await exec.exec('bash', ['-c', 'sudo grep dnsmasq /var/log/syslog > /tmp/pre-hook-dns-logs.txt || true']);
+            core.info('✅ Pre-hook DNS logs saved to /tmp/pre-hook-dns-logs.txt');
+        }
         let dnsUser;
         if (preActionRan) {
             // Pre-action already set up infrastructure - just reconfigure
@@ -384,7 +390,7 @@ async function createRandomDNSUser() {
     ]);
     return { username, uid };
 }
-async function setupFirewallRules() {
+async function setupFirewallRules(logPrefix = '') {
     // Allow established and related connections
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'state', '--state', 'ESTABLISHED,RELATED', '-j', 'ACCEPT']);
     // Allow Azure metadata service (required for GitHub Actions)
@@ -393,14 +399,14 @@ async function setupFirewallRules() {
     // Allow localhost traffic
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'lo', '-s', '127.0.0.1', '-d', '127.0.0.1', '-j', 'ACCEPT']);
     // Log processing for debugging
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'LOG', '--log-prefix=Processing: ']);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'LOG', `--log-prefix=${logPrefix}Processing: `]);
     // Create ipsets for allowlisting
     await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
     await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
     // Allow connections to IPs in ipsets
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=GitHub-Allow: ']);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'ACCEPT']);
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=User-Allow: ']);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
 }
 async function setupDNSConfig() {
@@ -444,16 +450,16 @@ async function startServices(dnsUid) {
     // Allow DNS traffic to our upstream server - only from the random DNS user UID
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
 }
-async function finalizeSecurityRules(mode) {
+async function finalizeSecurityRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
         // Log dropped packets for debugging
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', '--log-prefix=Drop-Enforce: ']);
+        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=${logPrefix}Drop-Enforce: `]);
         // DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'DROP']);
     }
     else {
         // Log other traffic for analysis but allow it
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'LOG', '--log-prefix=Allow-Analyze: ']);
+        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'LOG', `--log-prefix=${logPrefix}Allow-Analyze: `]);
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'ACCEPT']);
     }
 }
