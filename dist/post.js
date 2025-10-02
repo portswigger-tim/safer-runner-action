@@ -310,7 +310,7 @@ function parseDnsLogsFromString(logContent) {
     // Group log entries by request ID and extract final resolutions
     const resolutions = parseRequestChains(lines);
     // Remove duplicates and limit results
-    return deduplicateDnsResolutions(resolutions).slice(0, 20);
+    return deduplicateDnsResolutions(resolutions).slice(0, 1000);
 }
 /**
  * Parse DNS log lines and track request chains to identify final resolutions
@@ -574,7 +574,7 @@ function parseNetworkLogsFromString(logContent) {
         }
     }
     // Remove duplicates and limit results
-    return deduplicateConnections(connections).slice(0, 20);
+    return deduplicateConnections(connections).slice(0, 1000);
 }
 /**
  * Parse a single iptables log line to extract connection details

@@ -47,7 +47,7 @@ export function parseDnsLogsFromString(logContent: string): DnsResolution[] {
   const resolutions = parseRequestChains(lines);
 
   // Remove duplicates and limit results
-  return deduplicateDnsResolutions(resolutions).slice(0, 20);
+  return deduplicateDnsResolutions(resolutions).slice(0, 1000);
 }
 
 /**

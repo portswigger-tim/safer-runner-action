@@ -193,15 +193,15 @@ describe('Network Parser', () => {
       expect(result[0].ip).toBe('140.82.114.6');
     });
 
-    it('should respect the 20 connection limit', () => {
-      // Create more than 20 unique log lines
-      const manyLogs = Array.from({ length: 25 }, (_, i) =>
-        `2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.${i} DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0`
+    it('should respect the 1000 connection limit', () => {
+      // Create more than 1000 unique log lines
+      const manyLogs = Array.from({ length: 1100 }, (_, i) =>
+        `2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.${i % 256} DPT=${443 + (i % 100)} WINDOW=64240 RES=0x00 SYN URGP=0`
       ).join('\n');
 
       const result = parseNetworkLogsFromString(manyLogs);
 
-      expect(result).toHaveLength(20);
+      expect(result).toHaveLength(1000);
     });
 
     it('should deduplicate before applying limit', () => {

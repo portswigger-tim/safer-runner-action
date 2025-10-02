@@ -285,16 +285,16 @@ describe('DNS Parser', () => {
       expect(result[0].ip).toBe('1.2.3.4');
     });
 
-    it('should respect the 20 resolution limit', () => {
-      // Create more than 20 unique resolutions
-      const manyLogs = Array.from({ length: 25 }, (_, i) =>
+    it('should respect the 1000 resolution limit', () => {
+      // Create more than 1000 unique resolutions
+      const manyLogs = Array.from({ length: 1100 }, (_, i) =>
         `2025-10-01T10:53:56.659901+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 query[A] domain${i}.com from 127.0.0.1\n` +
-        `2025-10-01T10:53:56.664651+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 reply domain${i}.com is 1.2.3.${i}`
+        `2025-10-01T10:53:56.664651+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 reply domain${i}.com is 1.2.3.${i % 256}`
       ).join('\n');
 
       const result = parseDnsLogsFromString(manyLogs);
 
-      expect(result).toHaveLength(20);
+      expect(result).toHaveLength(1000);
     });
 
     it('should deduplicate before applying limit', () => {

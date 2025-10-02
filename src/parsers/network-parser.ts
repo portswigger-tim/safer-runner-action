@@ -53,7 +53,7 @@ export function parseNetworkLogsFromString(logContent: string): NetworkConnectio
   }
 
   // Remove duplicates and limit results
-  return deduplicateConnections(connections).slice(0, 20);
+  return deduplicateConnections(connections).slice(0, 1000);
 }
 
 /**
