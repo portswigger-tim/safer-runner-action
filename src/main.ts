@@ -64,8 +64,8 @@ async function run(): Promise<void> {
         // Reconfigure iptables final rules
         if (mode === 'enforce') {
           core.info('Applying enforce mode firewall rules...');
-          // Remove the analyze mode ACCEPT rule
-          await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Allow-Analyze: ']);
+          // Remove the analyze mode ACCEPT rule (pre-action uses Pre- prefix)
+          await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Allow-Analyze: ']);
           await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'ACCEPT']);
           // Add enforce mode DROP rule
           await finalizeSecurityRules('enforce');
