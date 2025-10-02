@@ -13,26 +13,34 @@ Network security layer for GitHub Actions runners using DNS filtering (Quad9) an
 
 ## Usage
 
+⚠️ **Important**: Always place this action as the **first step** in your workflow to maximize security coverage.
+
+ℹ️ **How it works**: This action uses a `pre` hook to establish security monitoring in analyze mode before any workflow steps run, then the main action applies your desired configuration (analyze or enforce mode).
+
 ### Analyze mode (default)
 
 ```yaml
-- uses: portswigger-tim/safer-runner-action@v1
-- run: |
-    curl https://example.com  # Logged but not blocked
+steps:
+  - uses: portswigger-tim/safer-runner-action@v1  # Must be first step
+  - uses: actions/checkout@v4
+  - run: |
+      curl https://example.com  # Logged but not blocked
 ```
 
 ### Enforce mode
 
 ```yaml
-- uses: portswigger-tim/safer-runner-action@v1
-  with:
-    mode: 'enforce'
-    allowed-domains: |
-      example.com
-      api.trusted-service.com
-- run: |
-    curl https://api.trusted-service.com  # ✅ Allowed
-    curl https://malicious.com  # ❌ Blocked
+steps:
+  - uses: portswigger-tim/safer-runner-action@v1  # Must be first step
+    with:
+      mode: 'enforce'
+      allowed-domains: |
+        example.com
+        api.trusted-service.com
+  - uses: actions/checkout@v4
+  - run: |
+      curl https://api.trusted-service.com  # ✅ Allowed
+      curl https://malicious.com  # ❌ Blocked
 ```
 
 ## Inputs
@@ -84,10 +92,24 @@ In analyze mode, the report suggests an `allowed-domains` configuration based on
 
 ## Limitations
 
-Network filtering provides a first line of defense but has limitations. Sophisticated attackers may attempt:
+### Platform Support
 
+- **GitHub-hosted runners**: Only Ubuntu runners are supported. Windows and macOS runners are not supported.
+- **Self-hosted runners**: Linux runners with sudo access and iptables support. Windows and macOS runners are not supported.
+- **Containerized jobs**: Not supported when the job runs in a container due to sudo access requirements.
+
+### Security Limitations
+
+Network filtering provides a first line of defense but has limitations:
+
+#### Timing Window
+- **Pre-hook ordering**: This action's `pre:` hook establishes analyze mode monitoring before the main action step runs, providing early visibility
+- **Other actions' pre-hooks**: Actions that appear later in the workflow will have their `pre:` hooks run after this action's pre-hook, so they are monitored
+- **Actions before this one**: Any actions placed before this action in the workflow will have their `pre:` hooks run before monitoring is established
+- **Mitigation**: Place this action as the first step in your workflow and carefully vet all actions used
+
+#### Attack Vectors
 - **Data exfiltration via allowed domains**: Abuse GitHub/npm/PyPI to upload secrets
-- **DNS tunneling**: Encode data in DNS queries
 - **Local file system attacks**: Stage data for later exfiltration
 - **Process/system call abuse**: Container escapes, privilege escalation
 

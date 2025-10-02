@@ -28,6 +28,7 @@ export interface DnsConfigOptions {
   allowedDomains: string;
   blockRiskySubdomains: boolean;
   dnsServer?: string;
+  dnsUsername?: string;
 }
 
 export interface DnsConfigResult {
@@ -61,12 +62,20 @@ export function parseAllowedDomains(allowedDomains: string): string[] {
  * @returns DNSmasq configuration and list of blocked subdomains
  */
 export function buildDnsConfig(options: DnsConfigOptions): DnsConfigResult {
-  const { mode, allowedDomains, blockRiskySubdomains, dnsServer = DEFAULT_DNS_SERVER } = options;
+  const { mode, allowedDomains, blockRiskySubdomains, dnsServer = DEFAULT_DNS_SERVER, dnsUsername } = options;
 
   let config = `# Enable query logging for summary generation
 log-queries=extra
 
 `;
+
+  // Configure user for privilege separation if provided
+  if (dnsUsername) {
+    config += `# Run as isolated user for privilege separation
+user=${dnsUsername}
+
+`;
+  }
 
   // Configure DNS policy based on mode
   if (mode === 'enforce') {

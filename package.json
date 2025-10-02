@@ -5,9 +5,10 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc && ncc build lib/main.js -o dist/main --license licenses.txt && mv dist/main/index.js dist/main.js",
+    "build:pre": "ncc build lib/pre.js -o dist/pre --license licenses.txt && mv dist/pre/index.js dist/pre.js",
     "build:post": "ncc build lib/post.js -o dist/post --license licenses.txt && mv dist/post/index.js dist/post.js",
     "clean": "rm -rf dist lib",
-    "package": "npm run clean && npm test && npm run build && npm run build:post",
+    "package": "npm run clean && npm test && npm run build && npm run build:pre && npm run build:post",
     "test": "jest",
     "all": "npm run package"
   },

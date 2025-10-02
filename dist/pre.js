@@ -116,142 +116,6 @@ function getRiskySubdomains() {
 
 /***/ }),
 
-/***/ 5915:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const validation_1 = __nccwpck_require__(8449);
-const setup_1 = __nccwpck_require__(1413);
-async function run() {
-    try {
-        const mode = core.getInput('mode') || 'analyze';
-        const allowedDomains = core.getInput('allowed-domains') || '';
-        const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
-        core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
-        if (mode === 'enforce' && blockRiskySubdomains) {
-            core.info('🔒 Risky GitHub subdomain blocking: ENABLED');
-        }
-        // Check if pre-action already ran and set up infrastructure
-        const preUsername = core.getState('dns-user');
-        const preUid = core.getState('dns-uid');
-        const preActionRan = preUsername && preUid;
-        let dnsUser;
-        if (preActionRan) {
-            // Pre-action already set up infrastructure - just reconfigure
-            core.info('✅ Pre-action already established monitoring infrastructure');
-            dnsUser = {
-                username: preUsername,
-                uid: parseInt(preUid, 10)
-            };
-            // Only need to reconfigure if user wants enforce mode or custom settings
-            if (mode === 'enforce' || allowedDomains || blockRiskySubdomains) {
-                core.info('Reconfiguring security policies...');
-                // Reconfigure DNSMasq with user settings
-                const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username);
-                if (blockedSubdomains.length > 0) {
-                    core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
-                    for (const subdomain of blockedSubdomains) {
-                        core.info(`  🚫 Blocked: ${subdomain}`);
-                    }
-                }
-                // Restart dnsmasq to apply new config
-                await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
-                // Reconfigure iptables final rules
-                if (mode === 'enforce') {
-                    core.info('Applying enforce mode firewall rules...');
-                    // Remove the analyze mode ACCEPT rule
-                    await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Allow-Analyze: ']);
-                    await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'ACCEPT']);
-                    // Add enforce mode DROP rule
-                    await (0, setup_1.finalizeSecurityRules)('enforce');
-                }
-            }
-        }
-        else {
-            // Pre-action didn't run - do full setup
-            core.info('Pre-action did not run - performing full setup...');
-            // Step 1: Install dependencies
-            core.info('Installing dependencies...');
-            await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-            await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
-            // Step 2: Create random DNS user for privilege separation
-            core.info('Creating isolated DNS user...');
-            dnsUser = await (0, setup_1.createRandomDNSUser)();
-            core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
-            // Step 3: Configure iptables rules
-            core.info('Configuring iptables rules...');
-            await (0, setup_1.setupFirewallRules)();
-            // Step 4: Configure DNS filtering
-            core.info('Configuring DNS filtering...');
-            await (0, setup_1.setupDNSConfig)();
-            // Step 5: Configure DNSMasq
-            core.info('Configuring DNSMasq...');
-            const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username);
-            if (blockedSubdomains.length > 0) {
-                core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
-                for (const subdomain of blockedSubdomains) {
-                    core.info(`  🚫 Blocked: ${subdomain}`);
-                }
-            }
-            // Step 6: Start services
-            core.info('Starting services...');
-            await (0, setup_1.startServices)(dnsUser.uid);
-            // Step 7: Finalize security rules
-            core.info('Finalizing security rules...');
-            await (0, setup_1.finalizeSecurityRules)(mode);
-        }
-        // Capture post-setup baseline for integrity monitoring
-        core.info('Capturing post-setup security baseline...');
-        const validator = new validation_1.SystemValidator();
-        await validator.capturePostSetupBaseline();
-        core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
-    }
-    catch (error) {
-        core.setFailed(`Action failed with error: ${error}`);
-    }
-}
-run();
-
-
-/***/ }),
-
 /***/ 9170:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -312,6 +176,101 @@ function isGitHubRelated(domain) {
     const githubDomains = getGitHubRequiredDomains();
     return isGitHubDomain(domain, githubDomains);
 }
+
+
+/***/ }),
+
+/***/ 8229:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const setup_1 = __nccwpck_require__(1413);
+/**
+ * Pre-action hook: Establish security in analyze mode
+ *
+ * This runs BEFORE the main action step, providing early network monitoring.
+ *
+ * Strategy:
+ * - Set up full security infrastructure in ANALYZE mode (log everything, block nothing)
+ * - Main action will reconfigure to user's desired mode (analyze or enforce)
+ * - Save DNS user info in state for main action to reuse
+ */
+async function run() {
+    try {
+        core.info('🔍 Pre-action: Establishing security monitoring...');
+        // Step 1: Install dependencies
+        core.info('Installing dependencies...');
+        await exec.exec('sudo', ['apt-get', 'update', '-qq']);
+        await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+        // Step 2: Create random DNS user for privilege separation
+        core.info('Creating isolated DNS user...');
+        const dnsUser = await (0, setup_1.createRandomDNSUser)();
+        // Save DNS user info for main action to use
+        core.saveState('dns-user', dnsUser.username);
+        core.saveState('dns-uid', dnsUser.uid.toString());
+        core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
+        // Step 3: Configure iptables rules
+        core.info('Configuring iptables rules...');
+        await (0, setup_1.setupFirewallRules)();
+        // Step 4: Configure DNS filtering
+        core.info('Configuring DNS filtering...');
+        await (0, setup_1.setupDNSConfig)();
+        // Step 5: Configure DNSMasq in ANALYZE mode (permissive, log everything)
+        core.info('Configuring DNSMasq in analyze mode...');
+        await (0, setup_1.setupDNSMasq)('analyze', '', false, dnsUser.username);
+        // Step 6: Start services
+        core.info('Starting services...');
+        await (0, setup_1.startServices)(dnsUser.uid);
+        // Step 7: Finalize with ANALYZE mode rules (log but allow all)
+        core.info('Finalizing analyze mode rules...');
+        await (0, setup_1.finalizeSecurityRules)('analyze');
+        core.info('✅ Pre-action: Security monitoring active (analyze mode)');
+        core.info('   Main action will apply user configuration...');
+    }
+    catch (error) {
+        // Don't fail the workflow if pre-setup fails - log warning and continue
+        core.warning(`Pre-action setup encountered an error: ${error}`);
+        core.warning('Main action will attempt full setup...');
+    }
+}
+run();
 
 
 /***/ }),
@@ -457,328 +416,6 @@ async function finalizeSecurityRules(mode) {
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'ACCEPT']);
     }
 }
-
-
-/***/ }),
-
-/***/ 8449:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * System Integrity Validation for Safer Runner Action
- *
- * This module provides SHA256 checksum-based validation to ensure that critical
- * security configurations (dnsmasq.conf, resolv.conf, iptables rules) are not
- * tampered with between setup completion and action end.
- *
- * Validation Flow:
- * 1. Setup completes (main.ts) → Capture post-setup baseline checksums
- * 2. User workflow runs (potentially malicious code could run here)
- * 3. Post-action (post.ts) → Verify current state matches baseline
- *
- * This detects tampering by external processes during the action run, ensuring
- * that DNS filtering and firewall rules maintain their integrity.
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SystemValidator = void 0;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const crypto = __importStar(__nccwpck_require__(6982));
-const fs_1 = __nccwpck_require__(9896);
-/**
- * Standard iptables chains to monitor for tampering
- */
-const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'];
-class SystemValidator {
-    constructor(criticalFiles) {
-        this.validationStateFile = '/tmp/safer-runner-validation-state.json';
-        // Allow injection of critical files for testing
-        this.criticalFiles = criticalFiles || [
-            '/etc/dnsmasq.conf',
-            '/etc/resolv.conf',
-            '/etc/systemd/resolved.conf.d/no-stub.conf'
-        ];
-    }
-    /**
-     * Capture post-setup baseline checksums after all configuration is complete
-     * This baseline will be verified in the post-action to detect tampering
-     */
-    async capturePostSetupBaseline() {
-        core.info('📋 Capturing post-setup security baseline...');
-        const state = {
-            files: [],
-            iptablesRules: [],
-            timestamp: new Date().toISOString()
-        };
-        // Capture file checksums
-        for (const filePath of this.criticalFiles) {
-            try {
-                const checksum = await this.calculateFileChecksum(filePath);
-                if (checksum) {
-                    state.files.push({
-                        path: filePath,
-                        checksum,
-                        timestamp: new Date().toISOString()
-                    });
-                    core.info(`✅ Captured baseline checksum for ${filePath}: ${checksum.substring(0, 16)}...`);
-                }
-                else {
-                    core.error(`❌ Expected file ${filePath} not found after setup - this indicates a setup failure`);
-                    throw new Error(`Critical file ${filePath} missing after setup completion`);
-                }
-            }
-            catch (error) {
-                core.error(`❌ Failed to capture baseline for ${filePath}: ${error}`);
-                throw error;
-            }
-        }
-        // Capture iptables state
-        await this.captureIptablesState(state);
-        // Save validation state
-        (0, fs_1.writeFileSync)(this.validationStateFile, JSON.stringify(state, null, 2));
-        core.info(`💾 Security baseline saved to ${this.validationStateFile}`);
-    }
-    /**
-     * Verify current state against post-setup baseline to detect tampering
-     */
-    async verifyAgainstBaseline() {
-        core.info('🔍 Verifying system integrity against baseline...');
-        if (!(0, fs_1.existsSync)(this.validationStateFile)) {
-            core.warning('⚠️  No baseline state file found - cannot verify integrity');
-            return false;
-        }
-        let baselineState;
-        try {
-            baselineState = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
-        }
-        catch (error) {
-            core.error(`❌ Failed to read baseline state: ${error}`);
-            return false;
-        }
-        let allValid = true;
-        // Verify file checksums against baseline
-        for (const fileState of baselineState.files) {
-            try {
-                const currentChecksum = await this.calculateFileChecksum(fileState.path);
-                if (!currentChecksum) {
-                    core.error(`❌ Critical file ${fileState.path} was deleted after setup!`);
-                    allValid = false;
-                    continue;
-                }
-                if (currentChecksum === fileState.checksum) {
-                    core.info(`✅ File ${fileState.path} integrity verified`);
-                }
-                else {
-                    core.error(`❌ File ${fileState.path} has been tampered with after setup!`);
-                    allValid = false;
-                }
-            }
-            catch (error) {
-                core.error(`❌ Failed to verify ${fileState.path}: ${error}`);
-                allValid = false;
-            }
-        }
-        // Verify iptables rules against baseline
-        const currentIptablesState = await this.getCurrentIptablesState();
-        for (const ruleState of baselineState.iptablesRules) {
-            const currentRule = currentIptablesState.find(r => r.chain === ruleState.chain);
-            if (!currentRule) {
-                core.error(`❌ iptables chain ${ruleState.chain} is missing!`);
-                allValid = false;
-                continue;
-            }
-            if (currentRule.checksum === ruleState.checksum) {
-                core.info(`✅ iptables chain ${ruleState.chain} integrity verified`);
-            }
-            else {
-                core.error(`❌ iptables chain ${ruleState.chain} has been tampered with after setup!`);
-                allValid = false;
-            }
-        }
-        if (allValid) {
-            core.info('✅ All validation checks passed - no tampering detected');
-        }
-        return allValid;
-    }
-    /**
-     * Calculate SHA256 checksum of a file
-     */
-    async calculateFileChecksum(filePath) {
-        try {
-            const fileContent = (0, fs_1.readFileSync)(filePath);
-            return crypto.createHash('sha256').update(fileContent).digest('hex');
-        }
-        catch (error) {
-            if (error.code === 'ENOENT') {
-                return null; // File doesn't exist
-            }
-            throw error;
-        }
-    }
-    /**
-     * Calculate checksum of iptables rules content
-     */
-    calculateRulesChecksum(rules) {
-        return crypto.createHash('sha256').update(rules).digest('hex');
-    }
-    /**
-     * Get iptables rules output for a specific chain
-     * Extracted for testability - can be overridden in tests
-     */
-    async getIptablesChainOutput(chain) {
-        let rulesOutput = '';
-        await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
-            listeners: {
-                stdout: (data) => { rulesOutput += data.toString(); }
-            },
-            ignoreReturnCode: true
-        });
-        return rulesOutput;
-    }
-    /**
-     * Capture current iptables state
-     */
-    async captureIptablesState(state) {
-        for (const chain of IPTABLES_CHAINS) {
-            try {
-                const rulesOutput = await this.getIptablesChainOutput(chain);
-                const checksum = this.calculateRulesChecksum(rulesOutput);
-                state.iptablesRules.push({
-                    chain,
-                    rules: rulesOutput,
-                    checksum,
-                    timestamp: new Date().toISOString()
-                });
-                core.info(`✅ Captured iptables ${chain} chain: ${checksum.substring(0, 16)}...`);
-            }
-            catch (error) {
-                core.warning(`⚠️  Failed to capture iptables ${chain} chain: ${error}`);
-            }
-        }
-    }
-    /**
-     * Get current iptables state for comparison
-     */
-    async getCurrentIptablesState() {
-        const currentState = [];
-        for (const chain of IPTABLES_CHAINS) {
-            try {
-                const rulesOutput = await this.getIptablesChainOutput(chain);
-                const checksum = this.calculateRulesChecksum(rulesOutput);
-                currentState.push({
-                    chain,
-                    rules: rulesOutput,
-                    checksum,
-                    timestamp: new Date().toISOString()
-                });
-            }
-            catch (error) {
-                core.warning(`⚠️  Failed to get current iptables ${chain} chain: ${error}`);
-            }
-        }
-        return currentState;
-    }
-    /**
-     * Generate detailed validation report
-     */
-    async generateValidationReport() {
-        if (!(0, fs_1.existsSync)(this.validationStateFile)) {
-            return '## Config File Tamper Detection\n\nNo validation data available.\n\n';
-        }
-        let report = '## Config File Tamper Detection\n\n';
-        try {
-            const state = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
-            report += `**Baseline:** ${state.timestamp}\n`;
-            report += `**Verified:** ${new Date().toISOString()}\n\n`;
-            // File integrity report
-            report += '### Configuration Files\n\n';
-            report += '| File | Status | Checksum Comparison |\n';
-            report += '|------|--------|--------------------|\n';
-            for (const file of state.files) {
-                const currentChecksum = await this.calculateFileChecksum(file.path);
-                let status = 'Unknown';
-                let displayChecksum = file.checksum.substring(0, 16);
-                if (!currentChecksum) {
-                    status = '🚨 DELETED';
-                    displayChecksum = `${displayChecksum} -> MISSING`;
-                }
-                else if (currentChecksum === file.checksum) {
-                    status = 'VERIFIED';
-                    displayChecksum = `${displayChecksum} (unchanged)`;
-                }
-                else {
-                    status = '⚠️ TAMPERED';
-                    displayChecksum = `${displayChecksum} -> ${currentChecksum.substring(0, 16)}`;
-                }
-                report += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
-            }
-            // iptables integrity report
-            report += '\n### Firewall Rules\n\n';
-            report += '| Chain | Status | Checksum Comparison |\n';
-            report += '|-------|--------|--------------|\n';
-            const currentIptablesState = await this.getCurrentIptablesState();
-            for (const rule of state.iptablesRules) {
-                const currentRule = currentIptablesState.find(r => r.chain === rule.chain);
-                let status = 'Unknown';
-                let displayChecksum = rule.checksum.substring(0, 16);
-                if (!currentRule) {
-                    status = '🚨 MISSING';
-                    displayChecksum = `${displayChecksum} -> MISSING`;
-                }
-                else if (currentRule.checksum === rule.checksum) {
-                    status = 'VERIFIED';
-                    displayChecksum = `${displayChecksum} (unchanged)`;
-                }
-                else {
-                    status = '⚠️ TAMPERED';
-                    displayChecksum = `${displayChecksum} -> ${currentRule.checksum.substring(0, 16)}`;
-                }
-                report += `| ${rule.chain} | ${status} | ${displayChecksum} |\n`;
-            }
-            report += '\n';
-        }
-        catch (error) {
-            report += `Failed to generate report: ${error}\n`;
-        }
-        return report;
-    }
-}
-exports.SystemValidator = SystemValidator;
 
 
 /***/ }),
@@ -28340,7 +27977,7 @@ module.exports = parseParams
 /******/ 	// startup
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(5915);
+/******/ 	var __webpack_exports__ = __nccwpck_require__(8229);
 /******/ 	module.exports = __webpack_exports__;
 /******/ 	
 /******/ })()
