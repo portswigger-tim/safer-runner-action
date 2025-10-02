@@ -13,6 +13,7 @@ export interface DnsResolution {
   domain: string;
   ip: string;
   status: string;
+  cnames?: string[]; // Optional CNAME chain for the resolution
 }
 
 /**
@@ -58,6 +59,7 @@ export function parseRequestChains(lines: string[]): DnsResolution[] {
   const requestChains = new Map<string, {
     queriedDomain: string;
     ips: string[];
+    cnames: string[];
     status: string;
   }>();
 
@@ -78,6 +80,7 @@ export function parseRequestChains(lines: string[]): DnsResolution[] {
         requestChains.set(requestId, {
           queriedDomain: queryMatch[1],
           ips: [],
+          cnames: [],
           status: 'QUERIED'
         });
       }
@@ -93,6 +96,18 @@ export function parseRequestChains(lines: string[]): DnsResolution[] {
       continue;
     }
 
+    // Parse CNAME records - capture the intermediate domain names
+    const cnameMatch = line.match(/reply ([^\s]+) is <CNAME>/);
+    if (cnameMatch && requestChains.has(requestId)) {
+      const chain = requestChains.get(requestId)!;
+      const cnameDomain = cnameMatch[1];
+      // Only add if it's not the original queried domain
+      if (cnameDomain !== chain.queriedDomain && !chain.cnames.includes(cnameDomain)) {
+        chain.cnames.push(cnameDomain);
+      }
+      continue;
+    }
+
     // Parse NXDOMAIN responses (blocked domains)
     const nxdomainMatch = line.match(/config ([^\s]+) is NXDOMAIN/);
     if (nxdomainMatch && requestChains.has(requestId)) {
@@ -101,19 +116,24 @@ export function parseRequestChains(lines: string[]): DnsResolution[] {
       chain.status = 'BLOCKED';
       continue;
     }
-
-    // Ignore CNAME entries - we only care about the final IPv4 resolution
   }
 
   // Convert request chains to DnsResolution objects
   const resolutions: DnsResolution[] = [];
   for (const chain of requestChains.values()) {
     if (chain.ips.length > 0) {
-      resolutions.push({
+      const resolution: DnsResolution = {
         domain: chain.queriedDomain,
         ip: chain.ips.length === 1 ? chain.ips[0] : chain.ips.join(', '),
         status: chain.status
-      });
+      };
+
+      // Only add cnames if there are any
+      if (chain.cnames.length > 0) {
+        resolution.cnames = chain.cnames;
+      }
+
+      resolutions.push(resolution);
     }
   }
 

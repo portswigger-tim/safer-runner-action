@@ -19,6 +19,7 @@ exports.generateConfigurationAdvice = generateConfigurationAdvice;
 exports.formatConnectionStatus = formatConnectionStatus;
 exports.formatDnsStatus = formatDnsStatus;
 exports.formatIpAddresses = formatIpAddresses;
+exports.formatCnameChain = formatCnameChain;
 exports.getStatusIcon = getStatusIcon;
 exports.getDnsStatusIcon = getDnsStatusIcon;
 const github_parser_1 = __nccwpck_require__(9170);
@@ -92,24 +93,26 @@ function generateDnsDetails(dnsResolutions) {
         const importantDns = [...userDns, ...blockedDns];
         // Remove duplicates
         const uniqueImportant = Array.from(new Map(importantDns.map(d => [d.domain, d])).values());
-        details += `| Domain | IP Address(es) | Status |\n`;
-        details += `|--------|----------------|--------|\n`;
+        details += `| Domain | IP Address(es) | CNAME(s) | Status |\n`;
+        details += `|--------|----------------|----------|--------|\n`;
         for (const dns of uniqueImportant) {
             const status = formatDnsStatus(dns.status);
             const formattedIps = formatIpAddresses(dns.ip);
-            details += `| ${dns.domain} | ${formattedIps} | ${status} |\n`;
+            const formattedCnames = formatCnameChain(dns.cnames);
+            details += `| ${dns.domain} | ${formattedIps} | ${formattedCnames} | ${status} |\n`;
         }
         details += `\n`;
     }
     // Show GitHub DNS in collapsed section
     if (githubDns.length > 0) {
         details += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
-        details += `| Domain | IP Address(es) | Status |\n`;
-        details += `|--------|----------------|--------|\n`;
+        details += `| Domain | IP Address(es) | CNAME(s) | Status |\n`;
+        details += `|--------|----------------|----------|--------|\n`;
         for (const dns of githubDns) {
             const status = formatDnsStatus(dns.status);
             const formattedIps = formatIpAddresses(dns.ip);
-            details += `| ${dns.domain} | ${formattedIps} | ${status} |\n`;
+            const formattedCnames = formatCnameChain(dns.cnames);
+            details += `| ${dns.domain} | ${formattedIps} | ${formattedCnames} | ${status} |\n`;
         }
         details += `\n</details>\n\n`;
     }
@@ -197,6 +200,19 @@ function formatIpAddresses(ipString) {
         return ipString.split(', ').join('<br/>');
     }
     return ipString;
+}
+/**
+ * Format CNAME chain for markdown display
+ * Converts CNAME array to line-break separated list
+ *
+ * @param cnames - Optional array of CNAME domains
+ * @returns Formatted CNAME chain with HTML line breaks, or '-' if no CNAMEs
+ */
+function formatCnameChain(cnames) {
+    if (!cnames || cnames.length === 0) {
+        return '-';
+    }
+    return cnames.join('<br/>');
 }
 /**
  * Get status icon for network connections
@@ -333,6 +349,7 @@ function parseRequestChains(lines) {
                 requestChains.set(requestId, {
                     queriedDomain: queryMatch[1],
                     ips: [],
+                    cnames: [],
                     status: 'QUERIED'
                 });
             }
@@ -346,6 +363,17 @@ function parseRequestChains(lines) {
             chain.status = 'RESOLVED';
             continue;
         }
+        // Parse CNAME records - capture the intermediate domain names
+        const cnameMatch = line.match(/reply ([^\s]+) is <CNAME>/);
+        if (cnameMatch && requestChains.has(requestId)) {
+            const chain = requestChains.get(requestId);
+            const cnameDomain = cnameMatch[1];
+            // Only add if it's not the original queried domain
+            if (cnameDomain !== chain.queriedDomain && !chain.cnames.includes(cnameDomain)) {
+                chain.cnames.push(cnameDomain);
+            }
+            continue;
+        }
         // Parse NXDOMAIN responses (blocked domains)
         const nxdomainMatch = line.match(/config ([^\s]+) is NXDOMAIN/);
         if (nxdomainMatch && requestChains.has(requestId)) {
@@ -354,17 +382,21 @@ function parseRequestChains(lines) {
             chain.status = 'BLOCKED';
             continue;
         }
-        // Ignore CNAME entries - we only care about the final IPv4 resolution
     }
     // Convert request chains to DnsResolution objects
     const resolutions = [];
     for (const chain of requestChains.values()) {
         if (chain.ips.length > 0) {
-            resolutions.push({
+            const resolution = {
                 domain: chain.queriedDomain,
                 ip: chain.ips.length === 1 ? chain.ips[0] : chain.ips.join(', '),
                 status: chain.status
-            });
+            };
+            // Only add cnames if there are any
+            if (chain.cnames.length > 0) {
+                resolution.cnames = chain.cnames;
+            }
+            resolutions.push(resolution);
         }
     }
     return resolutions;

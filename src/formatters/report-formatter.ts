@@ -93,13 +93,14 @@ export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
     // Remove duplicates
     const uniqueImportant = Array.from(new Map(importantDns.map(d => [d.domain, d])).values());
 
-    details += `| Domain | IP Address(es) | Status |\n`;
-    details += `|--------|----------------|--------|\n`;
+    details += `| Domain | IP Address(es) | CNAME(s) | Status |\n`;
+    details += `|--------|----------------|----------|--------|\n`;
 
     for (const dns of uniqueImportant) {
       const status = formatDnsStatus(dns.status);
       const formattedIps = formatIpAddresses(dns.ip);
-      details += `| ${dns.domain} | ${formattedIps} | ${status} |\n`;
+      const formattedCnames = formatCnameChain(dns.cnames);
+      details += `| ${dns.domain} | ${formattedIps} | ${formattedCnames} | ${status} |\n`;
     }
     details += `\n`;
   }
@@ -107,13 +108,14 @@ export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
   // Show GitHub DNS in collapsed section
   if (githubDns.length > 0) {
     details += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
-    details += `| Domain | IP Address(es) | Status |\n`;
-    details += `|--------|----------------|--------|\n`;
+    details += `| Domain | IP Address(es) | CNAME(s) | Status |\n`;
+    details += `|--------|----------------|----------|--------|\n`;
 
     for (const dns of githubDns) {
       const status = formatDnsStatus(dns.status);
       const formattedIps = formatIpAddresses(dns.ip);
-      details += `| ${dns.domain} | ${formattedIps} | ${status} |\n`;
+      const formattedCnames = formatCnameChain(dns.cnames);
+      details += `| ${dns.domain} | ${formattedIps} | ${formattedCnames} | ${status} |\n`;
     }
     details += `\n</details>\n\n`;
   }
@@ -214,6 +216,20 @@ export function formatIpAddresses(ipString: string): string {
     return ipString.split(', ').join('<br/>');
   }
   return ipString;
+}
+
+/**
+ * Format CNAME chain for markdown display
+ * Converts CNAME array to line-break separated list
+ *
+ * @param cnames - Optional array of CNAME domains
+ * @returns Formatted CNAME chain with HTML line breaks, or '-' if no CNAMEs
+ */
+export function formatCnameChain(cnames?: string[]): string {
+  if (!cnames || cnames.length === 0) {
+    return '-';
+  }
+  return cnames.join('<br/>');
 }
 
 /**

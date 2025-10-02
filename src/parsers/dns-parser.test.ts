@@ -15,7 +15,7 @@ describe('DNS Parser', () => {
   });
 
   describe('parseRequestChains', () => {
-    it('should parse simple domain resolution', () => {
+    it('should parse simple domain resolution without CNAMEs', () => {
       const logs = [
         '2025-10-01T10:53:56.659901+00:00 runnervm3ublj dnsmasq[3001]: 1 127.0.0.1/39637 query[A] api.github.com from 127.0.0.1',
         '2025-10-01T10:53:56.664651+00:00 runnervm3ublj dnsmasq[3001]: 1 127.0.0.1/39637 reply api.github.com is 140.82.114.6'
@@ -29,6 +29,8 @@ describe('DNS Parser', () => {
         ip: '140.82.114.6',
         status: 'RESOLVED'
       });
+      // Should not have cnames field if there are no CNAMEs
+      expect(result[0].cnames).toBeUndefined();
     });
 
     it('should parse NXDOMAIN (blocked) domains', () => {
@@ -70,11 +72,11 @@ describe('DNS Parser', () => {
       });
     });
 
-    it('should handle CNAME chains and return final IP', () => {
+    it('should handle CNAME chains and return final IP with CNAME records', () => {
       const logs = [
         '2025-10-01T10:53:56.888145+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 query[A] results-receiver.actions.githubusercontent.com from 127.0.0.1',
-        '2025-10-01T10:53:56.893108+00:00 runnervm3ublj dnsmasq[3001]: 6 127.0.0.1/41452 reply results-receiver.actions.githubusercontent.com is <CNAME>',
-        '2025-10-01T10:53:56.894179+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 reply results-receiver.actions.githubusercontent.com is <CNAME>',
+        '2025-10-01T10:53:56.893108+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 reply results-receiver.actions.githubusercontent.com is <CNAME>',
+        '2025-10-01T10:53:56.894179+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 reply glb-db52c2cf8be544.github.com is <CNAME>',
         '2025-10-01T10:53:56.894262+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 reply glb-db52c2cf8be544.github.com is 140.82.112.21'
       ];
 
@@ -84,7 +86,8 @@ describe('DNS Parser', () => {
       expect(result[0]).toEqual({
         domain: 'results-receiver.actions.githubusercontent.com',
         ip: '140.82.112.21',
-        status: 'RESOLVED'
+        status: 'RESOLVED',
+        cnames: ['glb-db52c2cf8be544.github.com']
       });
     });
 

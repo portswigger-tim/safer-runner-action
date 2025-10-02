@@ -5,6 +5,7 @@ import {
   formatConnectionStatus,
   formatDnsStatus,
   formatIpAddresses,
+  formatCnameChain,
   getStatusIcon,
   getDnsStatusIcon
 } from './report-formatter';
@@ -194,15 +195,34 @@ describe('Report Formatter', () => {
       expect(result).toContain('(🛡️ 2 filtered)');
     });
 
-    it('should handle CNAME responses', () => {
+    it('should display CNAME chain when present', () => {
       const resolutions: DnsResolution[] = [
-        { domain: 'example.com', ip: 'CNAME', status: 'RESOLVED' }
+        {
+          domain: 'example.com',
+          ip: '1.2.3.4',
+          status: 'RESOLVED',
+          cnames: ['cdn.example.com', 'edge.cloudfront.net']
+        }
       ];
 
       const result = generateDnsDetails(resolutions);
 
       expect(result).toContain('example.com');
-      expect(result).toContain('CNAME');
+      expect(result).toContain('1.2.3.4');
+      expect(result).toContain('cdn.example.com<br/>edge.cloudfront.net');
+    });
+
+    it('should display dash when no CNAME chain', () => {
+      const resolutions: DnsResolution[] = [
+        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
+      ];
+
+      const result = generateDnsDetails(resolutions);
+
+      expect(result).toContain('example.com');
+      expect(result).toContain('1.2.3.4');
+      // Should contain dash for empty CNAME
+      expect(result).toContain(' - |');
     });
 
     it('should create valid markdown tables', () => {
@@ -212,8 +232,8 @@ describe('Report Formatter', () => {
 
       const result = generateDnsDetails(resolutions);
 
-      expect(result).toContain('| Domain | IP Address(es) | Status |');
-      expect(result).toContain('|--------|----------------|--------|');
+      expect(result).toContain('| Domain | IP Address(es) | CNAME(s) | Status |');
+      expect(result).toContain('|--------|----------------|----------|--------|');
     });
 
     it('should recognize explicit GitHub domains only', () => {
@@ -410,6 +430,33 @@ describe('Report Formatter', () => {
     it('should handle two IPs', () => {
       const result = formatIpAddresses('1.2.3.4, 5.6.7.8');
       expect(result).toBe('1.2.3.4<br/>5.6.7.8');
+    });
+  });
+
+  describe('formatCnameChain', () => {
+    it('should return dash when no CNAMEs', () => {
+      const result = formatCnameChain(undefined);
+      expect(result).toBe('-');
+    });
+
+    it('should return dash when empty array', () => {
+      const result = formatCnameChain([]);
+      expect(result).toBe('-');
+    });
+
+    it('should format single CNAME', () => {
+      const result = formatCnameChain(['cdn.example.com']);
+      expect(result).toBe('cdn.example.com');
+    });
+
+    it('should format multiple CNAMEs with line breaks', () => {
+      const result = formatCnameChain(['cdn.example.com', 'glb-12345.cloudfront.net']);
+      expect(result).toBe('cdn.example.com<br/>glb-12345.cloudfront.net');
+    });
+
+    it('should format three CNAMEs with line breaks', () => {
+      const result = formatCnameChain(['first.com', 'second.com', 'third.com']);
+      expect(result).toBe('first.com<br/>second.com<br/>third.com');
     });
   });
 
