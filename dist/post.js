@@ -611,8 +611,9 @@ async function parseNetworkLogs() {
 async function parsePreHookNetworkLogs() {
     try {
         // Get only Pre- prefixed logs from pre-hook
+        // Use space after colon to match log format and avoid partial matches
         let syslogOutput = '';
-        await exec.exec('sudo', ['grep', '-E', 'Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ', '/var/log/syslog'], {
+        await exec.exec('sudo', ['grep', '-E', ' Pre-GitHub-Allow: | Pre-User-Allow: | Pre-Allow-Analyze: ', '/var/log/syslog'], {
             listeners: {
                 stdout: (data) => { syslogOutput += data.toString(); }
             },

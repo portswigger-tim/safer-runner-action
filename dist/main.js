@@ -186,11 +186,16 @@ async function run() {
                 username: preUsername,
                 uid: parseInt(preUid, 10)
             };
-            // Remove Pre- prefixed iptables LOG rules before reconfiguring
+            // Remove Pre- prefixed iptables LOG rules and add main LOG rules
             core.info('Removing pre-hook iptables log rules...');
             await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Processing: '], { ignoreReturnCode: true });
             await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=Pre-GitHub-Allow: '], { ignoreReturnCode: true });
             await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=Pre-User-Allow: '], { ignoreReturnCode: true });
+            // Add main action LOG rules (without Pre- prefix)
+            core.info('Adding main action log rules...');
+            await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '5', '-j', 'LOG', '--log-prefix=Processing: ']);
+            await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '5', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=GitHub-Allow: ']);
+            await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '6', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=User-Allow: ']);
             // Only need to reconfigure if user wants enforce mode or custom settings
             if (mode === 'enforce' || allowedDomains || blockRiskySubdomains) {
                 core.info('Reconfiguring security policies...');
@@ -403,14 +408,13 @@ async function setupFirewallRules(logPrefix = '') {
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '169.254.169.254', '-j', 'ACCEPT']);
     // Allow localhost traffic
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'lo', '-s', '127.0.0.1', '-d', '127.0.0.1', '-j', 'ACCEPT']);
-    // Log processing for debugging
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'LOG', `--log-prefix=${logPrefix}Processing: `]);
     // Create ipsets for allowlisting
     await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
     await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
-    // Allow connections to IPs in ipsets
+    // Log GitHub ipset matches
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'ACCEPT']);
+    // Log user-allowed ipset matches
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
 }
@@ -457,14 +461,14 @@ async function startServices(dnsUid) {
 }
 async function finalizeSecurityRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
-        // Log dropped packets for debugging
+        // Log traffic that doesn't match any ipset (will be dropped)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=${logPrefix}Drop-Enforce: `]);
         // DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'DROP']);
     }
     else {
-        // Log other traffic for analysis but allow it
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'LOG', `--log-prefix=${logPrefix}Allow-Analyze: `]);
+        // Analyze mode: Log traffic that doesn't match any ipset (but still allow it)
+        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=${logPrefix}Allow-Analyze: `]);
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'ACCEPT']);
     }
 }

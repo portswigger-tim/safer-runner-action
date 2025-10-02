@@ -44,11 +44,17 @@ async function run(): Promise<void> {
         uid: parseInt(preUid, 10)
       };
 
-      // Remove Pre- prefixed iptables LOG rules before reconfiguring
+      // Remove Pre- prefixed iptables LOG rules and add main LOG rules
       core.info('Removing pre-hook iptables log rules...');
       await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Processing: '], { ignoreReturnCode: true });
       await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=Pre-GitHub-Allow: '], { ignoreReturnCode: true });
       await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=Pre-User-Allow: '], { ignoreReturnCode: true });
+
+      // Add main action LOG rules (without Pre- prefix)
+      core.info('Adding main action log rules...');
+      await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '5', '-j', 'LOG', '--log-prefix=Processing: ']);
+      await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '5', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=GitHub-Allow: ']);
+      await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '6', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=User-Allow: ']);
 
       // Only need to reconfigure if user wants enforce mode or custom settings
       if (mode === 'enforce' || allowedDomains || blockRiskySubdomains) {
