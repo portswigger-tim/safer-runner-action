@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
 
-// Mock SystemValidator that provides test iptables output instead of calling sudo
+// Mock SystemValidator that provides test iptables output and file reading without sudo
 class TestSystemValidator extends SystemValidator {
   private mockIptablesOutput: Map<string, string> = new Map();
 
@@ -15,6 +15,19 @@ class TestSystemValidator extends SystemValidator {
   // Helper method to set mock iptables output for tests
   setMockIptablesOutput(chain: string, output: string): void {
     this.mockIptablesOutput.set(chain, output);
+  }
+
+  // Override to read files without sudo for local testing
+  protected async calculateFileChecksum(filePath: string): Promise<string | null> {
+    try {
+      const fileContent = fs.readFileSync(filePath);
+      return crypto.createHash('sha256').update(fileContent).digest('hex');
+    } catch (error) {
+      if ((error as any).code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
   }
 }
 
