@@ -190,6 +190,9 @@ async function run() {
             core.info('Creating isolated DNS user...');
             dnsUser = await (0, setup_1.createRandomDNSUser)();
             core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
+            // Configure ipsets
+            core.info('Configuring ipsets...');
+            await (0, setup_1.setupIpsets)();
         }
         else {
             // Pre-action already set up infrastructure - just reconfigure
@@ -342,6 +345,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createRandomDNSUser = createRandomDNSUser;
+exports.setupIpsets = setupIpsets;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
@@ -367,6 +371,11 @@ async function createRandomDNSUser() {
     ]);
     return { username, uid };
 }
+async function setupIpsets() {
+    // Create ipsets for allowlisting
+    await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
+    await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
+}
 async function setupFirewallRules(dnsUid, logPrefix = '') {
     // Flush OUTPUT chain
     await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
@@ -377,9 +386,6 @@ async function setupFirewallRules(dnsUid, logPrefix = '') {
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '169.254.169.254', '-j', 'ACCEPT']);
     // Allow localhost traffic
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'lo', '-s', '127.0.0.1', '-d', '127.0.0.1', '-j', 'ACCEPT']);
-    // Create ipsets for allowlisting
-    await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
-    await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
     // Log GitHub ipset matches
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'ACCEPT']);

@@ -32,6 +32,12 @@ export async function createRandomDNSUser(): Promise<DnsUser> {
   return { username, uid };
 }
 
+export async function setupIpsets() {
+  // Create ipsets for allowlisting
+  await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
+  await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
+}
+
 export async function setupFirewallRules(dnsUid: number, logPrefix: string = ''): Promise<void> {
   // Flush OUTPUT chain
   await exec.exec('sudo', ['iptables', '-F', 'OUTPUT'])
@@ -44,10 +50,6 @@ export async function setupFirewallRules(dnsUid: number, logPrefix: string = '')
 
   // Allow localhost traffic
   await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'lo', '-s', '127.0.0.1', '-d', '127.0.0.1', '-j', 'ACCEPT']);
-
-  // Create ipsets for allowlisting
-  await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
-  await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
 
   // Log GitHub ipset matches
   await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);

@@ -225,7 +225,7 @@ const setup_1 = __nccwpck_require__(1413);
 /**
  * Pre-action hook: Establish security in analyze mode
  *
- * This runs BEFORE the main action step, providing early network monitoring.
+ * This runs BEFORE the main action oviding early network monitoring.
  *
  * Strategy:
  * - Set up full security infrastructure in ANALYZE mode (log everything, block nothing)
@@ -235,30 +235,33 @@ const setup_1 = __nccwpck_require__(1413);
 async function run() {
     try {
         core.info('🔍 Pre-action: Establishing security monitoring...');
-        // Step 1: Install dependencies
+        // Install dependencies
         core.info('Installing dependencies...');
         await exec.exec('sudo', ['apt-get', 'update', '-qq']);
         await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
-        // Step 2: Create random DNS user for privilege separation
+        // Create random DNS user for privilege separation
         core.info('Creating isolated DNS user...');
         const dnsUser = await (0, setup_1.createRandomDNSUser)();
         // Save DNS user info for main action to use
         core.saveState('dns-user', dnsUser.username);
         core.saveState('dns-uid', dnsUser.uid.toString());
         core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
-        // Step 3: Configure iptables rules with Pre- log prefix
+        // Configure ipsets
+        core.info('Configuring ipsets...');
+        await (0, setup_1.setupIpsets)();
+        // Configure iptables rules with Pre- log prefix
         core.info('Configuring iptables rules...');
         await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Pre-');
-        // Step 4: Configure DNS filtering
+        // Configure DNS filtering
         core.info('Configuring DNS filtering...');
         await (0, setup_1.setupDNSConfig)();
-        // Step 5: Configure DNSMasq in ANALYZE mode (permissive, log everything)
+        // Configure DNSMasq in ANALYZE mode (permissive, log everything)
         core.info('Configuring DNSMasq in analyze mode...');
         await (0, setup_1.setupDNSMasq)('analyze', '', false, dnsUser.username);
-        // Step 6: Start services
+        // Start services
         core.info('Restarting services...');
         await (0, setup_1.restartServices)();
-        // Step 7: Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
+        // Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
         core.info('Finalizing analyze mode rules...');
         await (0, setup_1.finalizeFirewallRules)('analyze', 'Pre-');
         core.info('✅ Pre-action: Security monitoring active (analyze mode)');
@@ -318,6 +321,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createRandomDNSUser = createRandomDNSUser;
+exports.setupIpsets = setupIpsets;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
@@ -343,6 +347,11 @@ async function createRandomDNSUser() {
     ]);
     return { username, uid };
 }
+async function setupIpsets() {
+    // Create ipsets for allowlisting
+    await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
+    await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
+}
 async function setupFirewallRules(dnsUid, logPrefix = '') {
     // Flush OUTPUT chain
     await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
@@ -353,9 +362,6 @@ async function setupFirewallRules(dnsUid, logPrefix = '') {
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '169.254.169.254', '-j', 'ACCEPT']);
     // Allow localhost traffic
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'lo', '-s', '127.0.0.1', '-d', '127.0.0.1', '-j', 'ACCEPT']);
-    // Create ipsets for allowlisting
-    await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
-    await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
     // Log GitHub ipset matches
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'ACCEPT']);

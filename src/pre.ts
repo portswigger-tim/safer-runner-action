@@ -6,13 +6,14 @@ import {
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules
+  finalizeFirewallRules,
+  setupIpsets
 } from './setup';
 
 /**
  * Pre-action hook: Establish security in analyze mode
  *
- * This runs BEFORE the main action step, providing early network monitoring.
+ * This runs BEFORE the main action oviding early network monitoring.
  *
  * Strategy:
  * - Set up full security infrastructure in ANALYZE mode (log everything, block nothing)
@@ -23,12 +24,12 @@ async function run(): Promise<void> {
   try {
     core.info('🔍 Pre-action: Establishing security monitoring...');
 
-    // Step 1: Install dependencies
+    // Install dependencies
     core.info('Installing dependencies...');
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
     await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
 
-    // Step 2: Create random DNS user for privilege separation
+    // Create random DNS user for privilege separation
     core.info('Creating isolated DNS user...');
     const dnsUser = await createRandomDNSUser();
 
@@ -37,23 +38,27 @@ async function run(): Promise<void> {
     core.saveState('dns-uid', dnsUser.uid.toString());
     core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
 
-    // Step 3: Configure iptables rules with Pre- log prefix
+    // Configure ipsets
+    core.info('Configuring ipsets...');
+    await setupIpsets();
+
+    // Configure iptables rules with Pre- log prefix
     core.info('Configuring iptables rules...');
     await setupFirewallRules(dnsUser.uid, 'Pre-');
 
-    // Step 4: Configure DNS filtering
+    // Configure DNS filtering
     core.info('Configuring DNS filtering...');
     await setupDNSConfig();
 
-    // Step 5: Configure DNSMasq in ANALYZE mode (permissive, log everything)
+    // Configure DNSMasq in ANALYZE mode (permissive, log everything)
     core.info('Configuring DNSMasq in analyze mode...');
     await setupDNSMasq('analyze', '', false, dnsUser.username);
 
-    // Step 6: Start services
+    // Start services
     core.info('Restarting services...');
     await restartServices();
 
-    // Step 7: Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
+    // Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
     core.info('Finalizing analyze mode rules...');
     await finalizeFirewallRules('analyze', 'Pre-');
 

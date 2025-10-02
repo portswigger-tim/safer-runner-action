@@ -8,7 +8,8 @@ import {
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules
+  finalizeFirewallRules,
+  setupIpsets
 } from './setup';
 
 async function run(): Promise<void> {
@@ -49,6 +50,10 @@ async function run(): Promise<void> {
       core.info('Creating isolated DNS user...');
       dnsUser = await createRandomDNSUser();
       core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
+
+      // Configure ipsets
+      core.info('Configuring ipsets...');
+      await setupIpsets();
     } else {
       // Pre-action already set up infrastructure - just reconfigure
       core.info('✅ Pre-action already established monitoring infrastructure');
