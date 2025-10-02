@@ -93,26 +93,26 @@ function generateDnsDetails(dnsResolutions) {
         const importantDns = [...userDns, ...blockedDns];
         // Remove duplicates
         const uniqueImportant = Array.from(new Map(importantDns.map(d => [d.domain, d])).values());
-        details += `| Domain | IP Address(es) | CNAME(s) | Status |\n`;
-        details += `|--------|----------------|----------|--------|\n`;
+        details += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
+        details += `|--------|----------|----------------|--------|\n`;
         for (const dns of uniqueImportant) {
             const status = formatDnsStatus(dns.status);
             const formattedIps = formatIpAddresses(dns.ip);
             const formattedCnames = formatCnameChain(dns.cnames);
-            details += `| ${dns.domain} | ${formattedIps} | ${formattedCnames} | ${status} |\n`;
+            details += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
         }
         details += `\n`;
     }
     // Show GitHub DNS in collapsed section
     if (githubDns.length > 0) {
         details += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
-        details += `| Domain | IP Address(es) | CNAME(s) | Status |\n`;
-        details += `|--------|----------------|----------|--------|\n`;
+        details += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
+        details += `|--------|----------|----------------|--------|\n`;
         for (const dns of githubDns) {
             const status = formatDnsStatus(dns.status);
             const formattedIps = formatIpAddresses(dns.ip);
             const formattedCnames = formatCnameChain(dns.cnames);
-            details += `| ${dns.domain} | ${formattedIps} | ${formattedCnames} | ${status} |\n`;
+            details += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
         }
         details += `\n</details>\n\n`;
     }
@@ -355,20 +355,28 @@ function parseRequestChains(lines) {
             }
             continue;
         }
-        // Parse reply with IPv4 address - this is the final resolution
-        const ipReplyMatch = line.match(new RegExp(`reply [^\\s]+ is (${ipv4Pattern})`));
+        // Parse reply with IPv4 address - extract both domain and IP
+        const ipReplyMatch = line.match(new RegExp(`reply ([^\\s]+) is (${ipv4Pattern})`));
         if (ipReplyMatch && requestChains.has(requestId)) {
             const chain = requestChains.get(requestId);
-            chain.ips.push(ipReplyMatch[1]);
+            const replyDomain = ipReplyMatch[1];
+            const replyIp = ipReplyMatch[2];
+            // Add the IP to the list
+            chain.ips.push(replyIp);
             chain.status = 'RESOLVED';
+            // If the domain in the reply is different from the queried domain, it's a CNAME
+            if (replyDomain !== chain.queriedDomain && !chain.cnames.includes(replyDomain)) {
+                chain.cnames.push(replyDomain);
+            }
             continue;
         }
-        // Parse CNAME records - capture the intermediate domain names
+        // Parse CNAME records - capture intermediate CNAME targets
         const cnameMatch = line.match(/reply ([^\s]+) is <CNAME>/);
         if (cnameMatch && requestChains.has(requestId)) {
             const chain = requestChains.get(requestId);
             const cnameDomain = cnameMatch[1];
-            // Only add if it's not the original queried domain
+            // Only add if it's not the original queried domain and not already in the list
+            // This captures intermediate CNAMEs that don't appear in IP reply lines
             if (cnameDomain !== chain.queriedDomain && !chain.cnames.includes(cnameDomain)) {
                 chain.cnames.push(cnameDomain);
             }

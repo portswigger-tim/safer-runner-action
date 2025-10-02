@@ -232,8 +232,8 @@ describe('Report Formatter', () => {
 
       const result = generateDnsDetails(resolutions);
 
-      expect(result).toContain('| Domain | IP Address(es) | CNAME(s) | Status |');
-      expect(result).toContain('|--------|----------------|----------|--------|');
+      expect(result).toContain('| Domain | CNAME(s) | IP Address(es) | Status |');
+      expect(result).toContain('|--------|----------|----------------|--------|');
     });
 
     it('should recognize explicit GitHub domains only', () => {

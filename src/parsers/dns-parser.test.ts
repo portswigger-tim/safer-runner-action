@@ -74,10 +74,11 @@ describe('DNS Parser', () => {
 
     it('should handle CNAME chains and return final IP with CNAME records', () => {
       const logs = [
-        '2025-10-01T10:53:56.888145+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 query[A] results-receiver.actions.githubusercontent.com from 127.0.0.1',
-        '2025-10-01T10:53:56.893108+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 reply results-receiver.actions.githubusercontent.com is <CNAME>',
-        '2025-10-01T10:53:56.894179+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 reply glb-db52c2cf8be544.github.com is <CNAME>',
-        '2025-10-01T10:53:56.894262+00:00 runnervm3ublj dnsmasq[3001]: 5 127.0.0.1/41452 reply glb-db52c2cf8be544.github.com is 140.82.112.21'
+        '2025-10-02T09:44:56.737098+00:00 runnervm3ublj dnsmasq[2973]: 7 127.0.0.1/39222 query[A] results-receiver.actions.githubusercontent.com from 127.0.0.1',
+        '2025-10-02T09:44:56.751640+00:00 runnervm3ublj dnsmasq[2973]: 8 127.0.0.1/39222 reply results-receiver.actions.githubusercontent.com is <CNAME>',
+        '2025-10-02T09:44:56.751727+00:00 runnervm3ublj dnsmasq[2973]: 8 127.0.0.1/39222 reply glb-db52c2cf8be544.github.com is NODATA-IPv6',
+        '2025-10-02T09:44:56.752872+00:00 runnervm3ublj dnsmasq[2973]: 7 127.0.0.1/39222 reply results-receiver.actions.githubusercontent.com is <CNAME>',
+        '2025-10-02T09:44:56.752965+00:00 runnervm3ublj dnsmasq[2973]: 7 127.0.0.1/39222 reply glb-db52c2cf8be544.github.com is 140.82.113.21'
       ];
 
       const result = parseRequestChains(logs);
@@ -85,9 +86,30 @@ describe('DNS Parser', () => {
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual({
         domain: 'results-receiver.actions.githubusercontent.com',
-        ip: '140.82.112.21',
+        ip: '140.82.113.21',
         status: 'RESOLVED',
         cnames: ['glb-db52c2cf8be544.github.com']
+      });
+    });
+
+    it('should handle multiple CNAME chains with multiple IPs', () => {
+      const logs = [
+        '2025-10-02T09:44:53.614436+00:00 runnervm3ublj dnsmasq[2986]: 7 127.0.0.1/52121 query[A] productionresultssa13.blob.core.windows.net from 127.0.0.1',
+        '2025-10-02T09:44:53.631397+00:00 runnervm3ublj dnsmasq[2986]: 7 127.0.0.1/52121 reply productionresultssa13.blob.core.windows.net is <CNAME>',
+        '2025-10-02T09:44:53.631485+00:00 runnervm3ublj dnsmasq[2986]: 7 127.0.0.1/52121 reply blob.blz25prdstrz09a.store.core.windows.net is <CNAME>',
+        '2025-10-02T09:44:53.631613+00:00 runnervm3ublj dnsmasq[2986]: 7 127.0.0.1/52121 reply blob.blz25prdstrz09a.trafficmanager.net is 20.209.226.1',
+        '2025-10-02T09:44:53.631728+00:00 runnervm3ublj dnsmasq[2986]: 7 127.0.0.1/52121 reply blob.blz25prdstrz09a.trafficmanager.net is 20.209.226.129',
+        '2025-10-02T09:44:53.631839+00:00 runnervm3ublj dnsmasq[2986]: 7 127.0.0.1/52121 reply blob.blz25prdstrz09a.trafficmanager.net is 20.209.227.33'
+      ];
+
+      const result = parseRequestChains(logs);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        domain: 'productionresultssa13.blob.core.windows.net',
+        ip: '20.209.226.1, 20.209.226.129, 20.209.227.33',
+        status: 'RESOLVED',
+        cnames: ['blob.blz25prdstrz09a.store.core.windows.net', 'blob.blz25prdstrz09a.trafficmanager.net']
       });
     });
 
