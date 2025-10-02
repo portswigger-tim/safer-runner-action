@@ -355,19 +355,15 @@ async function setupIpsets() {
 async function setupFirewallRules(dnsUid, logPrefix = '') {
     // Flush OUTPUT chain
     await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
-    // Allow established and related connections
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'state', '--state', 'ESTABLISHED,RELATED', '-j', 'ACCEPT']);
     // Allow Azure metadata service (required for GitHub Actions)
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '168.63.129.16', '-j', 'ACCEPT']);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '169.254.169.254', '-j', 'ACCEPT']);
-    // Allow localhost traffic
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'lo', '-s', '127.0.0.1', '-d', '127.0.0.1', '-j', 'ACCEPT']);
     // Log GitHub ipset matches
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'ACCEPT']);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'ACCEPT']);
     // Log user-allowed ipset matches
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
     // Allow DNS traffic to our upstream server - only from the random DNS user UID
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
 }
