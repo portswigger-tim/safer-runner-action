@@ -443,7 +443,7 @@ async function finalizeFirewallRules(mode, logPrefix = '') {
     else {
         // Analyze mode: Log traffic that doesn't match any ipset (but still allow it)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=${logPrefix}Allow-Analyze: `]);
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-j', 'ACCEPT']);
+        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'ACCEPT']);
     }
 }
 
