@@ -248,7 +248,7 @@ async function run() {
         core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
         // Step 3: Configure iptables rules with Pre- log prefix
         core.info('Configuring iptables rules...');
-        await (0, setup_1.setupFirewallRules)('Pre-');
+        await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Pre-');
         // Step 4: Configure DNS filtering
         core.info('Configuring DNS filtering...');
         await (0, setup_1.setupDNSConfig)();
@@ -256,11 +256,11 @@ async function run() {
         core.info('Configuring DNSMasq in analyze mode...');
         await (0, setup_1.setupDNSMasq)('analyze', '', false, dnsUser.username);
         // Step 6: Start services
-        core.info('Starting services...');
-        await (0, setup_1.startServices)(dnsUser.uid);
+        core.info('Restarting services...');
+        await (0, setup_1.restartServices)();
         // Step 7: Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
         core.info('Finalizing analyze mode rules...');
-        await (0, setup_1.finalizeSecurityRules)('analyze', 'Pre-');
+        await (0, setup_1.finalizeFirewallRules)('analyze', 'Pre-');
         core.info('✅ Pre-action: Security monitoring active (analyze mode)');
         core.info('   Main action will apply user configuration...');
     }
@@ -321,8 +321,8 @@ exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
-exports.startServices = startServices;
-exports.finalizeSecurityRules = finalizeSecurityRules;
+exports.restartServices = restartServices;
+exports.finalizeFirewallRules = finalizeFirewallRules;
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const dns_config_builder_1 = __nccwpck_require__(1877);
@@ -343,7 +343,9 @@ async function createRandomDNSUser() {
     ]);
     return { username, uid };
 }
-async function setupFirewallRules(logPrefix = '') {
+async function setupFirewallRules(dnsUid, logPrefix = '') {
+    // Flush OUTPUT chain
+    await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
     // Allow established and related connections
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'state', '--state', 'ESTABLISHED,RELATED', '-j', 'ACCEPT']);
     // Allow Azure metadata service (required for GitHub Actions)
@@ -360,6 +362,8 @@ async function setupFirewallRules(logPrefix = '') {
     // Log user-allowed ipset matches
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
+    // Allow DNS traffic to our upstream server - only from the random DNS user UID
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
 }
 async function setupDNSConfig() {
     // Configure systemd-resolved to use our DNS server
@@ -394,15 +398,12 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsern
     await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
     return blockedSubdomains;
 }
-async function startServices(dnsUid) {
+async function restartServices() {
     // Restart systemd-resolved and start dnsmasq
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-    await exec.exec('sudo', ['systemctl', 'enable', 'dnsmasq']);
-    await exec.exec('sudo', ['systemctl', 'start', 'dnsmasq']);
-    // Allow DNS traffic to our upstream server - only from the random DNS user UID
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
+    await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
 }
-async function finalizeSecurityRules(mode, logPrefix = '') {
+async function finalizeFirewallRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
         // Log traffic that doesn't match any ipset (will be dropped)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);

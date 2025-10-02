@@ -32,7 +32,9 @@ export async function createRandomDNSUser(): Promise<DnsUser> {
   return { username, uid };
 }
 
-export async function setupFirewallRules(logPrefix: string = ''): Promise<void> {
+export async function setupFirewallRules(dnsUid: number, logPrefix: string = ''): Promise<void> {
+  // Flush OUTPUT chain
+  await exec.exec('sudo', ['iptables', '-F', 'OUTPUT'])
   // Allow established and related connections
   await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'state', '--state', 'ESTABLISHED,RELATED', '-j', 'ACCEPT']);
 
@@ -54,7 +56,11 @@ export async function setupFirewallRules(logPrefix: string = ''): Promise<void> 
   // Log user-allowed ipset matches
   await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
   await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
+ 
+  // Allow DNS traffic to our upstream server - only from the random DNS user UID
+  await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
 }
+
 
 export async function setupDNSConfig(): Promise<void> {
   // Configure systemd-resolved to use our DNS server
@@ -97,17 +103,13 @@ export async function setupDNSMasq(mode: string, allowedDomains: string, blockRi
   return blockedSubdomains;
 }
 
-export async function startServices(dnsUid: number): Promise<void> {
+export async function restartServices(): Promise<void> {
   // Restart systemd-resolved and start dnsmasq
   await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-  await exec.exec('sudo', ['systemctl', 'enable', 'dnsmasq']);
-  await exec.exec('sudo', ['systemctl', 'start', 'dnsmasq']);
-
-  // Allow DNS traffic to our upstream server - only from the random DNS user UID
-  await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
+  await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
 }
 
-export async function finalizeSecurityRules(mode: string, logPrefix: string = ''): Promise<void> {
+export async function finalizeFirewallRules(mode: string, logPrefix: string = ''): Promise<void> {
   if (mode === 'enforce') {
     // Log traffic that doesn't match any ipset (will be dropped)
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);

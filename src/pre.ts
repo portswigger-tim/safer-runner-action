@@ -5,8 +5,8 @@ import {
   setupFirewallRules,
   setupDNSConfig,
   setupDNSMasq,
-  startServices,
-  finalizeSecurityRules
+  restartServices,
+  finalizeFirewallRules
 } from './setup';
 
 /**
@@ -39,7 +39,7 @@ async function run(): Promise<void> {
 
     // Step 3: Configure iptables rules with Pre- log prefix
     core.info('Configuring iptables rules...');
-    await setupFirewallRules('Pre-');
+    await setupFirewallRules(dnsUser.uid, 'Pre-');
 
     // Step 4: Configure DNS filtering
     core.info('Configuring DNS filtering...');
@@ -50,12 +50,12 @@ async function run(): Promise<void> {
     await setupDNSMasq('analyze', '', false, dnsUser.username);
 
     // Step 6: Start services
-    core.info('Starting services...');
-    await startServices(dnsUser.uid);
+    core.info('Restarting services...');
+    await restartServices();
 
     // Step 7: Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
     core.info('Finalizing analyze mode rules...');
-    await finalizeSecurityRules('analyze', 'Pre-');
+    await finalizeFirewallRules('analyze', 'Pre-');
 
     core.info('✅ Pre-action: Security monitoring active (analyze mode)');
     core.info('   Main action will apply user configuration...');

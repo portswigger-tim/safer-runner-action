@@ -179,81 +179,47 @@ async function run() {
             core.info('✅ Pre-hook DNS logs saved to /tmp/pre-hook-dns-logs.txt');
         }
         let dnsUser;
-        if (preActionRan) {
+        if (!preActionRan) {
+            // Pre-action didn't run - do full setup
+            core.info('Pre-action did not run - performing full setup...');
+            // Install dependencies
+            core.info('Installing dependencies...');
+            await exec.exec('sudo', ['apt-get', 'update', '-qq']);
+            await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+            // Create random DNS user for privilege separation
+            core.info('Creating isolated DNS user...');
+            dnsUser = await (0, setup_1.createRandomDNSUser)();
+            core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
+        }
+        else {
             // Pre-action already set up infrastructure - just reconfigure
             core.info('✅ Pre-action already established monitoring infrastructure');
             dnsUser = {
                 username: preUsername,
                 uid: parseInt(preUid, 10)
             };
-            // Remove Pre- prefixed iptables LOG rules and add main LOG rules
-            core.info('Removing pre-hook iptables log rules...');
-            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Processing: '], { ignoreReturnCode: true });
-            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=Pre-GitHub-Allow: '], { ignoreReturnCode: true });
-            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=Pre-User-Allow: '], { ignoreReturnCode: true });
-            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Pre-Allow-Analyze: `], { ignoreReturnCode: true });
-            // Add main action LOG rules (without Pre- prefix)
-            core.info('Adding main action log rules...');
-            await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '5', '-j', 'LOG', '--log-prefix=Processing: ']);
-            await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '5', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=GitHub-Allow: ']);
-            await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '6', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=User-Allow: ']);
-            // Only need to reconfigure if user wants enforce mode or custom settings
-            if (mode === 'enforce' || allowedDomains || blockRiskySubdomains) {
-                core.info('Reconfiguring security policies...');
-                // Reconfigure DNSMasq with user settings
-                const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username);
-                if (blockedSubdomains.length > 0) {
-                    core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
-                    for (const subdomain of blockedSubdomains) {
-                        core.info(`  🚫 Blocked: ${subdomain}`);
-                    }
-                }
-                // Restart dnsmasq to apply new config
-                await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
-                // Reconfigure iptables final rules
-                if (mode === 'enforce') {
-                    core.info('Applying enforce mode firewall rules...');
-                    // Remove the analyze mode ACCEPT rules
-                    await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Allow-Analyze: '], { ignoreReturnCode: true });
-                    await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'ACCEPT']);
-                    // Add enforce mode DROP rule
-                    await (0, setup_1.finalizeSecurityRules)('enforce');
-                }
+        }
+        // Configure iptables rules
+        core.info('Configuring iptables rules...');
+        await (0, setup_1.setupFirewallRules)(dnsUser.uid);
+        // Configure DNS filtering
+        core.info('Configuring DNS filtering...');
+        await (0, setup_1.setupDNSConfig)();
+        // Configure DNSMasq
+        core.info('Configuring DNSMasq...');
+        const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username);
+        if (blockedSubdomains.length > 0) {
+            core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
+            for (const subdomain of blockedSubdomains) {
+                core.info(`  🚫 Blocked: ${subdomain}`);
             }
         }
-        else {
-            // Pre-action didn't run - do full setup
-            core.info('Pre-action did not run - performing full setup...');
-            // Step 1: Install dependencies
-            core.info('Installing dependencies...');
-            await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-            await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
-            // Step 2: Create random DNS user for privilege separation
-            core.info('Creating isolated DNS user...');
-            dnsUser = await (0, setup_1.createRandomDNSUser)();
-            core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
-            // Step 3: Configure iptables rules
-            core.info('Configuring iptables rules...');
-            await (0, setup_1.setupFirewallRules)();
-            // Step 4: Configure DNS filtering
-            core.info('Configuring DNS filtering...');
-            await (0, setup_1.setupDNSConfig)();
-            // Step 5: Configure DNSMasq
-            core.info('Configuring DNSMasq...');
-            const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username);
-            if (blockedSubdomains.length > 0) {
-                core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
-                for (const subdomain of blockedSubdomains) {
-                    core.info(`  🚫 Blocked: ${subdomain}`);
-                }
-            }
-            // Step 6: Start services
-            core.info('Starting services...');
-            await (0, setup_1.startServices)(dnsUser.uid);
-            // Step 7: Finalize security rules
-            core.info('Finalizing security rules...');
-            await (0, setup_1.finalizeSecurityRules)(mode);
-        }
+        // Start services
+        core.info('Restarting services...');
+        await (0, setup_1.restartServices)();
+        // Finalize firewall rules
+        core.info('Finalizing firewall rules...');
+        await (0, setup_1.finalizeFirewallRules)(mode);
         // Capture post-setup baseline for integrity monitoring
         core.info('Capturing post-setup security baseline...');
         const validator = new validation_1.SystemValidator();
@@ -379,8 +345,8 @@ exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
-exports.startServices = startServices;
-exports.finalizeSecurityRules = finalizeSecurityRules;
+exports.restartServices = restartServices;
+exports.finalizeFirewallRules = finalizeFirewallRules;
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const dns_config_builder_1 = __nccwpck_require__(1877);
@@ -401,7 +367,9 @@ async function createRandomDNSUser() {
     ]);
     return { username, uid };
 }
-async function setupFirewallRules(logPrefix = '') {
+async function setupFirewallRules(dnsUid, logPrefix = '') {
+    // Flush OUTPUT chain
+    await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
     // Allow established and related connections
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'state', '--state', 'ESTABLISHED,RELATED', '-j', 'ACCEPT']);
     // Allow Azure metadata service (required for GitHub Actions)
@@ -418,6 +386,8 @@ async function setupFirewallRules(logPrefix = '') {
     // Log user-allowed ipset matches
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
+    // Allow DNS traffic to our upstream server - only from the random DNS user UID
+    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
 }
 async function setupDNSConfig() {
     // Configure systemd-resolved to use our DNS server
@@ -452,15 +422,12 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsern
     await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
     return blockedSubdomains;
 }
-async function startServices(dnsUid) {
+async function restartServices() {
     // Restart systemd-resolved and start dnsmasq
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-    await exec.exec('sudo', ['systemctl', 'enable', 'dnsmasq']);
-    await exec.exec('sudo', ['systemctl', 'start', 'dnsmasq']);
-    // Allow DNS traffic to our upstream server - only from the random DNS user UID
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
+    await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
 }
-async function finalizeSecurityRules(mode, logPrefix = '') {
+async function finalizeFirewallRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
         // Log traffic that doesn't match any ipset (will be dropped)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);
