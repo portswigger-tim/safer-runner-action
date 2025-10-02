@@ -69,18 +69,17 @@ export function generateNetworkConnectionDetails(connections: NetworkConnection[
 }
 
 /**
- * Format DNS resolutions into markdown table
+ * Generate DNS resolution table (without heading)
  *
  * @param dnsResolutions - List of DNS resolutions
- * @returns Markdown-formatted DNS details
+ * @returns Markdown-formatted DNS table with statistics
  */
-export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
-  let details = `## DNS Information\n\n`;
-
+export function generateDnsTable(dnsResolutions: DnsResolution[]): string {
   if (dnsResolutions.length === 0) {
-    details += `No DNS resolutions recorded.\n\n`;
-    return details;
+    return `No DNS resolutions recorded.\n\n`;
   }
+
+  let table = '';
 
   // Separate GitHub and non-GitHub DNS resolutions
   const githubDns = dnsResolutions.filter(d => isGitHubRelated(d.domain));
@@ -93,40 +92,52 @@ export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
     // Remove duplicates
     const uniqueImportant = Array.from(new Map(importantDns.map(d => [d.domain, d])).values());
 
-    details += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
-    details += `|--------|----------|----------------|--------|\n`;
+    table += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
+    table += `|--------|----------|----------------|--------|\n`;
 
     for (const dns of uniqueImportant) {
       const status = formatDnsStatus(dns.status);
       const formattedIps = formatIpAddresses(dns.ip);
       const formattedCnames = formatCnameChain(dns.cnames);
-      details += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
+      table += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
     }
-    details += `\n`;
+    table += `\n`;
   }
 
   // Show GitHub DNS in collapsed section
   if (githubDns.length > 0) {
-    details += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
-    details += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
-    details += `|--------|----------|----------------|--------|\n`;
+    table += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
+    table += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
+    table += `|--------|----------|----------------|--------|\n`;
 
     for (const dns of githubDns) {
       const status = formatDnsStatus(dns.status);
       const formattedIps = formatIpAddresses(dns.ip);
       const formattedCnames = formatCnameChain(dns.cnames);
-      details += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
+      table += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
     }
-    details += `\n</details>\n\n`;
+    table += `\n</details>\n\n`;
   }
 
   const blockedCount = dnsResolutions.filter(d => d.status === 'BLOCKED').length;
-  details += `**Total domains:** ${dnsResolutions.length}`;
+  table += `**Total domains:** ${dnsResolutions.length}`;
   if (blockedCount > 0) {
-    details += ` (🛡️ ${blockedCount} filtered)`;
+    table += ` (🛡️ ${blockedCount} filtered)`;
   }
-  details += `\n\n`;
+  table += `\n\n`;
 
+  return table;
+}
+
+/**
+ * Format DNS resolutions into markdown table with heading
+ *
+ * @param dnsResolutions - List of DNS resolutions
+ * @returns Markdown-formatted DNS details with heading
+ */
+export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
+  let details = `## DNS Information\n\n`;
+  details += generateDnsTable(dnsResolutions);
   return details;
 }
 

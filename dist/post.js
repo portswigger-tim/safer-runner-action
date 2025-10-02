@@ -14,6 +14,7 @@
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.generateNetworkConnectionDetails = generateNetworkConnectionDetails;
+exports.generateDnsTable = generateDnsTable;
 exports.generateDnsDetails = generateDnsDetails;
 exports.generateConfigurationAdvice = generateConfigurationAdvice;
 exports.formatConnectionStatus = formatConnectionStatus;
@@ -73,17 +74,16 @@ function generateNetworkConnectionDetails(connections) {
     return details;
 }
 /**
- * Format DNS resolutions into markdown table
+ * Generate DNS resolution table (without heading)
  *
  * @param dnsResolutions - List of DNS resolutions
- * @returns Markdown-formatted DNS details
+ * @returns Markdown-formatted DNS table with statistics
  */
-function generateDnsDetails(dnsResolutions) {
-    let details = `## DNS Information\n\n`;
+function generateDnsTable(dnsResolutions) {
     if (dnsResolutions.length === 0) {
-        details += `No DNS resolutions recorded.\n\n`;
-        return details;
+        return `No DNS resolutions recorded.\n\n`;
     }
+    let table = '';
     // Separate GitHub and non-GitHub DNS resolutions
     const githubDns = dnsResolutions.filter(d => (0, github_parser_1.isGitHubRelated)(d.domain));
     const userDns = dnsResolutions.filter(d => !(0, github_parser_1.isGitHubRelated)(d.domain));
@@ -93,35 +93,46 @@ function generateDnsDetails(dnsResolutions) {
         const importantDns = [...userDns, ...blockedDns];
         // Remove duplicates
         const uniqueImportant = Array.from(new Map(importantDns.map(d => [d.domain, d])).values());
-        details += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
-        details += `|--------|----------|----------------|--------|\n`;
+        table += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
+        table += `|--------|----------|----------------|--------|\n`;
         for (const dns of uniqueImportant) {
             const status = formatDnsStatus(dns.status);
             const formattedIps = formatIpAddresses(dns.ip);
             const formattedCnames = formatCnameChain(dns.cnames);
-            details += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
+            table += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
         }
-        details += `\n`;
+        table += `\n`;
     }
     // Show GitHub DNS in collapsed section
     if (githubDns.length > 0) {
-        details += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
-        details += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
-        details += `|--------|----------|----------------|--------|\n`;
+        table += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
+        table += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
+        table += `|--------|----------|----------------|--------|\n`;
         for (const dns of githubDns) {
             const status = formatDnsStatus(dns.status);
             const formattedIps = formatIpAddresses(dns.ip);
             const formattedCnames = formatCnameChain(dns.cnames);
-            details += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
+            table += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
         }
-        details += `\n</details>\n\n`;
+        table += `\n</details>\n\n`;
     }
     const blockedCount = dnsResolutions.filter(d => d.status === 'BLOCKED').length;
-    details += `**Total domains:** ${dnsResolutions.length}`;
+    table += `**Total domains:** ${dnsResolutions.length}`;
     if (blockedCount > 0) {
-        details += ` (🛡️ ${blockedCount} filtered)`;
+        table += ` (🛡️ ${blockedCount} filtered)`;
     }
-    details += `\n\n`;
+    table += `\n\n`;
+    return table;
+}
+/**
+ * Format DNS resolutions into markdown table with heading
+ *
+ * @param dnsResolutions - List of DNS resolutions
+ * @returns Markdown-formatted DNS details with heading
+ */
+function generateDnsDetails(dnsResolutions) {
+    let details = `## DNS Information\n\n`;
+    details += generateDnsTable(dnsResolutions);
     return details;
 }
 /**
@@ -822,6 +833,12 @@ function generatePreHookAnalysis(connections, dnsResolutions, preHookConnections
     if (preHookDnsResolutions.length > 0) {
         report += `Pre-hook DNS monitoring captured **${preHookDnsResolutions.length}** DNS resolution(s).\n\n`;
     }
+    // Show all pre-hook DNS resolutions using the standard DNS table formatter
+    if (preHookDnsResolutions.length > 0) {
+        report += `### 📋 Pre-Hook DNS Resolutions\n\n`;
+        report += `All DNS queries captured during pre-hook monitoring:\n\n`;
+        report += (0, report_formatter_1.generateDnsTable)(preHookDnsResolutions);
+    }
     // Show blocked connections (security working as intended)
     if (blockedAfterPreHook.length > 0) {
         report += `### ✅ Connections Blocked After Pre-Hook\n\n`;
@@ -894,7 +911,8 @@ async function generateJobSummary(connections, dnsResolutions, preHookConnection
     // 1. Network Connection Details
     summary += (0, report_formatter_1.generateNetworkConnectionDetails)(connections);
     // 2. DNS Information
-    summary += (0, report_formatter_1.generateDnsDetails)(dnsResolutions);
+    summary += `## DNS Information\n\n`;
+    summary += (0, report_formatter_1.generateDnsTable)(dnsResolutions);
     // 3. Pre-Hook Security Analysis (collapsible)
     summary += generatePreHookAnalysis(connections, dnsResolutions, preHookConnections, preHookDnsResolutions);
     // 4. Config File Tamper Detection

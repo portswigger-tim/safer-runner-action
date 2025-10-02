@@ -6,7 +6,7 @@ import { parseNetworkLogs, parsePreHookNetworkLogs, NetworkConnection } from './
 import { parseDnsLogs, DnsResolution } from './parsers/dns-parser';
 import {
   generateNetworkConnectionDetails,
-  generateDnsDetails,
+  generateDnsTable,
   generateConfigurationAdvice
 } from './formatters/report-formatter';
 
@@ -120,6 +120,13 @@ function generatePreHookAnalysis(connections: NetworkConnection[], dnsResolution
     report += `Pre-hook DNS monitoring captured **${preHookDnsResolutions.length}** DNS resolution(s).\n\n`;
   }
 
+  // Show all pre-hook DNS resolutions using the standard DNS table formatter
+  if (preHookDnsResolutions.length > 0) {
+    report += `### 📋 Pre-Hook DNS Resolutions\n\n`;
+    report += `All DNS queries captured during pre-hook monitoring:\n\n`;
+    report += generateDnsTable(preHookDnsResolutions);
+  }
+
   // Show blocked connections (security working as intended)
   if (blockedAfterPreHook.length > 0) {
     report += `### ✅ Connections Blocked After Pre-Hook\n\n`;
@@ -203,7 +210,8 @@ async function generateJobSummary(connections: NetworkConnection[], dnsResolutio
   summary += generateNetworkConnectionDetails(connections);
 
   // 2. DNS Information
-  summary += generateDnsDetails(dnsResolutions);
+  summary += `## DNS Information\n\n`;
+  summary += generateDnsTable(dnsResolutions);
 
   // 3. Pre-Hook Security Analysis (collapsible)
   summary += generatePreHookAnalysis(connections, dnsResolutions, preHookConnections, preHookDnsResolutions);
