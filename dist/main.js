@@ -175,7 +175,7 @@ async function run() {
         // If pre-action ran, capture its DNS logs before we reconfigure
         if (preActionRan) {
             core.info('📋 Capturing pre-hook DNS logs...');
-            await exec.exec('bash', ['-c', 'sudo grep dnsmasq /var/log/syslog > /tmp/pre-hook-dns-logs.txt || true']);
+            await exec.exec('bash', ['-c', 'sudo grep dnsmasq /var/log/syslog | tee /tmp/pre-hook-dns-logs.txt || true']);
             core.info('✅ Pre-hook DNS logs saved to /tmp/pre-hook-dns-logs.txt');
         }
         let dnsUser;
@@ -186,6 +186,11 @@ async function run() {
                 username: preUsername,
                 uid: parseInt(preUid, 10)
             };
+            // Remove Pre- prefixed iptables LOG rules before reconfiguring
+            core.info('Removing pre-hook iptables log rules...');
+            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Processing: '], { ignoreReturnCode: true });
+            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=Pre-GitHub-Allow: '], { ignoreReturnCode: true });
+            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=Pre-User-Allow: '], { ignoreReturnCode: true });
             // Only need to reconfigure if user wants enforce mode or custom settings
             if (mode === 'enforce' || allowedDomains || blockRiskySubdomains) {
                 core.info('Reconfiguring security policies...');
@@ -202,8 +207,8 @@ async function run() {
                 // Reconfigure iptables final rules
                 if (mode === 'enforce') {
                     core.info('Applying enforce mode firewall rules...');
-                    // Remove the analyze mode ACCEPT rule (pre-action uses Pre- prefix)
-                    await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Allow-Analyze: ']);
+                    // Remove the analyze mode ACCEPT rules
+                    await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Allow-Analyze: '], { ignoreReturnCode: true });
                     await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'ACCEPT']);
                     // Add enforce mode DROP rule
                     await (0, setup_1.finalizeSecurityRules)('enforce');

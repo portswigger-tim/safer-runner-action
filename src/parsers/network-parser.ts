@@ -21,9 +21,10 @@ export interface NetworkConnection {
  */
 export async function parseNetworkLogs(): Promise<NetworkConnection[]> {
   try {
-    // Get syslog content (including Pre- prefixed logs from pre-hook)
+    // Get syslog content (exclude Pre- prefixed logs from pre-hook - those are analyzed separately)
+    // Space before each pattern ensures we don't match Pre-GitHub-Allow: when looking for GitHub-Allow:
     let syslogOutput = '';
-    await exec.exec('sudo', ['grep', '-E', 'GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: |Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ', '/var/log/syslog'], {
+    await exec.exec('sudo', ['grep', '-E', ' GitHub-Allow: | User-Allow: | Drop-Enforce: | Allow-Analyze: ', '/var/log/syslog'], {
       listeners: {
         stdout: (data) => { syslogOutput += data.toString(); }
       },
@@ -34,6 +35,28 @@ export async function parseNetworkLogs(): Promise<NetworkConnection[]> {
 
   } catch (error) {
     core.warning(`Failed to parse logs: ${error}`);
+    return [];
+  }
+}
+
+/**
+ * Parse pre-hook network logs from syslog to extract connection attempts
+ */
+export async function parsePreHookNetworkLogs(): Promise<NetworkConnection[]> {
+  try {
+    // Get only Pre- prefixed logs from pre-hook
+    let syslogOutput = '';
+    await exec.exec('sudo', ['grep', '-E', 'Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ', '/var/log/syslog'], {
+      listeners: {
+        stdout: (data) => { syslogOutput += data.toString(); }
+      },
+      ignoreReturnCode: true
+    });
+
+    return parseNetworkLogsFromString(syslogOutput);
+
+  } catch (error) {
+    core.warning(`Failed to parse pre-hook network logs: ${error}`);
     return [];
   }
 }

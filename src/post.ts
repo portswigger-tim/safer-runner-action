@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import { readFileSync } from 'fs';
 import { SystemValidator } from './validation';
-import { parseNetworkLogs, NetworkConnection } from './parsers/network-parser';
+import { parseNetworkLogs, parsePreHookNetworkLogs, NetworkConnection } from './parsers/network-parser';
 import { parseDnsLogs, DnsResolution } from './parsers/dns-parser';
 import {
   generateNetworkConnectionDetails,
@@ -20,17 +20,29 @@ async function run(): Promise<void> {
     const connections = await parseNetworkLogs();
     const dnsResolutions = await parseDnsLogs();
 
-    // Parse pre-hook DNS logs if they exist
+    // Parse pre-hook logs if pre-action ran
+    let preHookConnections: NetworkConnection[] = [];
     let preHookDnsResolutions: DnsResolution[] = [];
-    try {
-      const fs = await import('fs');
-      if (fs.existsSync('/tmp/pre-hook-dns-logs.txt')) {
-        core.info('📋 Parsing pre-hook DNS logs...');
-        preHookDnsResolutions = await parseDnsLogs('/tmp/pre-hook-dns-logs.txt');
-        core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
+
+    // Check if pre-action ran by looking for DNS user state
+    const preUsername = core.getState('dns-user');
+    if (preUsername) {
+      core.info('📋 Parsing pre-hook logs...');
+
+      // Parse pre-hook network connections
+      preHookConnections = await parsePreHookNetworkLogs();
+      core.info(`✅ Found ${preHookConnections.length} pre-hook network connection(s)`);
+
+      // Parse pre-hook DNS logs if they exist
+      try {
+        const fs = await import('fs');
+        if (fs.existsSync('/tmp/pre-hook-dns-logs.txt')) {
+          preHookDnsResolutions = await parseDnsLogs('/tmp/pre-hook-dns-logs.txt');
+          core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
+        }
+      } catch (error) {
+        core.warning(`Could not parse pre-hook DNS logs: ${error}`);
       }
-    } catch (error) {
-      core.warning(`Could not parse pre-hook DNS logs: ${error}`);
     }
 
     // Verify system integrity against post-setup baseline
@@ -46,7 +58,7 @@ async function run(): Promise<void> {
       return; // Exit early - the validation report will still be in the logs above
     }
 
-    await generateJobSummary(connections, dnsResolutions, preHookDnsResolutions, validationReport);
+    await generateJobSummary(connections, dnsResolutions, preHookConnections, preHookDnsResolutions, validationReport);
 
     core.info('✅ Network access summary generated');
 
@@ -61,25 +73,19 @@ async function run(): Promise<void> {
  * 1. Seen in pre-hook but blocked later (good - action working)
  * 2. Only seen in pre-hook (early workflow setup traffic)
  */
-function generatePreHookAnalysis(connections: NetworkConnection[], dnsResolutions: DnsResolution[], preHookDnsResolutions: DnsResolution[]): string {
-  // Separate pre-hook and main connections
-  const preHookConnections = connections.filter(c =>
-    c.source.startsWith('Pre-hook')
-  );
-  const mainConnections = connections.filter(c =>
-    !c.source.startsWith('Pre-hook')
-  );
+function generatePreHookAnalysis(connections: NetworkConnection[], dnsResolutions: DnsResolution[], preHookConnections: NetworkConnection[], preHookDnsResolutions: DnsResolution[]): string {
+  // connections are already separated (main vs pre-hook)
 
   // Find connections only in pre-hook
   const preHookOnlyConnections = preHookConnections.filter(preConn =>
-    !mainConnections.some(mainConn =>
+    !connections.some(mainConn =>
       mainConn.ip === preConn.ip && mainConn.port === preConn.port
     )
   );
 
   // Find connections that were pre-hook ANALYZED but later DENIED
   const blockedAfterPreHook = preHookConnections.filter(preConn =>
-    mainConnections.some(mainConn =>
+    connections.some(mainConn =>
       mainConn.ip === preConn.ip &&
       mainConn.port === preConn.port &&
       mainConn.status === 'DENIED'
@@ -170,7 +176,7 @@ function generatePreHookAnalysis(connections: NetworkConnection[], dnsResolution
   return report;
 }
 
-async function generateJobSummary(connections: NetworkConnection[], dnsResolutions: DnsResolution[], preHookDnsResolutions: DnsResolution[], validationReport: string): Promise<void> {
+async function generateJobSummary(connections: NetworkConnection[], dnsResolutions: DnsResolution[], preHookConnections: NetworkConnection[], preHookDnsResolutions: DnsResolution[], validationReport: string): Promise<void> {
   const mode = core.getInput('mode') || 'analyze';
   const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
   const jobName = process.env.GITHUB_JOB || 'unknown';
@@ -200,7 +206,7 @@ async function generateJobSummary(connections: NetworkConnection[], dnsResolutio
   summary += generateDnsDetails(dnsResolutions);
 
   // 3. Pre-Hook Security Analysis (collapsible)
-  summary += generatePreHookAnalysis(connections, dnsResolutions, preHookDnsResolutions);
+  summary += generatePreHookAnalysis(connections, dnsResolutions, preHookConnections, preHookDnsResolutions);
 
   // 4. Config File Tamper Detection
   summary += `${validationReport}\n`;
