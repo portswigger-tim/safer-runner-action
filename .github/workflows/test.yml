@@ -115,19 +115,19 @@ jobs:
         with:
           repository: actions/hello-world-javascript-action
           path: test-repo
-      
+
       - name: Test artifact upload/download
         uses: actions/upload-artifact@v4
         with:
           name: test-artifact
-          path: README.md
-      
+          path: test-repo/README.md
+
       - name: Download test artifact
         uses: actions/download-artifact@v4
         with:
           name: test-artifact
           path: downloaded/
-      
+
       - name: Verify artifact was downloaded
         run: |
           ls -la downloaded/
