@@ -1,323 +1,111 @@
 # Safer Runner Action
 
-A GitHub composite action that adds a network security layer to GitHub Actions runners through DNS filtering and iptables rules. This action prevents communication with malicious domains by implementing a default-deny DNS policy and allowing only explicitly permitted domains.
+Network security layer for GitHub Actions runners using DNS filtering (Quad9) and iptables rules. Implements default-deny policy: only explicitly permitted domains are accessible.
 
 ## Features
 
-- **Dual Operation Modes**: `analyze` mode for traffic monitoring, `enforce` mode for active blocking
-- **DNS Filtering**: Uses DNSMasq with Quad9 (9.9.9.9) - 98% malware blocking rate (September 2024 independent testing) with real-time threat intelligence from 12+ security vendors
-- **Risky Subdomain Blocking**: Automatically blocks gist.github.com, gist.githubusercontent.com, and raw.githubusercontent.com in enforce mode to prevent CVE-2025-30066 style attacks
-- **Firewall Rules**: Configures iptables to control outbound network traffic
-- **GitHub Actions Compatible**: Pre-configured to allow all required GitHub domains
-- **Custom Domain Support**: Add your own trusted domains via input parameters
-- **Automatic Log Analysis**: Automatic network access provenance reports after each run
-- **Supply Chain Protection**: Helps defend against malicious network requests in compromised dependencies
+- **Dual modes**: `analyze` (monitoring) or `enforce` (blocking)
+- **DNS filtering**: DNSMasq with Quad9 upstream resolver
+- **Firewall rules**: iptables prevents DNS bypass via direct IP connections
+- **Custom domains**: Add trusted domains via input parameter
+- **Automatic reporting**: Network access provenance in job summaries
+- **Risky subdomain blocking**: Blocks gist.github.com and raw.githubusercontent.com by default in enforce mode
 
 ## Usage
 
-### Basic Usage (Analyze Mode)
+### Analyze mode (default)
 
 ```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@v1
-    # Default mode is "analyze" - logs traffic without blocking
-  - name: Your workflow steps
-    run: |
-      # Your commands here - all traffic allowed but logged
-      curl https://api.github.com/user
-      curl https://example.com  # This will be logged but not blocked
+- uses: portswigger-tim/safer-runner-action@v1
+- run: |
+    curl https://example.com  # Logged but not blocked
 ```
 
-### Enforce Mode (Blocking)
-
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@v1
-    with:
-      mode: 'enforce'
-      allowed-domains: >-
-        example.com
-        api.trusted-service.com
-        cdn.example.org
-
-  - name: Your secure workflow
-    run: |
-      # Only allowed domains are accessible
-      curl https://api.github.com/user  # ✅ Allowed (GitHub domain)
-      curl https://api.trusted-service.com/data  # ✅ Allowed (custom domain)
-      curl https://malicious.com  # ❌ Blocked (not in allowed list)
-```
-
-### Custom Configuration
-
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@v1
-    with:
-      mode: 'analyze'  # or 'enforce'
-      allowed-domains: >-
-        example.com
-        api.trusted-service.com
-        registry.npmjs.org
-        pypi.org
-
-  - name: Your workflow
-    run: |
-      # Behavior depends on mode setting
-      curl https://api.trusted-service.com/data
-```
-
-### Security-Critical Workflows
-
-For security-critical workflows where any tampering should fail the workflow:
+### Enforce mode
 
 ```yaml
 - uses: portswigger-tim/safer-runner-action@v1
   with:
     mode: 'enforce'
-    fail-on-tampering: true
     allowed-domains: |
+      example.com
       api.trusted-service.com
-      secure.partner.com
-
-- name: Security-critical deployment
-  run: |
-    # Your workflow steps will complete normally
-    ./deploy-to-production.sh
-
-# Note: If tampering is detected, the workflow will fail in the post-job
-# after all your workflow steps have completed, ensuring you get the
-# security report while still marking the workflow as failed.
+- run: |
+    curl https://api.trusted-service.com  # ✅ Allowed
+    curl https://malicious.com  # ❌ Blocked
 ```
 
 ## Inputs
 
-| Input | Description | Required | Default |
-|-------|-------------|----------|---------|
-| `mode` | Operation mode: `analyze` logs traffic without blocking, `enforce` blocks unauthorized domains | No | `analyze` |
-| `allowed-domains` | Space-separated list of additional domains to allow (beyond GitHub required domains) | No | `''` |
-| `fail-on-tampering` | Whether to fail the workflow after job completion if security configuration tampering is detected | No | `false` |
-| `block-risky-github-subdomains` | Whether to block risky GitHub subdomains (gist.github.com, gist.githubusercontent.com, raw.githubusercontent.com) in enforce mode to prevent CVE-2025-30066 style attacks. Set to `false` if you need these domains. | No | `true` |
-
-## Pre-configured GitHub Domains
-
-The action automatically allows all GitHub Actions required domains:
-
-**Essential Operations:**
-- `github.com` - Main GitHub service
-- `actions.githubusercontent.com` - Actions runtime
-- `api.github.com` - GitHub API
-
-**Actions & Packages:**
-- `codeload.github.com` - Code downloads
-- `pkg.actions.githubusercontent.com` - Action packages
-- `pkg.github.com` - GitHub packages
-- `pkg-containers.githubusercontent.com` - Container packages
-- `ghcr.io` - GitHub Container Registry
-
-**Artifacts & Storage:**
-- `results-receiver.actions.githubusercontent.com` - Results upload
-- `productionresultssa0-19.blob.core.windows.net` - GitHub's specific Azure storage accounts (20 accounts)
-- `github-cloud.githubusercontent.com` - Git LFS
-- `github-cloud.s3.amazonaws.com` - Git LFS storage
-
-**Runner Updates:**
-- `objects.githubusercontent.com` - Runner binaries
-- `objects-origin.githubusercontent.com` - Origin server
-- `github-releases.githubusercontent.com` - Release files
-- `github-registry-files.githubusercontent.com` - Registry files
-
-**Additional Services:**
-- `dependabot-actions.githubapp.com` - Dependabot actions
-- `release-assets.githubusercontent.com` - Release assets
-- `api.snapcraft.io` - Snapcraft integration
+| Input | Description | Default |
+|-------|-------------|---------|
+| `mode` | `analyze` (log only) or `enforce` (block) | `analyze` |
+| `allowed-domains` | Additional domains to allow | `''` |
+| `fail-on-tampering` | Fail workflow if security config is tampered | `false` |
+| `block-risky-github-subdomains` | Block gist.github.com and raw.githubusercontent.com in enforce mode | `true` |
 
 ## How It Works
 
-1. **Install Dependencies**: Installs `dnsmasq` and `ipset` packages
-2. **Configure Firewall**: Sets up iptables rules to control outbound traffic
-3. **DNS Configuration**: Configures system DNS to use local DNSMasq instance
-4. **DNSMasq Setup**: Configures DNS policy with Quad9 (9.9.9.9) upstream for malware protection
-5. **Service Startup**: Starts DNSMasq and applies final security rules
-6. **Automatic Analysis**: Post-action analyzes logs and generates network access summary
+1. Installs `dnsmasq` and `ipset` packages
+2. Configures iptables rules to control outbound traffic
+3. Configures system DNS to use local DNSMasq instance
+4. Sets up DNS policy with Quad9 upstream resolver
+5. Starts DNSMasq and applies security rules
+6. Post-action analyzes logs and generates network access report
+
+GitHub Actions required domains are pre-configured and automatically allowed.
 
 ## Network Access Reports
 
-The action automatically generates a **Network Access Provenance** table in your job summary showing:
+Job summaries include a Network Access Provenance table showing:
 
-- **Domain/IP addresses** accessed during the workflow
-- **Ports** used for connections
-- **Status** (✅ Allowed, ❌ Denied, 📊 Analyzed)
-- **Source** (GitHub Required, User Defined, etc.)
-- **Summary statistics** of connection attempts
+- Domain/IP addresses accessed
+- Ports used
+- Status (✅ Allowed, ❌ Denied, 📊 Analyzed)
+- Source (GitHub Required, User Defined)
 
-**Analyze Mode Bonus**: Automatically suggests an `allowed-domains` configuration based on the non-GitHub domains accessed during your run, making it easy to transition to enforce mode.
-
-No configuration needed - the report appears automatically after each run!
+In analyze mode, the report suggests an `allowed-domains` configuration based on non-GitHub domains accessed, making it easy to transition to enforce mode.
 
 ## Security Model
 
 ### Analyze Mode
-- **Traffic Monitoring**: All DNS queries are logged but allowed to proceed
-- **Comprehensive Logging**: DNS queries, firewall activity, and connection attempts are logged
-- **Non-Blocking**: Workflow continues normally while collecting security intelligence
+- All DNS queries logged but allowed
+- DNS queries, firewall activity, and connection attempts are logged
+- Workflow continues normally while collecting security intelligence
 
 ### Enforce Mode
-- **Default Deny**: All DNS queries return NXDOMAIN unless explicitly allowed
-- **Firewall Protection**: iptables rules prevent bypassing DNS filtering
-- **Strict Blocking**: Only allowed domains can be accessed
+- All DNS queries return NXDOMAIN unless explicitly allowed
+- iptables rules prevent bypassing DNS filtering
+- Only allowed domains accessible
 
 ### Both Modes
-- **Azure Metadata**: Preserves access to Azure metadata service (required for GitHub Actions)
-- **Established Connections**: Allows return traffic for established connections
+- Azure metadata service access preserved (required for GitHub Actions)
+- Return traffic for established connections allowed
+
+## Limitations
+
+Network filtering provides a first line of defense but has limitations. Sophisticated attackers may attempt:
+
+- **Data exfiltration via allowed domains**: Abuse GitHub/npm/PyPI to upload secrets
+- **DNS tunneling**: Encode data in DNS queries
+- **Local file system attacks**: Stage data for later exfiltration
+- **Process/system call abuse**: Container escapes, privilege escalation
+
+### Defense in Depth
+
+Combine with additional security layers:
+
+- **Runtime security**: Falco, Tracee
+- **Container security**: Distroless images, read-only filesystems, non-root users
+- **Secrets management**: GitHub secrets, secure credential handling
+- **Dependency scanning**: Snyk, Dependabot, GitHub native scanning
+- **Action security**: Pin to commits, use trusted publishers
 
 ## Debugging
 
-You can check DNS and firewall logs:
+View DNS and firewall logs:
 
 ```bash
-# View recent DNS queries and firewall actions
-sudo grep -E 'Processing: |GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ' /var/log/syslog
-```
-
-## Supply Chain Security Context
-
-GitHub Actions supply chain attacks have increased significantly, with several major incidents in 2025 affecting thousands of repositories. These attacks often follow a pattern:
-
-1. **Compromise**: Malicious code gets injected through compromised dependencies, PR injections, or compromised GitHub Actions
-2. **Network Exfiltration**: The malicious code makes HTTP requests to attacker-controlled domains to steal secrets, tokens, or sensitive data
-3. **Persistence**: Attackers use stolen credentials to maintain access or compromise additional repositories
-
-### Real-World Protection
-
-This action provides network-level defense against such attacks by:
-
-- **Blocking data exfiltration** to unauthorized domains in enforce mode
-- **Detecting suspicious activity** through comprehensive DNS and network logging in analyze mode
-- **Preventing malicious downloads** by controlling which domains can be accessed
-
-**Note**: This action focuses on network-level protection and should be part of a comprehensive security strategy that includes action pinning, input validation, and minimal permissions.
-
-### Recent Attack Examples (2025)
-
-- **tj-actions/changed-files (CVE-2025-30066, March 2025)**: Affected 23,000+ repositories through malicious Python scripts downloaded from `gist.githubusercontent.com`. **This action's default configuration would block this attack** by preventing access to the malicious script, stopping the memory-scraping payload from executing.
-
-- **s1ngularity attack (August 2025)**: Compromised Nx npm packages (versions 20.9.0-21.8.0) affecting 2,180 accounts and 7,200 repositories. Attack exploited a vulnerable GitHub Actions workflow in the Nx repository that allowed pull request title injection. Stolen credentials were exfiltrated to attacker-controlled public repositories named "s1ngularity-repository". Network filtering would have detected and could have blocked the data exfiltration to unauthorized repositories.
-
-- **Shai-Hulud worm (September 2025)**: Self-replicating worm that compromised 187 npm packages across 40+ developer accounts. The worm injected malicious GitHub Actions workflows (`.github/workflows/shai-hulud-workflow.yml`) that executed on push events to steal secrets and publish them to public "Shai-Hulud" repositories. Network filtering combined with workflow monitoring would have detected the automated repository creation and secret exfiltration patterns.
-
-**Protection Level with Default Settings**:
-
-- **✅ tj-actions/changed-files (CVE-2025-30066)**: **BLOCKED** - The malicious script download from `gist.githubusercontent.com` would be blocked by default risky subdomain filtering in enforce mode.
-
-- **⚠️ s1ngularity & Shai-Hulud**: **PARTIAL PROTECTION** - These attacks used `api.github.com` for repository creation and data exfiltration, which cannot be blocked as it's required for GitHub Actions functionality. However, this action provides:
-  - **Analyze mode**: Detects and logs the suspicious repository creation patterns
-  - **Enforce mode**: Blocks alternative exfiltration channels, limiting attacker options
-  - **Defense in depth**: Forces attackers to use monitored GitHub infrastructure
-
-**Note**: If you disable subdomain blocking (`block-risky-github-subdomains: false`), you lose protection against CVE-2025-30066 style attacks. For comprehensive protection against attacks that abuse GitHub infrastructure, combine with runtime security monitoring tools like Falco (see recommendations below).
-
-## Limitations and Attacker Workarounds
-
-While this action provides strong network-level protection, sophisticated attackers may attempt workarounds. **Network filtering alone is not sufficient** - combine with additional runtime security tooling:
-
-### Potential Attack Vectors
-
-**🚨 Data Exfiltration via Allowed Domains**
-- Attackers could abuse legitimate allowed domains (GitHub, npm, PyPI) to exfiltrate data
-- Example: Uploading secrets to a public repository or package registry
-- **Mitigation**: Use runtime monitoring to detect unusual data patterns
-
-**🚨 DNS Tunneling and Alternative Protocols**
-- Advanced attackers might use DNS queries to encode and exfiltrate data
-- Non-HTTP protocols (raw sockets, custom ports) could bypass HTTP-focused filtering
-- **Mitigation**: Comprehensive network monitoring and anomaly detection
-
-**🚨 Local File System Attacks**
-- Malicious code could write sensitive data to shared file systems or container volumes
-- Data could be staged for later exfiltration by other processes
-- **Mitigation**: File system monitoring and access controls
-
-**🚨 Process and System Call Abuse**
-- Attackers might attempt privilege escalation or container escapes
-- System resource abuse (CPU, memory) for cryptocurrency mining
-- **Mitigation**: Runtime behavior analysis and system call monitoring
-
-### Recommended Complementary Tooling
-
-**🛡️ Falco for Runtime Security**
-```yaml
-- name: Runtime Security with Falco
-  uses: falcosecurity/falco-action@v1
-  with:
-    rules: |
-      - rule: Detect Sensitive File Access
-        desc: Detect access to sensitive files
-        condition: >
-          open_read and fd.filename in (/etc/passwd, /etc/shadow, /home/*/.ssh/*, /root/.ssh/*)
-        output: Sensitive file accessed (user=%user.name command=%proc.cmdline file=%fd.name)
-        priority: WARNING
-
-      - rule: Unexpected Network Activity
-        desc: Detect unusual network connections
-        condition: >
-          inbound or outbound and not fd.net.cip in (github_ips, allowed_ips)
-        output: Unexpected network activity (user=%user.name command=%proc.cmdline connection=%fd.net.cip.name:%fd.net.sport->%fd.net.sip.name:%fd.net.dport)
-        priority: WARNING
-
-      - rule: Suspicious Process Execution
-        desc: Detect potentially malicious process execution
-        condition: >
-          spawned_process and (proc.name in (nc, ncat, socat, wget, curl) and proc.args contains "shell")
-        output: Suspicious process execution (user=%user.name command=%proc.cmdline)
-        priority: CRITICAL
-```
-
-**🛡️ Additional Security Layers**
-- **Container Security**: Use distroless images, read-only filesystems, non-root users
-- **Secrets Management**: Use GitHub's native secrets, avoid hardcoded credentials
-- **Dependency Scanning**: Tools like Snyk, Dependabot, or GitHub's native scanning
-- **Action Security**: Pin actions to specific commits, use trusted publishers only
-- **SIEM Integration**: Forward logs to security information and event management systems
-
-### Defense in Depth Strategy
-
-```yaml
-# Example comprehensive security workflow
-steps:
-  # Layer 1: Network Security
-  - uses: portswigger-tim/safer-runner-action@v1
-    with:
-      mode: 'enforce'
-      allowed-domains: 'api.trusted-service.com'
-
-  # Layer 2: Runtime Security
-  - uses: falcosecurity/falco-action@v1
-    with:
-      rules_file: .github/falco-rules.yaml
-
-  # Layer 3: Container Security
-  - uses: securecodewarrior/github-action-add-sarif@v1
-    with:
-      sarif-file: container-scan-results.sarif
-
-  # Layer 4: Your Application
-  - name: Run application with minimal privileges
-    run: |
-      # Your secure application logic
-    env:
-      # Use GitHub secrets, never hardcode
-      API_KEY: ${{ secrets.API_KEY }}
-```
-
-**Remember**: Network filtering is your first line of defense, but attackers adapt. Combine multiple security layers for maximum protection.
-
-## Debugging
-
-You can check DNS and firewall logs:
-
-```bash
-# View recent DNS queries and firewall actions
 sudo grep -E 'Processing: |GitHub-Allow: |User-Allow: |Drop-Enforce: |Allow-Analyze: ' /var/log/syslog
 ```
 
