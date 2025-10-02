@@ -1,4 +1,4 @@
-import { getGitHubRequiredDomains, isGitHubDomain, isGitHubInfrastructure, isGitHubRelated } from './github-parser';
+import { getGitHubRequiredDomains, isGitHubDomain, isGitHubRelated } from './github-parser';
 
 describe('GitHub Parser', () => {
   describe('getGitHubRequiredDomains', () => {
@@ -57,36 +57,6 @@ describe('GitHub Parser', () => {
     });
   });
 
-  describe('isGitHubInfrastructure', () => {
-    it('should match Azure blob storage domains', () => {
-      expect(isGitHubInfrastructure('productionresultssa0.blob.core.windows.net')).toBe(true);
-      expect(isGitHubInfrastructure('something.blob.core.windows.net')).toBe(true);
-    });
-
-    it('should match Azure traffic manager domains', () => {
-      expect(isGitHubInfrastructure('github-actions.trafficmanager.net')).toBe(true);
-      expect(isGitHubInfrastructure('something.trafficmanager.net')).toBe(true);
-    });
-
-    it('should NOT match non-infrastructure domains', () => {
-      expect(isGitHubInfrastructure('example.com')).toBe(false);
-      expect(isGitHubInfrastructure('google.com')).toBe(false);
-      expect(isGitHubInfrastructure('npmjs.com')).toBe(false);
-    });
-
-    it('should NOT match risky githubusercontent.com domains', () => {
-      // These should NOT match infrastructure patterns
-      expect(isGitHubInfrastructure('raw.githubusercontent.com')).toBe(false);
-      expect(isGitHubInfrastructure('gist.githubusercontent.com')).toBe(false);
-    });
-
-    it('should NOT match safe githubusercontent.com domains', () => {
-      // These are in the explicit list, not infrastructure patterns
-      expect(isGitHubInfrastructure('actions.githubusercontent.com')).toBe(false);
-      expect(isGitHubInfrastructure('objects.githubusercontent.com')).toBe(false);
-    });
-  });
-
   describe('isGitHubRelated', () => {
     it('should identify exact GitHub domains as related', () => {
       expect(isGitHubRelated('github.com')).toBe(true);
@@ -98,9 +68,16 @@ describe('GitHub Parser', () => {
       expect(isGitHubRelated('subdomain.github.com')).toBe(true);
     });
 
-    it('should identify infrastructure domains as related', () => {
+    it('should identify explicit productionresultssa domains as related', () => {
+      // These are in the explicit list
       expect(isGitHubRelated('productionresultssa0.blob.core.windows.net')).toBe(true);
-      expect(isGitHubRelated('something.trafficmanager.net')).toBe(true);
+      expect(isGitHubRelated('productionresultssa15.blob.core.windows.net')).toBe(true);
+    });
+
+    it('should NOT identify broad infrastructure patterns as related', () => {
+      // Broad patterns are no longer matched - only explicit list or evidence-based discovery
+      expect(isGitHubRelated('something.blob.core.windows.net')).toBe(false);
+      expect(isGitHubRelated('something.trafficmanager.net')).toBe(false);
     });
 
     it('should NOT identify non-GitHub domains as related', () => {

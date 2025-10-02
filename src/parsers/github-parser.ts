@@ -44,32 +44,13 @@ export function isGitHubDomain(domain: string, githubDomains: string[]): boolean
 }
 
 /**
- * Check if a domain is GitHub infrastructure using pattern matching.
- * This catches domains not in the explicit list but are clearly GitHub-related.
- *
- * Note: Excludes raw.githubusercontent.com and gist.githubusercontent.com (security risk)
- *
- * @param domain - The domain to check
- * @returns true if domain matches GitHub infrastructure patterns
- */
-export function isGitHubInfrastructure(domain: string): boolean {
-  // Pattern-based detection for GitHub infrastructure not in explicit list
-  // Note: Excludes raw.githubusercontent.com and gist.githubusercontent.com (security risk)
-  const patterns = [
-    'blob.core.windows.net',      // Azure blob storage for GitHub
-    'trafficmanager.net'           // Azure traffic manager
-  ];
-  return patterns.some(pattern => domain.includes(pattern));
-}
-
-/**
  * Check if a domain should be excluded from configuration suggestions.
- * A domain is excluded if it's a GitHub domain or GitHub infrastructure.
+ * A domain is excluded if it's in the explicit GitHub domain list or is a subdomain.
  *
  * @param domain - The domain to check
  * @returns true if domain should be excluded from suggestions
  */
 export function isGitHubRelated(domain: string): boolean {
   const githubDomains = getGitHubRequiredDomains();
-  return isGitHubDomain(domain, githubDomains) || isGitHubInfrastructure(domain);
+  return isGitHubDomain(domain, githubDomains);
 }

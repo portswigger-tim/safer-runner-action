@@ -216,15 +216,20 @@ describe('Report Formatter', () => {
       expect(result).toContain('|--------|----------------|--------|');
     });
 
-    it('should recognize GitHub infrastructure patterns', () => {
+    it('should recognize explicit GitHub domains only', () => {
       const resolutions: DnsResolution[] = [
-        { domain: 'something.blob.core.windows.net', ip: '1.2.3.4', status: 'RESOLVED' }
+        { domain: 'something.blob.core.windows.net', ip: '1.2.3.4', status: 'RESOLVED' },
+        { domain: 'productionresultssa0.blob.core.windows.net', ip: '5.6.7.8', status: 'RESOLVED' }
       ];
 
       const result = generateDnsDetails(resolutions);
 
-      // Should be in GitHub infrastructure section
+      // Explicit productionresultssa domains should be in GitHub section
       expect(result).toContain('GitHub Infrastructure DNS');
+      expect(result).toContain('productionresultssa0.blob.core.windows.net');
+
+      // Broad patterns like 'something.blob.core.windows.net' should be in user section
+      // (unless discovered via IPTables evidence)
       expect(result).toContain('something.blob.core.windows.net');
     });
   });
