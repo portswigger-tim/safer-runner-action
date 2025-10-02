@@ -170,10 +170,23 @@ export class SystemValidator {
 
   /**
    * Calculate SHA256 checksum of a file
+   * Uses sudo to read files with restricted permissions (e.g., dnsmasq.conf with mode 600)
    */
   private async calculateFileChecksum(filePath: string): Promise<string | null> {
     try {
-      const fileContent = readFileSync(filePath);
+      let fileContent = '';
+      const exitCode = await exec.exec('sudo', ['cat', filePath], {
+        listeners: {
+          stdout: (data) => { fileContent += data.toString(); }
+        },
+        ignoreReturnCode: true
+      });
+
+      // Exit code 1 typically means file not found
+      if (exitCode !== 0) {
+        return null;
+      }
+
       return crypto.createHash('sha256').update(fileContent).digest('hex');
     } catch (error) {
       if ((error as any).code === 'ENOENT') {

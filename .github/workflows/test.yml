@@ -14,11 +14,8 @@ jobs:
     name: Test Analyze Mode
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
       - name: Apply Safer Runner Action (Analyze Mode)
-        uses: ./
+        uses: portswigger-tim/safer-runner-action@main
         with:
           mode: 'analyze'
           allowed-domains: 'httpbin.org api.github.com'
@@ -55,14 +52,11 @@ jobs:
           echo "📊 Check the job summary section below for Network Access Provenance table"
 
   test-enforce-mode:
-    name: Test Enforce Mode  
+    name: Test Enforce Mode
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
       - name: Apply Safer Runner Action (Enforce Mode)
-        uses: ./
+        uses: portswigger-tim/safer-runner-action@main
         with:
           mode: 'enforce'
           allowed-domains: 'httpbin.org'
@@ -111,16 +105,13 @@ jobs:
     name: Test GitHub Actions Compatibility
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
       - name: Apply Safer Runner Action (Enforce Mode)
-        uses: ./
+        uses: portswigger-tim/safer-runner-action@main
         with:
           mode: 'enforce'
-      
+
       - name: Test Actions checkout (uses GitHub domains)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: actions/hello-world-javascript-action
           path: test-repo
@@ -156,11 +147,8 @@ jobs:
         ports:
           - 80/tcp
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
       - name: Apply Safer Runner Action (Enforce Mode)
-        uses: ./
+        uses: portswigger-tim/safer-runner-action@main
         with:
           mode: 'enforce'
           allowed-domains: 'api.github.com httpbin.org'
@@ -241,11 +229,8 @@ jobs:
     name: Test System Integrity Validation
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Apply Safer Runner Action (Analyze Mode)
-        uses: ./
+        uses: portswigger-tim/safer-runner-action@main
         with:
           mode: 'analyze'
           allowed-domains: 'httpbin.org'
