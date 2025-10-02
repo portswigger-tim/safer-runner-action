@@ -405,7 +405,7 @@ async function startServices(dnsUid) {
 async function finalizeSecurityRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
         // Log traffic that doesn't match any ipset (will be dropped)
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=${logPrefix}Drop-Enforce: `]);
+        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);
         // DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'DROP']);
     }

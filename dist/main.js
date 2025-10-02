@@ -191,6 +191,7 @@ async function run() {
             await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Processing: '], { ignoreReturnCode: true });
             await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=Pre-GitHub-Allow: '], { ignoreReturnCode: true });
             await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=Pre-User-Allow: '], { ignoreReturnCode: true });
+            await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Pre-Allow-Analyze: `], { ignoreReturnCode: true });
             // Add main action LOG rules (without Pre- prefix)
             core.info('Adding main action log rules...');
             await exec.exec('sudo', ['iptables', '-I', 'OUTPUT', '5', '-j', 'LOG', '--log-prefix=Processing: ']);
@@ -462,7 +463,7 @@ async function startServices(dnsUid) {
 async function finalizeSecurityRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
         // Log traffic that doesn't match any ipset (will be dropped)
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=${logPrefix}Drop-Enforce: `]);
+        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);
         // DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'DROP']);
     }

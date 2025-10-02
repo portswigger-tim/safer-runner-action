@@ -49,6 +49,7 @@ async function run(): Promise<void> {
       await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-j', 'LOG', '--log-prefix=Pre-Processing: '], { ignoreReturnCode: true });
       await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', '--log-prefix=Pre-GitHub-Allow: '], { ignoreReturnCode: true });
       await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', '--log-prefix=Pre-User-Allow: '], { ignoreReturnCode: true });
+      await exec.exec('sudo', ['iptables', '-D', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Pre-Allow-Analyze: `], { ignoreReturnCode: true });
 
       // Add main action LOG rules (without Pre- prefix)
       core.info('Adding main action log rules...');

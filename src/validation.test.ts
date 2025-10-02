@@ -234,7 +234,7 @@ num  target     prot opt source               destination
     it('should handle missing critical files gracefully during initialization', () => {
       // Create validator with non-existent files
       const nonExistentFiles = ['/tmp/does-not-exist-1.conf', '/tmp/does-not-exist-2.conf'];
-      const testValidator = new SystemValidator(nonExistentFiles);
+      const testValidator = new TestSystemValidator(nonExistentFiles);
 
       // Should fail during baseline capture because files don't exist
       expect(testValidator.capturePostSetupBaseline()).rejects.toThrow();
