@@ -56,6 +56,10 @@ jobs:
             fi
           done
 
+          echo ""
+          echo "=== Runner Sudoers File Content ==="
+          sudo cat /etc/sudoers.d/runner
+
       - name: Check DNS log file permissions
         run: |
           echo "=== DNS Log File Permissions ==="
