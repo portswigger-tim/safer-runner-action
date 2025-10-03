@@ -1,13 +1,12 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import {
-  createRandomDNSUser,
+  performInitialSetup,
   setupFirewallRules,
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules,
-  setupIpsets
+  finalizeFirewallRules
 } from './setup';
 
 /**
@@ -24,23 +23,12 @@ async function run(): Promise<void> {
   try {
     core.info('🔍 Pre-action: Establishing security monitoring...');
 
-    // Install dependencies
-    core.info('Installing dependencies...');
-    await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-    await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'auditd', 'audispd-plugins']);
-
-    // Create random DNS user for privilege separation
-    core.info('Creating isolated DNS user...');
-    const dnsUser = await createRandomDNSUser();
+    // Perform initial system setup
+    const dnsUser = await performInitialSetup();
 
     // Save DNS user info for main action to use
     core.saveState('dns-user', dnsUser.username);
     core.saveState('dns-uid', dnsUser.uid.toString());
-    core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
-
-    // Configure ipsets
-    core.info('Configuring ipsets...');
-    await setupIpsets();
 
     // Configure iptables rules with Pre- log prefix
     core.info('Configuring iptables rules...');

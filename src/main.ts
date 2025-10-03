@@ -3,13 +3,12 @@ import * as exec from '@actions/exec';
 import { SystemValidator } from './validation';
 import {
   type DnsUser,
-  createRandomDNSUser,
+  performInitialSetup,
   setupFirewallRules,
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules,
-  setupIpsets
+  finalizeFirewallRules
 } from './setup';
 
 async function run(): Promise<void> {
@@ -33,20 +32,7 @@ async function run(): Promise<void> {
     if (!preActionRan) {
       // Pre-action didn't run - do full setup
       core.info('Pre-action did not run - performing full setup...');
-
-      // Install dependencies
-      core.info('Installing dependencies...');
-      await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-      await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'auditd', 'audispd-plugins']);
-
-      // Create random DNS user for privilege separation
-      core.info('Creating isolated DNS user...');
-      dnsUser = await createRandomDNSUser();
-      core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
-
-      // Configure ipsets
-      core.info('Configuring ipsets...');
-      await setupIpsets();
+      dnsUser = await performInitialSetup();
     } else {
       // Pre-action already set up infrastructure - just reconfigure
       core.info('✅ Pre-action already established monitoring infrastructure');

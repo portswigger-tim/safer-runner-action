@@ -163,7 +163,6 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
 const validation_1 = __nccwpck_require__(8449);
 const setup_1 = __nccwpck_require__(1413);
 async function run() {
@@ -183,17 +182,7 @@ async function run() {
         if (!preActionRan) {
             // Pre-action didn't run - do full setup
             core.info('Pre-action did not run - performing full setup...');
-            // Install dependencies
-            core.info('Installing dependencies...');
-            await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-            await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'auditd', 'audispd-plugins']);
-            // Create random DNS user for privilege separation
-            core.info('Creating isolated DNS user...');
-            dnsUser = await (0, setup_1.createRandomDNSUser)();
-            core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
-            // Configure ipsets
-            core.info('Configuring ipsets...');
-            await (0, setup_1.setupIpsets)();
+            dnsUser = await (0, setup_1.performInitialSetup)();
         }
         else {
             // Pre-action already set up infrastructure - just reconfigure
@@ -354,6 +343,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.setupAuditdRules = setupAuditdRules;
+exports.performInitialSetup = performInitialSetup;
 exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupIpsets = setupIpsets;
 exports.setupFirewallRules = setupFirewallRules;
@@ -361,9 +352,50 @@ exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
 exports.restartServices = restartServices;
 exports.finalizeFirewallRules = finalizeFirewallRules;
+const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const dns_config_builder_1 = __nccwpck_require__(1877);
+/**
+ * Configure auditd rules for runtime monitoring
+ * Monitors sudo usage and privileged commands
+ */
+async function setupAuditdRules() {
+    // Monitor all executions of sudo
+    // This captures when sudo is invoked and what command is executed
+    await exec.exec('sudo', [
+        'auditctl',
+        '-a',
+        'always,exit',
+        '-S',
+        'execve',
+        '-F',
+        'exe=/usr/bin/sudo',
+        '-k',
+        'sudo_execution'
+    ]);
+}
+/**
+ * Perform initial system setup: install dependencies, configure auditd, create DNS user, setup ipsets
+ * Returns the created DNS user
+ */
+async function performInitialSetup() {
+    // Install dependencies
+    core.info('Installing dependencies...');
+    await exec.exec('sudo', ['apt-get', 'update', '-qq']);
+    await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'auditd', 'audispd-plugins']);
+    // Configure auditd monitoring rules
+    core.info('Configuring auditd monitoring rules...');
+    await setupAuditdRules();
+    // Create random DNS user for privilege separation
+    core.info('Creating isolated DNS user...');
+    const dnsUser = await createRandomDNSUser();
+    core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
+    // Configure ipsets
+    core.info('Configuring ipsets...');
+    await setupIpsets();
+    return dnsUser;
+}
 async function createRandomDNSUser() {
     // Generate random username with 16 hex characters
     const randomHex = crypto.randomBytes(8).toString('hex');

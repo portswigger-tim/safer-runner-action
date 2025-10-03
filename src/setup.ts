@@ -2,6 +2,7 @@
  * Shared setup functions for pre and main actions
  */
 
+import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
 import { buildDnsConfig, DEFAULT_DNS_SERVER } from './config/dns-config-builder';
@@ -9,6 +10,52 @@ import { buildDnsConfig, DEFAULT_DNS_SERVER } from './config/dns-config-builder'
 export interface DnsUser {
   username: string;
   uid: number;
+}
+
+/**
+ * Configure auditd rules for runtime monitoring
+ * Monitors sudo usage and privileged commands
+ */
+export async function setupAuditdRules(): Promise<void> {
+  // Monitor all executions of sudo
+  // This captures when sudo is invoked and what command is executed
+  await exec.exec('sudo', [
+    'auditctl',
+    '-a',
+    'always,exit',
+    '-S',
+    'execve',
+    '-F',
+    'exe=/usr/bin/sudo',
+    '-k',
+    'sudo_execution'
+  ]);
+}
+
+/**
+ * Perform initial system setup: install dependencies, configure auditd, create DNS user, setup ipsets
+ * Returns the created DNS user
+ */
+export async function performInitialSetup(): Promise<DnsUser> {
+  // Install dependencies
+  core.info('Installing dependencies...');
+  await exec.exec('sudo', ['apt-get', 'update', '-qq']);
+  await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'auditd', 'audispd-plugins']);
+
+  // Configure auditd monitoring rules
+  core.info('Configuring auditd monitoring rules...');
+  await setupAuditdRules();
+
+  // Create random DNS user for privilege separation
+  core.info('Creating isolated DNS user...');
+  const dnsUser = await createRandomDNSUser();
+  core.info(`Created isolated DNS user: ${dnsUser.username} (UID: ${dnsUser.uid})`);
+
+  // Configure ipsets
+  core.info('Configuring ipsets...');
+  await setupIpsets();
+
+  return dnsUser;
 }
 
 export async function createRandomDNSUser(): Promise<DnsUser> {
