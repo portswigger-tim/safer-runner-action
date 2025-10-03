@@ -542,7 +542,7 @@ jobs:
           mode: 'analyze'
           sudo-config: |
             runner ALL=(ALL) NOPASSWD: /usr/bin/docker
-            runner ALL=(ALL) NOPASSWD: /usr/bin/npm
+            runner ALL=(ALL) NOPASSWD: /usr/local/bin/npm
 
       - name: Debug sudoers file after action
         run: |
