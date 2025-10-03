@@ -288,7 +288,7 @@ describe('Report Formatter', () => {
 
       expect(result).toContain('## Configuration Advice');
       expect(result).toContain('```yaml');
-      expect(result).toContain("mode: 'enforce'");
+      expect(result).toContain('mode: enforce');
       expect(result).toContain('allowed-domains: |');
       expect(result).toContain('      example.com');
       expect(result).toContain('```');

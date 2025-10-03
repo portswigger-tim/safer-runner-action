@@ -430,10 +430,10 @@ async function applyCustomSudoConfig(sudoConfig) {
         });
         // Validate with visudo
         await exec.exec('sudo', ['visudo', '-c', '-f', tempFile]);
-        // If validation passes, move to sudoers.d
+        // If validation passes, set permissions before moving
+        await exec.exec('sudo', ['chmod', '0440', tempFile]);
+        await exec.exec('sudo', ['chown', 'root:root', tempFile]);
         await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
-        await exec.exec('sudo', ['chmod', '0440', sudoersFile]);
-        await exec.exec('sudo', ['chown', 'root:root', sudoersFile]);
         core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
         core.info('🔒 Runner user now has restricted sudo access');
     }
@@ -449,10 +449,14 @@ async function applyCustomSudoConfig(sudoConfig) {
  * Disable sudo access for the runner user
  * This prevents malicious code from using sudo to bypass security controls
  *
+ * However, we still need to allow specific commands for post-action validation:
+ * - sudo cat <file> - to read protected configuration files for integrity checks
+ * - sudo iptables -L <chain> -n --line-numbers - to verify firewall rules
+ *
  * The runner user on GitHub Actions has sudo access via /etc/sudoers.d/runner
  * which contains: runner ALL=(ALL) NOPASSWD:ALL
  *
- * Renaming this file effectively disables all sudo access for the runner user.
+ * We replace this with a minimal configuration that only allows validation commands.
  */
 async function disableSudoForRunner() {
     // Get the current user (should be 'runner' on GitHub Actions)
@@ -464,21 +468,44 @@ async function disableSudoForRunner() {
             }
         }
     });
-    core.info(`Disabling sudo access for user: ${currentUser}`);
+    core.info(`Restricting sudo access for user: ${currentUser} to validation commands only`);
     // GitHub Actions runners grant sudo via /etc/sudoers.d/runner file
     const sudoersFile = `/etc/sudoers.d/${currentUser}`;
-    const disabledFile = `${sudoersFile}.disabled-by-safer-runner`;
+    const tempFile = `/tmp/${currentUser}-validation-sudoers.tmp`;
+    // Minimal sudoers config that only allows validation commands
+    const validationOnlySudoConfig = `# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation
+# All other sudo commands will be denied
+
+# Allow reading configuration files for checksum validation
+${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/dnsmasq.conf
+${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/resolv.conf
+${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
+
+# Allow reading iptables rules for integrity validation
+${currentUser} ALL=(ALL) NOPASSWD: /sbin/iptables -L * -n --line-numbers
+${currentUser} ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L * -n --line-numbers
+`;
     try {
-        // Check if the sudoers file exists
-        await exec.exec('sudo', ['test', '-f', sudoersFile]);
-        // Rename it to disable sudo access (preserves file for debugging)
-        await exec.exec('sudo', ['mv', sudoersFile, disabledFile]);
-        core.info(`✅ Renamed ${sudoersFile} to ${disabledFile}`);
-        core.info('🔒 Sudo access disabled - runner user can no longer execute privileged commands');
+        // Write minimal config to temp file
+        await exec.exec('sudo', ['tee', tempFile], {
+            input: Buffer.from(validationOnlySudoConfig)
+        });
+        // Validate with visudo
+        await exec.exec('sudo', ['visudo', '-c', '-f', tempFile]);
+        // Set correct permissions before moving
+        await exec.exec('sudo', ['chmod', '0440', tempFile]);
+        await exec.exec('sudo', ['chown', 'root:root', tempFile]);
+        // Replace the existing sudoers file
+        await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
+        core.info(`✅ Sudo access restricted to validation commands only`);
+        core.info('🔒 Runner user can only execute commands needed for integrity validation');
     }
     catch (error) {
-        core.warning(`Could not disable sudo: ${error}`);
-        core.warning(`File ${sudoersFile} may not exist`);
+        core.error(`Failed to restrict sudo access: ${error}`);
+        // Clean up temp file
+        await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
+        throw new Error('Failed to configure validation-only sudo access');
     }
 }
 /**

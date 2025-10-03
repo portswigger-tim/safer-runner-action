@@ -189,51 +189,55 @@ export function generateConfigurationAdvice(
 
   let advice = `## Configuration Advice\n\n`;
 
-  // DNS/Domain configuration advice
-  if (suggestedDomains.length === 0) {
-    advice += `No additional domains detected for allowlist configuration.\n\n`;
-  } else {
-    advice += `### 🌐 Network Access\n\n`;
-    advice += `To run in enforce mode with the domains accessed in this workflow, add these domains to your configuration:\n\n`;
-    advice += `\`\`\`yaml\n`;
-    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-    advice += `  with:\n`;
-    advice += `    mode: 'enforce'\n`;
-    advice += `    allowed-domains: |\n`;
+  // Determine if we have any configuration to suggest
+  const hasDomains = suggestedDomains.length > 0;
+  const hasSudoCommands = sudoCommands && sudoCommands.length > 0;
+  const noSudoCommands = sudoCommands && sudoCommands.length === 0;
 
+  // If no domains and no sudo usage, keep it minimal
+  if (!hasDomains && !hasSudoCommands && !noSudoCommands) {
+    advice += `No additional domains detected for allowlist configuration.\n\n`;
+    return advice;
+  }
+
+  // Single unified configuration example
+  if (hasSudoCommands) {
+    advice += `Your workflow used **${sudoCommands!.length}** sudo command${sudoCommands!.length === 1 ? '' : 's'}`;
+    if (hasDomains) {
+      advice += ` and accessed **${suggestedDomains.length}** external domain${suggestedDomains.length === 1 ? '' : 's'}`;
+    }
+    advice += `. To run in enforce mode:\n\n`;
+  } else if (noSudoCommands && hasDomains) {
+    advice += `Your workflow accessed **${suggestedDomains.length}** external domain${suggestedDomains.length === 1 ? '' : 's'}`;
+    advice += ` and did not use sudo. To run in enforce mode:\n\n`;
+  } else if (noSudoCommands && !hasDomains) {
+    advice += `No external domains or sudo commands were used. To run in enforce mode with sudo disabled:\n\n`;
+  } else if (hasDomains && !sudoCommands) {
+    advice += `To run in enforce mode with the domains accessed in this workflow:\n\n`;
+  }
+
+  // Generate unified configuration
+  advice += '```yaml\n';
+  advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+  advice += `  with:\n`;
+  advice += `    mode: enforce\n`;
+
+  // Add allowed-domains if we have them
+  if (hasDomains) {
+    advice += `    allowed-domains: |\n`;
     for (const domain of suggestedDomains) {
       advice += `      ${domain}\n`;
     }
-
-    advice += `\`\`\`\n\n`;
   }
 
-  // Sudo configuration advice
-  if (sudoCommands && sudoCommands.length > 0) {
-    advice += `### 🔐 Sudo Access\n\n`;
-    advice += `Your workflow used **${sudoCommands.length}** sudo command${sudoCommands.length === 1 ? '' : 's'}. `;
-    advice += `Consider restricting sudo access to only these specific commands:\n\n`;
-
-    // Generate sudoers configuration
-    advice += '```yaml\n';
-    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-    advice += `  with:\n`;
-    advice += `    mode: enforce\n`;
-
-    // Add allowed-domains if we have them
-    if (suggestedDomains.length > 0) {
-      advice += `    allowed-domains: |\n`;
-      for (const domain of suggestedDomains) {
-        advice += `      ${domain}\n`;
-      }
-    }
-
+  // Add sudo configuration if we have commands
+  if (hasSudoCommands) {
     advice += `    sudo-config: |\n`;
 
     // Group commands by executable
     const commandsByExecutable = new Map<string, Set<string>>();
 
-    for (const cmd of sudoCommands) {
+    for (const cmd of sudoCommands!) {
       if (!commandsByExecutable.has(cmd.command)) {
         commandsByExecutable.set(cmd.command, new Set());
       }
@@ -255,26 +259,27 @@ export function generateConfigurationAdvice(
         advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
       }
     }
-
-    advice += '```\n\n';
-
-    // Add security note
-    advice += `> **Security Note**: This configuration follows the principle of least privilege by restricting network access to specific domains and sudo access to specific commands.\n\n`;
-  } else if (sudoCommands && sudoCommands.length === 0) {
-    advice += `### 🔐 Sudo Access\n\n`;
-    advice += `No sudo commands were used during this workflow. You can use \`disable-sudo: true\` to completely disable sudo access:\n\n`;
-    advice += `\`\`\`yaml\n`;
-    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-    advice += `  with:\n`;
-    advice += `    mode: enforce\n`;
-    if (suggestedDomains.length > 0) {
-      advice += `    allowed-domains: |\n`;
-      for (const domain of suggestedDomains) {
-        advice += `      ${domain}\n`;
-      }
-    }
+  } else if (noSudoCommands) {
+    // Suggest disabling sudo if not used
     advice += `    disable-sudo: true\n`;
-    advice += `\`\`\`\n\n`;
+  }
+
+  advice += '```\n\n';
+
+  // Add security note if we have actual restrictions
+  if (hasDomains || hasSudoCommands || noSudoCommands) {
+    advice += `> **Security Note**: This configuration follows the principle of least privilege`;
+    if (hasDomains && hasSudoCommands) {
+      advice += ` by restricting network access to specific domains and sudo access to specific commands.\n\n`;
+    } else if (hasDomains && noSudoCommands) {
+      advice += ` by restricting network access to specific domains and disabling sudo access.\n\n`;
+    } else if (hasSudoCommands) {
+      advice += ` by restricting sudo access to specific commands.\n\n`;
+    } else if (noSudoCommands) {
+      advice += ` by disabling sudo access.\n\n`;
+    } else {
+      advice += `.\n\n`;
+    }
   }
 
   return advice;
