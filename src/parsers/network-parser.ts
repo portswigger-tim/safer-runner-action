@@ -112,13 +112,13 @@ export function parseLogLine(line: string): NetworkConnection | null {
   // Check for Pre- prefixed logs (from pre-hook monitoring)
   if (line.includes('Pre-GitHub-Allow: ')) {
     status = 'ANALYZED';
-    source = 'Pre-hook (GitHub)';
+    source = 'GitHub Required';
   } else if (line.includes('Pre-User-Allow: ')) {
     status = 'ANALYZED';
-    source = 'Pre-hook (User)';
+    source = 'User Defined';
   } else if (line.includes('Pre-Allow-Analyze: ')) {
     status = 'ANALYZED';
-    source = 'Pre-hook Monitor';
+    source = 'Monitor Only';
   } else if (line.includes('GitHub-Allow: ')) {
     status = 'ALLOWED';
     source = 'GitHub Required';
