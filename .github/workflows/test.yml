@@ -214,6 +214,11 @@ jobs:
           mode: 'enforce'
           allowed-domains: 'api.github.com httpbin.org'
 
+      - name: Harden Runner
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: audit
+
       - name: Test DNS resolution
         run: |
           echo "Testing DNS resolution..."
@@ -313,12 +318,6 @@ jobs:
           mode: 'analyze'
           allowed-domains: 'httpbin.org'
      
-      - name: Start Falco
-        uses: falcosecurity/falco-actions/start@c44e5c23b3cc1cb0a90e69cee21f14400207f818
-        with:
-          mode: live
-          falco-version: '0.39.0'
-          verbose: true
 
       - name: Verify baseline was captured
         run: |
@@ -406,9 +405,3 @@ jobs:
           echo ""
           echo "Check the job summary below for the System Integrity Validation Report!"
           echo "It should show ❌ Tampered status for /etc/dnsmasq.conf"
-
-      - name: Stop Falco
-        uses: falcosecurity/falco-actions/stop@c44e5c23b3cc1cb0a90e69cee21f14400207f818
-        with:
-          mode: live
-          verbose: true
