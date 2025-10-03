@@ -883,7 +883,7 @@ async function generateJobSummary(connections, dnsResolutions, preHookConnection
     summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions);
     // 4. Config File Tamper Detection
     summary += `${validationReport}\n`;
-    // 5. Configuration Advice (for analyze mode)
+    // 5. Configuration Advice (for analyze mode only)
     if (mode === 'analyze') {
         summary += (0, report_formatter_1.generateConfigurationAdvice)(dnsResolutions);
     }
@@ -1167,17 +1167,19 @@ class SystemValidator {
      */
     async generateValidationReport() {
         if (!(0, fs_1.existsSync)(this.validationStateFile)) {
-            return '## Config File Tamper Detection\n\nNo validation data available.\n\n';
+            return '<details>\n<summary><h2>Config File Tamper Detection</h2></summary>\n\nNo validation data available.\n\n</details>\n\n';
         }
-        let report = '## Config File Tamper Detection\n\n';
+        // Check if tampering occurred to add warning emoji
+        let tamperingDetected = false;
+        let reportContent = '';
         try {
             const state = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
-            report += `**Baseline:** ${state.timestamp}\n`;
-            report += `**Verified:** ${new Date().toISOString()}\n\n`;
+            reportContent += `**Baseline:** ${state.timestamp}\n`;
+            reportContent += `**Verified:** ${new Date().toISOString()}\n\n`;
             // File integrity report
-            report += '### Configuration Files\n\n';
-            report += '| File | Status | Checksum Comparison |\n';
-            report += '|------|--------|--------------------|\n';
+            reportContent += '### Configuration Files\n\n';
+            reportContent += '| File | Status | Checksum Comparison |\n';
+            reportContent += '|------|--------|--------------------|\n';
             for (const file of state.files) {
                 const currentChecksum = await this.calculateFileChecksum(file.path);
                 let status = 'Unknown';
@@ -1185,6 +1187,7 @@ class SystemValidator {
                 if (!currentChecksum) {
                     status = '🚨 DELETED';
                     displayChecksum = `${displayChecksum} -> MISSING`;
+                    tamperingDetected = true;
                 }
                 else if (currentChecksum === file.checksum) {
                     status = 'VERIFIED';
@@ -1193,13 +1196,14 @@ class SystemValidator {
                 else {
                     status = '⚠️ TAMPERED';
                     displayChecksum = `${displayChecksum} -> ${currentChecksum.substring(0, 16)}`;
+                    tamperingDetected = true;
                 }
-                report += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
+                reportContent += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
             }
             // iptables integrity report
-            report += '\n### Firewall Rules\n\n';
-            report += '| Chain | Status | Checksum Comparison |\n';
-            report += '|-------|--------|--------------|\n';
+            reportContent += '\n### Firewall Rules\n\n';
+            reportContent += '| Chain | Status | Checksum Comparison |\n';
+            reportContent += '|-------|--------|--------------|\n';
             const currentIptablesState = await this.getCurrentIptablesState();
             for (const rule of state.iptablesRules) {
                 const currentRule = currentIptablesState.find(r => r.chain === rule.chain);
@@ -1208,6 +1212,7 @@ class SystemValidator {
                 if (!currentRule) {
                     status = '🚨 MISSING';
                     displayChecksum = `${displayChecksum} -> MISSING`;
+                    tamperingDetected = true;
                 }
                 else if (currentRule.checksum === rule.checksum) {
                     status = 'VERIFIED';
@@ -1216,15 +1221,19 @@ class SystemValidator {
                 else {
                     status = '⚠️ TAMPERED';
                     displayChecksum = `${displayChecksum} -> ${currentRule.checksum.substring(0, 16)}`;
+                    tamperingDetected = true;
                 }
-                report += `| ${rule.chain} | ${status} | ${displayChecksum} |\n`;
+                reportContent += `| ${rule.chain} | ${status} | ${displayChecksum} |\n`;
             }
-            report += '\n';
+            reportContent += '\n';
         }
         catch (error) {
-            report += `Failed to generate report: ${error}\n`;
+            reportContent += `Failed to generate report: ${error}\n`;
+            tamperingDetected = true;
         }
-        return report;
+        // Wrap in collapsible section with warning emoji if tampering detected
+        const titleEmoji = tamperingDetected ? '⚠️ ' : '';
+        return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${reportContent}</details>\n\n`;
     }
 }
 exports.SystemValidator = SystemValidator;

@@ -188,6 +188,9 @@ num  target     prot opt source               destination
 
       // Check for expected report sections
       expect(report).toContain('Config File Tamper Detection');
+      expect(report).toContain('<details>');
+      expect(report).toContain('<summary>');
+      expect(report).toContain('</details>');
       expect(report).toContain('Configuration Files');
       expect(report).toContain('Firewall Rules');
       expect(report).toContain('Baseline:');
@@ -199,6 +202,8 @@ num  target     prot opt source               destination
       const report = await validator.generateValidationReport();
 
       expect(report).toContain('VERIFIED');
+      // Should NOT have warning emoji when no tampering
+      expect(report).not.toContain('⚠️ Config File Tamper Detection');
     });
 
     it('should show TAMPERED status for modified files', async () => {
@@ -210,6 +215,8 @@ num  target     prot opt source               destination
       const report = await validator.generateValidationReport();
 
       expect(report).toContain('TAMPERED');
+      // Should have warning emoji when tampering detected
+      expect(report).toContain('⚠️ Config File Tamper Detection');
     });
 
     it('should show DELETED status for removed files', async () => {
@@ -221,6 +228,8 @@ num  target     prot opt source               destination
       const report = await validator.generateValidationReport();
 
       expect(report).toContain('DELETED');
+      // Should have warning emoji when file deletion detected
+      expect(report).toContain('⚠️ Config File Tamper Detection');
     });
 
     it('should handle missing baseline state gracefully', async () => {

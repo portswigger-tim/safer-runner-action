@@ -134,7 +134,7 @@ async function generateJobSummary(
   // 4. Config File Tamper Detection
   summary += `${validationReport}\n`;
 
-  // 5. Configuration Advice (for analyze mode)
+  // 5. Configuration Advice (for analyze mode only)
   if (mode === 'analyze') {
     summary += generateConfigurationAdvice(dnsResolutions);
   }
