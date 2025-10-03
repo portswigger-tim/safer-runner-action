@@ -166,11 +166,11 @@ ls -la dist/
 
 **DNS Logs**:
 ```bash
-# View pre-hook DNS activity
-sudo cat /tmp/pre-dns.log
+# View pre-hook DNS activity (readable by runner group)
+cat /tmp/pre-dns.log
 
-# View main action DNS activity
-sudo cat /tmp/main-dns.log
+# View main action DNS activity (readable by runner group)
+cat /tmp/main-dns.log
 
 # Test DNS resolution
 dig @127.0.0.1 example.com
@@ -371,6 +371,7 @@ Previously, DNS logs went to syslog mixed with iptables logs. We now use dedicat
 ✅ Easier parsing (no grep filtering needed)
 ✅ Better performance (avoid parsing entire syslog)
 ✅ Consistent with iptables (which uses log prefixes)
+✅ Readable by runner group (no sudo required for log access)
 
 ### Why Three-Phase Lifecycle (pre/main/post)?
 

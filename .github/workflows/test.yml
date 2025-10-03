@@ -19,7 +19,25 @@ jobs:
         with:
           mode: 'analyze'
           allowed-domains: 'httpbin.org api.github.com'
-      
+
+      - name: Output sudoers configuration
+        run: |
+          echo "=== Sudoers Configuration ==="
+          echo "Main sudoers file:"
+          sudo cat /etc/sudoers
+          echo ""
+          echo "Sudoers.d directory contents:"
+          sudo ls -la /etc/sudoers.d/
+          echo ""
+          echo "Individual sudoers.d files:"
+          for file in /etc/sudoers.d/*; do
+            if [ -f "$file" ]; then
+              echo "--- $file ---"
+              sudo cat "$file"
+              echo ""
+            fi
+          done
+
       - name: Test GitHub domain access
         run: |
           echo "Testing GitHub domain access..."
@@ -54,7 +72,7 @@ jobs:
           echo "=== Pre-hook DNS Logs ==="
           if [ -f /tmp/pre-dns.log ]; then
             echo "Pre-hook DNS logs file found:"
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
           else
             echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
           fi
@@ -63,7 +81,7 @@ jobs:
           echo "=== Main Action DNS Logs ==="
           if [ -f /tmp/main-dns.log ]; then
             echo "Main action DNS logs file found:"
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
           else
             echo "Main action DNS logs file not found at /tmp/main-dns.log"
           fi
@@ -122,7 +140,7 @@ jobs:
           echo "=== Pre-hook DNS Logs ==="
           if [ -f /tmp/pre-dns.log ]; then
             echo "Pre-hook DNS logs file found:"
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
           else
             echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
           fi
@@ -131,7 +149,7 @@ jobs:
           echo "=== Main Action DNS Logs ==="
           if [ -f /tmp/main-dns.log ]; then
             echo "Main action DNS logs file found:"
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
           else
             echo "Main action DNS logs file not found at /tmp/main-dns.log"
           fi
@@ -186,7 +204,7 @@ jobs:
           echo ""
           echo "=== Pre-hook DNS Logs ==="
           if [ -f /tmp/pre-dns.log ]; then
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
           else
             echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
           fi
@@ -194,7 +212,7 @@ jobs:
           echo ""
           echo "=== Main Action DNS Logs ==="
           if [ -f /tmp/main-dns.log ]; then
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
           else
             echo "Main action DNS logs file not found at /tmp/main-dns.log"
           fi
@@ -270,7 +288,7 @@ jobs:
           echo ""
           echo "=== Pre-hook DNS Logs ==="
           if [ -f /tmp/pre-dns.log ]; then
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
           else
             echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
           fi
@@ -278,7 +296,7 @@ jobs:
           echo ""
           echo "=== Main Action DNS Logs ==="
           if [ -f /tmp/main-dns.log ]; then
-            sudo grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
           else
             echo "Main action DNS logs file not found at /tmp/main-dns.log"
           fi

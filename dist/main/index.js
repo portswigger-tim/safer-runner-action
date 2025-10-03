@@ -536,6 +536,15 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsern
         dnsUsername,
         logFile
     });
+    // Create log file with proper permissions if specified
+    if (logFile) {
+        // Touch the log file to create it
+        await exec.exec('sudo', ['touch', logFile]);
+        // Set ownership to DNS user (for writing) and runner group (for reading)
+        await exec.exec('sudo', ['chown', `${dnsUsername}:runner`, logFile]);
+        // Set permissions to 640 (owner write, group read)
+        await exec.exec('sudo', ['chmod', '640', logFile]);
+    }
     // Write configuration to file
     await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
         input: Buffer.from(dnsmasqConfig)
