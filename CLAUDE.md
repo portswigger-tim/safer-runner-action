@@ -126,7 +126,8 @@ The `post.ts` generates a comprehensive job summary with:
 2. **Build & test** - `npm run package`
 3. **Test locally** - Use validation test: `node src/validation.test.ts`
 4. **Commit source + dist** - Always commit both `.ts` and `.js` files
-5. **Test in GitHub Actions** - Use the test workflow
+5. **Push changes** - Use `GIT_SSH_COMMAND="ssh -o IdentitiesOnly=yes" git push` to avoid SSH agent certificate issues
+6. **Test in GitHub Actions** - Use the test workflow
 
 ### Adding New Security Features
 
