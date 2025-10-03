@@ -8,7 +8,9 @@
     "build:pre": "ncc build lib/pre.js -o dist/pre --license licenses.txt && mv dist/pre/index.js dist/pre.js",
     "build:post": "ncc build lib/post.js -o dist/post --license licenses.txt && mv dist/post/index.js dist/post.js",
     "clean": "rm -rf dist lib",
-    "package": "npm run clean && npm test && npm run build && npm run build:pre && npm run build:post",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "package": "npm run clean && npm run format && npm test && npm run build && npm run build:pre && npm run build:post",
     "test": "jest",
     "all": "npm run package"
   },
@@ -29,6 +31,7 @@
     "@types/node": "^20.8.0",
     "@vercel/ncc": "^0.38.1",
     "jest": "^30.2.0",
+    "prettier": "^3.6.2",
     "ts-jest": "^29.4.4",
     "typescript": "^5.2.2"
   }

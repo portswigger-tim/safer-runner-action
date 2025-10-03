@@ -24,15 +24,20 @@ export async function parseNetworkLogs(): Promise<NetworkConnection[]> {
     // Get syslog content (exclude Pre- prefixed logs from pre-hook - those are analyzed separately)
     // Space before each pattern ensures we don't match Pre-GitHub-Allow: when looking for GitHub-Allow:
     let syslogOutput = '';
-    await exec.exec('sudo', ['grep', '-E', ' GitHub-Allow: | User-Allow: | Drop-Enforce: | Allow-Analyze: ', '/var/log/syslog'], {
-      listeners: {
-        stdout: (data) => { syslogOutput += data.toString(); }
-      },
-      ignoreReturnCode: true
-    });
+    await exec.exec(
+      'sudo',
+      ['grep', '-E', ' GitHub-Allow: | User-Allow: | Drop-Enforce: | Allow-Analyze: ', '/var/log/syslog'],
+      {
+        listeners: {
+          stdout: data => {
+            syslogOutput += data.toString();
+          }
+        },
+        ignoreReturnCode: true
+      }
+    );
 
     return parseNetworkLogsFromString(syslogOutput);
-
   } catch (error) {
     core.warning(`Failed to parse logs: ${error}`);
     return [];
@@ -47,15 +52,20 @@ export async function parsePreHookNetworkLogs(): Promise<NetworkConnection[]> {
     // Get only Pre- prefixed logs from pre-hook
     // Use space after colon to match log format and avoid partial matches
     let syslogOutput = '';
-    await exec.exec('sudo', ['grep', '-E', ' Pre-GitHub-Allow: | Pre-User-Allow: | Pre-Allow-Analyze: ', '/var/log/syslog'], {
-      listeners: {
-        stdout: (data) => { syslogOutput += data.toString(); }
-      },
-      ignoreReturnCode: true
-    });
+    await exec.exec(
+      'sudo',
+      ['grep', '-E', ' Pre-GitHub-Allow: | Pre-User-Allow: | Pre-Allow-Analyze: ', '/var/log/syslog'],
+      {
+        listeners: {
+          stdout: data => {
+            syslogOutput += data.toString();
+          }
+        },
+        ignoreReturnCode: true
+      }
+    );
 
     return parseNetworkLogsFromString(syslogOutput);
-
   } catch (error) {
     core.warning(`Failed to parse pre-hook network logs: ${error}`);
     return [];

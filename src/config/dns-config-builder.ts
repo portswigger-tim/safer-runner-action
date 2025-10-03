@@ -13,9 +13,9 @@ import { getGitHubRequiredDomains } from '../parsers/github-parser';
  * These are blocked in enforce mode when block-risky-github-subdomains is enabled
  */
 export const RISKY_GITHUB_SUBDOMAINS = [
-  'gist.github.com',              // Gist web interface
-  'gist.githubusercontent.com',   // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
-  'raw.githubusercontent.com'     // Common vector for serving malicious raw file content
+  'gist.github.com', // Gist web interface
+  'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
+  'raw.githubusercontent.com' // Common vector for serving malicious raw file content
 ] as const;
 
 /**
@@ -29,6 +29,7 @@ export interface DnsConfigOptions {
   blockRiskySubdomains: boolean;
   dnsServer?: string;
   dnsUsername?: string;
+  logFile?: string;
 }
 
 export interface DnsConfigResult {
@@ -62,12 +63,20 @@ export function parseAllowedDomains(allowedDomains: string): string[] {
  * @returns DNSmasq configuration and list of blocked subdomains
  */
 export function buildDnsConfig(options: DnsConfigOptions): DnsConfigResult {
-  const { mode, allowedDomains, blockRiskySubdomains, dnsServer = DEFAULT_DNS_SERVER, dnsUsername } = options;
+  const { mode, allowedDomains, blockRiskySubdomains, dnsServer = DEFAULT_DNS_SERVER, dnsUsername, logFile } = options;
 
   let config = `# Enable query logging for summary generation
 log-queries=extra
 
 `;
+
+  // Configure log facility if provided (separate log file)
+  if (logFile) {
+    config += `# Log to dedicated file for clear pre/main separation
+log-facility=${logFile}
+
+`;
+  }
 
   // Configure user for privilege separation if provided
   if (dnsUsername) {

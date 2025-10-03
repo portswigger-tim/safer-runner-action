@@ -177,7 +177,9 @@ export class SystemValidator {
       let fileContent = '';
       const exitCode = await exec.exec('sudo', ['cat', filePath], {
         listeners: {
-          stdout: (data) => { fileContent += data.toString(); }
+          stdout: data => {
+            fileContent += data.toString();
+          }
         },
         ignoreReturnCode: true
       });
@@ -211,7 +213,9 @@ export class SystemValidator {
     let rulesOutput = '';
     await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
       listeners: {
-        stdout: (data) => { rulesOutput += data.toString(); }
+        stdout: data => {
+          rulesOutput += data.toString();
+        }
       },
       ignoreReturnCode: true
     });
@@ -332,7 +336,6 @@ export class SystemValidator {
       }
 
       report += '\n';
-
     } catch (error) {
       report += `Failed to generate report: ${error}\n`;
     }

@@ -52,7 +52,7 @@ async function run(): Promise<void> {
 
     // Configure DNSMasq in ANALYZE mode (permissive, log everything)
     core.info('Configuring DNSMasq in analyze mode...');
-    await setupDNSMasq('analyze', '', false, dnsUser.username);
+    await setupDNSMasq('analyze', '', false, dnsUser.username, '/tmp/pre-dns.log');
 
     // Start services
     core.info('Restarting services...');
@@ -64,7 +64,6 @@ async function run(): Promise<void> {
 
     core.info('✅ Pre-action: Security monitoring active (analyze mode)');
     core.info('   Main action will apply user configuration...');
-
   } catch (error) {
     // Don't fail the workflow if pre-setup fails - log warning and continue
     core.warning(`Pre-action setup encountered an error: ${error}`);

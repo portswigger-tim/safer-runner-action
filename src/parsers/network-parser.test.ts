@@ -1,11 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import {
-  parseNetworkLogsFromString,
-  parseLogLine,
-  deduplicateConnections,
-  NetworkConnection
-} from './network-parser';
+import { parseNetworkLogsFromString, parseLogLine, deduplicateConnections, NetworkConnection } from './network-parser';
 
 describe('Network Parser', () => {
   let fixtureContent: string;
@@ -16,7 +11,8 @@ describe('Network Parser', () => {
 
   describe('parseLogLine', () => {
     it('should parse GitHub-Allow log line correctly', () => {
-      const line = '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=19827 DF PROTO=TCP SPT=37704 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
+      const line =
+        '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=19827 DF PROTO=TCP SPT=37704 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
 
       const result = parseLogLine(line);
 
@@ -29,7 +25,8 @@ describe('Network Parser', () => {
     });
 
     it('should parse User-Allow log line correctly', () => {
-      const line = '2025-10-01T10:53:56.985342+00:00 runnervm3ublj kernel: User-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=44.195.242.49 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=32842 DF PROTO=TCP SPT=55852 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
+      const line =
+        '2025-10-01T10:53:56.985342+00:00 runnervm3ublj kernel: User-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=44.195.242.49 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=32842 DF PROTO=TCP SPT=55852 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
 
       const result = parseLogLine(line);
 
@@ -42,7 +39,8 @@ describe('Network Parser', () => {
     });
 
     it('should parse Drop-Enforce log line correctly', () => {
-      const line = '2025-10-01T10:54:02.901847+00:00 runnervm3ublj kernel: Drop-Enforce: IN= OUT=eth0 SRC=10.1.1.103 DST=8.8.8.8 LEN=79 TOS=0x00 PREC=0x00 TTL=64 ID=9547 PROTO=UDP SPT=38809 DPT=53 LEN=59';
+      const line =
+        '2025-10-01T10:54:02.901847+00:00 runnervm3ublj kernel: Drop-Enforce: IN= OUT=eth0 SRC=10.1.1.103 DST=8.8.8.8 LEN=79 TOS=0x00 PREC=0x00 TTL=64 ID=9547 PROTO=UDP SPT=38809 DPT=53 LEN=59';
 
       const result = parseLogLine(line);
 
@@ -55,7 +53,8 @@ describe('Network Parser', () => {
     });
 
     it('should default to port 443 when DPT is missing', () => {
-      const line = '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60';
+      const line =
+        '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60';
 
       const result = parseLogLine(line);
 
@@ -195,8 +194,10 @@ describe('Network Parser', () => {
 
     it('should respect the 1000 connection limit', () => {
       // Create more than 1000 unique log lines
-      const manyLogs = Array.from({ length: 1100 }, (_, i) =>
-        `2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.${i % 256} DPT=${443 + (i % 100)} WINDOW=64240 RES=0x00 SYN URGP=0`
+      const manyLogs = Array.from(
+        { length: 1100 },
+        (_, i) =>
+          `2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.${i % 256} DPT=${443 + (i % 100)} WINDOW=64240 RES=0x00 SYN URGP=0`
       ).join('\n');
 
       const result = parseNetworkLogsFromString(manyLogs);
@@ -206,8 +207,10 @@ describe('Network Parser', () => {
 
     it('should deduplicate before applying limit', () => {
       // Create many duplicate log lines
-      const duplicateLogs = Array.from({ length: 30 }, () =>
-        '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0'
+      const duplicateLogs = Array.from(
+        { length: 30 },
+        () =>
+          '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0'
       ).join('\n');
 
       const result = parseNetworkLogsFromString(duplicateLogs);

@@ -1,11 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import {
-  parseDnsLogsFromString,
-  parseRequestChains,
-  deduplicateDnsResolutions,
-  DnsResolution
-} from './dns-parser';
+import { parseDnsLogsFromString, parseRequestChains, deduplicateDnsResolutions, DnsResolution } from './dns-parser';
 
 describe('DNS Parser', () => {
   let fixtureContent: string;
@@ -155,9 +150,7 @@ describe('DNS Parser', () => {
 
   describe('deduplicateDnsResolutions', () => {
     it('should keep single IP resolutions as-is', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'api.github.com', ip: '140.82.114.6', status: 'RESOLVED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'api.github.com', ip: '140.82.114.6', status: 'RESOLVED' }];
 
       const result = deduplicateDnsResolutions(resolutions);
 
@@ -312,9 +305,11 @@ describe('DNS Parser', () => {
 
     it('should respect the 1000 resolution limit', () => {
       // Create more than 1000 unique resolutions
-      const manyLogs = Array.from({ length: 1100 }, (_, i) =>
-        `2025-10-01T10:53:56.659901+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 query[A] domain${i}.com from 127.0.0.1\n` +
-        `2025-10-01T10:53:56.664651+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 reply domain${i}.com is 1.2.3.${i % 256}`
+      const manyLogs = Array.from(
+        { length: 1100 },
+        (_, i) =>
+          `2025-10-01T10:53:56.659901+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 query[A] domain${i}.com from 127.0.0.1\n` +
+          `2025-10-01T10:53:56.664651+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 reply domain${i}.com is 1.2.3.${i % 256}`
       ).join('\n');
 
       const result = parseDnsLogsFromString(manyLogs);
@@ -324,9 +319,11 @@ describe('DNS Parser', () => {
 
     it('should deduplicate before applying limit', () => {
       // Create many duplicate resolutions
-      const duplicateLogs = Array.from({ length: 30 }, (_, i) =>
-        `2025-10-01T10:53:56.${String(i).padStart(6, '0')}+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 query[A] test.com from 127.0.0.1\n` +
-        `2025-10-01T10:53:56.${String(i + 1).padStart(6, '0')}+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 reply test.com is 1.2.3.4`
+      const duplicateLogs = Array.from(
+        { length: 30 },
+        (_, i) =>
+          `2025-10-01T10:53:56.${String(i).padStart(6, '0')}+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 query[A] test.com from 127.0.0.1\n` +
+          `2025-10-01T10:53:56.${String(i + 1).padStart(6, '0')}+00:00 runnervm3ublj dnsmasq[3001]: ${i} 127.0.0.1/39637 reply test.com is 1.2.3.4`
       ).join('\n');
 
       const result = parseDnsLogsFromString(duplicateLogs);

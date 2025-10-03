@@ -28,13 +28,14 @@ export async function parseDnsLogs(logFile?: string): Promise<DnsResolution[]> {
     let syslogOutput = '';
     await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', targetFile], {
       listeners: {
-        stdout: (data) => { syslogOutput += data.toString(); }
+        stdout: data => {
+          syslogOutput += data.toString();
+        }
       },
       ignoreReturnCode: true
     });
 
     return parseDnsLogsFromString(syslogOutput);
-
   } catch (error) {
     core.warning(`Failed to parse DNS logs: ${error}`);
     return [];
@@ -59,12 +60,15 @@ export function parseDnsLogsFromString(logContent: string): DnsResolution[] {
  */
 export function parseRequestChains(lines: string[]): DnsResolution[] {
   // Map of request ID to request chain
-  const requestChains = new Map<string, {
-    queriedDomain: string;
-    ips: string[];
-    cnames: string[];
-    status: string;
-  }>();
+  const requestChains = new Map<
+    string,
+    {
+      queriedDomain: string;
+      ips: string[];
+      cnames: string[];
+      status: string;
+    }
+  >();
 
   // IPv4 address pattern
   const ipv4Pattern = '(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)';
@@ -173,18 +177,16 @@ export function deduplicateDnsResolutions(resolutions: DnsResolution[]): DnsReso
   // Process each domain's resolutions
   for (const [domain, domainResolutions] of domainMap) {
     // Sort by priority: RESOLVED > BLOCKED > QUERIED
-    const priorityMap: { [key: string]: number } = { 'RESOLVED': 3, 'BLOCKED': 2, 'QUERIED': 1 };
-    const sortedResolutions = domainResolutions.sort((a, b) =>
-      (priorityMap[b.status] || 0) - (priorityMap[a.status] || 0)
+    const priorityMap: { [key: string]: number } = { RESOLVED: 3, BLOCKED: 2, QUERIED: 1 };
+    const sortedResolutions = domainResolutions.sort(
+      (a, b) => (priorityMap[b.status] || 0) - (priorityMap[a.status] || 0)
     );
 
     const highestPriority = sortedResolutions[0];
 
     if (highestPriority.status === 'RESOLVED') {
       // For resolved domains, collect all unique IPs
-      const resolvedIps = sortedResolutions
-        .filter(r => r.status === 'RESOLVED' && r.ip !== 'CNAME')
-        .map(r => r.ip);
+      const resolvedIps = sortedResolutions.filter(r => r.status === 'RESOLVED' && r.ip !== 'CNAME').map(r => r.ip);
 
       const uniqueIps = [...new Set(resolvedIps)];
 

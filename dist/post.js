@@ -125,10 +125,10 @@ function generateDnsTable(dnsResolutions) {
     return table;
 }
 /**
- * Format DNS resolutions into markdown table with heading
+ * Generate DNS resolution section with heading
  *
  * @param dnsResolutions - List of DNS resolutions
- * @returns Markdown-formatted DNS details with heading
+ * @returns Markdown-formatted DNS section with heading and table
  */
 function generateDnsDetails(dnsResolutions) {
     let details = `## DNS Information\n\n`;
@@ -233,10 +233,14 @@ function formatCnameChain(cnames) {
  */
 function getStatusIcon(status) {
     switch (status) {
-        case 'ALLOWED': return '✅';
-        case 'DENIED': return '❌';
-        case 'ANALYZED': return '📊';
-        default: return '❓';
+        case 'ALLOWED':
+            return '✅';
+        case 'DENIED':
+            return '❌';
+        case 'ANALYZED':
+            return '📊';
+        default:
+            return '❓';
     }
 }
 /**
@@ -247,10 +251,14 @@ function getStatusIcon(status) {
  */
 function getDnsStatusIcon(status) {
     switch (status) {
-        case 'RESOLVED': return '✅';
-        case 'BLOCKED': return '🚫';
-        case 'QUERIED': return '❓';
-        default: return '❓';
+        case 'RESOLVED':
+            return '✅';
+        case 'BLOCKED':
+            return '🚫';
+        case 'QUERIED':
+            return '❓';
+        default:
+            return '❓';
     }
 }
 
@@ -320,7 +328,9 @@ async function parseDnsLogs(logFile) {
         let syslogOutput = '';
         await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', targetFile], {
             listeners: {
-                stdout: (data) => { syslogOutput += data.toString(); }
+                stdout: data => {
+                    syslogOutput += data.toString();
+                }
             },
             ignoreReturnCode: true
         });
@@ -438,14 +448,12 @@ function deduplicateDnsResolutions(resolutions) {
     // Process each domain's resolutions
     for (const [domain, domainResolutions] of domainMap) {
         // Sort by priority: RESOLVED > BLOCKED > QUERIED
-        const priorityMap = { 'RESOLVED': 3, 'BLOCKED': 2, 'QUERIED': 1 };
+        const priorityMap = { RESOLVED: 3, BLOCKED: 2, QUERIED: 1 };
         const sortedResolutions = domainResolutions.sort((a, b) => (priorityMap[b.status] || 0) - (priorityMap[a.status] || 0));
         const highestPriority = sortedResolutions[0];
         if (highestPriority.status === 'RESOLVED') {
             // For resolved domains, collect all unique IPs
-            const resolvedIps = sortedResolutions
-                .filter(r => r.status === 'RESOLVED' && r.ip !== 'CNAME')
-                .map(r => r.ip);
+            const resolvedIps = sortedResolutions.filter(r => r.status === 'RESOLVED' && r.ip !== 'CNAME').map(r => r.ip);
             const uniqueIps = [...new Set(resolvedIps)];
             if (uniqueIps.length === 1) {
                 // Single IP - use that resolution
@@ -500,16 +508,25 @@ exports.isGitHubRelated = isGitHubRelated;
 function getGitHubRequiredDomains() {
     // GitHub required domains (must match main.ts)
     return [
-        'github.com', 'actions.githubusercontent.com', 'api.github.com',
-        'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
+        'github.com',
+        'actions.githubusercontent.com',
+        'api.github.com',
+        'codeload.github.com',
+        'pkg.actions.githubusercontent.com',
+        'ghcr.io',
         'results-receiver.actions.githubusercontent.com',
         // Add all the productionresultssa domains...
         ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
-        'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
-        'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
-        'pkg.github.com', 'pkg-containers.githubusercontent.com',
-        'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
-        'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
+        'objects.githubusercontent.com',
+        'objects-origin.githubusercontent.com',
+        'github-releases.githubusercontent.com',
+        'github-registry-files.githubusercontent.com',
+        'pkg.github.com',
+        'pkg-containers.githubusercontent.com',
+        'github-cloud.githubusercontent.com',
+        'github-cloud.s3.amazonaws.com',
+        'dependabot-actions.githubapp.com',
+        'release-assets.githubusercontent.com',
         'api.snapcraft.io'
     ];
 }
@@ -605,7 +622,9 @@ async function parseNetworkLogs() {
         let syslogOutput = '';
         await exec.exec('sudo', ['grep', '-E', ' GitHub-Allow: | User-Allow: | Drop-Enforce: | Allow-Analyze: ', '/var/log/syslog'], {
             listeners: {
-                stdout: (data) => { syslogOutput += data.toString(); }
+                stdout: data => {
+                    syslogOutput += data.toString();
+                }
             },
             ignoreReturnCode: true
         });
@@ -626,7 +645,9 @@ async function parsePreHookNetworkLogs() {
         let syslogOutput = '';
         await exec.exec('sudo', ['grep', '-E', ' Pre-GitHub-Allow: | Pre-User-Allow: | Pre-Allow-Analyze: ', '/var/log/syslog'], {
             listeners: {
-                stdout: (data) => { syslogOutput += data.toString(); }
+                stdout: data => {
+                    syslogOutput += data.toString();
+                }
             },
             ignoreReturnCode: true
         });
@@ -762,8 +783,9 @@ async function run() {
         core.info('🔍 Analyzing network access logs...');
         // Wait for logs to be written
         await new Promise(resolve => setTimeout(resolve, 2000));
+        // Parse main action logs
         const connections = await (0, network_parser_1.parseNetworkLogs)();
-        const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)();
+        const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/main-dns.log');
         // Parse pre-hook logs if pre-action ran
         let preHookConnections = [];
         let preHookDnsResolutions = [];
@@ -774,11 +796,11 @@ async function run() {
             // Parse pre-hook network connections
             preHookConnections = await (0, network_parser_1.parsePreHookNetworkLogs)();
             core.info(`✅ Found ${preHookConnections.length} pre-hook network connection(s)`);
-            // Parse pre-hook DNS logs if they exist
+            // Parse pre-hook DNS logs from dedicated log file
             try {
                 const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
-                if (fs.existsSync('/tmp/pre-hook-dns-logs.txt')) {
-                    preHookDnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/pre-hook-dns-logs.txt');
+                if (fs.existsSync('/tmp/pre-dns.log')) {
+                    preHookDnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/pre-dns.log');
                     core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
                 }
             }
@@ -814,9 +836,7 @@ function generatePreHookAnalysis(connections, dnsResolutions, preHookConnections
     // Find connections only in pre-hook
     const preHookOnlyConnections = preHookConnections.filter(preConn => !connections.some(mainConn => mainConn.ip === preConn.ip && mainConn.port === preConn.port));
     // Find connections that were pre-hook ANALYZED but later DENIED
-    const blockedAfterPreHook = preHookConnections.filter(preConn => connections.some(mainConn => mainConn.ip === preConn.ip &&
-        mainConn.port === preConn.port &&
-        mainConn.status === 'DENIED'));
+    const blockedAfterPreHook = preHookConnections.filter(preConn => connections.some(mainConn => mainConn.ip === preConn.ip && mainConn.port === preConn.port && mainConn.status === 'DENIED'));
     // Find DNS resolutions only in pre-hook
     const preHookOnlyDns = preHookDnsResolutions.filter(preDns => !dnsResolutions.some(mainDns => mainDns.domain === preDns.domain));
     // Find DNS resolutions that were pre-hook RESOLVED but later BLOCKED
@@ -911,8 +931,7 @@ async function generateJobSummary(connections, dnsResolutions, preHookConnection
     // 1. Network Connection Details
     summary += (0, report_formatter_1.generateNetworkConnectionDetails)(connections);
     // 2. DNS Information
-    summary += `## DNS Information\n\n`;
-    summary += (0, report_formatter_1.generateDnsTable)(dnsResolutions);
+    summary += (0, report_formatter_1.generateDnsDetails)(dnsResolutions);
     // 3. Pre-Hook Security Analysis (collapsible)
     summary += generatePreHookAnalysis(connections, dnsResolutions, preHookConnections, preHookDnsResolutions);
     // 4. Config File Tamper Detection
@@ -1112,7 +1131,9 @@ class SystemValidator {
             let fileContent = '';
             const exitCode = await exec.exec('sudo', ['cat', filePath], {
                 listeners: {
-                    stdout: (data) => { fileContent += data.toString(); }
+                    stdout: data => {
+                        fileContent += data.toString();
+                    }
                 },
                 ignoreReturnCode: true
             });
@@ -1143,7 +1164,9 @@ class SystemValidator {
         let rulesOutput = '';
         await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
             listeners: {
-                stdout: (data) => { rulesOutput += data.toString(); }
+                stdout: data => {
+                    rulesOutput += data.toString();
+                }
             },
             ignoreReturnCode: true
         });

@@ -28,16 +28,9 @@ async function run(): Promise<void> {
     const preUid = core.getState('dns-uid');
     const preActionRan = preUsername && preUid;
 
-    // If pre-action ran, capture its DNS logs before we reconfigure
-    if (preActionRan) {
-      core.info('📋 Capturing pre-hook DNS logs...');
-      await exec.exec('bash', ['-c', 'sudo grep dnsmasq /var/log/syslog | tee /tmp/pre-hook-dns-logs.txt || true']);
-      core.info('✅ Pre-hook DNS logs saved to /tmp/pre-hook-dns-logs.txt');
-    }
-
     let dnsUser: DnsUser;
-    
-    if(!preActionRan) {
+
+    if (!preActionRan) {
       // Pre-action didn't run - do full setup
       core.info('Pre-action did not run - performing full setup...');
 
@@ -73,7 +66,13 @@ async function run(): Promise<void> {
 
     // Configure DNSMasq
     core.info('Configuring DNSMasq...');
-    const blockedSubdomains = await setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUser.username);
+    const blockedSubdomains = await setupDNSMasq(
+      mode,
+      allowedDomains,
+      blockRiskySubdomains,
+      dnsUser.username,
+      '/tmp/main-dns.log'
+    );
 
     if (blockedSubdomains.length > 0) {
       core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
@@ -96,7 +95,6 @@ async function run(): Promise<void> {
     await validator.capturePostSetupBaseline();
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
-
   } catch (error) {
     core.setFailed(`Action failed with error: ${error}`);
   }

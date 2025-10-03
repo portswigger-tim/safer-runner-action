@@ -12,16 +12,25 @@
 export function getGitHubRequiredDomains(): string[] {
   // GitHub required domains (must match main.ts)
   return [
-    'github.com', 'actions.githubusercontent.com', 'api.github.com',
-    'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
+    'github.com',
+    'actions.githubusercontent.com',
+    'api.github.com',
+    'codeload.github.com',
+    'pkg.actions.githubusercontent.com',
+    'ghcr.io',
     'results-receiver.actions.githubusercontent.com',
     // Add all the productionresultssa domains...
-    ...Array.from({length: 20}, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
-    'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
-    'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
-    'pkg.github.com', 'pkg-containers.githubusercontent.com',
-    'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
-    'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
+    ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
+    'objects.githubusercontent.com',
+    'objects-origin.githubusercontent.com',
+    'github-releases.githubusercontent.com',
+    'github-registry-files.githubusercontent.com',
+    'pkg.github.com',
+    'pkg-containers.githubusercontent.com',
+    'github-cloud.githubusercontent.com',
+    'github-cloud.s3.amazonaws.com',
+    'dependabot-actions.githubapp.com',
+    'release-assets.githubusercontent.com',
     'api.snapcraft.io'
   ];
 }
@@ -38,9 +47,7 @@ export function getGitHubRequiredDomains(): string[] {
  */
 export function isGitHubDomain(domain: string, githubDomains: string[]): boolean {
   // Check exact match or if domain is a subdomain of any GitHub domain
-  return githubDomains.some(ghDomain =>
-    domain === ghDomain || domain.endsWith('.' + ghDomain)
-  );
+  return githubDomains.some(ghDomain => domain === ghDomain || domain.endsWith('.' + ghDomain));
 }
 
 /**

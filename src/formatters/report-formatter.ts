@@ -130,10 +130,10 @@ export function generateDnsTable(dnsResolutions: DnsResolution[]): string {
 }
 
 /**
- * Format DNS resolutions into markdown table with heading
+ * Generate DNS resolution section with heading
  *
  * @param dnsResolutions - List of DNS resolutions
- * @returns Markdown-formatted DNS details with heading
+ * @returns Markdown-formatted DNS section with heading and table
  */
 export function generateDnsDetails(dnsResolutions: DnsResolution[]): string {
   let details = `## DNS Information\n\n`;
@@ -251,10 +251,14 @@ export function formatCnameChain(cnames?: string[]): string {
  */
 export function getStatusIcon(status: string): string {
   switch (status) {
-    case 'ALLOWED': return '✅';
-    case 'DENIED': return '❌';
-    case 'ANALYZED': return '📊';
-    default: return '❓';
+    case 'ALLOWED':
+      return '✅';
+    case 'DENIED':
+      return '❌';
+    case 'ANALYZED':
+      return '📊';
+    default:
+      return '❓';
   }
 }
 
@@ -266,9 +270,13 @@ export function getStatusIcon(status: string): string {
  */
 export function getDnsStatusIcon(status: string): string {
   switch (status) {
-    case 'RESOLVED': return '✅';
-    case 'BLOCKED': return '🚫';
-    case 'QUERIED': return '❓';
-    default: return '❓';
+    case 'RESOLVED':
+      return '✅';
+    case 'BLOCKED':
+      return '🚫';
+    case 'QUERIED':
+      return '❓';
+    default:
+      return '❓';
   }
 }

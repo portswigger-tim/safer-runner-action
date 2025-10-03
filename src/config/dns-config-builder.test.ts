@@ -58,6 +58,40 @@ describe('DNS Config Builder', () => {
     });
   });
 
+  describe('buildDnsConfig - log-facility', () => {
+    it('should include log-facility when logFile is provided', () => {
+      const result = buildDnsConfig({
+        mode: 'analyze',
+        allowedDomains: '',
+        blockRiskySubdomains: false,
+        logFile: '/tmp/test-dns.log'
+      });
+
+      expect(result.config).toContain('log-facility=/tmp/test-dns.log');
+    });
+
+    it('should not include log-facility when logFile is not provided', () => {
+      const result = buildDnsConfig({
+        mode: 'analyze',
+        allowedDomains: '',
+        blockRiskySubdomains: false
+      });
+
+      expect(result.config).not.toContain('log-facility=');
+    });
+
+    it('should support different log paths', () => {
+      const result = buildDnsConfig({
+        mode: 'enforce',
+        allowedDomains: '',
+        blockRiskySubdomains: false,
+        logFile: '/var/log/custom-dns.log'
+      });
+
+      expect(result.config).toContain('log-facility=/var/log/custom-dns.log');
+    });
+  });
+
   describe('buildDnsConfig - analyze mode', () => {
     it('should use allow-all DNS policy in analyze mode', () => {
       const result = buildDnsConfig({

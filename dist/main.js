@@ -56,11 +56,18 @@ function parseAllowedDomains(allowedDomains) {
  * @returns DNSmasq configuration and list of blocked subdomains
  */
 function buildDnsConfig(options) {
-    const { mode, allowedDomains, blockRiskySubdomains, dnsServer = exports.DEFAULT_DNS_SERVER, dnsUsername } = options;
+    const { mode, allowedDomains, blockRiskySubdomains, dnsServer = exports.DEFAULT_DNS_SERVER, dnsUsername, logFile } = options;
     let config = `# Enable query logging for summary generation
 log-queries=extra
 
 `;
+    // Configure log facility if provided (separate log file)
+    if (logFile) {
+        config += `# Log to dedicated file for clear pre/main separation
+log-facility=${logFile}
+
+`;
+    }
     // Configure user for privilege separation if provided
     if (dnsUsername) {
         config += `# Run as isolated user for privilege separation
@@ -172,12 +179,6 @@ async function run() {
         const preUsername = core.getState('dns-user');
         const preUid = core.getState('dns-uid');
         const preActionRan = preUsername && preUid;
-        // If pre-action ran, capture its DNS logs before we reconfigure
-        if (preActionRan) {
-            core.info('📋 Capturing pre-hook DNS logs...');
-            await exec.exec('bash', ['-c', 'sudo grep dnsmasq /var/log/syslog | tee /tmp/pre-hook-dns-logs.txt || true']);
-            core.info('✅ Pre-hook DNS logs saved to /tmp/pre-hook-dns-logs.txt');
-        }
         let dnsUser;
         if (!preActionRan) {
             // Pre-action didn't run - do full setup
@@ -210,7 +211,7 @@ async function run() {
         await (0, setup_1.setupDNSConfig)();
         // Configure DNSMasq
         core.info('Configuring DNSMasq...');
-        const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username);
+        const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username, '/tmp/main-dns.log');
         if (blockedSubdomains.length > 0) {
             core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
             for (const subdomain of blockedSubdomains) {
@@ -260,16 +261,25 @@ exports.isGitHubRelated = isGitHubRelated;
 function getGitHubRequiredDomains() {
     // GitHub required domains (must match main.ts)
     return [
-        'github.com', 'actions.githubusercontent.com', 'api.github.com',
-        'codeload.github.com', 'pkg.actions.githubusercontent.com', 'ghcr.io',
+        'github.com',
+        'actions.githubusercontent.com',
+        'api.github.com',
+        'codeload.github.com',
+        'pkg.actions.githubusercontent.com',
+        'ghcr.io',
         'results-receiver.actions.githubusercontent.com',
         // Add all the productionresultssa domains...
         ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
-        'objects.githubusercontent.com', 'objects-origin.githubusercontent.com',
-        'github-releases.githubusercontent.com', 'github-registry-files.githubusercontent.com',
-        'pkg.github.com', 'pkg-containers.githubusercontent.com',
-        'github-cloud.githubusercontent.com', 'github-cloud.s3.amazonaws.com',
-        'dependabot-actions.githubapp.com', 'release-assets.githubusercontent.com',
+        'objects.githubusercontent.com',
+        'objects-origin.githubusercontent.com',
+        'github-releases.githubusercontent.com',
+        'github-registry-files.githubusercontent.com',
+        'pkg.github.com',
+        'pkg-containers.githubusercontent.com',
+        'github-cloud.githubusercontent.com',
+        'github-cloud.s3.amazonaws.com',
+        'dependabot-actions.githubapp.com',
+        'release-assets.githubusercontent.com',
         'api.snapcraft.io'
     ];
 }
@@ -365,16 +375,40 @@ async function createRandomDNSUser() {
         'useradd',
         '--system',
         '--no-create-home',
-        '--shell', '/usr/sbin/nologin',
-        '--uid', uid.toString(),
+        '--shell',
+        '/usr/sbin/nologin',
+        '--uid',
+        uid.toString(),
         username
     ]);
     return { username, uid };
 }
 async function setupIpsets() {
     // Create ipsets for allowlisting
-    await exec.exec('sudo', ['ipset', 'create', 'github', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
-    await exec.exec('sudo', ['ipset', 'create', 'user', 'hash:ip', 'family', 'inet', 'hashsize', '1024', 'maxelem', '10000']);
+    await exec.exec('sudo', [
+        'ipset',
+        'create',
+        'github',
+        'hash:ip',
+        'family',
+        'inet',
+        'hashsize',
+        '1024',
+        'maxelem',
+        '10000'
+    ]);
+    await exec.exec('sudo', [
+        'ipset',
+        'create',
+        'user',
+        'hash:ip',
+        'family',
+        'inet',
+        'hashsize',
+        '1024',
+        'maxelem',
+        '10000'
+    ]);
 }
 async function setupFirewallRules(dnsUid, logPrefix = '') {
     // Flush OUTPUT chain
@@ -383,13 +417,85 @@ async function setupFirewallRules(dnsUid, logPrefix = '') {
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '168.63.129.16', '-j', 'ACCEPT']);
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '169.254.169.254', '-j', 'ACCEPT']);
     // Log GitHub ipset matches
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}GitHub-Allow: `]);
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'github', 'dst', '-j', 'ACCEPT']);
+    await exec.exec('sudo', [
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-m',
+        'set',
+        '--match-set',
+        'github',
+        'dst',
+        '-j',
+        'LOG',
+        `--log-prefix=${logPrefix}GitHub-Allow: `
+    ]);
+    await exec.exec('sudo', [
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-m',
+        'set',
+        '--match-set',
+        'github',
+        'dst',
+        '-j',
+        'ACCEPT'
+    ]);
     // Log user-allowed ipset matches
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'LOG', `--log-prefix=${logPrefix}User-Allow: `]);
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-m', 'set', '--match-set', 'user', 'dst', '-j', 'ACCEPT']);
+    await exec.exec('sudo', [
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-m',
+        'set',
+        '--match-set',
+        'user',
+        'dst',
+        '-j',
+        'LOG',
+        `--log-prefix=${logPrefix}User-Allow: `
+    ]);
+    await exec.exec('sudo', [
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-m',
+        'set',
+        '--match-set',
+        'user',
+        'dst',
+        '-j',
+        'ACCEPT'
+    ]);
     // Allow DNS traffic to our upstream server - only from the random DNS user UID
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', dns_config_builder_1.DEFAULT_DNS_SERVER, '-p', 'udp', '--dport', '53', '-m', 'owner', '--uid-owner', dnsUid.toString(), '-j', 'ACCEPT']);
+    await exec.exec('sudo', [
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-d',
+        dns_config_builder_1.DEFAULT_DNS_SERVER,
+        '-p',
+        'udp',
+        '--dport',
+        '53',
+        '-m',
+        'owner',
+        '--uid-owner',
+        dnsUid.toString(),
+        '-j',
+        'ACCEPT'
+    ]);
 }
 async function setupDNSConfig() {
     // Configure systemd-resolved to use our DNS server
@@ -407,13 +513,14 @@ DNSStubListener=no`;
         input: Buffer.from('nameserver 127.0.0.1\n')
     });
 }
-async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsername) {
+async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsername, logFile) {
     // Build DNS configuration using the config builder module
     const { config: dnsmasqConfig, blockedSubdomains } = (0, dns_config_builder_1.buildDnsConfig)({
         mode: mode,
         allowedDomains,
         blockRiskySubdomains,
-        dnsUsername
+        dnsUsername,
+        logFile
     });
     // Write configuration to file
     await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
@@ -438,7 +545,16 @@ async function finalizeFirewallRules(mode, logPrefix = '') {
     }
     else {
         // Analyze mode: Log traffic that doesn't match any ipset (but still allow it)
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=${logPrefix}Allow-Analyze: `]);
+        await exec.exec('sudo', [
+            'iptables',
+            '-A',
+            'OUTPUT',
+            '-o',
+            'eth0',
+            '-j',
+            'LOG',
+            `--log-prefix=${logPrefix}Allow-Analyze: `
+        ]);
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'ACCEPT']);
     }
 }
@@ -629,7 +745,9 @@ class SystemValidator {
             let fileContent = '';
             const exitCode = await exec.exec('sudo', ['cat', filePath], {
                 listeners: {
-                    stdout: (data) => { fileContent += data.toString(); }
+                    stdout: data => {
+                        fileContent += data.toString();
+                    }
                 },
                 ignoreReturnCode: true
             });
@@ -660,7 +778,9 @@ class SystemValidator {
         let rulesOutput = '';
         await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
             listeners: {
-                stdout: (data) => { rulesOutput += data.toString(); }
+                stdout: data => {
+                    rulesOutput += data.toString();
+                }
             },
             ignoreReturnCode: true
         });

@@ -1,6 +1,6 @@
 import {
   generateNetworkConnectionDetails,
-  generateDnsDetails,
+  generateDnsTable,
   generateConfigurationAdvice,
   formatConnectionStatus,
   formatDnsStatus,
@@ -112,20 +112,17 @@ describe('Report Formatter', () => {
     });
   });
 
-  describe('generateDnsDetails', () => {
+  describe('generateDnsTable', () => {
     it('should handle empty DNS resolutions', () => {
-      const result = generateDnsDetails([]);
+      const result = generateDnsTable([]);
 
-      expect(result).toContain('## DNS Information');
       expect(result).toContain('No DNS resolutions recorded');
     });
 
     it('should format single DNS resolution', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('example.com');
       expect(result).toContain('1.2.3.4');
@@ -138,7 +135,7 @@ describe('Report Formatter', () => {
         { domain: 'github.com', ip: '140.82.121.3', status: 'RESOLVED' }
       ];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       // User DNS should be in main table
       expect(result).toContain('example.com');
@@ -150,11 +147,9 @@ describe('Report Formatter', () => {
     });
 
     it('should format blocked DNS with emoji', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'malicious.com', ip: 'NXDOMAIN', status: 'BLOCKED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'malicious.com', ip: 'NXDOMAIN', status: 'BLOCKED' }];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('🚫 BLOCKED');
       expect(result).toContain('malicious.com');
@@ -165,7 +160,7 @@ describe('Report Formatter', () => {
         { domain: 'example.com', ip: '1.2.3.4, 5.6.7.8, 9.10.11.12', status: 'RESOLVED' }
       ];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('1.2.3.4<br/>5.6.7.8<br/>9.10.11.12');
     });
@@ -176,7 +171,7 @@ describe('Report Formatter', () => {
         { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
       ];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       const lines = result.split('\n').filter(line => line.includes('example.com'));
       expect(lines.length).toBe(1);
@@ -189,7 +184,7 @@ describe('Report Formatter', () => {
         { domain: 'blocked2.com', ip: 'NXDOMAIN', status: 'BLOCKED' }
       ];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('**Total domains:** 3');
       expect(result).toContain('(🛡️ 2 filtered)');
@@ -205,7 +200,7 @@ describe('Report Formatter', () => {
         }
       ];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('example.com');
       expect(result).toContain('1.2.3.4');
@@ -213,11 +208,9 @@ describe('Report Formatter', () => {
     });
 
     it('should display dash when no CNAME chain', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('example.com');
       expect(result).toContain('1.2.3.4');
@@ -226,11 +219,9 @@ describe('Report Formatter', () => {
     });
 
     it('should create valid markdown tables', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('| Domain | CNAME(s) | IP Address(es) | Status |');
       expect(result).toContain('|--------|----------|----------------|--------|');
@@ -242,7 +233,7 @@ describe('Report Formatter', () => {
         { domain: 'productionresultssa0.blob.core.windows.net', ip: '5.6.7.8', status: 'RESOLVED' }
       ];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       // Explicit productionresultssa domains should be in GitHub section
       expect(result).toContain('GitHub Infrastructure DNS');
@@ -291,9 +282,7 @@ describe('Report Formatter', () => {
     });
 
     it('should generate YAML configuration for single domain', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
 
       const result = generateConfigurationAdvice(resolutions);
 
@@ -349,9 +338,7 @@ describe('Report Formatter', () => {
     });
 
     it('should use correct YAML indentation', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
 
       const result = generateConfigurationAdvice(resolutions);
 
@@ -360,9 +347,7 @@ describe('Report Formatter', () => {
     });
 
     it('should include action reference', () => {
-      const resolutions: DnsResolution[] = [
-        { domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }
-      ];
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
 
       const result = generateConfigurationAdvice(resolutions);
 
@@ -517,7 +502,7 @@ describe('Report Formatter', () => {
         { domain: 'test-api.example-domain.com', ip: '1.2.3.4', status: 'RESOLVED' }
       ];
 
-      const result = generateDnsDetails(resolutions);
+      const result = generateDnsTable(resolutions);
 
       expect(result).toContain('test-api.example-domain.com');
     });
