@@ -8,7 +8,8 @@ import {
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules
+  finalizeFirewallRules,
+  disableSudoForRunner
 } from './setup';
 
 async function run(): Promise<void> {
@@ -16,6 +17,7 @@ async function run(): Promise<void> {
     const mode = core.getInput('mode') || 'analyze';
     const allowedDomains = core.getInput('allowed-domains') || '';
     const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
+    const disableSudo = core.getBooleanInput('disable-sudo');
 
     core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
     if (mode === 'enforce' && blockRiskySubdomains) {
@@ -79,6 +81,12 @@ async function run(): Promise<void> {
     core.info('Capturing post-setup security baseline...');
     const validator = new SystemValidator();
     await validator.capturePostSetupBaseline();
+
+    // Disable sudo if requested (must be done LAST, after all setup is complete)
+    if (disableSudo) {
+      core.info('Disabling sudo access for runner user...');
+      await disableSudoForRunner();
+    }
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
   } catch (error) {

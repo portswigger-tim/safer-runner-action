@@ -118,27 +118,15 @@ jobs:
           fi
 
           echo ""
-          echo "=== Auditd Logs (Default Configuration) ==="
-          echo "Auditd service status:"
-          sudo systemctl status auditd --no-pager || echo "Auditd not running"
+          echo "=== Sudo Usage Logs ==="
+          echo "Sudo log file location:"
+          ls -lh /tmp/runner-sudo.log 2>/dev/null || echo "Sudo log file not found"
           echo ""
-          echo "Audit rules currently loaded:"
-          sudo auditctl -l || echo "No audit rules loaded"
+          echo "Sudo log contents:"
+          cat /tmp/runner-sudo.log 2>/dev/null || echo "Could not read sudo log"
           echo ""
-          echo "Raw audit log file location:"
-          sudo ls -lh /var/log/audit/audit.log 2>/dev/null || echo "Audit log file not found at standard location"
-          echo ""
-          echo "Recent audit log entries (last 50 lines):"
-          sudo tail -50 /var/log/audit/audit.log 2>/dev/null || echo "Could not read audit log"
-          echo ""
-          echo "Audit log entries with 'sudo' keyword:"
-          sudo grep -i "sudo" /var/log/audit/audit.log 2>/dev/null | tail -20 || echo "No sudo entries found in audit log"
-          echo ""
-          echo "Audit log entries with 'sudo_execution' key:"
-          sudo grep "sudo_execution" /var/log/audit/audit.log 2>/dev/null | tail -20 || echo "No sudo_execution key found in audit log"
-          echo ""
-          echo "Recent sudo executions via ausearch:"
-          sudo ausearch -k sudo_execution -i 2>/dev/null | head -200 || echo "No sudo events found via ausearch"
+          echo "Count of sudo commands:"
+          wc -l /tmp/runner-sudo.log 2>/dev/null || echo "Could not count sudo commands"
 
       - name: Verify job summary was created
         run: |
@@ -478,3 +466,69 @@ jobs:
           echo ""
           echo "Check the job summary below for the System Integrity Validation Report!"
           echo "It should show ❌ Tampered status for /etc/dnsmasq.conf"
+
+  test-disable-sudo:
+    name: Test Disable Sudo Feature
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify sudo works before action
+        run: |
+          echo "=== Testing sudo BEFORE disabling ==="
+          whoami
+          sudo whoami
+          echo "✅ Sudo is working"
+
+      - name: Apply Safer Runner Action with disable-sudo
+        uses: portswigger-tim/safer-runner-action@main
+        with:
+          mode: 'analyze'
+          disable-sudo: 'true'
+
+      - name: Verify sudo is disabled after action
+        run: |
+          echo "=== Testing sudo AFTER disabling ==="
+
+          echo "Attempting to run sudo command (should fail)..."
+          if sudo whoami 2>&1; then
+            echo "❌ ERROR: Sudo still works! It should have been disabled."
+            exit 1
+          else
+            echo "✅ SUCCESS: Sudo is correctly disabled"
+          fi
+
+      - name: Check sudoers file was renamed
+        run: |
+          echo "=== Checking sudoers file status ==="
+
+          echo "Original file should not exist:"
+          if sudo test -f /etc/sudoers.d/runner; then
+            echo "❌ ERROR: /etc/sudoers.d/runner still exists!"
+            exit 1
+          else
+            echo "✅ /etc/sudoers.d/runner does not exist"
+          fi
+
+          echo ""
+          echo "Disabled file should exist:"
+          if sudo test -f /etc/sudoers.d/runner.disabled-by-safer-runner; then
+            echo "✅ /etc/sudoers.d/runner.disabled-by-safer-runner exists"
+            echo "Content:"
+            sudo cat /etc/sudoers.d/runner.disabled-by-safer-runner
+          else
+            echo "❌ ERROR: Disabled file not found!"
+            exit 1
+          fi
+
+      - name: Verify Docker still works
+        run: |
+          echo "=== Testing Docker access (should still work) ==="
+          docker --version
+          docker ps
+          echo "✅ Docker access still works (runner user still in docker group)"
+
+      - name: Verify log file access still works
+        run: |
+          echo "=== Testing log file access (should still work) ==="
+          # Runner user is in 'adm' group, should be able to read some logs
+          ls -la /var/log/syslog
+          echo "✅ Log file access still works (runner user still in adm group)"

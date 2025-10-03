@@ -39,6 +39,7 @@ npm test             # Run Jest tests only
 
 1. **Pre-hook** (`pre.ts`) - Runs BEFORE main action
    - Establishes analyze mode monitoring
+   - Configures sudo logging to `/tmp/runner-sudo.log`
    - Logs DNS to `/tmp/pre-dns.log`
    - Logs iptables to syslog with `Pre-` prefix
    - Saves DNS user info for main action to reuse
@@ -49,15 +50,16 @@ npm test             # Run Jest tests only
    - Logs DNS to `/tmp/main-dns.log`
    - Logs iptables to syslog (no prefix)
    - Captures security baseline for validation
+   - Optionally disables sudo access for runner user (if `disable-sudo: true`)
 
 3. **Post-action** (`post.ts`) - Runs AFTER workflow completes
    - Parses pre-hook and main logs separately
    - Validates system integrity
-   - Generates comprehensive job summary
+   - Generates comprehensive job summary with sudo usage
 
 ## 🛡️ Security Architecture
 
-### Two-Layer Protection Model
+### Three-Layer Protection Model
 
 1. **DNS Layer (DNSmasq)** - `setup.ts:setupDNSMasq()`
    - Blocks domain resolution for unauthorized domains
@@ -71,6 +73,12 @@ npm test             # Run Jest tests only
    - Uses `ipset` for efficient IP allowlists (github, user)
    - Logs all connection attempts to syslog
    - Log prefixes: `Pre-` for pre-hook, none for main action
+
+3. **Privilege Layer (sudo)** - `setup.ts:setupSudoLogging()` and `disableSudoForRunner()`
+   - **Logging**: All sudo usage logged to `/tmp/runner-sudo.log`
+   - **Disable**: Optionally disable sudo access by renaming `/etc/sudoers.d/runner`
+   - Preserves other group memberships (docker, adm, systemd-journal)
+   - File renamed to `.disabled-by-safer-runner` for debugging/recovery
 
 ### Validation System - `validation.ts`
 
@@ -101,6 +109,12 @@ npm test             # Run Jest tests only
 - Pre-hook prefix: `Pre-GitHub-Allow:`, `Pre-User-Allow:`, `Pre-Allow-Analyze:`
 - Main action prefix: `GitHub-Allow:`, `User-Allow:`, `Drop-Enforce:`, `Allow-Analyze:`
 - Parsed by `parsers/network-parser.ts`
+
+**Sudo Logs** (sudo logfile):
+- All sudo usage logged to `/tmp/runner-sudo.log`
+- Configured via `/etc/sudoers.d/00-sudo-logging`
+- Captures: user, tty, pwd, user, command for every sudo invocation
+- Readable by runner user (no sudo required to view)
 
 ### Post-Action Summary Generation
 

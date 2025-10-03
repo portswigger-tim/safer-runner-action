@@ -326,7 +326,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.setupAuditdRules = setupAuditdRules;
+exports.setupSudoLogging = setupSudoLogging;
+exports.disableSudoForRunner = disableSudoForRunner;
 exports.performInitialSetup = performInitialSetup;
 exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupIpsets = setupIpsets;
@@ -340,36 +341,71 @@ const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const dns_config_builder_1 = __nccwpck_require__(1877);
 /**
- * Configure auditd rules for runtime monitoring
- * Monitors sudo usage and privileged commands
+ * Configure sudo logging to capture all sudo usage
+ * Logs to /tmp/runner-sudo.log for visibility and auditability
  */
-async function setupAuditdRules() {
-    // Monitor all executions of sudo
-    // This captures when sudo is invoked and what command is executed
-    await exec.exec('sudo', [
-        'auditctl',
-        '-a',
-        'always,exit',
-        '-S',
-        'execve',
-        '-F',
-        'exe=/usr/bin/sudo',
-        '-k',
-        'sudo_execution'
-    ]);
+async function setupSudoLogging() {
+    core.info('Configuring sudo logging...');
+    // Create a sudoers.d file to enable logging
+    const logConfig = 'Defaults logfile=/tmp/runner-sudo.log\n';
+    await exec.exec('sudo', ['tee', '/etc/sudoers.d/00-sudo-logging'], {
+        input: Buffer.from(logConfig)
+    });
+    // Set appropriate permissions (must be 0440 or 0400 for sudoers files)
+    await exec.exec('sudo', ['chmod', '0440', '/etc/sudoers.d/00-sudo-logging']);
+    await exec.exec('sudo', ['chown', 'root:root', '/etc/sudoers.d/00-sudo-logging']);
+    // Create the log file and make it readable by the runner
+    await exec.exec('sudo', ['touch', '/tmp/runner-sudo.log']);
+    await exec.exec('sudo', ['chmod', '0644', '/tmp/runner-sudo.log']);
+    core.info('✅ Sudo logging configured to /tmp/runner-sudo.log');
 }
 /**
- * Perform initial system setup: install dependencies, configure auditd, create DNS user, setup ipsets
+ * Disable sudo access for the runner user
+ * This prevents malicious code from using sudo to bypass security controls
+ *
+ * The runner user on GitHub Actions has sudo access via /etc/sudoers.d/runner
+ * which contains: runner ALL=(ALL) NOPASSWD:ALL
+ *
+ * Renaming this file effectively disables all sudo access for the runner user.
+ */
+async function disableSudoForRunner() {
+    // Get the current user (should be 'runner' on GitHub Actions)
+    let currentUser = '';
+    await exec.exec('whoami', [], {
+        listeners: {
+            stdout: (data) => {
+                currentUser += data.toString().trim();
+            }
+        }
+    });
+    core.info(`Disabling sudo access for user: ${currentUser}`);
+    // GitHub Actions runners grant sudo via /etc/sudoers.d/runner file
+    const sudoersFile = `/etc/sudoers.d/${currentUser}`;
+    const disabledFile = `${sudoersFile}.disabled-by-safer-runner`;
+    try {
+        // Check if the sudoers file exists
+        await exec.exec('sudo', ['test', '-f', sudoersFile]);
+        // Rename it to disable sudo access (preserves file for debugging)
+        await exec.exec('sudo', ['mv', sudoersFile, disabledFile]);
+        core.info(`✅ Renamed ${sudoersFile} to ${disabledFile}`);
+        core.info('🔒 Sudo access disabled - runner user can no longer execute privileged commands');
+    }
+    catch (error) {
+        core.warning(`Could not disable sudo: ${error}`);
+        core.warning(`File ${sudoersFile} may not exist`);
+    }
+}
+/**
+ * Perform initial system setup: install dependencies, configure sudo logging, create DNS user, setup ipsets
  * Returns the created DNS user
  */
 async function performInitialSetup() {
     // Install dependencies
     core.info('Installing dependencies...');
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-    await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'auditd', 'audispd-plugins']);
-    // Configure auditd monitoring rules
-    core.info('Configuring auditd monitoring rules...');
-    await setupAuditdRules();
+    await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+    // Configure sudo logging
+    await setupSudoLogging();
     // Create random DNS user for privilege separation
     core.info('Creating isolated DNS user...');
     const dnsUser = await createRandomDNSUser();

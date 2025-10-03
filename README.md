@@ -7,6 +7,8 @@ Network security layer for GitHub Actions runners using DNS filtering (Quad9) an
 - **Dual modes**: `analyze` (monitoring) or `enforce` (blocking)
 - **DNS filtering**: DNSMasq with Quad9 upstream resolver
 - **Firewall rules**: iptables prevents DNS bypass via direct IP connections
+- **Sudo logging**: All sudo usage logged to `/tmp/runner-sudo.log`
+- **Sudo disabling**: Optionally disable sudo access after setup (prevents privilege escalation)
 - **Custom domains**: Add trusted domains via input parameter
 - **Automatic reporting**: Network access provenance in job summaries
 - **Risky subdomain blocking**: Blocks gist.github.com and raw.githubusercontent.com by default in enforce mode
@@ -51,15 +53,18 @@ steps:
 | `allowed-domains` | Additional domains to allow | `''` |
 | `fail-on-tampering` | Fail workflow if security config is tampered | `false` |
 | `block-risky-github-subdomains` | Block gist.github.com and raw.githubusercontent.com in enforce mode | `true` |
+| `disable-sudo` | Disable sudo access for runner user after setup | `false` |
 
 ## How It Works
 
 1. Installs `dnsmasq` and `ipset` packages
-2. Configures iptables rules to control outbound traffic
-3. Configures system DNS to use local DNSMasq instance
-4. Sets up DNS policy with Quad9 upstream resolver
-5. Starts DNSMasq and applies security rules
-6. Post-action analyzes logs and generates network access report
+2. Configures sudo logging to `/tmp/runner-sudo.log`
+3. Configures iptables rules to control outbound traffic
+4. Configures system DNS to use local DNSMasq instance
+5. Sets up DNS policy with Quad9 upstream resolver
+6. Starts DNSMasq and applies security rules
+7. Optionally disables sudo access (if `disable-sudo: true`)
+8. Post-action analyzes logs and generates network access report
 
 GitHub Actions required domains are pre-configured and automatically allowed.
 
@@ -89,6 +94,27 @@ In analyze mode, the report suggests an `allowed-domains` configuration based on
 ### Both Modes
 - Azure metadata service access preserved (required for GitHub Actions)
 - Return traffic for established connections allowed
+- Sudo usage logged to `/tmp/runner-sudo.log` for auditability
+
+### Sudo Disabling (Optional)
+
+When `disable-sudo: true` is set:
+- Sudo access is disabled **after** security setup completes
+- The `/etc/sudoers.d/runner` file is renamed to `.disabled-by-safer-runner`
+- Runner user retains other group memberships (docker, adm, systemd-journal)
+- Prevents malicious code from using sudo to bypass security controls
+- **Note**: This is an advanced security feature - ensure your workflow doesn't require sudo after the action runs
+
+Example with sudo disabled:
+```yaml
+steps:
+  - uses: portswigger-tim/safer-runner-action@v1
+    with:
+      mode: 'enforce'
+      disable-sudo: 'true'
+  - run: npm test  # ✅ Works (no sudo needed)
+  - run: sudo apt-get install something  # ❌ Fails (sudo disabled)
+```
 
 ## Limitations
 
