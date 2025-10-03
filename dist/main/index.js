@@ -220,7 +220,7 @@ async function run() {
         }
         // Start services
         core.info('Restarting services...');
-        await (0, setup_1.restartServices)();
+        await (0, setup_1.restartServices)('/tmp/main-dns.log');
         // Finalize firewall rules
         core.info('Finalizing firewall rules...');
         await (0, setup_1.finalizeFirewallRules)(mode);
@@ -536,15 +536,6 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsern
         dnsUsername,
         logFile
     });
-    // Create log file with proper permissions if specified
-    if (logFile) {
-        // Touch the log file to create it
-        await exec.exec('sudo', ['touch', logFile]);
-        // Set ownership to root (dnsmasq runs as root)
-        await exec.exec('sudo', ['chown', 'root:root', logFile]);
-        // Set permissions to 644 (owner write, group/others read)
-        await exec.exec('sudo', ['chmod', '0644', logFile]);
-    }
     // Write configuration to file
     await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
         input: Buffer.from(dnsmasqConfig)
@@ -554,10 +545,17 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsern
     await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
     return blockedSubdomains;
 }
-async function restartServices() {
+async function restartServices(logFile) {
     // Restart systemd-resolved and start dnsmasq
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
     await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
+    // After dnsmasq starts and creates log files, make them readable by all
+    if (logFile) {
+        // Wait a moment for dnsmasq to create the log file
+        await new Promise(resolve => setTimeout(resolve, 500));
+        // Make log file world-readable (dnsmasq creates it as 660)
+        await exec.exec('sudo', ['chmod', '0644', logFile]);
+    }
 }
 async function finalizeFirewallRules(mode, logPrefix = '') {
     if (mode === 'enforce') {

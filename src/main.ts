@@ -83,7 +83,7 @@ async function run(): Promise<void> {
 
     // Start services
     core.info('Restarting services...');
-    await restartServices();
+    await restartServices('/tmp/main-dns.log');
 
     // Finalize firewall rules
     core.info('Finalizing firewall rules...');

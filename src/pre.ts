@@ -56,7 +56,7 @@ async function run(): Promise<void> {
 
     // Start services
     core.info('Restarting services...');
-    await restartServices();
+    await restartServices('/tmp/pre-dns.log');
 
     // Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
     core.info('Finalizing analyze mode rules...');
