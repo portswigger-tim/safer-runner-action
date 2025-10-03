@@ -79,7 +79,14 @@ jobs:
         run: |
           echo "Testing custom allowed domain..."
           curl -I https://httpbin.org/get || { echo "Custom domain failed"; exit 1; }
-      
+
+      - name: Test sudo commands for configuration advice
+        run: |
+          echo "Testing sudo commands (to generate configuration advice)..."
+          sudo docker --version
+          sudo whoami
+          sudo cat /etc/os-release
+
       - name: Test localhost DNS resolution
         run: |
           echo "Testing localhost DNS resolution in analyze mode..."
@@ -522,6 +529,13 @@ jobs:
           sudo npm --version
           echo "✅ Sudo is unrestricted"
 
+      - name: Debug executable paths
+        run: |
+          echo "=== Finding executable paths ==="
+          echo "docker: $(which docker)"
+          echo "npm: $(which npm)"
+          echo "whoami: $(which whoami)"
+
       - name: Apply Safer Runner Action with custom sudo-config
         uses: portswigger-tim/safer-runner-action@main
         with:
@@ -529,6 +543,11 @@ jobs:
           sudo-config: |
             runner ALL=(ALL) NOPASSWD: /usr/bin/docker
             runner ALL=(ALL) NOPASSWD: /usr/bin/npm
+
+      - name: Debug sudoers file after action
+        run: |
+          echo "=== Checking sudoers configuration ==="
+          sudo cat /etc/sudoers.d/runner || echo "File not found"
 
       - name: Verify restricted sudo commands work
         run: |
