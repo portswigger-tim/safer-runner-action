@@ -100,11 +100,14 @@ jobs:
           echo "Auditd service status:"
           sudo systemctl status auditd --no-pager || echo "Auditd not running"
           echo ""
-          echo "Recent auditd events:"
-          sudo ausearch -ts recent -i 2>/dev/null | head -100 || echo "No auditd events found or ausearch failed"
-          echo ""
           echo "Audit rules currently loaded:"
           sudo auditctl -l || echo "No audit rules loaded"
+          echo ""
+          echo "Recent sudo executions captured by auditd:"
+          sudo ausearch -k sudo_execution -i 2>/dev/null | head -200 || echo "No sudo events found"
+          echo ""
+          echo "Summary of sudo commands:"
+          sudo ausearch -k sudo_execution --format text 2>/dev/null | grep -E "^type=EXECVE" | head -50 || echo "No sudo command details found"
 
       - name: Verify job summary was created
         run: |
