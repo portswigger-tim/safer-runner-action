@@ -373,7 +373,8 @@ async function setupSudoLogging(logFile) {
  * - Query iptables rules for firewall validation
  * - Parse DNS and network logs for reporting
  *
- * These commands are excluded from sudo logging to prevent noise in the audit trail.
+ * Uses Cmnd_Alias and Defaults!<alias> !log_allowed to exclude these commands
+ * from sudo logging (they're internal validation, not user workflow commands).
  *
  * @param username - The username to generate rules for (default: 'runner')
  * @returns Sudoers configuration string with required commands
@@ -382,19 +383,23 @@ function getRequiredSudoCommands(username) {
     return `
 # Required commands for post-action validation and reporting
 # These are automatically added by safer-runner-action
-# !logfile excludes these commands from sudo logs (they're internal validation, not user workflow commands)
 
-# Allow reading configuration files for checksum validation
-${username} ALL=(ALL) NOPASSWD, !logfile: /usr/bin/cat /etc/dnsmasq.conf
-${username} ALL=(ALL) NOPASSWD, !logfile: /usr/bin/cat /etc/resolv.conf
-${username} ALL=(ALL) NOPASSWD, !logfile: /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
+# Define command alias for validation commands
+Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
+                                      /usr/bin/cat /etc/resolv.conf, \\
+                                      /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
+                                      /usr/sbin/iptables -L * -n --line-numbers, \\
+                                      /usr/bin/grep -E * /var/log/syslog, \\
+                                      /usr/bin/grep -E * /tmp/pre-dns.log, \\
+                                      /usr/bin/grep -E * /tmp/main-dns.log, \\
+                                      /usr/bin/grep -E * /tmp/pre-sudo.log, \\
+                                      /usr/bin/grep -E * /tmp/main-sudo.log
 
-# Allow reading iptables rules for integrity validation
-${username} ALL=(ALL) NOPASSWD, !logfile: /usr/sbin/iptables -L * -n --line-numbers
+# Exclude validation commands from sudo logging
+Defaults!SAFER_RUNNER_VALIDATION !log_allowed
 
-# Allow parsing DNS and network logs for post-action reporting
-${username} ALL=(ALL) NOPASSWD, !logfile: /usr/bin/grep -E * /var/log/syslog
-${username} ALL=(ALL) NOPASSWD, !logfile: /usr/bin/grep -E * /tmp/*
+# Allow validation commands without password
+${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 `;
 }
 /**
