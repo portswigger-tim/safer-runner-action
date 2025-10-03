@@ -234,6 +234,7 @@ jobs:
         image: nginx:alpine
         ports:
           - 80/tcp
+        options: --restart always
     steps:
       - name: Apply Safer Runner Action (Enforce Mode)
         uses: portswigger-tim/safer-runner-action@main
