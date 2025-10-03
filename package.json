@@ -4,9 +4,9 @@
   "description": "Network security layer for GitHub Actions with DNS filtering and log analysis",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc && ncc build lib/main.js -o dist/main --license licenses.txt && mv dist/main/index.js dist/main.js",
-    "build:pre": "ncc build lib/pre.js -o dist/pre --license licenses.txt && mv dist/pre/index.js dist/pre.js",
-    "build:post": "ncc build lib/post.js -o dist/post --license licenses.txt && mv dist/post/index.js dist/post.js",
+    "build": "tsc && ncc build lib/main.js -o dist/main --license licenses.txt",
+    "build:pre": "ncc build lib/pre.js -o dist/pre --license licenses.txt",
+    "build:post": "ncc build lib/post.js -o dist/post --license licenses.txt",
     "clean": "rm -rf dist lib",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
