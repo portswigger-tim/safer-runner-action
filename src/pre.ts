@@ -6,7 +6,8 @@ import {
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules
+  finalizeFirewallRules,
+  setupSudoLogging
 } from './setup';
 
 /**
@@ -49,6 +50,11 @@ async function run(): Promise<void> {
     // Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
     core.info('Finalizing analyze mode rules...');
     await finalizeFirewallRules('analyze', 'Pre-');
+
+    // Setup sudo logging AFTER all security configuration is complete
+    // This captures sudo usage by other actions' pre-hooks
+    core.info('Configuring sudo logging for pre-hook monitoring...');
+    await setupSudoLogging('/tmp/pre-sudo.log');
 
     core.info('✅ Pre-action: Security monitoring active (analyze mode)');
     core.info('   Main action will apply user configuration...');

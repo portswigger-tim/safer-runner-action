@@ -8,6 +8,7 @@
 import { NetworkConnection } from '../parsers/network-parser';
 import { DnsResolution } from '../parsers/dns-parser';
 import { isGitHubRelated } from '../parsers/github-parser';
+import { SudoCommand } from '../parsers/sudo-parser';
 
 /**
  * Generate network connection table (without heading)
@@ -175,28 +176,107 @@ function extractAllowedDomains(dnsResolutions: DnsResolution[]): string[] {
  * Generate configuration advice for analyze mode
  *
  * @param dnsResolutions - List of DNS resolutions to analyze
+ * @param sudoCommands - List of sudo commands executed (optional)
+ * @param username - Username for sudoers config (default: 'runner')
  * @returns Markdown-formatted configuration advice
  */
-export function generateConfigurationAdvice(dnsResolutions: DnsResolution[]): string {
+export function generateConfigurationAdvice(
+  dnsResolutions: DnsResolution[],
+  sudoCommands?: SudoCommand[],
+  username: string = 'runner'
+): string {
   const suggestedDomains = extractAllowedDomains(dnsResolutions);
 
-  if (suggestedDomains.length === 0) {
-    return `## Configuration Advice\n\nNo additional domains detected for allowlist configuration.\n\n`;
-  }
-
   let advice = `## Configuration Advice\n\n`;
-  advice += `To run in enforce mode with the domains accessed in this workflow, add these domains to your configuration:\n\n`;
-  advice += `\`\`\`yaml\n`;
-  advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-  advice += `  with:\n`;
-  advice += `    mode: 'enforce'\n`;
-  advice += `    allowed-domains: |\n`;
 
-  for (const domain of suggestedDomains) {
-    advice += `      ${domain}\n`;
+  // DNS/Domain configuration advice
+  if (suggestedDomains.length === 0) {
+    advice += `No additional domains detected for allowlist configuration.\n\n`;
+  } else {
+    advice += `### 🌐 Network Access\n\n`;
+    advice += `To run in enforce mode with the domains accessed in this workflow, add these domains to your configuration:\n\n`;
+    advice += `\`\`\`yaml\n`;
+    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+    advice += `  with:\n`;
+    advice += `    mode: 'enforce'\n`;
+    advice += `    allowed-domains: |\n`;
+
+    for (const domain of suggestedDomains) {
+      advice += `      ${domain}\n`;
+    }
+
+    advice += `\`\`\`\n\n`;
   }
 
-  advice += `\`\`\`\n\n`;
+  // Sudo configuration advice
+  if (sudoCommands && sudoCommands.length > 0) {
+    advice += `### 🔐 Sudo Access\n\n`;
+    advice += `Your workflow used **${sudoCommands.length}** sudo command${sudoCommands.length === 1 ? '' : 's'}. `;
+    advice += `Consider restricting sudo access to only these specific commands:\n\n`;
+
+    // Generate sudoers configuration
+    advice += '```yaml\n';
+    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+    advice += `  with:\n`;
+    advice += `    mode: enforce\n`;
+
+    // Add allowed-domains if we have them
+    if (suggestedDomains.length > 0) {
+      advice += `    allowed-domains: |\n`;
+      for (const domain of suggestedDomains) {
+        advice += `      ${domain}\n`;
+      }
+    }
+
+    advice += `    sudo-config: |\n`;
+
+    // Group commands by executable
+    const commandsByExecutable = new Map<string, Set<string>>();
+
+    for (const cmd of sudoCommands) {
+      if (!commandsByExecutable.has(cmd.command)) {
+        commandsByExecutable.set(cmd.command, new Set());
+      }
+      commandsByExecutable.get(cmd.command)!.add(cmd.args);
+    }
+
+    // Generate sudoers rules with proper indentation
+    for (const [executable, argsSet] of commandsByExecutable.entries()) {
+      const args = Array.from(argsSet);
+
+      if (args.length === 1 && args[0] === '') {
+        // No arguments - allow bare command
+        advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
+      } else if (args.length === 1) {
+        // Single argument pattern - allow specific invocation
+        advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable} ${args[0]}\n`;
+      } else {
+        // Multiple argument patterns - allow executable with any args
+        advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
+      }
+    }
+
+    advice += '```\n\n';
+
+    // Add security note
+    advice += `> **Security Note**: This configuration follows the principle of least privilege by restricting network access to specific domains and sudo access to specific commands.\n\n`;
+  } else if (sudoCommands && sudoCommands.length === 0) {
+    advice += `### 🔐 Sudo Access\n\n`;
+    advice += `No sudo commands were used during this workflow. You can use \`disable-sudo: true\` to completely disable sudo access:\n\n`;
+    advice += `\`\`\`yaml\n`;
+    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+    advice += `  with:\n`;
+    advice += `    mode: enforce\n`;
+    if (suggestedDomains.length > 0) {
+      advice += `    allowed-domains: |\n`;
+      for (const domain of suggestedDomains) {
+        advice += `      ${domain}\n`;
+      }
+    }
+    advice += `    disable-sudo: true\n`;
+    advice += `\`\`\`\n\n`;
+  }
+
   return advice;
 }
 

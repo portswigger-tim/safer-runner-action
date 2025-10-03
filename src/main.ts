@@ -9,7 +9,9 @@ import {
   setupDNSMasq,
   restartServices,
   finalizeFirewallRules,
-  disableSudoForRunner
+  disableSudoForRunner,
+  applyCustomSudoConfig,
+  setupSudoLogging
 } from './setup';
 
 async function run(): Promise<void> {
@@ -18,6 +20,19 @@ async function run(): Promise<void> {
     const allowedDomains = core.getInput('allowed-domains') || '';
     const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
     const disableSudo = core.getBooleanInput('disable-sudo');
+    const sudoConfig = core.getInput('sudo-config') || '';
+
+    // Validate sudo-related inputs
+    if (disableSudo && sudoConfig) {
+      core.warning(
+        '⚠️ Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).'
+      );
+    }
+
+    // Remove sudo logging config from pre-hook to stop capturing in pre-sudo.log
+    // We'll reconfigure it at the end of main setup to capture only workflow commands
+    core.info('Removing pre-hook sudo logging configuration...');
+    await exec.exec('sudo', ['rm', '-f', '/etc/sudoers.d/00-sudo-logging']);
 
     core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
     if (mode === 'enforce' && blockRiskySubdomains) {
@@ -82,10 +97,18 @@ async function run(): Promise<void> {
     const validator = new SystemValidator();
     await validator.capturePostSetupBaseline();
 
-    // Disable sudo if requested (must be done LAST, after all setup is complete)
+    // Setup sudo logging AFTER all security configuration is complete
+    // This captures sudo usage during the workflow execution only
+    core.info('Configuring sudo logging for workflow monitoring...');
+    await setupSudoLogging('/tmp/main-sudo.log');
+
+    // Apply sudo configuration (must be done LAST, after sudo logging is configured)
     if (disableSudo) {
       core.info('Disabling sudo access for runner user...');
       await disableSudoForRunner();
+    } else if (sudoConfig) {
+      core.info('Applying custom sudo configuration...');
+      await applyCustomSudoConfig(sudoConfig);
     }
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);

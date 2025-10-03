@@ -166,24 +166,92 @@ function extractAllowedDomains(dnsResolutions) {
  * Generate configuration advice for analyze mode
  *
  * @param dnsResolutions - List of DNS resolutions to analyze
+ * @param sudoCommands - List of sudo commands executed (optional)
+ * @param username - Username for sudoers config (default: 'runner')
  * @returns Markdown-formatted configuration advice
  */
-function generateConfigurationAdvice(dnsResolutions) {
+function generateConfigurationAdvice(dnsResolutions, sudoCommands, username = 'runner') {
     const suggestedDomains = extractAllowedDomains(dnsResolutions);
-    if (suggestedDomains.length === 0) {
-        return `## Configuration Advice\n\nNo additional domains detected for allowlist configuration.\n\n`;
-    }
     let advice = `## Configuration Advice\n\n`;
-    advice += `To run in enforce mode with the domains accessed in this workflow, add these domains to your configuration:\n\n`;
-    advice += `\`\`\`yaml\n`;
-    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-    advice += `  with:\n`;
-    advice += `    mode: 'enforce'\n`;
-    advice += `    allowed-domains: |\n`;
-    for (const domain of suggestedDomains) {
-        advice += `      ${domain}\n`;
+    // DNS/Domain configuration advice
+    if (suggestedDomains.length === 0) {
+        advice += `No additional domains detected for allowlist configuration.\n\n`;
     }
-    advice += `\`\`\`\n\n`;
+    else {
+        advice += `### 🌐 Network Access\n\n`;
+        advice += `To run in enforce mode with the domains accessed in this workflow, add these domains to your configuration:\n\n`;
+        advice += `\`\`\`yaml\n`;
+        advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+        advice += `  with:\n`;
+        advice += `    mode: 'enforce'\n`;
+        advice += `    allowed-domains: |\n`;
+        for (const domain of suggestedDomains) {
+            advice += `      ${domain}\n`;
+        }
+        advice += `\`\`\`\n\n`;
+    }
+    // Sudo configuration advice
+    if (sudoCommands && sudoCommands.length > 0) {
+        advice += `### 🔐 Sudo Access\n\n`;
+        advice += `Your workflow used **${sudoCommands.length}** sudo command${sudoCommands.length === 1 ? '' : 's'}. `;
+        advice += `Consider restricting sudo access to only these specific commands:\n\n`;
+        // Generate sudoers configuration
+        advice += '```yaml\n';
+        advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+        advice += `  with:\n`;
+        advice += `    mode: enforce\n`;
+        // Add allowed-domains if we have them
+        if (suggestedDomains.length > 0) {
+            advice += `    allowed-domains: |\n`;
+            for (const domain of suggestedDomains) {
+                advice += `      ${domain}\n`;
+            }
+        }
+        advice += `    sudo-config: |\n`;
+        // Group commands by executable
+        const commandsByExecutable = new Map();
+        for (const cmd of sudoCommands) {
+            if (!commandsByExecutable.has(cmd.command)) {
+                commandsByExecutable.set(cmd.command, new Set());
+            }
+            commandsByExecutable.get(cmd.command).add(cmd.args);
+        }
+        // Generate sudoers rules with proper indentation
+        for (const [executable, argsSet] of commandsByExecutable.entries()) {
+            const args = Array.from(argsSet);
+            if (args.length === 1 && args[0] === '') {
+                // No arguments - allow bare command
+                advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
+            }
+            else if (args.length === 1) {
+                // Single argument pattern - allow specific invocation
+                advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable} ${args[0]}\n`;
+            }
+            else {
+                // Multiple argument patterns - allow executable with any args
+                advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
+            }
+        }
+        advice += '```\n\n';
+        // Add security note
+        advice += `> **Security Note**: This configuration follows the principle of least privilege by restricting network access to specific domains and sudo access to specific commands.\n\n`;
+    }
+    else if (sudoCommands && sudoCommands.length === 0) {
+        advice += `### 🔐 Sudo Access\n\n`;
+        advice += `No sudo commands were used during this workflow. You can use \`disable-sudo: true\` to completely disable sudo access:\n\n`;
+        advice += `\`\`\`yaml\n`;
+        advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
+        advice += `  with:\n`;
+        advice += `    mode: enforce\n`;
+        if (suggestedDomains.length > 0) {
+            advice += `    allowed-domains: |\n`;
+            for (const domain of suggestedDomains) {
+                advice += `      ${domain}\n`;
+            }
+        }
+        advice += `    disable-sudo: true\n`;
+        advice += `\`\`\`\n\n`;
+    }
     return advice;
 }
 /**
@@ -747,6 +815,116 @@ function deduplicateConnections(connections) {
 
 /***/ }),
 
+/***/ 7516:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Parser for sudo log files
+ * Extracts command execution patterns from /tmp/runner-sudo.log
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSudoLogLine = parseSudoLogLine;
+exports.deduplicateSudoCommands = deduplicateSudoCommands;
+exports.parseSudoLogsFromString = parseSudoLogsFromString;
+exports.generateSudoersConfig = generateSudoersConfig;
+/**
+ * Parse a single sudo log entry
+ * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
+ */
+function parseSudoLogLine(line) {
+    // Match sudo log format with timestamp
+    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
+    if (!match) {
+        return null;
+    }
+    const [, timestamp, user, targetUser, fullCommand] = match;
+    // Split command and args
+    const commandParts = fullCommand.trim().split(/\s+/);
+    const command = commandParts[0];
+    const args = commandParts.slice(1).join(' ');
+    return {
+        timestamp,
+        user,
+        targetUser,
+        command,
+        args
+    };
+}
+/**
+ * Deduplicate sudo commands by command+args combination
+ */
+function deduplicateSudoCommands(commands) {
+    const seen = new Set();
+    const deduplicated = [];
+    for (const cmd of commands) {
+        const key = `${cmd.command} ${cmd.args}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            deduplicated.push(cmd);
+        }
+    }
+    return deduplicated;
+}
+/**
+ * Parse sudo logs from string content
+ */
+function parseSudoLogsFromString(content) {
+    const lines = content.split('\n');
+    const commands = [];
+    for (const line of lines) {
+        const cmd = parseSudoLogLine(line);
+        if (cmd) {
+            commands.push(cmd);
+        }
+    }
+    // Deduplicate and limit to 1000 commands
+    const deduplicated = deduplicateSudoCommands(commands);
+    return deduplicated.slice(0, 1000);
+}
+/**
+ * Convert sudo commands to sudoers config format
+ * Groups commands by executable and generates appropriate rules
+ *
+ * Note: No filtering needed - commands are captured after setup is complete
+ */
+function generateSudoersConfig(commands, username = 'runner') {
+    if (commands.length === 0) {
+        return '';
+    }
+    // Group commands by executable
+    const commandsByExecutable = new Map();
+    for (const cmd of commands) {
+        if (!commandsByExecutable.has(cmd.command)) {
+            commandsByExecutable.set(cmd.command, new Set());
+        }
+        commandsByExecutable.get(cmd.command).add(cmd.args);
+    }
+    // Generate sudoers rules
+    const rules = [];
+    for (const [executable, argsSet] of commandsByExecutable.entries()) {
+        const args = Array.from(argsSet);
+        if (args.length === 1 && args[0] === '') {
+            // No arguments - allow bare command
+            rules.push(`${username} ALL=(ALL) NOPASSWD: ${executable}`);
+        }
+        else if (args.length === 1) {
+            // Single argument pattern - allow specific invocation
+            rules.push(`${username} ALL=(ALL) NOPASSWD: ${executable} ${args[0]}`);
+        }
+        else {
+            // Multiple argument patterns - allow executable with any args
+            rules.push(`${username} ALL=(ALL) NOPASSWD: ${executable}`);
+            rules.push(`# Used with: ${args.slice(0, 3).join(', ')}${args.length > 3 ? ', ...' : ''}`);
+        }
+    }
+    return rules.join('\n');
+}
+
+
+/***/ }),
+
 /***/ 5960:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -790,6 +968,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const validation_1 = __nccwpck_require__(8449);
 const network_parser_1 = __nccwpck_require__(8089);
 const dns_parser_1 = __nccwpck_require__(1106);
+const sudo_parser_1 = __nccwpck_require__(7516);
 const report_formatter_1 = __nccwpck_require__(5601);
 async function run() {
     try {
@@ -799,9 +978,23 @@ async function run() {
         // Parse main action logs
         const connections = await (0, network_parser_1.parseNetworkLogs)();
         const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/main-dns.log');
+        // Parse main sudo logs (workflow commands only)
+        let sudoCommands = [];
+        try {
+            const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
+            if (fs.existsSync('/tmp/main-sudo.log')) {
+                const sudoLogContent = fs.readFileSync('/tmp/main-sudo.log', 'utf-8');
+                sudoCommands = (0, sudo_parser_1.parseSudoLogsFromString)(sudoLogContent);
+                core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
+            }
+        }
+        catch (error) {
+            core.warning(`Could not parse main sudo logs: ${error}`);
+        }
         // Parse pre-hook logs if pre-action ran
         let preHookConnections = [];
         let preHookDnsResolutions = [];
+        let preHookSudoCommands = [];
         // Check if pre-action ran by looking for DNS user state
         const preUsername = core.getState('dns-user');
         if (preUsername) {
@@ -816,9 +1009,16 @@ async function run() {
                     preHookDnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/pre-dns.log');
                     core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
                 }
+                // Parse pre-hook sudo logs (other actions' pre-hooks only)
+                // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
+                if (fs.existsSync('/tmp/pre-sudo.log')) {
+                    const preSudoLogContent = fs.readFileSync('/tmp/pre-sudo.log', 'utf-8');
+                    preHookSudoCommands = (0, sudo_parser_1.parseSudoLogsFromString)(preSudoLogContent);
+                    core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
+                }
             }
             catch (error) {
-                core.warning(`Could not parse pre-hook DNS logs: ${error}`);
+                core.warning(`Could not parse pre-hook logs: ${error}`);
             }
         }
         // Verify system integrity against post-setup baseline
@@ -831,7 +1031,7 @@ async function run() {
             core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
             return; // Exit early - the validation report will still be in the logs above
         }
-        await generateJobSummary(connections, dnsResolutions, preHookConnections, preHookDnsResolutions, validationReport);
+        await generateJobSummary(connections, dnsResolutions, sudoCommands, preHookConnections, preHookDnsResolutions, preHookSudoCommands, validationReport);
         core.info('✅ Network access summary generated');
     }
     catch (error) {
@@ -840,23 +1040,37 @@ async function run() {
     }
 }
 /**
- * Generate simplified pre-hook analysis section with network connections and DNS info
+ * Generate simplified pre-hook analysis section with network connections, DNS, and sudo info
  */
-function generatePreHookAnalysis(preHookConnections, preHookDnsResolutions) {
+function generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preHookSudoCommands) {
     // If no pre-hook activity, don't show the section
-    if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0) {
+    if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0 && preHookSudoCommands.length === 0) {
         return '';
     }
     let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
-    report += `This section shows network activity captured during pre-hook monitoring, before your workflow steps executed.\n\n`;
+    report += `This section shows activity captured during pre-hook monitoring (other actions' pre-hooks), before your workflow steps executed.\n\n`;
     // Network Connection Details
     report += (0, report_formatter_1.generateNetworkConnectionDetails)(preHookConnections);
     // DNS Information
     report += (0, report_formatter_1.generateDnsDetails)(preHookDnsResolutions);
+    // Sudo Commands
+    if (preHookSudoCommands.length > 0) {
+        report += `## Sudo Commands\n\n`;
+        report += `Pre-hook executed **${preHookSudoCommands.length}** sudo command${preHookSudoCommands.length === 1 ? '' : 's'}:\n\n`;
+        report += `| Command | Arguments |\n`;
+        report += `|---------|----------|\n`;
+        for (const cmd of preHookSudoCommands.slice(0, 50)) {
+            report += `| \`${cmd.command}\` | \`${cmd.args || '(none)'}\` |\n`;
+        }
+        if (preHookSudoCommands.length > 50) {
+            report += `\n*Showing first 50 of ${preHookSudoCommands.length} commands*\n`;
+        }
+        report += `\n`;
+    }
     report += `</details>\n\n`;
     return report;
 }
-async function generateJobSummary(connections, dnsResolutions, preHookConnections, preHookDnsResolutions, validationReport) {
+async function generateJobSummary(connections, dnsResolutions, sudoCommands, preHookConnections, preHookDnsResolutions, preHookSudoCommands, validationReport) {
     const mode = core.getInput('mode') || 'analyze';
     const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
     const jobName = process.env.GITHUB_JOB || 'unknown';
@@ -883,8 +1097,8 @@ async function generateJobSummary(connections, dnsResolutions, preHookConnection
     summary += (0, report_formatter_1.generateDnsDetails)(dnsResolutions);
     summary += `---\n\n`;
     // 3. Pre-Hook Security Analysis (collapsible)
-    summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions);
-    if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0) {
+    summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preHookSudoCommands);
+    if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0 || preHookSudoCommands.length > 0) {
         summary += `---\n\n`;
     }
     // 4. Config File Tamper Detection
@@ -892,7 +1106,7 @@ async function generateJobSummary(connections, dnsResolutions, preHookConnection
     summary += `---\n\n`;
     // 5. Configuration Advice (for analyze mode only)
     if (mode === 'analyze') {
-        summary += (0, report_formatter_1.generateConfigurationAdvice)(dnsResolutions);
+        summary += (0, report_formatter_1.generateConfigurationAdvice)(dnsResolutions, sudoCommands);
         summary += `---\n\n`;
     }
     summary += `*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;

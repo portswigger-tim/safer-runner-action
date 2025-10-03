@@ -270,6 +270,10 @@ async function run() {
         // Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
         core.info('Finalizing analyze mode rules...');
         await (0, setup_1.finalizeFirewallRules)('analyze', 'Pre-');
+        // Setup sudo logging AFTER all security configuration is complete
+        // This captures sudo usage by other actions' pre-hooks
+        core.info('Configuring sudo logging for pre-hook monitoring...');
+        await (0, setup_1.setupSudoLogging)('/tmp/pre-sudo.log');
         core.info('✅ Pre-action: Security monitoring active (analyze mode)');
         core.info('   Main action will apply user configuration...');
     }
@@ -327,6 +331,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.setupSudoLogging = setupSudoLogging;
+exports.applyCustomSudoConfig = applyCustomSudoConfig;
 exports.disableSudoForRunner = disableSudoForRunner;
 exports.performInitialSetup = performInitialSetup;
 exports.createRandomDNSUser = createRandomDNSUser;
@@ -342,12 +347,14 @@ const crypto = __importStar(__nccwpck_require__(6982));
 const dns_config_builder_1 = __nccwpck_require__(1877);
 /**
  * Configure sudo logging to capture all sudo usage
- * Logs to /tmp/runner-sudo.log for visibility and auditability
+ * Logs to specified file for visibility and auditability
+ *
+ * @param logFile - Path to sudo log file (e.g., /tmp/pre-sudo.log or /tmp/main-sudo.log)
  */
-async function setupSudoLogging() {
-    core.info('Configuring sudo logging...');
+async function setupSudoLogging(logFile) {
+    core.info(`Configuring sudo logging to ${logFile}...`);
     // Create a sudoers.d file to enable logging
-    const logConfig = 'Defaults logfile=/tmp/runner-sudo.log\n';
+    const logConfig = `Defaults logfile=${logFile}\n`;
     await exec.exec('sudo', ['tee', '/etc/sudoers.d/00-sudo-logging'], {
         input: Buffer.from(logConfig)
     });
@@ -355,9 +362,51 @@ async function setupSudoLogging() {
     await exec.exec('sudo', ['chmod', '0440', '/etc/sudoers.d/00-sudo-logging']);
     await exec.exec('sudo', ['chown', 'root:root', '/etc/sudoers.d/00-sudo-logging']);
     // Create the log file and make it readable by the runner
-    await exec.exec('sudo', ['touch', '/tmp/runner-sudo.log']);
-    await exec.exec('sudo', ['chmod', '0644', '/tmp/runner-sudo.log']);
-    core.info('✅ Sudo logging configured to /tmp/runner-sudo.log');
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chmod', '0644', logFile]);
+    core.info(`✅ Sudo logging configured to ${logFile}`);
+}
+/**
+ * Apply custom sudoers configuration for the runner user
+ * This replaces the default unrestricted sudo access with user-specified rules
+ *
+ * @param sudoConfig - The custom sudoers configuration (multi-line string)
+ */
+async function applyCustomSudoConfig(sudoConfig) {
+    // Get the current user (should be 'runner' on GitHub Actions)
+    let currentUser = '';
+    await exec.exec('whoami', [], {
+        listeners: {
+            stdout: (data) => {
+                currentUser += data.toString().trim();
+            }
+        }
+    });
+    core.info(`Applying custom sudo configuration for user: ${currentUser}`);
+    // Validate the sudo config using visudo
+    const sudoersFile = `/etc/sudoers.d/${currentUser}`;
+    const tempFile = `/tmp/${currentUser}-sudoers.tmp`;
+    try {
+        // Write custom config to temp file
+        await exec.exec('sudo', ['tee', tempFile], {
+            input: Buffer.from(sudoConfig + '\n')
+        });
+        // Validate with visudo
+        await exec.exec('sudo', ['visudo', '-c', '-f', tempFile]);
+        // If validation passes, move to sudoers.d
+        await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
+        await exec.exec('sudo', ['chmod', '0440', sudoersFile]);
+        await exec.exec('sudo', ['chown', 'root:root', sudoersFile]);
+        core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
+        core.info('🔒 Runner user now has restricted sudo access');
+    }
+    catch (error) {
+        core.error(`Failed to apply custom sudo config: ${error}`);
+        core.error('Invalid sudoers syntax. Please check your sudo-config input.');
+        // Clean up temp file
+        await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
+        throw new Error('Invalid sudoers configuration');
+    }
 }
 /**
  * Disable sudo access for the runner user
@@ -396,7 +445,9 @@ async function disableSudoForRunner() {
     }
 }
 /**
- * Perform initial system setup: install dependencies, configure sudo logging, create DNS user, setup ipsets
+ * Perform initial system setup: install dependencies, create DNS user, setup ipsets
+ * Note: Sudo logging is NOT configured here - it's set up at the end of pre/main actions
+ * to avoid capturing setup commands
  * Returns the created DNS user
  */
 async function performInitialSetup() {
@@ -404,8 +455,6 @@ async function performInitialSetup() {
     core.info('Installing dependencies...');
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
     await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
-    // Configure sudo logging
-    await setupSudoLogging();
     // Create random DNS user for privilege separation
     core.info('Creating isolated DNS user...');
     const dnsUser = await createRandomDNSUser();

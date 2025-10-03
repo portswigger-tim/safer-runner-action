@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import { SystemValidator } from './validation';
 import { parseNetworkLogs, parsePreHookNetworkLogs, NetworkConnection } from './parsers/network-parser';
 import { parseDnsLogs, DnsResolution } from './parsers/dns-parser';
+import { parseSudoLogsFromString, SudoCommand } from './parsers/sudo-parser';
 import {
   generateNetworkConnectionDetails,
   generateDnsTable,
@@ -20,9 +21,23 @@ async function run(): Promise<void> {
     const connections = await parseNetworkLogs();
     const dnsResolutions = await parseDnsLogs('/tmp/main-dns.log');
 
+    // Parse main sudo logs (workflow commands only)
+    let sudoCommands: SudoCommand[] = [];
+    try {
+      const fs = await import('fs');
+      if (fs.existsSync('/tmp/main-sudo.log')) {
+        const sudoLogContent = fs.readFileSync('/tmp/main-sudo.log', 'utf-8');
+        sudoCommands = parseSudoLogsFromString(sudoLogContent);
+        core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
+      }
+    } catch (error) {
+      core.warning(`Could not parse main sudo logs: ${error}`);
+    }
+
     // Parse pre-hook logs if pre-action ran
     let preHookConnections: NetworkConnection[] = [];
     let preHookDnsResolutions: DnsResolution[] = [];
+    let preHookSudoCommands: SudoCommand[] = [];
 
     // Check if pre-action ran by looking for DNS user state
     const preUsername = core.getState('dns-user');
@@ -40,8 +55,16 @@ async function run(): Promise<void> {
           preHookDnsResolutions = await parseDnsLogs('/tmp/pre-dns.log');
           core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
         }
+
+        // Parse pre-hook sudo logs (other actions' pre-hooks only)
+        // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
+        if (fs.existsSync('/tmp/pre-sudo.log')) {
+          const preSudoLogContent = fs.readFileSync('/tmp/pre-sudo.log', 'utf-8');
+          preHookSudoCommands = parseSudoLogsFromString(preSudoLogContent);
+          core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
+        }
       } catch (error) {
-        core.warning(`Could not parse pre-hook DNS logs: ${error}`);
+        core.warning(`Could not parse pre-hook logs: ${error}`);
       }
     }
 
@@ -58,7 +81,15 @@ async function run(): Promise<void> {
       return; // Exit early - the validation report will still be in the logs above
     }
 
-    await generateJobSummary(connections, dnsResolutions, preHookConnections, preHookDnsResolutions, validationReport);
+    await generateJobSummary(
+      connections,
+      dnsResolutions,
+      sudoCommands,
+      preHookConnections,
+      preHookDnsResolutions,
+      preHookSudoCommands,
+      validationReport
+    );
 
     core.info('✅ Network access summary generated');
   } catch (error) {
@@ -68,26 +99,42 @@ async function run(): Promise<void> {
 }
 
 /**
- * Generate simplified pre-hook analysis section with network connections and DNS info
+ * Generate simplified pre-hook analysis section with network connections, DNS, and sudo info
  */
 function generatePreHookAnalysis(
   preHookConnections: NetworkConnection[],
-  preHookDnsResolutions: DnsResolution[]
+  preHookDnsResolutions: DnsResolution[],
+  preHookSudoCommands: SudoCommand[]
 ): string {
   // If no pre-hook activity, don't show the section
-  if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0) {
+  if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0 && preHookSudoCommands.length === 0) {
     return '';
   }
 
   let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
 
-  report += `This section shows network activity captured during pre-hook monitoring, before your workflow steps executed.\n\n`;
+  report += `This section shows activity captured during pre-hook monitoring (other actions' pre-hooks), before your workflow steps executed.\n\n`;
 
   // Network Connection Details
   report += generateNetworkConnectionDetails(preHookConnections);
 
   // DNS Information
   report += generateDnsDetails(preHookDnsResolutions);
+
+  // Sudo Commands
+  if (preHookSudoCommands.length > 0) {
+    report += `## Sudo Commands\n\n`;
+    report += `Pre-hook executed **${preHookSudoCommands.length}** sudo command${preHookSudoCommands.length === 1 ? '' : 's'}:\n\n`;
+    report += `| Command | Arguments |\n`;
+    report += `|---------|----------|\n`;
+    for (const cmd of preHookSudoCommands.slice(0, 50)) {
+      report += `| \`${cmd.command}\` | \`${cmd.args || '(none)'}\` |\n`;
+    }
+    if (preHookSudoCommands.length > 50) {
+      report += `\n*Showing first 50 of ${preHookSudoCommands.length} commands*\n`;
+    }
+    report += `\n`;
+  }
 
   report += `</details>\n\n`;
   return report;
@@ -96,8 +143,10 @@ function generatePreHookAnalysis(
 async function generateJobSummary(
   connections: NetworkConnection[],
   dnsResolutions: DnsResolution[],
+  sudoCommands: SudoCommand[],
   preHookConnections: NetworkConnection[],
   preHookDnsResolutions: DnsResolution[],
+  preHookSudoCommands: SudoCommand[],
   validationReport: string
 ): Promise<void> {
   const mode = core.getInput('mode') || 'analyze';
@@ -132,8 +181,8 @@ async function generateJobSummary(
   summary += `---\n\n`;
 
   // 3. Pre-Hook Security Analysis (collapsible)
-  summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions);
-  if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0) {
+  summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preHookSudoCommands);
+  if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0 || preHookSudoCommands.length > 0) {
     summary += `---\n\n`;
   }
 
@@ -143,7 +192,7 @@ async function generateJobSummary(
 
   // 5. Configuration Advice (for analyze mode only)
   if (mode === 'analyze') {
-    summary += generateConfigurationAdvice(dnsResolutions);
+    summary += generateConfigurationAdvice(dnsResolutions, sudoCommands);
     summary += `---\n\n`;
   }
 

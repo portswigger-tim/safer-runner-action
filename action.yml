@@ -26,6 +26,10 @@ inputs:
     description: 'Whether to disable sudo access for the runner user after setup is complete. This prevents malicious code from using sudo to bypass security controls.'
     required: false
     default: 'false'
+  sudo-config:
+    description: 'Custom sudoers configuration for the runner user (only used when disable-sudo is false). Provide sudoers rules as a multi-line string.'
+    required: false
+    default: ''
 
 runs:
   using: 'node20'

@@ -496,29 +496,6 @@ jobs:
             echo "✅ SUCCESS: Sudo is correctly disabled"
           fi
 
-      - name: Check sudoers file was renamed
-        run: |
-          echo "=== Checking sudoers file status ==="
-
-          echo "Original file should not exist:"
-          if sudo test -f /etc/sudoers.d/runner; then
-            echo "❌ ERROR: /etc/sudoers.d/runner still exists!"
-            exit 1
-          else
-            echo "✅ /etc/sudoers.d/runner does not exist"
-          fi
-
-          echo ""
-          echo "Disabled file should exist:"
-          if sudo test -f /etc/sudoers.d/runner.disabled-by-safer-runner; then
-            echo "✅ /etc/sudoers.d/runner.disabled-by-safer-runner exists"
-            echo "Content:"
-            sudo cat /etc/sudoers.d/runner.disabled-by-safer-runner
-          else
-            echo "❌ ERROR: Disabled file not found!"
-            exit 1
-          fi
-
       - name: Verify Docker still works
         run: |
           echo "=== Testing Docker access (should still work) ==="
@@ -532,3 +509,62 @@ jobs:
           # Runner user is in 'adm' group, should be able to read some logs
           ls -la /var/log/syslog
           echo "✅ Log file access still works (runner user still in adm group)"
+
+  test-sudo-config:
+    name: Test Custom Sudo Config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify sudo works before action
+        run: |
+          echo "=== Testing sudo BEFORE restricting ==="
+          sudo whoami
+          sudo docker --version
+          sudo npm --version
+          echo "✅ Sudo is unrestricted"
+
+      - name: Apply Safer Runner Action with custom sudo-config
+        uses: portswigger-tim/safer-runner-action@main
+        with:
+          mode: 'analyze'
+          sudo-config: |
+            runner ALL=(ALL) NOPASSWD: /usr/bin/docker
+            runner ALL=(ALL) NOPASSWD: /usr/bin/npm
+
+      - name: Verify restricted sudo commands work
+        run: |
+          echo "=== Testing allowed sudo commands ==="
+
+          echo "Testing sudo docker (should work)..."
+          sudo docker --version || { echo "❌ ERROR: sudo docker failed!"; exit 1; }
+          echo "✅ sudo docker works"
+
+          echo "Testing sudo npm (should work)..."
+          sudo npm --version || { echo "❌ ERROR: sudo npm failed!"; exit 1; }
+          echo "✅ sudo npm works"
+
+      - name: Verify non-allowed sudo commands fail
+        run: |
+          echo "=== Testing non-allowed sudo commands ==="
+
+          echo "Testing sudo whoami (should fail)..."
+          if sudo whoami 2>&1; then
+            echo "❌ ERROR: sudo whoami should have been blocked!"
+            exit 1
+          else
+            echo "✅ sudo whoami correctly blocked"
+          fi
+
+          echo "Testing sudo ls (should fail)..."
+          if sudo ls /root 2>&1; then
+            echo "❌ ERROR: sudo ls should have been blocked!"
+            exit 1
+          else
+            echo "✅ sudo ls correctly blocked"
+          fi
+
+      - name: Verify Docker and other group access still works
+        run: |
+          echo "=== Testing non-sudo group access ==="
+          docker --version
+          docker ps
+          echo "✅ Docker access works without sudo (via docker group)"
