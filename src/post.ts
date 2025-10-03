@@ -121,25 +121,33 @@ async function generateJobSummary(
   }
 
   summary += `**Generated:** ${new Date().toISOString()}\n\n`;
+  summary += `---\n\n`;
 
   // 1. Network Connection Details
   summary += generateNetworkConnectionDetails(connections);
+  summary += `---\n\n`;
 
   // 2. DNS Information
   summary += generateDnsDetails(dnsResolutions);
+  summary += `---\n\n`;
 
   // 3. Pre-Hook Security Analysis (collapsible)
   summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions);
+  if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0) {
+    summary += `---\n\n`;
+  }
 
   // 4. Config File Tamper Detection
-  summary += `${validationReport}\n`;
+  summary += `${validationReport}`;
+  summary += `---\n\n`;
 
   // 5. Configuration Advice (for analyze mode only)
   if (mode === 'analyze') {
     summary += generateConfigurationAdvice(dnsResolutions);
+    summary += `---\n\n`;
   }
 
-  summary += `---\n*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
+  summary += `*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
 
   await core.summary.addRaw(summary).write();
 }
