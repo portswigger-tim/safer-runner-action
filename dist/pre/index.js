@@ -254,7 +254,7 @@ async function run() {
         // Install dependencies
         core.info('Installing dependencies...');
         await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-        await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+        await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'auditd', 'audispd-plugins']);
         // Create random DNS user for privilege separation
         core.info('Creating isolated DNS user...');
         const dnsUser = await (0, setup_1.createRandomDNSUser)();
