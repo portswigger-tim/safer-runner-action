@@ -126,14 +126,22 @@ jobs:
 
           echo ""
           echo "=== Sudo Usage Logs ==="
-          echo "Sudo log file location:"
-          ls -lh /tmp/runner-sudo.log 2>/dev/null || echo "Sudo log file not found"
+          echo "Pre-hook sudo log file:"
+          ls -lh /tmp/pre-sudo.log 2>/dev/null || echo "Pre-hook sudo log file not found"
+          if [ -f /tmp/pre-sudo.log ]; then
+            echo "Pre-hook sudo log contents (last 20 lines):"
+            tail -20 /tmp/pre-sudo.log 2>/dev/null || echo "Could not read pre-hook sudo log"
+          fi
           echo ""
-          echo "Sudo log contents:"
-          cat /tmp/runner-sudo.log 2>/dev/null || echo "Could not read sudo log"
-          echo ""
-          echo "Count of sudo commands:"
-          wc -l /tmp/runner-sudo.log 2>/dev/null || echo "Could not count sudo commands"
+          echo "Main action sudo log file:"
+          ls -lh /tmp/main-sudo.log 2>/dev/null || echo "Main action sudo log file not found"
+          if [ -f /tmp/main-sudo.log ]; then
+            echo "Main action sudo log contents (last 20 lines):"
+            tail -20 /tmp/main-sudo.log 2>/dev/null || echo "Could not read main action sudo log"
+            echo ""
+            echo "Count of sudo commands in main log:"
+            wc -l /tmp/main-sudo.log 2>/dev/null || echo "Could not count sudo commands"
+          fi
 
       - name: Verify job summary was created
         run: |
@@ -535,6 +543,9 @@ jobs:
           echo "docker: $(which docker)"
           echo "npm: $(which npm)"
           echo "whoami: $(which whoami)"
+          echo "grep: $(which grep)"
+          echo "cat: $(which cat)"
+          echo "iptables: $(which iptables)"
 
       - name: Apply Safer Runner Action with custom sudo-config
         uses: portswigger-tim/safer-runner-action@main

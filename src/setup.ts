@@ -43,6 +43,10 @@ export async function setupSudoLogging(logFile: string): Promise<void> {
  * Apply custom sudoers configuration for the runner user
  * This replaces the default unrestricted sudo access with user-specified rules
  *
+ * The custom config is automatically appended with required commands for:
+ * - Post-action integrity validation (reading config files, iptables rules)
+ * - Log parsing (grep for DNS and network logs)
+ *
  * @param sudoConfig - The custom sudoers configuration (multi-line string)
  */
 export async function applyCustomSudoConfig(sudoConfig: string): Promise<void> {
@@ -62,10 +66,33 @@ export async function applyCustomSudoConfig(sudoConfig: string): Promise<void> {
   const sudoersFile = `/etc/sudoers.d/${currentUser}`;
   const tempFile = `/tmp/${currentUser}-sudoers.tmp`;
 
+  // Append required commands for validation and log parsing
+  const requiredCommands = `
+# Required commands for post-action validation and reporting
+# These are automatically added by safer-runner-action
+
+# Allow reading configuration files for checksum validation
+${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/dnsmasq.conf
+${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/resolv.conf
+${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
+
+# Allow reading iptables rules for integrity validation
+${currentUser} ALL=(ALL) NOPASSWD: /sbin/iptables -L * -n --line-numbers
+${currentUser} ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L * -n --line-numbers
+
+# Allow parsing DNS and network logs for post-action reporting
+${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /var/log/syslog
+${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /var/log/syslog
+${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /tmp/*
+${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /tmp/*
+`;
+
+  const fullConfig = sudoConfig + '\n' + requiredCommands;
+
   try {
-    // Write custom config to temp file
+    // Write custom config + required commands to temp file
     await exec.exec('sudo', ['tee', tempFile], {
-      input: Buffer.from(sudoConfig + '\n')
+      input: Buffer.from(fullConfig + '\n')
     });
 
     // Validate with visudo
@@ -78,6 +105,7 @@ export async function applyCustomSudoConfig(sudoConfig: string): Promise<void> {
 
     core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
     core.info('🔒 Runner user now has restricted sudo access');
+    core.info('ℹ️  Required validation and log parsing commands automatically added');
   } catch (error) {
     core.error(`Failed to apply custom sudo config: ${error}`);
     core.error('Invalid sudoers syntax. Please check your sudo-config input.');
@@ -91,9 +119,10 @@ export async function applyCustomSudoConfig(sudoConfig: string): Promise<void> {
  * Disable sudo access for the runner user
  * This prevents malicious code from using sudo to bypass security controls
  *
- * However, we still need to allow specific commands for post-action validation:
+ * However, we still need to allow specific commands for post-action operations:
  * - sudo cat <file> - to read protected configuration files for integrity checks
  * - sudo iptables -L <chain> -n --line-numbers - to verify firewall rules
+ * - sudo grep -E <pattern> <file> - to parse DNS and network logs for reporting
  *
  * The runner user on GitHub Actions has sudo access via /etc/sudoers.d/runner
  * which contains: runner ALL=(ALL) NOPASSWD:ALL
@@ -120,7 +149,7 @@ export async function disableSudoForRunner(): Promise<void> {
   // Minimal sudoers config that only allows validation commands
   const validationOnlySudoConfig = `# Safer Runner Action - Validation-only sudo access
 # This configuration allows only the commands needed for post-action integrity validation
-# All other sudo commands will be denied
+# and log parsing. All other sudo commands will be denied.
 
 # Allow reading configuration files for checksum validation
 ${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/dnsmasq.conf
@@ -130,6 +159,12 @@ ${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/systemd/resolved.conf.d/no-stub
 # Allow reading iptables rules for integrity validation
 ${currentUser} ALL=(ALL) NOPASSWD: /sbin/iptables -L * -n --line-numbers
 ${currentUser} ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L * -n --line-numbers
+
+# Allow parsing DNS and network logs for post-action reporting
+${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /var/log/syslog
+${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /var/log/syslog
+${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /tmp/*
+${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /tmp/*
 `;
 
   try {
