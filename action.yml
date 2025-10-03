@@ -22,6 +22,10 @@ inputs:
     description: 'Whether to block risky GitHub subdomains (gist.github.com, gist.githubusercontent.com, raw.githubusercontent.com) in enforce mode. Set to "false" if you need these domains.'
     required: false
     default: 'true'
+  disable-sudo:
+    description: 'Whether to disable sudo access for the runner user after setup is complete. This prevents malicious code from using sudo to bypass security controls.'
+    required: false
+    default: 'false'
 
 runs:
   using: 'node20'

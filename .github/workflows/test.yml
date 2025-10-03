@@ -14,6 +14,24 @@ jobs:
     name: Test Analyze Mode
     runs-on: ubuntu-latest
     steps:
+      - name: Debug runner user information
+        run: |
+          echo "=== Runner User Information ==="
+          echo "Current user:"
+          whoami
+          echo ""
+          echo "User ID:"
+          id
+          echo ""
+          echo "Groups:"
+          groups
+          echo ""
+          echo "Detailed group membership:"
+          id -Gn
+          echo ""
+          echo "Sudo test (should work before action):"
+          sudo echo "Sudo is working"
+
       - name: Apply Safer Runner Action (Analyze Mode)
         uses: portswigger-tim/safer-runner-action@main
         with:
