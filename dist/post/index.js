@@ -13,6 +13,7 @@
  * All functions are pure (no I/O, no side effects) for maximum testability.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.generateNetworkConnectionTable = generateNetworkConnectionTable;
 exports.generateNetworkConnectionDetails = generateNetworkConnectionDetails;
 exports.generateDnsTable = generateDnsTable;
 exports.generateDnsDetails = generateDnsDetails;
@@ -25,17 +26,16 @@ exports.getStatusIcon = getStatusIcon;
 exports.getDnsStatusIcon = getDnsStatusIcon;
 const github_parser_1 = __nccwpck_require__(9170);
 /**
- * Format network connections into markdown table
+ * Generate network connection table (without heading)
  *
  * @param connections - List of network connections
- * @returns Markdown-formatted network connection details
+ * @returns Markdown-formatted network connection table with statistics
  */
-function generateNetworkConnectionDetails(connections) {
-    let details = `## Network Connection Details\n\n`;
+function generateNetworkConnectionTable(connections) {
     if (connections.length === 0) {
-        details += `No network connections recorded.\n\n`;
-        return details;
+        return `No network connections recorded.\n\n`;
     }
+    let table = '';
     // Separate GitHub and non-GitHub connections
     const githubConnections = connections.filter(c => c.source === 'GitHub Required');
     const userConnections = connections.filter(c => c.source === 'User Defined');
@@ -46,31 +46,42 @@ function generateNetworkConnectionDetails(connections) {
         const importantConnections = [...userConnections, ...deniedConnections, ...analyzedConnections];
         // Remove duplicates
         const uniqueImportant = Array.from(new Map(importantConnections.map(c => [`${c.ip}:${c.port}`, c])).values());
-        details += `| IP Address | Port | Status | Source |\n`;
-        details += `|------------|------|--------|--------|\n`;
+        table += `| IP Address | Port | Protocol | Status | Source |\n`;
+        table += `|------------|------|----------|--------|--------|\n`;
         for (const conn of uniqueImportant) {
             const statusDisplay = formatConnectionStatus(conn.status);
-            details += `| ${conn.ip} | ${conn.port} | ${statusDisplay} | ${conn.source} |\n`;
+            table += `| ${conn.ip} | ${conn.port} | ${conn.protocol} | ${statusDisplay} | ${conn.source} |\n`;
         }
-        details += `\n`;
+        table += `\n`;
     }
     // Show GitHub connections in collapsed section
     if (githubConnections.length > 0) {
-        details += `<details>\n<summary>📋 GitHub Infrastructure Connections (${githubConnections.length}) - Click to expand</summary>\n\n`;
-        details += `| IP Address | Port | Status | Source |\n`;
-        details += `|------------|------|--------|--------|\n`;
+        table += `<details>\n<summary>📋 GitHub Infrastructure Connections (${githubConnections.length}) - Click to expand</summary>\n\n`;
+        table += `| IP Address | Port | Protocol | Status | Source |\n`;
+        table += `|------------|------|----------|--------|--------|\n`;
         for (const conn of githubConnections) {
             const statusDisplay = formatConnectionStatus(conn.status);
-            details += `| ${conn.ip} | ${conn.port} | ${statusDisplay} | ${conn.source} |\n`;
+            table += `| ${conn.ip} | ${conn.port} | ${conn.protocol} | ${statusDisplay} | ${conn.source} |\n`;
         }
-        details += `\n</details>\n\n`;
+        table += `\n</details>\n\n`;
     }
     const deniedCount = connections.filter(c => c.status === 'DENIED').length;
-    details += `**Total connections:** ${connections.length}`;
+    table += `**Total connections:** ${connections.length}`;
     if (deniedCount > 0) {
-        details += ` (🛡️ ${deniedCount} blocked)`;
+        table += ` (🛡️ ${deniedCount} blocked)`;
     }
-    details += `\n\n`;
+    table += `\n\n`;
+    return table;
+}
+/**
+ * Generate network connection section with heading
+ *
+ * @param connections - List of network connections
+ * @returns Markdown-formatted network connection section with heading and table
+ */
+function generateNetworkConnectionDetails(connections) {
+    let details = `## Network Connection Details\n\n`;
+    details += generateNetworkConnectionTable(connections);
     return details;
 }
 /**
@@ -680,10 +691,12 @@ function parseLogLine(line) {
     // Parse iptables log format
     const ipMatch = line.match(/DST=([0-9.]+)/);
     const portMatch = line.match(/DPT=([0-9]+)/);
+    const protocolMatch = line.match(/PROTO=(\w+)/);
     if (!ipMatch)
         return null;
     const ip = ipMatch[1];
     const port = portMatch ? portMatch[1] : '443';
+    const protocol = protocolMatch ? protocolMatch[1] : 'TCP';
     let status = 'UNKNOWN';
     let source = 'Unknown';
     // Check for Pre- prefixed logs (from pre-hook monitoring)
@@ -715,7 +728,7 @@ function parseLogLine(line) {
         status = 'ANALYZED';
         source = 'Monitor Only';
     }
-    return { ip, port, status, source };
+    return { ip, port, protocol, status, source };
 }
 /**
  * Remove duplicate connections (same IP:port combination)
@@ -827,85 +840,19 @@ async function run() {
     }
 }
 /**
- * Analyze pre-hook traffic to identify connections that were:
- * 1. Seen in pre-hook but blocked later (good - action working)
- * 2. Only seen in pre-hook (early workflow setup traffic)
+ * Generate simplified pre-hook analysis section with network connections and DNS info
  */
-function generatePreHookAnalysis(connections, dnsResolutions, preHookConnections, preHookDnsResolutions) {
-    // connections are already separated (main vs pre-hook)
-    // Find connections only in pre-hook
-    const preHookOnlyConnections = preHookConnections.filter(preConn => !connections.some(mainConn => mainConn.ip === preConn.ip && mainConn.port === preConn.port));
-    // Find connections that were pre-hook ANALYZED but later DENIED
-    const blockedAfterPreHook = preHookConnections.filter(preConn => connections.some(mainConn => mainConn.ip === preConn.ip && mainConn.port === preConn.port && mainConn.status === 'DENIED'));
-    // Find DNS resolutions only in pre-hook
-    const preHookOnlyDns = preHookDnsResolutions.filter(preDns => !dnsResolutions.some(mainDns => mainDns.domain === preDns.domain));
-    // Find DNS resolutions that were pre-hook RESOLVED but later BLOCKED
-    const blockedDnsAfterPreHook = preHookDnsResolutions.filter(preDns => preDns.status === 'RESOLVED' &&
-        dnsResolutions.some(mainDns => mainDns.domain === preDns.domain && mainDns.status === 'BLOCKED'));
+function generatePreHookAnalysis(preHookConnections, preHookDnsResolutions) {
     // If no pre-hook activity, don't show the section
     if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0) {
         return '';
     }
     let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
-    if (preHookConnections.length > 0) {
-        report += `Pre-hook monitoring captured **${preHookConnections.length}** network connection(s) before user workflow execution.\n\n`;
-    }
-    if (preHookDnsResolutions.length > 0) {
-        report += `Pre-hook DNS monitoring captured **${preHookDnsResolutions.length}** DNS resolution(s).\n\n`;
-    }
-    // Show all pre-hook DNS resolutions using the standard DNS table formatter
-    if (preHookDnsResolutions.length > 0) {
-        report += `### 📋 Pre-Hook DNS Resolutions\n\n`;
-        report += `All DNS queries captured during pre-hook monitoring:\n\n`;
-        report += (0, report_formatter_1.generateDnsTable)(preHookDnsResolutions);
-    }
-    // Show blocked connections (security working as intended)
-    if (blockedAfterPreHook.length > 0) {
-        report += `### ✅ Connections Blocked After Pre-Hook\n\n`;
-        report += `These connections were monitored during pre-hook but blocked when enforce mode activated:\n\n`;
-        report += `| IP Address | Port | Status Transition |\n`;
-        report += `|------------|------|-------------------|\n`;
-        for (const conn of blockedAfterPreHook) {
-            report += `| ${conn.ip} | ${conn.port} | Pre-hook: ANALYZED → Main: DENIED |\n`;
-        }
-        report += `\n`;
-    }
-    // Show blocked DNS domains (security working as intended)
-    if (blockedDnsAfterPreHook.length > 0) {
-        report += `### ✅ DNS Domains Blocked After Pre-Hook\n\n`;
-        report += `These DNS queries were resolved during pre-hook but blocked when enforce mode activated:\n\n`;
-        report += `| Domain | IP | Status Transition |\n`;
-        report += `|--------|----|-----------------|\n`;
-        for (const dns of blockedDnsAfterPreHook) {
-            report += `| ${dns.domain} | ${dns.ip} | Pre-hook: RESOLVED → Main: BLOCKED |\n`;
-        }
-        report += `\n`;
-    }
-    // Show pre-hook only connections
-    if (preHookOnlyConnections.length > 0) {
-        report += `### 🕐 Pre-Hook Only Connections\n\n`;
-        report += `These connections only appeared during pre-hook monitoring (before user workflow):\n\n`;
-        report += `| IP Address | Port | Source |\n`;
-        report += `|------------|------|--------|\n`;
-        for (const conn of preHookOnlyConnections) {
-            report += `| ${conn.ip} | ${conn.port} | ${conn.source} |\n`;
-        }
-        report += `\n`;
-    }
-    // Show pre-hook only DNS resolutions
-    if (preHookOnlyDns.length > 0) {
-        report += `### 🕐 Pre-Hook Only DNS Resolutions\n\n`;
-        report += `These DNS queries only appeared during pre-hook monitoring:\n\n`;
-        report += `| Domain | IP | Status |\n`;
-        report += `|--------|----|---------|\n`;
-        for (const dns of preHookOnlyDns) {
-            report += `| ${dns.domain} | ${dns.ip} | ${dns.status} |\n`;
-        }
-        report += `\n`;
-    }
-    if (preHookOnlyConnections.length > 0 || preHookOnlyDns.length > 0) {
-        report += `*Note: Pre-hook only activity typically represents GitHub Actions setup connections that occur before workflow steps run.*\n\n`;
-    }
+    report += `This section shows network activity captured during pre-hook monitoring, before your workflow steps executed.\n\n`;
+    // Network Connection Details
+    report += (0, report_formatter_1.generateNetworkConnectionDetails)(preHookConnections);
+    // DNS Information
+    report += (0, report_formatter_1.generateDnsDetails)(preHookDnsResolutions);
     report += `</details>\n\n`;
     return report;
 }
@@ -933,7 +880,7 @@ async function generateJobSummary(connections, dnsResolutions, preHookConnection
     // 2. DNS Information
     summary += (0, report_formatter_1.generateDnsDetails)(dnsResolutions);
     // 3. Pre-Hook Security Analysis (collapsible)
-    summary += generatePreHookAnalysis(connections, dnsResolutions, preHookConnections, preHookDnsResolutions);
+    summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions);
     // 4. Config File Tamper Detection
     summary += `${validationReport}\n`;
     // 5. Configuration Advice (for analyze mode)

@@ -12,6 +12,7 @@ import * as exec from '@actions/exec';
 export interface NetworkConnection {
   ip: string;
   port: string;
+  protocol: string;
   status: string;
   source: string;
 }
@@ -97,11 +98,13 @@ export function parseLogLine(line: string): NetworkConnection | null {
   // Parse iptables log format
   const ipMatch = line.match(/DST=([0-9.]+)/);
   const portMatch = line.match(/DPT=([0-9]+)/);
+  const protocolMatch = line.match(/PROTO=(\w+)/);
 
   if (!ipMatch) return null;
 
   const ip = ipMatch[1];
   const port = portMatch ? portMatch[1] : '443';
+  const protocol = protocolMatch ? protocolMatch[1] : 'TCP';
 
   let status = 'UNKNOWN';
   let source = 'Unknown';
@@ -130,7 +133,7 @@ export function parseLogLine(line: string): NetworkConnection | null {
     source = 'Monitor Only';
   }
 
-  return { ip, port, status, source };
+  return { ip, port, protocol, status, source };
 }
 
 /**

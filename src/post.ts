@@ -68,42 +68,12 @@ async function run(): Promise<void> {
 }
 
 /**
- * Analyze pre-hook traffic to identify connections that were:
- * 1. Seen in pre-hook but blocked later (good - action working)
- * 2. Only seen in pre-hook (early workflow setup traffic)
+ * Generate simplified pre-hook analysis section with network connections and DNS info
  */
 function generatePreHookAnalysis(
-  connections: NetworkConnection[],
-  dnsResolutions: DnsResolution[],
   preHookConnections: NetworkConnection[],
   preHookDnsResolutions: DnsResolution[]
 ): string {
-  // connections are already separated (main vs pre-hook)
-
-  // Find connections only in pre-hook
-  const preHookOnlyConnections = preHookConnections.filter(
-    preConn => !connections.some(mainConn => mainConn.ip === preConn.ip && mainConn.port === preConn.port)
-  );
-
-  // Find connections that were pre-hook ANALYZED but later DENIED
-  const blockedAfterPreHook = preHookConnections.filter(preConn =>
-    connections.some(
-      mainConn => mainConn.ip === preConn.ip && mainConn.port === preConn.port && mainConn.status === 'DENIED'
-    )
-  );
-
-  // Find DNS resolutions only in pre-hook
-  const preHookOnlyDns = preHookDnsResolutions.filter(
-    preDns => !dnsResolutions.some(mainDns => mainDns.domain === preDns.domain)
-  );
-
-  // Find DNS resolutions that were pre-hook RESOLVED but later BLOCKED
-  const blockedDnsAfterPreHook = preHookDnsResolutions.filter(
-    preDns =>
-      preDns.status === 'RESOLVED' &&
-      dnsResolutions.some(mainDns => mainDns.domain === preDns.domain && mainDns.status === 'BLOCKED')
-  );
-
   // If no pre-hook activity, don't show the section
   if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0) {
     return '';
@@ -111,72 +81,13 @@ function generatePreHookAnalysis(
 
   let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
 
-  if (preHookConnections.length > 0) {
-    report += `Pre-hook monitoring captured **${preHookConnections.length}** network connection(s) before user workflow execution.\n\n`;
-  }
+  report += `This section shows network activity captured during pre-hook monitoring, before your workflow steps executed.\n\n`;
 
-  if (preHookDnsResolutions.length > 0) {
-    report += `Pre-hook DNS monitoring captured **${preHookDnsResolutions.length}** DNS resolution(s).\n\n`;
-  }
+  // Network Connection Details
+  report += generateNetworkConnectionDetails(preHookConnections);
 
-  // Show all pre-hook DNS resolutions using the standard DNS table formatter
-  if (preHookDnsResolutions.length > 0) {
-    report += `### 📋 Pre-Hook DNS Resolutions\n\n`;
-    report += `All DNS queries captured during pre-hook monitoring:\n\n`;
-    report += generateDnsTable(preHookDnsResolutions);
-  }
-
-  // Show blocked connections (security working as intended)
-  if (blockedAfterPreHook.length > 0) {
-    report += `### ✅ Connections Blocked After Pre-Hook\n\n`;
-    report += `These connections were monitored during pre-hook but blocked when enforce mode activated:\n\n`;
-    report += `| IP Address | Port | Status Transition |\n`;
-    report += `|------------|------|-------------------|\n`;
-    for (const conn of blockedAfterPreHook) {
-      report += `| ${conn.ip} | ${conn.port} | Pre-hook: ANALYZED → Main: DENIED |\n`;
-    }
-    report += `\n`;
-  }
-
-  // Show blocked DNS domains (security working as intended)
-  if (blockedDnsAfterPreHook.length > 0) {
-    report += `### ✅ DNS Domains Blocked After Pre-Hook\n\n`;
-    report += `These DNS queries were resolved during pre-hook but blocked when enforce mode activated:\n\n`;
-    report += `| Domain | IP | Status Transition |\n`;
-    report += `|--------|----|-----------------|\n`;
-    for (const dns of blockedDnsAfterPreHook) {
-      report += `| ${dns.domain} | ${dns.ip} | Pre-hook: RESOLVED → Main: BLOCKED |\n`;
-    }
-    report += `\n`;
-  }
-
-  // Show pre-hook only connections
-  if (preHookOnlyConnections.length > 0) {
-    report += `### 🕐 Pre-Hook Only Connections\n\n`;
-    report += `These connections only appeared during pre-hook monitoring (before user workflow):\n\n`;
-    report += `| IP Address | Port | Source |\n`;
-    report += `|------------|------|--------|\n`;
-    for (const conn of preHookOnlyConnections) {
-      report += `| ${conn.ip} | ${conn.port} | ${conn.source} |\n`;
-    }
-    report += `\n`;
-  }
-
-  // Show pre-hook only DNS resolutions
-  if (preHookOnlyDns.length > 0) {
-    report += `### 🕐 Pre-Hook Only DNS Resolutions\n\n`;
-    report += `These DNS queries only appeared during pre-hook monitoring:\n\n`;
-    report += `| Domain | IP | Status |\n`;
-    report += `|--------|----|---------|\n`;
-    for (const dns of preHookOnlyDns) {
-      report += `| ${dns.domain} | ${dns.ip} | ${dns.status} |\n`;
-    }
-    report += `\n`;
-  }
-
-  if (preHookOnlyConnections.length > 0 || preHookOnlyDns.length > 0) {
-    report += `*Note: Pre-hook only activity typically represents GitHub Actions setup connections that occur before workflow steps run.*\n\n`;
-  }
+  // DNS Information
+  report += generateDnsDetails(preHookDnsResolutions);
 
   report += `</details>\n\n`;
   return report;
@@ -218,7 +129,7 @@ async function generateJobSummary(
   summary += generateDnsDetails(dnsResolutions);
 
   // 3. Pre-Hook Security Analysis (collapsible)
-  summary += generatePreHookAnalysis(connections, dnsResolutions, preHookConnections, preHookDnsResolutions);
+  summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions);
 
   // 4. Config File Tamper Detection
   summary += `${validationReport}\n`;

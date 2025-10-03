@@ -19,6 +19,7 @@ describe('Network Parser', () => {
       expect(result).toEqual({
         ip: '140.82.114.6',
         port: '443',
+        protocol: 'TCP',
         status: 'ALLOWED',
         source: 'GitHub Required'
       });
@@ -33,6 +34,7 @@ describe('Network Parser', () => {
       expect(result).toEqual({
         ip: '44.195.242.49',
         port: '443',
+        protocol: 'TCP',
         status: 'ALLOWED',
         source: 'User Defined'
       });
@@ -47,6 +49,7 @@ describe('Network Parser', () => {
       expect(result).toEqual({
         ip: '8.8.8.8',
         port: '53',
+        protocol: 'UDP',
         status: 'DENIED',
         source: 'Firewall Drop'
       });
@@ -81,22 +84,34 @@ describe('Network Parser', () => {
   describe('deduplicateConnections', () => {
     it('should remove duplicate IP:port combinations', () => {
       const connections: NetworkConnection[] = [
-        { ip: '140.82.114.6', port: '443', status: 'ALLOWED', source: 'GitHub Required' },
-        { ip: '140.82.114.6', port: '443', status: 'ALLOWED', source: 'GitHub Required' },
-        { ip: '8.8.8.8', port: '53', status: 'DENIED', source: 'Firewall Drop' }
+        { ip: '140.82.114.6', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'GitHub Required' },
+        { ip: '140.82.114.6', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'GitHub Required' },
+        { ip: '8.8.8.8', port: '53', protocol: 'UDP', status: 'DENIED', source: 'Firewall Drop' }
       ];
 
       const result = deduplicateConnections(connections);
 
       expect(result).toHaveLength(2);
-      expect(result).toContainEqual({ ip: '140.82.114.6', port: '443', status: 'ALLOWED', source: 'GitHub Required' });
-      expect(result).toContainEqual({ ip: '8.8.8.8', port: '53', status: 'DENIED', source: 'Firewall Drop' });
+      expect(result).toContainEqual({
+        ip: '140.82.114.6',
+        port: '443',
+        protocol: 'TCP',
+        status: 'ALLOWED',
+        source: 'GitHub Required'
+      });
+      expect(result).toContainEqual({
+        ip: '8.8.8.8',
+        port: '53',
+        protocol: 'UDP',
+        status: 'DENIED',
+        source: 'Firewall Drop'
+      });
     });
 
     it('should keep connections with same IP but different ports', () => {
       const connections: NetworkConnection[] = [
-        { ip: '140.82.114.6', port: '443', status: 'ALLOWED', source: 'GitHub Required' },
-        { ip: '140.82.114.6', port: '80', status: 'ALLOWED', source: 'GitHub Required' }
+        { ip: '140.82.114.6', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'GitHub Required' },
+        { ip: '140.82.114.6', port: '80', protocol: 'TCP', status: 'ALLOWED', source: 'GitHub Required' }
       ];
 
       const result = deduplicateConnections(connections);

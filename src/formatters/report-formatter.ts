@@ -10,18 +10,17 @@ import { DnsResolution } from '../parsers/dns-parser';
 import { isGitHubRelated } from '../parsers/github-parser';
 
 /**
- * Format network connections into markdown table
+ * Generate network connection table (without heading)
  *
  * @param connections - List of network connections
- * @returns Markdown-formatted network connection details
+ * @returns Markdown-formatted network connection table with statistics
  */
-export function generateNetworkConnectionDetails(connections: NetworkConnection[]): string {
-  let details = `## Network Connection Details\n\n`;
-
+export function generateNetworkConnectionTable(connections: NetworkConnection[]): string {
   if (connections.length === 0) {
-    details += `No network connections recorded.\n\n`;
-    return details;
+    return `No network connections recorded.\n\n`;
   }
+
+  let table = '';
 
   // Separate GitHub and non-GitHub connections
   const githubConnections = connections.filter(c => c.source === 'GitHub Required');
@@ -35,36 +34,48 @@ export function generateNetworkConnectionDetails(connections: NetworkConnection[
     // Remove duplicates
     const uniqueImportant = Array.from(new Map(importantConnections.map(c => [`${c.ip}:${c.port}`, c])).values());
 
-    details += `| IP Address | Port | Status | Source |\n`;
-    details += `|------------|------|--------|--------|\n`;
+    table += `| IP Address | Port | Protocol | Status | Source |\n`;
+    table += `|------------|------|----------|--------|--------|\n`;
 
     for (const conn of uniqueImportant) {
       const statusDisplay = formatConnectionStatus(conn.status);
-      details += `| ${conn.ip} | ${conn.port} | ${statusDisplay} | ${conn.source} |\n`;
+      table += `| ${conn.ip} | ${conn.port} | ${conn.protocol} | ${statusDisplay} | ${conn.source} |\n`;
     }
-    details += `\n`;
+    table += `\n`;
   }
 
   // Show GitHub connections in collapsed section
   if (githubConnections.length > 0) {
-    details += `<details>\n<summary>📋 GitHub Infrastructure Connections (${githubConnections.length}) - Click to expand</summary>\n\n`;
-    details += `| IP Address | Port | Status | Source |\n`;
-    details += `|------------|------|--------|--------|\n`;
+    table += `<details>\n<summary>📋 GitHub Infrastructure Connections (${githubConnections.length}) - Click to expand</summary>\n\n`;
+    table += `| IP Address | Port | Protocol | Status | Source |\n`;
+    table += `|------------|------|----------|--------|--------|\n`;
 
     for (const conn of githubConnections) {
       const statusDisplay = formatConnectionStatus(conn.status);
-      details += `| ${conn.ip} | ${conn.port} | ${statusDisplay} | ${conn.source} |\n`;
+      table += `| ${conn.ip} | ${conn.port} | ${conn.protocol} | ${statusDisplay} | ${conn.source} |\n`;
     }
-    details += `\n</details>\n\n`;
+    table += `\n</details>\n\n`;
   }
 
   const deniedCount = connections.filter(c => c.status === 'DENIED').length;
-  details += `**Total connections:** ${connections.length}`;
+  table += `**Total connections:** ${connections.length}`;
   if (deniedCount > 0) {
-    details += ` (🛡️ ${deniedCount} blocked)`;
+    table += ` (🛡️ ${deniedCount} blocked)`;
   }
-  details += `\n\n`;
+  table += `\n\n`;
 
+  return table;
+}
+
+/**
+ * Generate network connection section with heading
+ *
+ * @param connections - List of network connections
+ * @returns Markdown-formatted network connection section with heading and table
+ */
+export function generateNetworkConnectionDetails(connections: NetworkConnection[]): string {
+  let details = `## Network Connection Details\n\n`;
+  details += generateNetworkConnectionTable(connections);
   return details;
 }
 

@@ -23,7 +23,7 @@ describe('Report Formatter', () => {
 
     it('should format single connection', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '443', status: 'ALLOWED', source: 'User Defined' }
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
@@ -36,8 +36,8 @@ describe('Report Formatter', () => {
 
     it('should separate GitHub and user connections', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '443', status: 'ALLOWED', source: 'User Defined' },
-        { ip: '140.82.121.3', port: '443', status: 'ALLOWED', source: 'GitHub Required' }
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' },
+        { ip: '140.82.121.3', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'GitHub Required' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
@@ -53,7 +53,7 @@ describe('Report Formatter', () => {
 
     it('should format denied connections with emoji', () => {
       const connections: NetworkConnection[] = [
-        { ip: '192.168.1.1', port: '80', status: 'DENIED', source: 'User Defined' }
+        { ip: '192.168.1.1', port: '80', protocol: 'TCP', status: 'DENIED', source: 'User Defined' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
@@ -64,9 +64,9 @@ describe('Report Formatter', () => {
 
     it('should deduplicate connections by IP:port', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '443', status: 'ALLOWED', source: 'User Defined' },
-        { ip: '1.2.3.4', port: '443', status: 'ALLOWED', source: 'User Defined' },
-        { ip: '1.2.3.4', port: '80', status: 'ALLOWED', source: 'User Defined' }
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' },
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' },
+        { ip: '1.2.3.4', port: '80', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
@@ -78,9 +78,9 @@ describe('Report Formatter', () => {
 
     it('should show total and blocked count', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '443', status: 'ALLOWED', source: 'User Defined' },
-        { ip: '5.6.7.8', port: '80', status: 'DENIED', source: 'User Defined' },
-        { ip: '9.10.11.12', port: '22', status: 'DENIED', source: 'User Defined' }
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' },
+        { ip: '5.6.7.8', port: '80', protocol: 'TCP', status: 'DENIED', source: 'User Defined' },
+        { ip: '9.10.11.12', port: '22', protocol: 'TCP', status: 'DENIED', source: 'User Defined' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
@@ -91,7 +91,7 @@ describe('Report Formatter', () => {
 
     it('should handle analyzed connections', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '443', status: 'ANALYZED', source: 'User Defined' }
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ANALYZED', source: 'User Defined' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
@@ -102,13 +102,13 @@ describe('Report Formatter', () => {
 
     it('should create valid markdown tables', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '443', status: 'ALLOWED', source: 'User Defined' }
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
 
-      expect(result).toContain('| IP Address | Port | Status | Source |');
-      expect(result).toContain('|------------|------|--------|--------|');
+      expect(result).toContain('| IP Address | Port | Protocol | Status | Source |');
+      expect(result).toContain('|------------|------|----------|--------|--------|');
     });
   });
 
@@ -488,6 +488,7 @@ describe('Report Formatter', () => {
       const connections: NetworkConnection[] = Array.from({ length: 100 }, (_, i) => ({
         ip: `192.168.1.${i}`,
         port: '443',
+        protocol: 'TCP',
         status: 'ALLOWED',
         source: 'User Defined'
       }));
@@ -509,16 +510,16 @@ describe('Report Formatter', () => {
 
     it('should handle mixed GitHub and user connections', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '443', status: 'ALLOWED', source: 'User Defined' },
-        { ip: '5.6.7.8', port: '443', status: 'DENIED', source: 'User Defined' },
-        { ip: '140.82.121.3', port: '443', status: 'ALLOWED', source: 'GitHub Required' },
-        { ip: '140.82.121.4', port: '443', status: 'ALLOWED', source: 'GitHub Required' }
+        { ip: '1.2.3.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'User Defined' },
+        { ip: '5.6.7.8', port: '443', protocol: 'TCP', status: 'DENIED', source: 'User Defined' },
+        { ip: '140.82.121.3', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'GitHub Required' },
+        { ip: '140.82.121.4', port: '443', protocol: 'TCP', status: 'ALLOWED', source: 'GitHub Required' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
 
       // Should have both main table and collapsed section
-      expect(result).toContain('| IP Address | Port | Status | Source |');
+      expect(result).toContain('| IP Address | Port | Protocol | Status | Source |');
       expect(result).toContain('<details>');
       expect(result).toContain('**Total connections:** 4');
       expect(result).toContain('(🛡️ 1 blocked)');
@@ -526,8 +527,8 @@ describe('Report Formatter', () => {
 
     it('should handle all-denied connections', () => {
       const connections: NetworkConnection[] = [
-        { ip: '1.2.3.4', port: '80', status: 'DENIED', source: 'User Defined' },
-        { ip: '5.6.7.8', port: '22', status: 'DENIED', source: 'User Defined' }
+        { ip: '1.2.3.4', port: '80', protocol: 'TCP', status: 'DENIED', source: 'User Defined' },
+        { ip: '5.6.7.8', port: '22', protocol: 'TCP', status: 'DENIED', source: 'User Defined' }
       ];
 
       const result = generateNetworkConnectionDetails(connections);
