@@ -38,6 +38,15 @@ jobs:
             fi
           done
 
+      - name: Check DNS log file permissions
+        run: |
+          echo "=== DNS Log File Permissions ==="
+          echo "Pre-hook DNS log:"
+          ls -l /tmp/pre-dns.log || echo "Pre-hook DNS log not found"
+          echo ""
+          echo "Main action DNS log:"
+          ls -l /tmp/main-dns.log || echo "Main action DNS log not found"
+
       - name: Test GitHub domain access
         run: |
           echo "Testing GitHub domain access..."
