@@ -52,17 +52,21 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-hook-dns-logs.txt ]; then
+          if [ -f /tmp/pre-dns.log ]; then
             echo "Pre-hook DNS logs file found:"
-            tail -30 /tmp/pre-hook-dns-logs.txt || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found, checking syslog directly..."
-            sudo grep 'dnsmasq' /var/log/syslog | grep -E 'query|reply|NXDOMAIN' | head -30 || echo "No DNS logs found"
+            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
           fi
 
           echo ""
-          echo "=== Current DNS Logs ==="
-          sudo grep 'dnsmasq' /var/log/syslog | grep -E 'query|reply|NXDOMAIN' | tail -20 || echo "No current DNS logs found"
+          echo "=== Main Action DNS Logs ==="
+          if [ -f /tmp/main-dns.log ]; then
+            echo "Main action DNS logs file found:"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
+          else
+            echo "Main action DNS logs file not found at /tmp/main-dns.log"
+          fi
 
       - name: Verify job summary was created
         run: |
@@ -116,16 +120,21 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-hook-dns-logs.txt ]; then
+          if [ -f /tmp/pre-dns.log ]; then
             echo "Pre-hook DNS logs file found:"
-            tail -30 /tmp/pre-hook-dns-logs.txt || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found"
+            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
           fi
 
           echo ""
-          echo "=== Current DNS Logs ==="
-          sudo grep 'dnsmasq' /var/log/syslog | grep -E 'query|reply|NXDOMAIN' | tail -20 || echo "No DNS logs found"
+          echo "=== Main Action DNS Logs ==="
+          if [ -f /tmp/main-dns.log ]; then
+            echo "Main action DNS logs file found:"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
+          else
+            echo "Main action DNS logs file not found at /tmp/main-dns.log"
+          fi
 
       - name: Verify job summary was created
         run: |
@@ -176,10 +185,18 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-hook-dns-logs.txt ]; then
-            tail -20 /tmp/pre-hook-dns-logs.txt || echo "Could not read pre-hook DNS logs"
+          if [ -f /tmp/pre-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found"
+            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
+          fi
+
+          echo ""
+          echo "=== Main Action DNS Logs ==="
+          if [ -f /tmp/main-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
+          else
+            echo "Main action DNS logs file not found at /tmp/main-dns.log"
           fi
 
   test-edge-cases:
@@ -247,16 +264,20 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-hook-dns-logs.txt ]; then
-            tail -20 /tmp/pre-hook-dns-logs.txt || echo "Could not read pre-hook DNS logs"
+          if [ -f /tmp/pre-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found"
+            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
           fi
 
           echo ""
-          echo "=== DNS Resolution Logs ==="
-          sudo grep 'dnsmasq' /var/log/syslog | grep -E 'reply|NXDOMAIN|localhost' | tail -15 || echo "No DNS logs found"
-      
+          echo "=== Main Action DNS Logs ==="
+          if [ -f /tmp/main-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
+          else
+            echo "Main action DNS logs file not found at /tmp/main-dns.log"
+          fi
+
       - name: Final security audit
         run: |
           echo "=== Final Security Audit ==="
