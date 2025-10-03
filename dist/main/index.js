@@ -404,6 +404,34 @@ async function setupSudoLogging(logFile) {
     core.info(`✅ Sudo logging configured to ${logFile}`);
 }
 /**
+ * Generate required sudo commands for validation and log parsing
+ * These commands are needed by the post-action to:
+ * - Read protected configuration files for integrity validation
+ * - Query iptables rules for firewall validation
+ * - Parse DNS and network logs for reporting
+ *
+ * @param username - The username to generate rules for (default: 'runner')
+ * @returns Sudoers configuration string with required commands
+ */
+function getRequiredSudoCommands(username) {
+    return `
+# Required commands for post-action validation and reporting
+# These are automatically added by safer-runner-action
+
+# Allow reading configuration files for checksum validation
+${username} ALL=(ALL) NOPASSWD: /usr/bin/cat /etc/dnsmasq.conf
+${username} ALL=(ALL) NOPASSWD: /usr/bin/cat /etc/resolv.conf
+${username} ALL=(ALL) NOPASSWD: /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
+
+# Allow reading iptables rules for integrity validation
+${username} ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L * -n --line-numbers
+
+# Allow parsing DNS and network logs for post-action reporting
+${username} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /var/log/syslog
+${username} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /tmp/*
+`;
+}
+/**
  * Apply custom sudoers configuration for the runner user
  * This replaces the default unrestricted sudo access with user-specified rules
  *
@@ -428,25 +456,7 @@ async function applyCustomSudoConfig(sudoConfig) {
     const sudoersFile = `/etc/sudoers.d/${currentUser}`;
     const tempFile = `/tmp/${currentUser}-sudoers.tmp`;
     // Append required commands for validation and log parsing
-    const requiredCommands = `
-# Required commands for post-action validation and reporting
-# These are automatically added by safer-runner-action
-
-# Allow reading configuration files for checksum validation
-${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/dnsmasq.conf
-${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/resolv.conf
-${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
-
-# Allow reading iptables rules for integrity validation
-${currentUser} ALL=(ALL) NOPASSWD: /sbin/iptables -L * -n --line-numbers
-${currentUser} ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L * -n --line-numbers
-
-# Allow parsing DNS and network logs for post-action reporting
-${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /var/log/syslog
-${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /var/log/syslog
-${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /tmp/*
-${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /tmp/*
-`;
+    const requiredCommands = getRequiredSudoCommands(currentUser);
     const fullConfig = sudoConfig + '\n' + requiredCommands;
     try {
         // Write custom config + required commands to temp file
@@ -486,60 +496,14 @@ ${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /tmp/*
  * We replace this with a minimal configuration that only allows validation commands.
  */
 async function disableSudoForRunner() {
-    // Get the current user (should be 'runner' on GitHub Actions)
-    let currentUser = '';
-    await exec.exec('whoami', [], {
-        listeners: {
-            stdout: (data) => {
-                currentUser += data.toString().trim();
-            }
-        }
-    });
-    core.info(`Restricting sudo access for user: ${currentUser} to validation commands only`);
-    // GitHub Actions runners grant sudo via /etc/sudoers.d/runner file
-    const sudoersFile = `/etc/sudoers.d/${currentUser}`;
-    const tempFile = `/tmp/${currentUser}-validation-sudoers.tmp`;
-    // Minimal sudoers config that only allows validation commands
-    const validationOnlySudoConfig = `# Safer Runner Action - Validation-only sudo access
+    core.info('Restricting sudo access to validation commands only');
+    // Use applyCustomSudoConfig with an empty config to get just the required commands
+    const validationOnlyHeader = `# Safer Runner Action - Validation-only sudo access
 # This configuration allows only the commands needed for post-action integrity validation
 # and log parsing. All other sudo commands will be denied.
-
-# Allow reading configuration files for checksum validation
-${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/dnsmasq.conf
-${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/resolv.conf
-${currentUser} ALL=(ALL) NOPASSWD: /bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
-
-# Allow reading iptables rules for integrity validation
-${currentUser} ALL=(ALL) NOPASSWD: /sbin/iptables -L * -n --line-numbers
-${currentUser} ALL=(ALL) NOPASSWD: /usr/sbin/iptables -L * -n --line-numbers
-
-# Allow parsing DNS and network logs for post-action reporting
-${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /var/log/syslog
-${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /var/log/syslog
-${currentUser} ALL=(ALL) NOPASSWD: /bin/grep -E * /tmp/*
-${currentUser} ALL=(ALL) NOPASSWD: /usr/bin/grep -E * /tmp/*
 `;
-    try {
-        // Write minimal config to temp file
-        await exec.exec('sudo', ['tee', tempFile], {
-            input: Buffer.from(validationOnlySudoConfig)
-        });
-        // Validate with visudo
-        await exec.exec('sudo', ['visudo', '-c', '-f', tempFile]);
-        // Set correct permissions before moving
-        await exec.exec('sudo', ['chmod', '0440', tempFile]);
-        await exec.exec('sudo', ['chown', 'root:root', tempFile]);
-        // Replace the existing sudoers file
-        await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
-        core.info(`✅ Sudo access restricted to validation commands only`);
-        core.info('🔒 Runner user can only execute commands needed for integrity validation');
-    }
-    catch (error) {
-        core.error(`Failed to restrict sudo access: ${error}`);
-        // Clean up temp file
-        await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
-        throw new Error('Failed to configure validation-only sudo access');
-    }
+    await applyCustomSudoConfig(validationOnlyHeader);
+    core.info('🔒 Runner user can only execute commands needed for integrity validation');
 }
 /**
  * Perform initial system setup: install dependencies, create DNS user, setup ipsets

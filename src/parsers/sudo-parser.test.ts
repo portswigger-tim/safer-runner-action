@@ -121,7 +121,7 @@ describe('Sudo Parser', () => {
     });
   });
 
-  describe('parseSudoLogsFromString', () => {
+  describe('parseSudoLogsFromString - single-line format', () => {
     it('should parse multiple sudo log entries', () => {
       const logs = `Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf
 Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/chmod 600 /etc/dnsmasq.conf
@@ -155,6 +155,58 @@ another invalid line`;
       const result = parseSudoLogsFromString(logs);
       expect(result).toHaveLength(1);
       expect(result[0].command).toBe('/usr/bin/tee');
+    });
+  });
+
+  describe('parseSudoLogsFromString - multi-line format', () => {
+    it('should parse multi-line sudo log entries', () => {
+      const logs = `Oct  3 14:36:19 : runner :
+    *** ; USER=root ;
+    COMMAND=/usr/bin/docker --version
+Oct  3 14:36:19 : runner :
+    *** ; USER=root ;
+    COMMAND=/usr/bin/whoami
+Oct  3 14:36:19 : runner :
+    *** ; USER=root ;
+    COMMAND=/usr/bin/cat /etc/os-release`;
+
+      const result = parseSudoLogsFromString(logs);
+      expect(result).toHaveLength(3);
+      expect(result[0].command).toBe('/usr/bin/docker');
+      expect(result[0].args).toBe('--version');
+      expect(result[1].command).toBe('/usr/bin/whoami');
+      expect(result[1].args).toBe('');
+      expect(result[2].command).toBe('/usr/bin/cat');
+      expect(result[2].args).toBe('/etc/os-release');
+    });
+
+    it('should deduplicate multi-line entries automatically', () => {
+      const logs = `Oct  3 14:36:19 : runner :
+    *** ; USER=root ;
+    COMMAND=/usr/bin/docker --version
+Oct  3 14:36:20 : runner :
+    *** ; USER=root ;
+    COMMAND=/usr/bin/docker --version`;
+
+      const result = parseSudoLogsFromString(logs);
+      expect(result).toHaveLength(1);
+      expect(result[0].command).toBe('/usr/bin/docker');
+    });
+
+    it('should handle empty multi-line content', () => {
+      expect(parseSudoLogsFromString('')).toEqual([]);
+    });
+
+    it('should handle malformed multi-line content gracefully', () => {
+      const logs = `invalid line
+Oct  3 14:36:19 : runner :
+    *** ; USER=root ;
+    COMMAND=/usr/bin/docker --version
+another invalid line`;
+
+      const result = parseSudoLogsFromString(logs);
+      expect(result).toHaveLength(1);
+      expect(result[0].command).toBe('/usr/bin/docker');
     });
   });
 

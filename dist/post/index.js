@@ -881,19 +881,76 @@ function deduplicateSudoCommands(commands) {
 }
 /**
  * Parse sudo logs from string content
+ * Handles both single-line and multi-line log formats
  */
 function parseSudoLogsFromString(content) {
     const lines = content.split('\n');
     const commands = [];
+    // First try single-line format (older sudo versions)
     for (const line of lines) {
         const cmd = parseSudoLogLine(line);
         if (cmd) {
             commands.push(cmd);
         }
     }
+    // If no commands found, try multi-line format (newer sudo versions)
+    if (commands.length === 0) {
+        const multiLineCommands = parseMultiLineSudoLogs(content);
+        commands.push(...multiLineCommands);
+    }
     // Deduplicate and limit to 1000 commands
     const deduplicated = deduplicateSudoCommands(commands);
     return deduplicated.slice(0, 1000);
+}
+/**
+ * Parse multi-line sudo log format (newer sudo versions)
+ * Format:
+ *   Oct  3 14:36:19 : runner :
+ *       *** ; USER=root ;
+ *       COMMAND=/usr/bin/docker --version
+ */
+function parseMultiLineSudoLogs(content) {
+    const commands = [];
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Look for timestamp line
+        const timestampMatch = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:/);
+        if (!timestampMatch)
+            continue;
+        const [, timestamp, user] = timestampMatch;
+        // Look for USER= line (should be next line or within next few lines)
+        let targetUser = '';
+        let fullCommand = '';
+        for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+            const nextLine = lines[j].trim();
+            // Extract USER
+            const userMatch = nextLine.match(/USER=(\w+)/);
+            if (userMatch) {
+                targetUser = userMatch[1];
+            }
+            // Extract COMMAND
+            const commandMatch = nextLine.match(/COMMAND=(.+)$/);
+            if (commandMatch) {
+                fullCommand = commandMatch[1].trim();
+                break;
+            }
+        }
+        if (targetUser && fullCommand) {
+            // Split command and args
+            const commandParts = fullCommand.split(/\s+/);
+            const command = commandParts[0];
+            const args = commandParts.slice(1).join(' ');
+            commands.push({
+                timestamp,
+                user,
+                targetUser,
+                command,
+                args
+            });
+        }
+    }
+    return commands;
 }
 /**
  * Convert sudo commands to sudoers config format
