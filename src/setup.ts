@@ -66,6 +66,21 @@ export async function setupFirewallRules(dnsUid: number, logPrefix: string = '')
   // Flush OUTPUT chain
   await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
 
+  // Allow established connections on eth0
+  await exec.exec('sudo', [
+    'iptables',
+    '-A',
+    'OUTPUT',
+    '-o',
+    'eth0',
+    '-m',
+    'conntrack',
+    '--ctstate',
+    'ESTABLISHED',
+    '-j',
+    'ACCEPT'
+  ]);
+
   // Allow Azure metadata service (required for GitHub Actions)
   await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '168.63.129.16', '-j', 'ACCEPT']);
   await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-d', '169.254.169.254', '-j', 'ACCEPT']);
