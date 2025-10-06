@@ -393,19 +393,18 @@ exports.parseRequestChains = parseRequestChains;
 exports.deduplicateDnsResolutions = deduplicateDnsResolutions;
 const core = __importStar(__nccwpck_require__(7484));
 /**
- * Parse DNS logs from syslog to extract domain resolutions
- * @param logFile Optional path to a specific log file (defaults to /var/log/syslog)
+ * Parse DNS logs from dedicated log file to extract domain resolutions
+ * @param logFile Path to the DNS log file
  */
 async function parseDnsLogs(logFile) {
     try {
-        const targetFile = logFile || '/var/log/syslog';
         // Read log file directly (no sudo required - file is world-readable)
         const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
-        if (!fs.existsSync(targetFile)) {
-            core.warning(`DNS log file not found: ${targetFile}`);
+        if (!fs.existsSync(logFile)) {
+            core.warning(`DNS log file not found: ${logFile}`);
             return [];
         }
-        const logContent = fs.readFileSync(targetFile, 'utf8');
+        const logContent = fs.readFileSync(logFile, 'utf8');
         // Filter to DNS-related lines only
         const dnsLines = logContent
             .split('\n')
@@ -1258,8 +1257,7 @@ function getRequiredSudoCommands(username) {
 Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
                                       /usr/bin/cat /etc/resolv.conf, \\
                                       /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
-                                      /usr/sbin/iptables -L * -n --line-numbers, \\
-                                      /usr/bin/grep -E * /var/log/syslog
+                                      /usr/sbin/iptables -L * -n --line-numbers
 
 # Define command alias for sudo configuration commands (used by applyCustomSudoConfig, setupSudoLogging, and removeSudoLogging)
 Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\

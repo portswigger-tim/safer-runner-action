@@ -82,8 +82,7 @@ function getRequiredSudoCommands(username: string): string {
 Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
                                       /usr/bin/cat /etc/resolv.conf, \\
                                       /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
-                                      /usr/sbin/iptables -L * -n --line-numbers, \\
-                                      /usr/bin/grep -E * /var/log/syslog
+                                      /usr/sbin/iptables -L * -n --line-numbers
 
 # Define command alias for sudo configuration commands (used by applyCustomSudoConfig, setupSudoLogging, and removeSudoLogging)
 Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\

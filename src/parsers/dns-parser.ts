@@ -17,21 +17,19 @@ export interface DnsResolution {
 }
 
 /**
- * Parse DNS logs from syslog to extract domain resolutions
- * @param logFile Optional path to a specific log file (defaults to /var/log/syslog)
+ * Parse DNS logs from dedicated log file to extract domain resolutions
+ * @param logFile Path to the DNS log file
  */
-export async function parseDnsLogs(logFile?: string): Promise<DnsResolution[]> {
+export async function parseDnsLogs(logFile: string): Promise<DnsResolution[]> {
   try {
-    const targetFile = logFile || '/var/log/syslog';
-
     // Read log file directly (no sudo required - file is world-readable)
     const fs = await import('fs');
-    if (!fs.existsSync(targetFile)) {
-      core.warning(`DNS log file not found: ${targetFile}`);
+    if (!fs.existsSync(logFile)) {
+      core.warning(`DNS log file not found: ${logFile}`);
       return [];
     }
 
-    const logContent = fs.readFileSync(targetFile, 'utf8');
+    const logContent = fs.readFileSync(logFile, 'utf8');
 
     // Filter to DNS-related lines only
     const dnsLines = logContent
