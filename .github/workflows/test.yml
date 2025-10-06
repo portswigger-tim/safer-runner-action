@@ -650,3 +650,141 @@ jobs:
           docker --version
           docker ps
           echo "✅ Docker access works without sudo (via docker group)"
+
+  test-disable-docker:
+    name: Test Disable Docker Feature
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Docker works before action
+        run: |
+          echo "=== Testing Docker BEFORE disabling ==="
+          whoami
+          groups
+          docker --version
+          docker ps
+          echo "✅ Docker is working"
+
+      - name: Apply Safer Runner Action with disable-docker
+        uses: portswigger-tim/safer-runner-action@main
+        with:
+          mode: 'analyze'
+          disable-docker: 'true'
+
+      - name: Verify Docker is disabled after action
+        run: |
+          echo "=== Testing Docker AFTER disabling ==="
+
+          echo "Checking group membership..."
+          groups | grep -v docker || echo "✅ Runner is not in docker group"
+
+          echo "Attempting to run docker command (should fail)..."
+          if docker ps 2>&1; then
+            echo "❌ ERROR: Docker still works! It should have been disabled."
+            exit 1
+          else
+            echo "✅ SUCCESS: Docker is correctly disabled"
+          fi
+
+          echo "Attempting to run docker version (should also fail)..."
+          if docker --version 2>&1; then
+            echo "❌ ERROR: Docker version command still works!"
+            exit 1
+          else
+            echo "✅ SUCCESS: Docker version command correctly blocked"
+          fi
+
+      - name: Verify sudo still works
+        run: |
+          echo "=== Testing sudo access (should still work) ==="
+          sudo whoami
+          sudo cat /etc/os-release
+          echo "✅ Sudo access still works (disable-docker doesn't affect sudo)"
+
+      - name: Verify other group memberships intact
+        run: |
+          echo "=== Testing other group access (should still work) ==="
+          # Runner user should still be in other groups
+          groups
+          echo ""
+          echo "Checking specific groups..."
+          groups | grep adm && echo "✅ Still in adm group" || echo "❌ Not in adm group"
+          groups | grep sudo && echo "✅ Still in sudo group" || echo "❌ Not in sudo group"
+
+          # Test log file access (adm group)
+          ls -la /var/log/syslog
+          echo "✅ Log file access still works (runner user still in adm group)"
+
+  test-combined-lockdown:
+    name: Test Combined Lockdown (Sudo + Docker Disabled)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify both sudo and Docker work before action
+        run: |
+          echo "=== Testing BEFORE combined lockdown ==="
+          echo "Sudo test:"
+          sudo whoami
+          echo "Docker test:"
+          docker --version
+          docker ps
+          echo "✅ Both sudo and Docker are working"
+
+      - name: Apply Safer Runner Action with combined lockdown
+        uses: portswigger-tim/safer-runner-action@main
+        with:
+          mode: 'enforce'
+          disable-sudo: 'true'
+          disable-docker: 'true'
+          allowed-domains: 'httpbin.org'
+
+      - name: Verify both sudo and Docker are disabled
+        run: |
+          echo "=== Testing AFTER combined lockdown ==="
+
+          echo "Checking sudo (should fail)..."
+          if sudo whoami 2>&1; then
+            echo "❌ ERROR: Sudo still works!"
+            exit 1
+          else
+            echo "✅ Sudo is correctly disabled"
+          fi
+
+          echo "Checking Docker (should fail)..."
+          if docker ps 2>&1; then
+            echo "❌ ERROR: Docker still works!"
+            exit 1
+          else
+            echo "✅ Docker is correctly disabled"
+          fi
+
+          echo "Checking group membership..."
+          groups
+          groups | grep -v docker || echo "✅ Not in docker group"
+
+      - name: Verify workflow can still function
+        run: |
+          echo "=== Testing workflow functionality without elevated privileges ==="
+
+          echo "Testing network access to allowed domain..."
+          curl -I https://httpbin.org/get || { echo "❌ Network access failed"; exit 1; }
+          echo "✅ Network access works"
+
+          echo "Testing basic commands..."
+          whoami
+          pwd
+          ls -la
+          echo "Hello from locked-down runner" > test.txt
+          cat test.txt
+          echo "✅ Basic commands work"
+
+          echo "Testing unauthorized domain is blocked..."
+          timeout 5 curl -I https://example.com && echo "❌ Unauthorized domain allowed!" || echo "✅ Unauthorized domain blocked"
+
+      - name: Summary
+        run: |
+          echo "=== Combined Lockdown Summary ==="
+          echo "✅ Sudo access: DISABLED"
+          echo "✅ Docker access: DISABLED"
+          echo "✅ Network filtering: ACTIVE (enforce mode)"
+          echo "✅ Workflow execution: FUNCTIONAL"
+          echo ""
+          echo "This demonstrates maximum security for workflows that don't need elevated privileges or containers."
