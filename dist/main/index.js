@@ -647,8 +647,12 @@ async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
     await exec.exec('sudo', ['tee', configFile], {
         input: Buffer.from(rsyslogConfig)
     });
+    // Create log file and set ownership to syslog user (rsyslog runs as syslog:adm)
+    // This allows rsyslog to write to the file
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
+    await exec.exec('sudo', ['chmod', '644', logFile]);
     // Restart rsyslog to apply configuration
-    // rsyslog will create the log file automatically with proper permissions
     await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
 }
 async function setupFirewallRules(dnsUid, logPrefix = '') {
