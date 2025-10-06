@@ -109,7 +109,6 @@ export async function setupIptablesLogging(
   const prefixArray = "['" + logPrefixes.join("', '") + "']";
 
   const rsyslogConfig = `if $msg contains ${prefixArray} then ${logFile}
-& stop
 `;
 
   // Use different config file names for pre-hook and main action
