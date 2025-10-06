@@ -10,6 +10,7 @@ import {
   setupSudoLogging,
   setupIptablesLogging
 } from './setup';
+import { applyCustomSudoConfig } from './sudo';
 
 /**
  * Pre-action hook: Establish security in analyze mode
@@ -60,7 +61,12 @@ async function run(): Promise<void> {
     core.info('Finalizing analyze mode rules...');
     await finalizeFirewallRules('analyze', 'Pre-');
 
-    // Setup sudo logging AFTER all security configuration is complete
+    // Apply default sudo config FIRST to set up exclusion rules
+    // This ensures removeSudoLogging() in main.ts won't be logged
+    core.info('Configuring default sudo access with validation exclusions...');
+    await applyCustomSudoConfig();
+
+    // Setup sudo logging AFTER exclusion rules are in place
     // This captures sudo usage by other actions' pre-hooks
     core.info('Configuring sudo logging for pre-hook monitoring...');
     await setupSudoLogging('/var/log/safer-runner/pre-sudo.log');
