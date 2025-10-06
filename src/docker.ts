@@ -14,22 +14,32 @@ export const DOCKER_GROUP = 'docker';
  * Disable Docker access for the runner user
  * This prevents container escape attacks, docker socket abuse, and privileged container execution
  *
- * Removes the runner user from the 'docker' group while preserving other group memberships.
- * The runner user will be unable to execute docker commands after this is applied.
+ * Strategy:
+ * 1. Remove runner from docker group (prevents new sessions from getting access)
+ * 2. Change docker socket permissions to block current session
+ *
+ * Note: Simply removing group membership doesn't affect the current process's
+ * credential cache, so we must also restrict the docker socket directly.
  */
 export async function disableDockerForRunner(): Promise<void> {
-  core.info('Removing runner user from docker group...');
+  core.info('Disabling Docker access for runner user...');
 
   try {
-    // Remove runner from docker group
+    // Step 1: Remove runner from docker group (for future sessions)
     await exec.exec('sudo', ['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
-
     core.info(`✅ Removed ${RUNNER_USERNAME} from ${DOCKER_GROUP} group`);
+
+    // Step 2: Restrict docker socket permissions to block current session
+    // Change ownership to root:root and set permissions to 600 (owner-only access)
+    core.info('Restricting docker socket permissions...');
+    await exec.exec('sudo', ['chown', 'root:root', '/var/run/docker.sock']);
+    await exec.exec('sudo', ['chmod', '600', '/var/run/docker.sock']);
+
+    core.info('✅ Docker socket access restricted to root only');
     core.info('🔒 Docker commands will no longer be available to the runner user');
     core.info('ℹ️  This prevents container escape attacks and docker socket abuse');
   } catch (error) {
-    // gpasswd returns non-zero if user isn't in the group - this is fine
-    core.warning(`Could not remove ${RUNNER_USERNAME} from ${DOCKER_GROUP} group (may not be a member): ${error}`);
+    core.warning(`Could not fully disable Docker access: ${error}`);
   }
 }
 

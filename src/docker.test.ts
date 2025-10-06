@@ -16,27 +16,35 @@ describe('docker module', () => {
   });
 
   describe('disableDockerForRunner', () => {
-    it('should remove runner from docker group successfully', async () => {
+    it('should remove runner from docker group and restrict socket permissions', async () => {
       const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
       mockExec.mockResolvedValue(0);
 
       await disableDockerForRunner();
 
+      // Should remove from docker group
       expect(mockExec).toHaveBeenCalledWith('sudo', ['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
-      expect(core.info).toHaveBeenCalledWith('Removing runner user from docker group...');
+
+      // Should restrict docker socket permissions
+      expect(mockExec).toHaveBeenCalledWith('sudo', ['chown', 'root:root', '/var/run/docker.sock']);
+      expect(mockExec).toHaveBeenCalledWith('sudo', ['chmod', '600', '/var/run/docker.sock']);
+
+      // Should log appropriate messages
+      expect(core.info).toHaveBeenCalledWith('Disabling Docker access for runner user...');
       expect(core.info).toHaveBeenCalledWith(`✅ Removed ${RUNNER_USERNAME} from ${DOCKER_GROUP} group`);
+      expect(core.info).toHaveBeenCalledWith('Restricting docker socket permissions...');
+      expect(core.info).toHaveBeenCalledWith('✅ Docker socket access restricted to root only');
       expect(core.info).toHaveBeenCalledWith('🔒 Docker commands will no longer be available to the runner user');
       expect(core.info).toHaveBeenCalledWith('ℹ️  This prevents container escape attacks and docker socket abuse');
     });
 
-    it('should handle case when runner is not in docker group', async () => {
+    it('should handle errors gracefully', async () => {
       const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockRejectedValue(new Error('User not in group'));
+      mockExec.mockRejectedValue(new Error('Permission denied'));
 
       await disableDockerForRunner();
 
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
-      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Could not remove runner from docker group'));
+      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Could not fully disable Docker access'));
     });
 
     it('should use correct constants', async () => {
