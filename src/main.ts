@@ -109,20 +109,25 @@ async function run(): Promise<void> {
     const validator = new SystemValidator();
     await validator.capturePostSetupBaseline();
 
-    // Setup sudo logging BEFORE applying sudo configuration
-    // This ensures we don't capture our own sudo config commands
-    // but DO capture any workflow commands that follow
-    core.info('Configuring sudo logging for workflow monitoring...');
-    await setupSudoLogging('/var/log/safer-runner/main-sudo.log');
-
-    // Apply sudo configuration (must be done LAST, after sudo logging is configured)
+    // Apply sudo configuration FIRST to set up exclusion rules
+    // This must happen BEFORE setupSudoLogging() so that internal setup commands
+    // are excluded from logs via Defaults!SAFER_RUNNER_CONFIG !log_allowed
     if (disableSudo) {
       core.info('Disabling sudo access for runner user...');
       await disableSudoForRunner();
     } else if (sudoConfig) {
       core.info('Applying custom sudo configuration...');
       await applyCustomSudoConfig(sudoConfig);
+    } else {
+      // No custom config - apply default config to set up exclusion rules
+      core.info('Configuring default sudo access with validation exclusions...');
+      await applyCustomSudoConfig();
     }
+
+    // Setup sudo logging AFTER exclusion rules are in place
+    // This ensures internal setup commands are not logged
+    core.info('Configuring sudo logging for workflow monitoring...');
+    await setupSudoLogging('/var/log/safer-runner/main-sudo.log');
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
   } catch (error) {
