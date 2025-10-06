@@ -658,9 +658,10 @@ async function setupIpsets() {
  */
 async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
     // Build rsyslog configuration to filter iptables logs
-    // Use expression-based filter with contains array for clean, reliable matching
+    // Filter by programname=kernel to only capture actual iptables log messages
+    // (not sudo commands that set up the logging rules)
     const prefixArray = "['" + logPrefixes.join("', '") + "']";
-    const rsyslogConfig = `if $msg contains ${prefixArray} then ${logFile}
+    const rsyslogConfig = `if $programname == 'kernel' and $msg contains ${prefixArray} then ${logFile}
 `;
     // Use different config file names for pre-hook and main action
     const configFile = configSuffix
@@ -1130,7 +1131,7 @@ function generateSudoConfigAdvice(commands) {
     let advice = `### Sudo Configuration\n\n`;
     advice += `Based on observed sudo usage, you can restrict sudo access with this configuration:\n\n`;
     advice += `\`\`\`yaml\n`;
-    advice += `- uses: portswigger-tim/safer-runner-action@main\n`;
+    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
     advice += `  with:\n`;
     advice += `    sudo-config: |\n`;
     // Indent each line of the sudoers config

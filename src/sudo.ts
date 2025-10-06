@@ -252,7 +252,7 @@ export function generateSudoConfigAdvice(commands: SudoCommand[]): string {
   let advice = `### Sudo Configuration\n\n`;
   advice += `Based on observed sudo usage, you can restrict sudo access with this configuration:\n\n`;
   advice += `\`\`\`yaml\n`;
-  advice += `- uses: portswigger-tim/safer-runner-action@main\n`;
+  advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
   advice += `  with:\n`;
   advice += `    sudo-config: |\n`;
 

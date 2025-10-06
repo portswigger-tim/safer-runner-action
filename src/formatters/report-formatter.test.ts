@@ -11,6 +11,7 @@ import {
 } from './report-formatter';
 import { NetworkConnection } from '../parsers/network-parser';
 import { DnsResolution } from '../parsers/dns-parser';
+import { SudoCommand } from '../parsers/sudo-parser';
 
 describe('Report Formatter', () => {
   describe('generateNetworkConnectionDetails', () => {
@@ -352,6 +353,49 @@ describe('Report Formatter', () => {
       const result = generateConfigurationAdvice(resolutions);
 
       expect(result).toContain('portswigger-tim/safer-runner-action@v1');
+    });
+
+    it('should suggest disable-sudo when no sudo commands are used', () => {
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
+      const sudoCommands: SudoCommand[] = [];
+
+      const result = generateConfigurationAdvice(resolutions, sudoCommands);
+
+      expect(result).toContain('disable-sudo: true');
+      expect(result).toContain('did not use sudo');
+    });
+
+    it('should suggest sudo-config when sudo commands are used', () => {
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
+      const sudoCommands: SudoCommand[] = [
+        { timestamp: '2024-01-01', user: 'runner', targetUser: 'root', command: '/usr/bin/docker', args: '--version' },
+        { timestamp: '2024-01-01', user: 'runner', targetUser: 'root', command: '/usr/bin/apt-get', args: 'update' }
+      ];
+
+      const result = generateConfigurationAdvice(resolutions, sudoCommands);
+
+      expect(result).toContain('sudo-config: |');
+      expect(result).toContain('runner ALL=(ALL) NOPASSWD: /usr/bin/docker --version');
+      expect(result).toContain('runner ALL=(ALL) NOPASSWD: /usr/bin/apt-get update');
+      expect(result).not.toContain('disable-sudo: true');
+    });
+
+    it('should suggest disable-sudo when no sudo commands and no domains', () => {
+      const resolutions: DnsResolution[] = [];
+      const sudoCommands: SudoCommand[] = [];
+
+      const result = generateConfigurationAdvice(resolutions, sudoCommands);
+
+      expect(result).toContain('disable-sudo: true');
+      expect(result).toContain('No external domains or sudo commands were used');
+    });
+
+    it('should not suggest disable-sudo when sudoCommands is undefined', () => {
+      const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
+
+      const result = generateConfigurationAdvice(resolutions);
+
+      expect(result).not.toContain('disable-sudo');
     });
   });
 

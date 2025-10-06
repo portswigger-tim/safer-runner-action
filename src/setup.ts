@@ -126,10 +126,11 @@ export async function setupIptablesLogging(
   configSuffix: string = ''
 ): Promise<void> {
   // Build rsyslog configuration to filter iptables logs
-  // Use expression-based filter with contains array for clean, reliable matching
+  // Filter by programname=kernel to only capture actual iptables log messages
+  // (not sudo commands that set up the logging rules)
   const prefixArray = "['" + logPrefixes.join("', '") + "']";
 
-  const rsyslogConfig = `if $msg contains ${prefixArray} then ${logFile}
+  const rsyslogConfig = `if $programname == 'kernel' and $msg contains ${prefixArray} then ${logFile}
 `;
 
   // Use different config file names for pre-hook and main action
