@@ -424,7 +424,7 @@ async function run() {
         core.saveState('dns-uid', dnsUser.uid.toString());
         // Setup rsyslog to filter pre-hook iptables logs to dedicated file
         core.info('Configuring iptables log filtering...');
-        await (0, setup_1.setupIptablesLogging)('/tmp/pre-iptables.log', ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:']);
+        await (0, setup_1.setupIptablesLogging)('/tmp/pre-iptables.log', ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:'], 'pre');
         // Configure iptables rules with Pre- log prefix
         core.info('Configuring iptables rules...');
         await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Pre-');
@@ -590,16 +590,23 @@ async function setupIpsets() {
  * Setup rsyslog to filter iptables logs to dedicated files
  * This allows reading logs without sudo and provides clean separation
  * between pre-hook and main action logs
+ *
+ * Creates separate config files for pre-hook and main action to avoid
+ * overwriting each other's configurations
  */
-async function setupIptablesLogging(logFile, logPrefixes) {
+async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
     // Build rsyslog configuration to filter iptables logs
     // Use regex to match any of the provided prefixes
     const prefixPattern = logPrefixes.join('|');
     const rsyslogConfig = `:msg,regex,"(${prefixPattern})" ${logFile}
 & stop
 `;
+    // Use different config file names for pre-hook and main action
+    const configFile = configSuffix
+        ? `/etc/rsyslog.d/10-iptables-safer-runner-${configSuffix}.conf`
+        : '/etc/rsyslog.d/10-iptables-safer-runner.conf';
     // Write rsyslog configuration
-    await exec.exec('sudo', ['tee', '/etc/rsyslog.d/10-iptables-safer-runner.conf'], {
+    await exec.exec('sudo', ['tee', configFile], {
         input: Buffer.from(rsyslogConfig)
     });
     // Create log file with proper permissions (world-readable)

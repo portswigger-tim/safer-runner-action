@@ -34,7 +34,11 @@ async function run(): Promise<void> {
 
     // Setup rsyslog to filter pre-hook iptables logs to dedicated file
     core.info('Configuring iptables log filtering...');
-    await setupIptablesLogging('/tmp/pre-iptables.log', ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:']);
+    await setupIptablesLogging(
+      '/tmp/pre-iptables.log',
+      ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:'],
+      'pre'
+    );
 
     // Configure iptables rules with Pre- log prefix
     core.info('Configuring iptables rules...');

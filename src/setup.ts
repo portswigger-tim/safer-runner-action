@@ -95,8 +95,15 @@ export async function setupIpsets() {
  * Setup rsyslog to filter iptables logs to dedicated files
  * This allows reading logs without sudo and provides clean separation
  * between pre-hook and main action logs
+ *
+ * Creates separate config files for pre-hook and main action to avoid
+ * overwriting each other's configurations
  */
-export async function setupIptablesLogging(logFile: string, logPrefixes: string[]): Promise<void> {
+export async function setupIptablesLogging(
+  logFile: string,
+  logPrefixes: string[],
+  configSuffix: string = ''
+): Promise<void> {
   // Build rsyslog configuration to filter iptables logs
   // Use regex to match any of the provided prefixes
   const prefixPattern = logPrefixes.join('|');
@@ -105,8 +112,13 @@ export async function setupIptablesLogging(logFile: string, logPrefixes: string[
 & stop
 `;
 
+  // Use different config file names for pre-hook and main action
+  const configFile = configSuffix
+    ? `/etc/rsyslog.d/10-iptables-safer-runner-${configSuffix}.conf`
+    : '/etc/rsyslog.d/10-iptables-safer-runner.conf';
+
   // Write rsyslog configuration
-  await exec.exec('sudo', ['tee', '/etc/rsyslog.d/10-iptables-safer-runner.conf'], {
+  await exec.exec('sudo', ['tee', configFile], {
     input: Buffer.from(rsyslogConfig)
   });
 
