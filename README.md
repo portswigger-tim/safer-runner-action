@@ -2,6 +2,38 @@
 
 Multi-layer security for GitHub Actions runners with network filtering (DNS + iptables), privilege control (sudo management), and integrity validation (tampering detection). Implements default-deny policy with comprehensive security reporting.
 
+## Who This Is For
+
+### ✅ Use This Action If You:
+
+- **Run untrusted code** in GitHub Actions (open source projects accepting PRs from external contributors)
+- **Use third-party actions** and want visibility into their network activity
+- **Accept community contributions** and need supply chain attack protection
+- **Build open source software** with dependencies from npm, PyPI, or other package registries
+- **Need compliance evidence** showing network access controls and audit trails
+- **Use GitHub-hosted Ubuntu runners** (ubuntu-latest, ubuntu-22.04, ubuntu-20.04)
+- **Want security observability** before committing to enforcement (analyze mode)
+
+### ❌ This Action Is NOT For You If:
+
+- **You only run trusted, first-party code** with no external dependencies
+- **You use Windows or macOS runners** (Linux/Ubuntu only)
+- **Your jobs run in containers** (`container:` in workflow - sudo access conflicts)
+- **You use self-hosted non-Ubuntu runners** (RHEL, Debian, etc. - not currently supported)
+- **Your workflow requires unrestricted network access** to arbitrary domains
+- **You need sub-second performance** (adds ~2-5s overhead for security setup)
+- **You want protection against sophisticated attackers** using allowed domain abuse (this is first-line defense only)
+
+### 💡 Common Use Cases
+
+**Open Source Maintainers**: Protect against malicious PRs that install compromised dependencies attempting to exfiltrate repository secrets or tokens.
+
+**Enterprise CI/CD**: Add network observability and control to GitHub Actions workflows handling sensitive data or credentials.
+
+**Security Compliance**: Generate audit trails showing network access controls were enforced during builds and deployments.
+
+**Dependency Analysis**: Use analyze mode to understand what external services your build dependencies are contacting.
+
 ## Features
 
 - **Dual modes**: `analyze` (monitoring) or `enforce` (blocking)
