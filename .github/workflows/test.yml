@@ -112,6 +112,15 @@ jobs:
           fi
 
           echo ""
+          echo "=== rsyslog Service Status ==="
+          sudo systemctl status rsyslog --no-pager || true
+
+          echo ""
+          echo "=== Test rsyslog Filtering ==="
+          echo "Testing if rsyslog would match our patterns:"
+          sudo grep -E "(Main-GitHub-Allow:|Main-User-Allow:|Main-Drop-Enforce:|Main-Allow-Analyze:)" /var/log/syslog | head -5 || echo "No matching patterns in syslog"
+
+          echo ""
           echo "=== iptables Log File Permissions ==="
           echo "Pre-hook iptables log:"
           ls -la /tmp/pre-iptables.log 2>/dev/null || echo "Pre-hook iptables log not found"
