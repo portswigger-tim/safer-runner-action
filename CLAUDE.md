@@ -71,8 +71,9 @@ npm test             # Run Jest tests only
 2. **Network Layer (iptables)** - `setup.ts:setupFirewallRules()`
    - Blocks connections to unauthorized IP addresses
    - Uses `ipset` for efficient IP allowlists (github, user)
-   - Logs all connection attempts to syslog
-   - Log prefixes: `Pre-` for pre-hook, none for main action
+   - **Logs to dedicated files**: `/tmp/pre-iptables.log` and `/tmp/main-iptables.log`
+   - Log filtering via rsyslog (`setup.ts:setupIptablesLogging()`)
+   - Log prefixes: `Pre-` for pre-hook, `Main-` for main action
 
 3. **Privilege Layer (sudo)** - `setup.ts:setupSudoLogging()` and `disableSudoForRunner()`
    - **Logging**: All sudo usage logged to `/tmp/runner-sudo.log`
@@ -104,11 +105,14 @@ npm test             # Run Jest tests only
 - Main action: `/tmp/main-dns.log`
 - Parsed by `parsers/dns-parser.ts`
 
-**Network Logs** (iptables):
-- All logged to syslog with iptables log prefixes
-- Pre-hook prefix: `Pre-GitHub-Allow:`, `Pre-User-Allow:`, `Pre-Allow-Analyze:`
-- Main action prefix: `GitHub-Allow:`, `User-Allow:`, `Drop-Enforce:`, `Allow-Analyze:`
+**Network Logs** (iptables with rsyslog filtering):
+- Pre-hook: `/tmp/pre-iptables.log`
+- Main action: `/tmp/main-iptables.log`
+- Pre-hook prefixes: `Pre-GitHub-Allow:`, `Pre-User-Allow:`, `Pre-Allow-Analyze:`
+- Main action prefixes: `Main-GitHub-Allow:`, `Main-User-Allow:`, `Main-Drop-Enforce:`, `Main-Allow-Analyze:`
+- Filtered by rsyslog configuration (`/etc/rsyslog.d/10-iptables-safer-runner.conf`)
 - Parsed by `parsers/network-parser.ts`
+- Readable by runner user (no sudo required)
 
 **Sudo Logs** (sudo logfile):
 - All sudo usage logged to `/tmp/runner-sudo.log`
@@ -193,14 +197,14 @@ dig @127.0.0.1 example.com
 
 **Network Logs**:
 ```bash
-# View iptables logs (all traffic)
-sudo grep -E 'Pre-|GitHub-Allow:|User-Allow:|Drop-Enforce:|Allow-Analyze:' /var/log/syslog
+# View pre-hook iptables activity (readable by runner, no sudo required)
+cat /tmp/pre-iptables.log
 
-# View only pre-hook traffic
-sudo grep 'Pre-' /var/log/syslog
+# View main action iptables activity (readable by runner, no sudo required)
+cat /tmp/main-iptables.log
 
-# View only main action traffic
-sudo grep -E 'GitHub-Allow:|User-Allow:|Drop-Enforce:|Allow-Analyze:' /var/log/syslog | grep -v 'Pre-'
+# Alternative: View via syslog (requires sudo)
+sudo grep -E 'Pre-|Main-' /var/log/syslog
 ```
 
 **Firewall Status**:
@@ -375,18 +379,24 @@ const criticalFiles = [
 
 ## 🏗️ Architecture Decisions
 
-### Why Separate DNS Log Files?
+### Why Separate Log Files for DNS and iptables?
 
-Previously, DNS logs went to syslog mixed with iptables logs. We now use dedicated files:
-- **Pre-hook**: `/tmp/pre-dns.log` via `log-facility` directive
-- **Main action**: `/tmp/main-dns.log` via `log-facility` directive
+We use dedicated log files filtered by rsyslog for both DNS and iptables logs:
+
+**DNS Logs** (DNSmasq `log-facility`):
+- **Pre-hook**: `/tmp/pre-dns.log`
+- **Main action**: `/tmp/main-dns.log`
+
+**Network Logs** (rsyslog filtering):
+- **Pre-hook**: `/tmp/pre-iptables.log` (filters `Pre-GitHub-Allow:`, `Pre-User-Allow:`, `Pre-Allow-Analyze:`)
+- **Main action**: `/tmp/main-iptables.log` (filters `Main-GitHub-Allow:`, `Main-User-Allow:`, `Main-Drop-Enforce:`, `Main-Allow-Analyze:`)
 
 **Benefits**:
-✅ Clear separation between pre-hook and main action DNS activity
-✅ Easier parsing (no grep filtering needed)
+✅ Clear separation between pre-hook and main action activity
+✅ No sudo required to read logs (world-readable files)
+✅ Easier parsing (dedicated files, no grep filtering needed)
 ✅ Better performance (avoid parsing entire syslog)
-✅ Consistent with iptables (which uses log prefixes)
-✅ Readable by runner group (no sudo required for log access)
+✅ Log prefixes prevent conflicts (`Pre-` vs `Main-` ensures rsyslog regex doesn't match both)
 
 ### Why Three-Phase Lifecycle (pre/main/post)?
 

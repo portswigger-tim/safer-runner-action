@@ -192,6 +192,14 @@ async function run() {
             // Pre-action didn't run - do full setup
             core.info('Pre-action did not run - performing full setup...');
             dnsUser = await (0, setup_1.performInitialSetup)();
+            // Setup rsyslog for main action iptables logs (pre-action would have already done this)
+            core.info('Configuring iptables log filtering...');
+            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', [
+                'Main-GitHub-Allow:',
+                'Main-User-Allow:',
+                'Main-Drop-Enforce:',
+                'Main-Allow-Analyze:'
+            ]);
         }
         else {
             // Pre-action already set up infrastructure - just reconfigure
@@ -200,10 +208,18 @@ async function run() {
                 username: preUsername,
                 uid: parseInt(preUid, 10)
             };
+            // Setup rsyslog for main action iptables logs (separate from pre-hook logs)
+            core.info('Configuring iptables log filtering for main action...');
+            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', [
+                'Main-GitHub-Allow:',
+                'Main-User-Allow:',
+                'Main-Drop-Enforce:',
+                'Main-Allow-Analyze:'
+            ]);
         }
-        // Configure iptables rules
+        // Configure iptables rules with Main- log prefix
         core.info('Configuring iptables rules...');
-        await (0, setup_1.setupFirewallRules)(dnsUser.uid);
+        await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Main-');
         // Configure DNS filtering
         core.info('Configuring DNS filtering...');
         await (0, setup_1.setupDNSConfig)();
@@ -219,9 +235,9 @@ async function run() {
         // Start services
         core.info('Restarting services...');
         await (0, setup_1.restartServices)('/tmp/main-dns.log');
-        // Finalize firewall rules
+        // Finalize firewall rules with Main- log prefix
         core.info('Finalizing firewall rules...');
-        await (0, setup_1.finalizeFirewallRules)(mode);
+        await (0, setup_1.finalizeFirewallRules)(mode, 'Main-');
         // Capture post-setup baseline for integrity monitoring
         core.info('Capturing post-setup security baseline...');
         const validator = new validation_1.SystemValidator();
@@ -537,6 +553,7 @@ exports.disableSudoForRunner = exports.applyCustomSudoConfig = exports.removeSud
 exports.performInitialSetup = performInitialSetup;
 exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupIpsets = setupIpsets;
+exports.setupIptablesLogging = setupIptablesLogging;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
@@ -617,6 +634,28 @@ async function setupIpsets() {
         'maxelem',
         '10000'
     ]);
+}
+/**
+ * Setup rsyslog to filter iptables logs to dedicated files
+ * This allows reading logs without sudo and provides clean separation
+ * between pre-hook and main action logs
+ */
+async function setupIptablesLogging(logFile, logPrefixes) {
+    // Build rsyslog configuration to filter iptables logs
+    // Use regex to match any of the provided prefixes
+    const prefixPattern = logPrefixes.join('|');
+    const rsyslogConfig = `:msg,regex,"(${prefixPattern})" ${logFile}
+& stop
+`;
+    // Write rsyslog configuration
+    await exec.exec('sudo', ['tee', '/etc/rsyslog.d/10-iptables-safer-runner.conf'], {
+        input: Buffer.from(rsyslogConfig)
+    });
+    // Create log file with proper permissions (world-readable)
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chmod', '644', logFile]);
+    // Restart rsyslog to apply configuration
+    await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
 }
 async function setupFirewallRules(dnsUid, logPrefix = '') {
     // Flush OUTPUT chain
@@ -768,7 +807,16 @@ async function restartServices(logFile) {
 async function finalizeFirewallRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
         // Log traffic that doesn't match any ipset (will be dropped)
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);
+        await exec.exec('sudo', [
+            'iptables',
+            '-A',
+            'OUTPUT',
+            '-o',
+            'eth0',
+            '-j',
+            'LOG',
+            `--log-prefix=${logPrefix}Drop-Enforce: `
+        ]);
         // DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'DROP']);
     }

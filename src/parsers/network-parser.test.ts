@@ -10,9 +10,9 @@ describe('Network Parser', () => {
   });
 
   describe('parseLogLine', () => {
-    it('should parse GitHub-Allow log line correctly', () => {
+    it('should parse Main-GitHub-Allow log line correctly', () => {
       const line =
-        '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=19827 DF PROTO=TCP SPT=37704 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
+        '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: Main-GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=19827 DF PROTO=TCP SPT=37704 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
 
       const result = parseLogLine(line);
 
@@ -25,9 +25,9 @@ describe('Network Parser', () => {
       });
     });
 
-    it('should parse User-Allow log line correctly', () => {
+    it('should parse Main-User-Allow log line correctly', () => {
       const line =
-        '2025-10-01T10:53:56.985342+00:00 runnervm3ublj kernel: User-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=44.195.242.49 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=32842 DF PROTO=TCP SPT=55852 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
+        '2025-10-01T10:53:56.985342+00:00 runnervm3ublj kernel: Main-User-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=44.195.242.49 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=32842 DF PROTO=TCP SPT=55852 DPT=443 WINDOW=64240 RES=0x00 SYN URGP=0';
 
       const result = parseLogLine(line);
 
@@ -40,9 +40,9 @@ describe('Network Parser', () => {
       });
     });
 
-    it('should parse Drop-Enforce log line correctly', () => {
+    it('should parse Main-Drop-Enforce log line correctly', () => {
       const line =
-        '2025-10-01T10:54:02.901847+00:00 runnervm3ublj kernel: Drop-Enforce: IN= OUT=eth0 SRC=10.1.1.103 DST=8.8.8.8 LEN=79 TOS=0x00 PREC=0x00 TTL=64 ID=9547 PROTO=UDP SPT=38809 DPT=53 LEN=59';
+        '2025-10-01T10:54:02.901847+00:00 runnervm3ublj kernel: Main-Drop-Enforce: IN= OUT=eth0 SRC=10.1.1.103 DST=8.8.8.8 LEN=79 TOS=0x00 PREC=0x00 TTL=64 ID=9547 PROTO=UDP SPT=38809 DPT=53 LEN=59';
 
       const result = parseLogLine(line);
 
@@ -57,7 +57,7 @@ describe('Network Parser', () => {
 
     it('should default to port 443 when DPT is missing', () => {
       const line =
-        '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60';
+        '2025-10-01T10:53:56.665352+00:00 runnervm3ublj kernel: Main-GitHub-Allow: IN= OUT=eth0 SRC=10.1.0.135 DST=140.82.114.6 LEN=60';
 
       const result = parseLogLine(line);
 

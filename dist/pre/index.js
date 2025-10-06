@@ -422,6 +422,9 @@ async function run() {
         // Save DNS user info for main action to use
         core.saveState('dns-user', dnsUser.username);
         core.saveState('dns-uid', dnsUser.uid.toString());
+        // Setup rsyslog to filter pre-hook iptables logs to dedicated file
+        core.info('Configuring iptables log filtering...');
+        await (0, setup_1.setupIptablesLogging)('/tmp/pre-iptables.log', ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:']);
         // Configure iptables rules with Pre- log prefix
         core.info('Configuring iptables rules...');
         await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Pre-');
@@ -501,6 +504,7 @@ exports.disableSudoForRunner = exports.applyCustomSudoConfig = exports.removeSud
 exports.performInitialSetup = performInitialSetup;
 exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupIpsets = setupIpsets;
+exports.setupIptablesLogging = setupIptablesLogging;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
@@ -581,6 +585,28 @@ async function setupIpsets() {
         'maxelem',
         '10000'
     ]);
+}
+/**
+ * Setup rsyslog to filter iptables logs to dedicated files
+ * This allows reading logs without sudo and provides clean separation
+ * between pre-hook and main action logs
+ */
+async function setupIptablesLogging(logFile, logPrefixes) {
+    // Build rsyslog configuration to filter iptables logs
+    // Use regex to match any of the provided prefixes
+    const prefixPattern = logPrefixes.join('|');
+    const rsyslogConfig = `:msg,regex,"(${prefixPattern})" ${logFile}
+& stop
+`;
+    // Write rsyslog configuration
+    await exec.exec('sudo', ['tee', '/etc/rsyslog.d/10-iptables-safer-runner.conf'], {
+        input: Buffer.from(rsyslogConfig)
+    });
+    // Create log file with proper permissions (world-readable)
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chmod', '644', logFile]);
+    // Restart rsyslog to apply configuration
+    await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
 }
 async function setupFirewallRules(dnsUid, logPrefix = '') {
     // Flush OUTPUT chain
@@ -732,7 +758,16 @@ async function restartServices(logFile) {
 async function finalizeFirewallRules(mode, logPrefix = '') {
     if (mode === 'enforce') {
         // Log traffic that doesn't match any ipset (will be dropped)
-        await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);
+        await exec.exec('sudo', [
+            'iptables',
+            '-A',
+            'OUTPUT',
+            '-o',
+            'eth0',
+            '-j',
+            'LOG',
+            `--log-prefix=${logPrefix}Drop-Enforce: `
+        ]);
         // DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
         await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'DROP']);
     }

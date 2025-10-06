@@ -7,7 +7,8 @@ import {
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules
+  finalizeFirewallRules,
+  setupIptablesLogging
 } from './setup';
 import { removeSudoLogging, setupSudoLogging, disableSudoForRunner, applyCustomSudoConfig } from './sudo';
 
@@ -45,6 +46,15 @@ async function run(): Promise<void> {
       // Pre-action didn't run - do full setup
       core.info('Pre-action did not run - performing full setup...');
       dnsUser = await performInitialSetup();
+
+      // Setup rsyslog for main action iptables logs (pre-action would have already done this)
+      core.info('Configuring iptables log filtering...');
+      await setupIptablesLogging('/tmp/main-iptables.log', [
+        'Main-GitHub-Allow:',
+        'Main-User-Allow:',
+        'Main-Drop-Enforce:',
+        'Main-Allow-Analyze:'
+      ]);
     } else {
       // Pre-action already set up infrastructure - just reconfigure
       core.info('✅ Pre-action already established monitoring infrastructure');
@@ -52,11 +62,20 @@ async function run(): Promise<void> {
         username: preUsername,
         uid: parseInt(preUid, 10)
       };
+
+      // Setup rsyslog for main action iptables logs (separate from pre-hook logs)
+      core.info('Configuring iptables log filtering for main action...');
+      await setupIptablesLogging('/tmp/main-iptables.log', [
+        'Main-GitHub-Allow:',
+        'Main-User-Allow:',
+        'Main-Drop-Enforce:',
+        'Main-Allow-Analyze:'
+      ]);
     }
 
-    // Configure iptables rules
+    // Configure iptables rules with Main- log prefix
     core.info('Configuring iptables rules...');
-    await setupFirewallRules(dnsUser.uid);
+    await setupFirewallRules(dnsUser.uid, 'Main-');
 
     // Configure DNS filtering
     core.info('Configuring DNS filtering...');
@@ -83,9 +102,9 @@ async function run(): Promise<void> {
     core.info('Restarting services...');
     await restartServices('/tmp/main-dns.log');
 
-    // Finalize firewall rules
+    // Finalize firewall rules with Main- log prefix
     core.info('Finalizing firewall rules...');
-    await finalizeFirewallRules(mode);
+    await finalizeFirewallRules(mode, 'Main-');
 
     // Capture post-setup baseline for integrity monitoring
     core.info('Capturing post-setup security baseline...');

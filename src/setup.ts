@@ -91,6 +91,33 @@ export async function setupIpsets() {
   ]);
 }
 
+/**
+ * Setup rsyslog to filter iptables logs to dedicated files
+ * This allows reading logs without sudo and provides clean separation
+ * between pre-hook and main action logs
+ */
+export async function setupIptablesLogging(logFile: string, logPrefixes: string[]): Promise<void> {
+  // Build rsyslog configuration to filter iptables logs
+  // Use regex to match any of the provided prefixes
+  const prefixPattern = logPrefixes.join('|');
+
+  const rsyslogConfig = `:msg,regex,"(${prefixPattern})" ${logFile}
+& stop
+`;
+
+  // Write rsyslog configuration
+  await exec.exec('sudo', ['tee', '/etc/rsyslog.d/10-iptables-safer-runner.conf'], {
+    input: Buffer.from(rsyslogConfig)
+  });
+
+  // Create log file with proper permissions (world-readable)
+  await exec.exec('sudo', ['touch', logFile]);
+  await exec.exec('sudo', ['chmod', '644', logFile]);
+
+  // Restart rsyslog to apply configuration
+  await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+}
+
 export async function setupFirewallRules(dnsUid: number, logPrefix: string = ''): Promise<void> {
   // Flush OUTPUT chain
   await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
@@ -264,7 +291,16 @@ export async function restartServices(logFile?: string): Promise<void> {
 export async function finalizeFirewallRules(mode: string, logPrefix: string = ''): Promise<void> {
   if (mode === 'enforce') {
     // Log traffic that doesn't match any ipset (will be dropped)
-    await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'LOG', `--log-prefix=Drop-Enforce: `]);
+    await exec.exec('sudo', [
+      'iptables',
+      '-A',
+      'OUTPUT',
+      '-o',
+      'eth0',
+      '-j',
+      'LOG',
+      `--log-prefix=${logPrefix}Drop-Enforce: `
+    ]);
 
     // DEFAULT DENY: Drop external traffic not explicitly allowed (scoped to eth0)
     await exec.exec('sudo', ['iptables', '-A', 'OUTPUT', '-o', 'eth0', '-j', 'DROP']);

@@ -1,13 +1,13 @@
 /**
  * Network Log Parser
  *
- * Parses iptables logs from syslog to extract network connection attempts.
+ * Parses iptables logs from dedicated log files to extract network connection attempts.
  * Identifies connections by status (ALLOWED, DENIED, ANALYZED) and source
  * (GitHub Required, User Defined, Firewall Drop, Monitor Only).
  */
 
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
+import * as fs from 'fs';
 
 export interface NetworkConnection {
   ip: string;
@@ -18,57 +18,39 @@ export interface NetworkConnection {
 }
 
 /**
- * Parse network logs from syslog to extract connection attempts
+ * Parse network logs from dedicated log file to extract connection attempts
  */
-export async function parseNetworkLogs(): Promise<NetworkConnection[]> {
+export async function parseNetworkLogs(logFile: string = '/tmp/main-iptables.log'): Promise<NetworkConnection[]> {
   try {
-    // Get syslog content (exclude Pre- prefixed logs from pre-hook - those are analyzed separately)
-    // Space before each pattern ensures we don't match Pre-GitHub-Allow: when looking for GitHub-Allow:
-    let syslogOutput = '';
-    await exec.exec(
-      'sudo',
-      ['grep', '-E', ' GitHub-Allow: | User-Allow: | Drop-Enforce: | Allow-Analyze: ', '/var/log/syslog'],
-      {
-        listeners: {
-          stdout: data => {
-            syslogOutput += data.toString();
-          }
-        },
-        ignoreReturnCode: true
-      }
-    );
+    // Read log file content (no sudo required - file is world-readable)
+    if (!fs.existsSync(logFile)) {
+      core.warning(`Network log file not found: ${logFile}`);
+      return [];
+    }
 
-    return parseNetworkLogsFromString(syslogOutput);
+    const logContent = fs.readFileSync(logFile, 'utf8');
+    return parseNetworkLogsFromString(logContent);
   } catch (error) {
-    core.warning(`Failed to parse logs: ${error}`);
+    core.warning(`Failed to parse network logs from ${logFile}: ${error}`);
     return [];
   }
 }
 
 /**
- * Parse pre-hook network logs from syslog to extract connection attempts
+ * Parse pre-hook network logs from dedicated log file to extract connection attempts
  */
-export async function parsePreHookNetworkLogs(): Promise<NetworkConnection[]> {
+export async function parsePreHookNetworkLogs(logFile: string = '/tmp/pre-iptables.log'): Promise<NetworkConnection[]> {
   try {
-    // Get only Pre- prefixed logs from pre-hook
-    // Use space after colon to match log format and avoid partial matches
-    let syslogOutput = '';
-    await exec.exec(
-      'sudo',
-      ['grep', '-E', ' Pre-GitHub-Allow: | Pre-User-Allow: | Pre-Allow-Analyze: ', '/var/log/syslog'],
-      {
-        listeners: {
-          stdout: data => {
-            syslogOutput += data.toString();
-          }
-        },
-        ignoreReturnCode: true
-      }
-    );
+    // Read log file content (no sudo required - file is world-readable)
+    if (!fs.existsSync(logFile)) {
+      core.warning(`Pre-hook network log file not found: ${logFile}`);
+      return [];
+    }
 
-    return parseNetworkLogsFromString(syslogOutput);
+    const logContent = fs.readFileSync(logFile, 'utf8');
+    return parseNetworkLogsFromString(logContent);
   } catch (error) {
-    core.warning(`Failed to parse pre-hook network logs: ${error}`);
+    core.warning(`Failed to parse pre-hook network logs from ${logFile}: ${error}`);
     return [];
   }
 }
@@ -119,16 +101,16 @@ export function parseLogLine(line: string): NetworkConnection | null {
   } else if (line.includes('Pre-Allow-Analyze: ')) {
     status = 'ANALYZED';
     source = 'Monitor Only';
-  } else if (line.includes('GitHub-Allow: ')) {
+  } else if (line.includes('Main-GitHub-Allow: ')) {
     status = 'ALLOWED';
     source = 'GitHub Required';
-  } else if (line.includes('User-Allow: ')) {
+  } else if (line.includes('Main-User-Allow: ')) {
     status = 'ALLOWED';
     source = 'User Defined';
-  } else if (line.includes('Drop-Enforce: ')) {
+  } else if (line.includes('Main-Drop-Enforce: ')) {
     status = 'DENIED';
     source = 'Firewall Drop';
-  } else if (line.includes('Allow-Analyze: ')) {
+  } else if (line.includes('Main-Allow-Analyze: ')) {
     status = 'ANALYZED';
     source = 'Monitor Only';
   }

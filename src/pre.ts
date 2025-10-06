@@ -7,7 +7,8 @@ import {
   setupDNSMasq,
   restartServices,
   finalizeFirewallRules,
-  setupSudoLogging
+  setupSudoLogging,
+  setupIptablesLogging
 } from './setup';
 
 /**
@@ -30,6 +31,10 @@ async function run(): Promise<void> {
     // Save DNS user info for main action to use
     core.saveState('dns-user', dnsUser.username);
     core.saveState('dns-uid', dnsUser.uid.toString());
+
+    // Setup rsyslog to filter pre-hook iptables logs to dedicated file
+    core.info('Configuring iptables log filtering...');
+    await setupIptablesLogging('/tmp/pre-iptables.log', ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:']);
 
     // Configure iptables rules with Pre- log prefix
     core.info('Configuring iptables rules...');
