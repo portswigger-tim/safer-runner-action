@@ -83,11 +83,7 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
                                       /usr/bin/cat /etc/resolv.conf, \\
                                       /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
                                       /usr/sbin/iptables -L * -n --line-numbers, \\
-                                      /usr/bin/grep -E * /var/log/syslog, \\
-                                      /usr/bin/grep -E * /var/log/safer-runner/pre-dns.log, \\
-                                      /usr/bin/grep -E * /var/log/safer-runner/main-dns.log, \\
-                                      /usr/bin/grep -E * /var/log/safer-runner/pre-sudo.log, \\
-                                      /usr/bin/grep -E * /var/log/safer-runner/main-sudo.log
+                                      /usr/bin/grep -E * /var/log/syslog
 
 # Define command alias for sudo configuration commands (used by applyCustomSudoConfig, setupSudoLogging, and removeSudoLogging)
 Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\
