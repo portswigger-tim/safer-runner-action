@@ -1,6 +1,6 @@
 # Safer Runner Action
 
-Network security layer for GitHub Actions runners using DNS filtering (Quad9) and iptables rules. Implements default-deny policy: only explicitly permitted domains are accessible.
+Multi-layer security for GitHub Actions runners with network filtering (DNS + iptables), privilege control (sudo management), and integrity validation (tampering detection). Implements default-deny policy with comprehensive security reporting.
 
 ## Features
 

@@ -1,5 +1,5 @@
 name: 'Safer Runner Action'
-description: 'Add network security layer with DNS filtering and iptables rules to prevent communication with malicious domains'
+description: 'Multi-layer security for GitHub Actions with network filtering, privilege control, and integrity validation. Analyze or enforce mode with comprehensive security reporting.'
 author: 'PortSwigger'
 branding:
   icon: 'shield'
