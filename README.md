@@ -41,6 +41,7 @@ Multi-layer security for GitHub Actions runners with network filtering (DNS + ip
 - **Firewall rules**: iptables prevents DNS bypass via direct IP connections
 - **Sudo logging**: All sudo usage logged to `/var/log/safer-runner/main-sudo.log`
 - **Sudo disabling**: Optionally disable sudo access after setup (prevents privilege escalation)
+- **Docker disabling**: Optionally disable Docker access (prevents container escape attacks)
 - **Custom domains**: Add trusted domains via input parameter
 - **Automatic reporting**: Network access provenance in job summaries
 - **Risky subdomain blocking**: Blocks gist.github.com and raw.githubusercontent.com by default in enforce mode
@@ -87,6 +88,7 @@ steps:
 | `block-risky-github-subdomains` | Block gist.github.com and raw.githubusercontent.com in enforce mode | `true` |
 | `disable-sudo` | Disable sudo access for runner user after setup | `false` |
 | `sudo-config` | Custom sudoers configuration for runner user (multi-line string) | `''` |
+| `disable-docker` | Remove runner user from docker group (prevents container usage) | `false` |
 
 ## How It Works
 
@@ -129,12 +131,13 @@ In analyze mode, the report suggests an `allowed-domains` configuration based on
 - Return traffic for established connections allowed
 - Sudo usage logged to `/var/log/safer-runner/main-sudo.log` for auditability
 
-### Sudo Disabling (Optional)
+### Privilege Control (Optional)
+
+#### Sudo Disabling
 
 When `disable-sudo: true` is set:
 - Sudo access is disabled **after** security setup completes
-- The `/etc/sudoers.d/runner` file is renamed to `.disabled-by-safer-runner`
-- Runner user retains other group memberships (docker, adm, systemd-journal)
+- Runner user can only execute commands needed for post-action validation
 - Prevents malicious code from using sudo to bypass security controls
 - **Note**: This is an advanced security feature - ensure your workflow doesn't require sudo after the action runs
 
@@ -147,6 +150,40 @@ steps:
       disable-sudo: 'true'
   - run: npm test  # ✅ Works (no sudo needed)
   - run: sudo apt-get install something  # ❌ Fails (sudo disabled)
+```
+
+#### Docker Disabling
+
+When `disable-docker: true` is set:
+- Runner user is removed from the `docker` group **after** security setup completes
+- Prevents container escape attacks, docker socket abuse, and privileged container execution
+- Useful for workflows that don't require Docker/containerization
+- **Note**: This disables all Docker commands - only use if your workflow doesn't need containers
+
+Example with Docker disabled:
+```yaml
+steps:
+  - uses: portswigger-tim/safer-runner-action@v1
+    with:
+      mode: 'enforce'
+      disable-docker: 'true'
+  - run: npm test  # ✅ Works (no Docker needed)
+  - run: docker build .  # ❌ Fails (Docker disabled)
+```
+
+#### Combined Lockdown
+
+For maximum security in workflows that don't need elevated privileges:
+```yaml
+steps:
+  - uses: portswigger-tim/safer-runner-action@v1
+    with:
+      mode: 'enforce'
+      disable-sudo: 'true'
+      disable-docker: 'true'
+      allowed-domains: |
+        registry.npmjs.org
+  - run: npm ci && npm test  # ✅ Works with restricted privileges
 ```
 
 ## Limitations

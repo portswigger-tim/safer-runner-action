@@ -13,6 +13,7 @@ src/
 ├── post.ts          # Post-action analysis and reporting
 ├── setup.ts         # Shared setup functions (DNS, firewall, ipsets)
 ├── sudo.ts          # Sudo logging and configuration management
+├── docker.ts        # Docker access control (group membership)
 ├── validation.ts    # System integrity validation with SHA256 checksums
 ├── config/
 │   └── dns-config-builder.ts  # DNSmasq configuration generation
@@ -354,9 +355,30 @@ The action supports three sudo modes via `sudo.ts`:
 
 **3. Disable sudo** (`disable-sudo: true`):
 - Completely removes sudo access for runner user
-- Renames `/etc/sudoers.d/runner` to `.disabled-by-safer-runner`
+- Runner can only execute commands needed for post-action validation
 
 **Implementation**: See `sudo.ts:applyCustomSudoConfig()` and `disableSudoForRunner()`
+
+### Docker Access Control
+
+The action can disable Docker access via `docker.ts`:
+
+**Default mode** (no input):
+- Runner user remains in `docker` group
+- Docker commands work normally
+
+**Disable Docker** (`disable-docker: true`):
+```yaml
+- uses: portswigger-tim/safer-runner-action@v1
+  with:
+    disable-docker: true
+```
+
+- Removes runner user from `docker` group
+- Prevents container escape attacks and docker socket abuse
+- Docker commands will fail with permission denied
+
+**Implementation**: See `docker.ts:disableDockerForRunner()` and `isRunnerInDockerGroup()`
 
 ## 📚 Key Dependencies
 
@@ -471,7 +493,7 @@ We use dedicated log files filtered by rsyslog for both DNS and iptables logs:
 
 ## 🔍 Code Quality
 
-**Test Coverage**: 191 tests across 7 test suites
+**Test Coverage**: 203 tests across 8 test suites
 - `config/dns-config-builder.test.ts` - DNS configuration generation
 - `parsers/dns-parser.test.ts` - DNS log parsing
 - `parsers/network-parser.test.ts` - iptables log parsing
@@ -479,6 +501,7 @@ We use dedicated log files filtered by rsyslog for both DNS and iptables logs:
 - `parsers/sudo-parser.test.ts` - Sudo log parsing and sudoers config generation
 - `formatters/report-formatter.test.ts` - Job summary formatting
 - `validation.test.ts` - System integrity validation
+- `docker.test.ts` - Docker access control
 
 **Run tests**: `npm test` (uses Jest)
 **Run specific test**: `npm test -- dns-parser.test.ts`

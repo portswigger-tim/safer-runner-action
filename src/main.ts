@@ -11,6 +11,7 @@ import {
   setupIptablesLogging
 } from './setup';
 import { removeSudoLogging, setupSudoLogging, disableSudoForRunner, applyCustomSudoConfig } from './sudo';
+import { disableDockerForRunner } from './docker';
 
 async function run(): Promise<void> {
   try {
@@ -19,6 +20,7 @@ async function run(): Promise<void> {
     const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
     const disableSudo = core.getBooleanInput('disable-sudo');
     const sudoConfig = core.getInput('sudo-config') || '';
+    const disableDocker = core.getBooleanInput('disable-docker');
 
     // Validate sudo-related inputs
     if (disableSudo && sudoConfig) {
@@ -128,6 +130,12 @@ async function run(): Promise<void> {
     // This ensures internal setup commands are not logged
     core.info('Configuring sudo logging for workflow monitoring...');
     await setupSudoLogging('/var/log/safer-runner/main-sudo.log');
+
+    // Disable Docker access if requested
+    if (disableDocker) {
+      core.info('Disabling Docker access for runner user...');
+      await disableDockerForRunner();
+    }
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
   } catch (error) {

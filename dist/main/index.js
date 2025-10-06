@@ -123,6 +123,103 @@ function getRiskySubdomains() {
 
 /***/ }),
 
+/***/ 2306:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Docker access control module
+ * Handles Docker group membership and container access restrictions
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.disableDockerForRunner = disableDockerForRunner;
+exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+// Constants
+exports.RUNNER_USERNAME = 'runner';
+exports.DOCKER_GROUP = 'docker';
+/**
+ * Disable Docker access for the runner user
+ * This prevents container escape attacks, docker socket abuse, and privileged container execution
+ *
+ * Removes the runner user from the 'docker' group while preserving other group memberships.
+ * The runner user will be unable to execute docker commands after this is applied.
+ */
+async function disableDockerForRunner() {
+    core.info('Removing runner user from docker group...');
+    try {
+        // Remove runner from docker group
+        await exec.exec('sudo', ['gpasswd', '-d', exports.RUNNER_USERNAME, exports.DOCKER_GROUP]);
+        core.info(`✅ Removed ${exports.RUNNER_USERNAME} from ${exports.DOCKER_GROUP} group`);
+        core.info('🔒 Docker commands will no longer be available to the runner user');
+        core.info('ℹ️  This prevents container escape attacks and docker socket abuse');
+    }
+    catch (error) {
+        // gpasswd returns non-zero if user isn't in the group - this is fine
+        core.warning(`Could not remove ${exports.RUNNER_USERNAME} from ${exports.DOCKER_GROUP} group (may not be a member): ${error}`);
+    }
+}
+/**
+ * Check if the runner user is a member of the docker group
+ * @returns Promise<boolean> - true if runner is in docker group
+ */
+async function isRunnerInDockerGroup() {
+    try {
+        let output = '';
+        await exec.exec('groups', [exports.RUNNER_USERNAME], {
+            listeners: {
+                stdout: (data) => {
+                    output += data.toString();
+                }
+            }
+        });
+        return output.includes(exports.DOCKER_GROUP);
+    }
+    catch (error) {
+        core.warning(`Could not check docker group membership: ${error}`);
+        return false;
+    }
+}
+
+
+/***/ }),
+
 /***/ 5915:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -166,6 +263,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const validation_1 = __nccwpck_require__(8449);
 const setup_1 = __nccwpck_require__(1413);
 const sudo_1 = __nccwpck_require__(1279);
+const docker_1 = __nccwpck_require__(2306);
 async function run() {
     try {
         const mode = core.getInput('mode') || 'analyze';
@@ -173,6 +271,7 @@ async function run() {
         const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
         const disableSudo = core.getBooleanInput('disable-sudo');
         const sudoConfig = core.getInput('sudo-config') || '';
+        const disableDocker = core.getBooleanInput('disable-docker');
         // Validate sudo-related inputs
         if (disableSudo && sudoConfig) {
             core.warning('⚠️ Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
@@ -252,6 +351,11 @@ async function run() {
         // This ensures internal setup commands are not logged
         core.info('Configuring sudo logging for workflow monitoring...');
         await (0, sudo_1.setupSudoLogging)('/var/log/safer-runner/main-sudo.log');
+        // Disable Docker access if requested
+        if (disableDocker) {
+            core.info('Disabling Docker access for runner user...');
+            await (0, docker_1.disableDockerForRunner)();
+        }
         core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
     }
     catch (error) {

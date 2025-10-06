@@ -30,6 +30,10 @@ inputs:
     description: 'Custom sudoers configuration for the runner user (only used when disable-sudo is false). Provide sudoers rules as a multi-line string.'
     required: false
     default: ''
+  disable-docker:
+    description: 'Whether to remove runner user from docker group. This prevents container usage, blocking container escape attacks and docker socket abuse.'
+    required: false
+    default: 'false'
 
 runs:
   using: 'node20'
