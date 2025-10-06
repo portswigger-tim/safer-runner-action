@@ -50,7 +50,7 @@ async function run(): Promise<void> {
       // Setup rsyslog for main action iptables logs (pre-action would have already done this)
       core.info('Configuring iptables log filtering...');
       await setupIptablesLogging(
-        '/tmp/main-iptables.log',
+        '/var/log/safer-runner/main-iptables.log',
         ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'],
         'main'
       );
@@ -65,7 +65,7 @@ async function run(): Promise<void> {
       // Setup rsyslog for main action iptables logs (separate from pre-hook logs)
       core.info('Configuring iptables log filtering for main action...');
       await setupIptablesLogging(
-        '/tmp/main-iptables.log',
+        '/var/log/safer-runner/main-iptables.log',
         ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'],
         'main'
       );
@@ -86,7 +86,7 @@ async function run(): Promise<void> {
       allowedDomains,
       blockRiskySubdomains,
       dnsUser.username,
-      '/tmp/main-dns.log'
+      '/var/log/safer-runner/main-dns.log'
     );
 
     if (blockedSubdomains.length > 0) {
@@ -98,7 +98,7 @@ async function run(): Promise<void> {
 
     // Start services
     core.info('Restarting services...');
-    await restartServices('/tmp/main-dns.log');
+    await restartServices('/var/log/safer-runner/main-dns.log');
 
     // Finalize firewall rules with Main- log prefix
     core.info('Finalizing firewall rules...');
@@ -113,7 +113,7 @@ async function run(): Promise<void> {
     // This ensures we don't capture our own sudo config commands
     // but DO capture any workflow commands that follow
     core.info('Configuring sudo logging for workflow monitoring...');
-    await setupSudoLogging('/tmp/main-sudo.log');
+    await setupSudoLogging('/var/log/safer-runner/main-sudo.log');
 
     // Apply sudo configuration (must be done LAST, after sudo logging is configured)
     if (disableSudo) {

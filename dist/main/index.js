@@ -194,7 +194,7 @@ async function run() {
             dnsUser = await (0, setup_1.performInitialSetup)();
             // Setup rsyslog for main action iptables logs (pre-action would have already done this)
             core.info('Configuring iptables log filtering...');
-            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'], 'main');
+            await (0, setup_1.setupIptablesLogging)('/var/log/safer-runner/main-iptables.log', ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'], 'main');
         }
         else {
             // Pre-action already set up infrastructure - just reconfigure
@@ -205,7 +205,7 @@ async function run() {
             };
             // Setup rsyslog for main action iptables logs (separate from pre-hook logs)
             core.info('Configuring iptables log filtering for main action...');
-            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'], 'main');
+            await (0, setup_1.setupIptablesLogging)('/var/log/safer-runner/main-iptables.log', ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'], 'main');
         }
         // Configure iptables rules with Main- log prefix
         core.info('Configuring iptables rules...');
@@ -215,7 +215,7 @@ async function run() {
         await (0, setup_1.setupDNSConfig)();
         // Configure DNSMasq
         core.info('Configuring DNSMasq...');
-        const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username, '/tmp/main-dns.log');
+        const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username, '/var/log/safer-runner/main-dns.log');
         if (blockedSubdomains.length > 0) {
             core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
             for (const subdomain of blockedSubdomains) {
@@ -224,7 +224,7 @@ async function run() {
         }
         // Start services
         core.info('Restarting services...');
-        await (0, setup_1.restartServices)('/tmp/main-dns.log');
+        await (0, setup_1.restartServices)('/var/log/safer-runner/main-dns.log');
         // Finalize firewall rules with Main- log prefix
         core.info('Finalizing firewall rules...');
         await (0, setup_1.finalizeFirewallRules)(mode, 'Main-');
@@ -236,7 +236,7 @@ async function run() {
         // This ensures we don't capture our own sudo config commands
         // but DO capture any workflow commands that follow
         core.info('Configuring sudo logging for workflow monitoring...');
-        await (0, sudo_1.setupSudoLogging)('/tmp/main-sudo.log');
+        await (0, sudo_1.setupSudoLogging)('/var/log/safer-runner/main-sudo.log');
         // Apply sudo configuration (must be done LAST, after sudo logging is configured)
         if (disableSudo) {
             core.info('Disabling sudo access for runner user...');
@@ -541,6 +541,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.disableSudoForRunner = exports.applyCustomSudoConfig = exports.removeSudoLogging = exports.setupSudoLogging = void 0;
 exports.performInitialSetup = performInitialSetup;
+exports.createLogDirectory = createLogDirectory;
 exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupIpsets = setupIpsets;
 exports.setupIptablesLogging = setupIptablesLogging;
@@ -560,7 +561,7 @@ Object.defineProperty(exports, "removeSudoLogging", ({ enumerable: true, get: fu
 Object.defineProperty(exports, "applyCustomSudoConfig", ({ enumerable: true, get: function () { return sudo_1.applyCustomSudoConfig; } }));
 Object.defineProperty(exports, "disableSudoForRunner", ({ enumerable: true, get: function () { return sudo_1.disableSudoForRunner; } }));
 /**
- * Perform initial system setup: install dependencies, create DNS user, setup ipsets
+ * Perform initial system setup: install dependencies, create DNS user, setup ipsets, create log directory
  * Note: Sudo logging is NOT configured here - it's set up at the end of pre/main actions
  * to avoid capturing setup commands
  * Returns the created DNS user
@@ -570,6 +571,9 @@ async function performInitialSetup() {
     core.info('Installing dependencies...');
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
     await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+    // Create log directory for all safer-runner logs
+    core.info('Creating log directory...');
+    await createLogDirectory();
     // Create random DNS user for privilege separation
     core.info('Creating isolated DNS user...');
     const dnsUser = await createRandomDNSUser();
@@ -578,6 +582,19 @@ async function performInitialSetup() {
     core.info('Configuring ipsets...');
     await setupIpsets();
     return dnsUser;
+}
+/**
+ * Create /var/log/safer-runner directory with proper permissions
+ * This directory will contain all safer-runner log files (DNS, iptables, sudo)
+ */
+async function createLogDirectory() {
+    const logDir = '/var/log/safer-runner';
+    // Create directory
+    await exec.exec('sudo', ['mkdir', '-p', logDir]);
+    // Set ownership to syslog:adm (rsyslog runs as syslog, runner is in adm group)
+    await exec.exec('sudo', ['chown', 'syslog:adm', logDir]);
+    // Make directory readable by all (so runner can read logs without sudo)
+    await exec.exec('sudo', ['chmod', '755', logDir]);
 }
 async function createRandomDNSUser() {
     // Generate random username with 16 hex characters
@@ -956,10 +973,10 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
                                       /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
                                       /usr/sbin/iptables -L * -n --line-numbers, \\
                                       /usr/bin/grep -E * /var/log/syslog, \\
-                                      /usr/bin/grep -E * /tmp/pre-dns.log, \\
-                                      /usr/bin/grep -E * /tmp/main-dns.log, \\
-                                      /usr/bin/grep -E * /tmp/pre-sudo.log, \\
-                                      /usr/bin/grep -E * /tmp/main-sudo.log
+                                      /usr/bin/grep -E * /var/log/safer-runner/pre-dns.log, \\
+                                      /usr/bin/grep -E * /var/log/safer-runner/main-dns.log, \\
+                                      /usr/bin/grep -E * /var/log/safer-runner/pre-sudo.log, \\
+                                      /usr/bin/grep -E * /var/log/safer-runner/main-sudo.log
 
 # Define command alias for sudo configuration commands (used by applyCustomSudoConfig)
 Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\

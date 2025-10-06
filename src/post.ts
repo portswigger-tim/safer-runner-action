@@ -19,10 +19,10 @@ async function run(): Promise<void> {
 
     // Parse main action logs
     const connections = await parseNetworkLogs();
-    const dnsResolutions = await parseDnsLogs('/tmp/main-dns.log');
+    const dnsResolutions = await parseDnsLogs('/var/log/safer-runner/main-dns.log');
 
     // Parse main sudo logs (workflow commands only)
-    const sudoCommands = parseSudoLogs('/tmp/main-sudo.log');
+    const sudoCommands = parseSudoLogs('/var/log/safer-runner/main-sudo.log');
     if (sudoCommands.length > 0) {
       core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
     }
@@ -44,14 +44,14 @@ async function run(): Promise<void> {
       // Parse pre-hook DNS logs from dedicated log file
       try {
         const fs = await import('fs');
-        if (fs.existsSync('/tmp/pre-dns.log')) {
-          preHookDnsResolutions = await parseDnsLogs('/tmp/pre-dns.log');
+        if (fs.existsSync('/var/log/safer-runner/pre-dns.log')) {
+          preHookDnsResolutions = await parseDnsLogs('/var/log/safer-runner/pre-dns.log');
           core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
         }
 
         // Parse pre-hook sudo logs (other actions' pre-hooks only)
         // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
-        preHookSudoCommands = parseSudoLogs('/tmp/pre-sudo.log');
+        preHookSudoCommands = parseSudoLogs('/var/log/safer-runner/pre-sudo.log');
         if (preHookSudoCommands.length > 0) {
           core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
         }

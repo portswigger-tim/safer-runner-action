@@ -20,7 +20,9 @@ export interface NetworkConnection {
 /**
  * Parse network logs from dedicated log file to extract connection attempts
  */
-export async function parseNetworkLogs(logFile: string = '/tmp/main-iptables.log'): Promise<NetworkConnection[]> {
+export async function parseNetworkLogs(
+  logFile: string = '/var/log/safer-runner/main-iptables.log'
+): Promise<NetworkConnection[]> {
   try {
     // Read log file content (no sudo required - file is world-readable)
     if (!fs.existsSync(logFile)) {
@@ -39,7 +41,9 @@ export async function parseNetworkLogs(logFile: string = '/tmp/main-iptables.log
 /**
  * Parse pre-hook network logs from dedicated log file to extract connection attempts
  */
-export async function parsePreHookNetworkLogs(logFile: string = '/tmp/pre-iptables.log'): Promise<NetworkConnection[]> {
+export async function parsePreHookNetworkLogs(
+  logFile: string = '/var/log/safer-runner/pre-iptables.log'
+): Promise<NetworkConnection[]> {
   try {
     // Read log file content (no sudo required - file is world-readable)
     if (!fs.existsSync(logFile)) {

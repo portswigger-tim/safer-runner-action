@@ -691,7 +691,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 /**
  * Parse network logs from dedicated log file to extract connection attempts
  */
-async function parseNetworkLogs(logFile = '/tmp/main-iptables.log') {
+async function parseNetworkLogs(logFile = '/var/log/safer-runner/main-iptables.log') {
     try {
         // Read log file content (no sudo required - file is world-readable)
         if (!fs.existsSync(logFile)) {
@@ -709,7 +709,7 @@ async function parseNetworkLogs(logFile = '/tmp/main-iptables.log') {
 /**
  * Parse pre-hook network logs from dedicated log file to extract connection attempts
  */
-async function parsePreHookNetworkLogs(logFile = '/tmp/pre-iptables.log') {
+async function parsePreHookNetworkLogs(logFile = '/var/log/safer-runner/pre-iptables.log') {
     try {
         // Read log file content (no sudo required - file is world-readable)
         if (!fs.existsSync(logFile)) {
@@ -1021,9 +1021,9 @@ async function run() {
         await new Promise(resolve => setTimeout(resolve, 2000));
         // Parse main action logs
         const connections = await (0, network_parser_1.parseNetworkLogs)();
-        const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/main-dns.log');
+        const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/var/log/safer-runner/main-dns.log');
         // Parse main sudo logs (workflow commands only)
-        const sudoCommands = (0, sudo_1.parseSudoLogs)('/tmp/main-sudo.log');
+        const sudoCommands = (0, sudo_1.parseSudoLogs)('/var/log/safer-runner/main-sudo.log');
         if (sudoCommands.length > 0) {
             core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
         }
@@ -1041,13 +1041,13 @@ async function run() {
             // Parse pre-hook DNS logs from dedicated log file
             try {
                 const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
-                if (fs.existsSync('/tmp/pre-dns.log')) {
-                    preHookDnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/pre-dns.log');
+                if (fs.existsSync('/var/log/safer-runner/pre-dns.log')) {
+                    preHookDnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/var/log/safer-runner/pre-dns.log');
                     core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
                 }
                 // Parse pre-hook sudo logs (other actions' pre-hooks only)
                 // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
-                preHookSudoCommands = (0, sudo_1.parseSudoLogs)('/tmp/pre-sudo.log');
+                preHookSudoCommands = (0, sudo_1.parseSudoLogs)('/var/log/safer-runner/pre-sudo.log');
                 if (preHookSudoCommands.length > 0) {
                     core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
                 }
@@ -1259,10 +1259,10 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
                                       /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
                                       /usr/sbin/iptables -L * -n --line-numbers, \\
                                       /usr/bin/grep -E * /var/log/syslog, \\
-                                      /usr/bin/grep -E * /tmp/pre-dns.log, \\
-                                      /usr/bin/grep -E * /tmp/main-dns.log, \\
-                                      /usr/bin/grep -E * /tmp/pre-sudo.log, \\
-                                      /usr/bin/grep -E * /tmp/main-sudo.log
+                                      /usr/bin/grep -E * /var/log/safer-runner/pre-dns.log, \\
+                                      /usr/bin/grep -E * /var/log/safer-runner/main-dns.log, \\
+                                      /usr/bin/grep -E * /var/log/safer-runner/pre-sudo.log, \\
+                                      /usr/bin/grep -E * /var/log/safer-runner/main-sudo.log
 
 # Define command alias for sudo configuration commands (used by applyCustomSudoConfig)
 Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\

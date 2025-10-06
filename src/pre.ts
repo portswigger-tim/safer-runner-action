@@ -35,7 +35,7 @@ async function run(): Promise<void> {
     // Setup rsyslog to filter pre-hook iptables logs to dedicated file
     core.info('Configuring iptables log filtering...');
     await setupIptablesLogging(
-      '/tmp/pre-iptables.log',
+      '/var/log/safer-runner/pre-iptables.log',
       ['Pre-GitHub-Allow', 'Pre-User-Allow', 'Pre-Allow-Analyze'],
       'pre'
     );
@@ -50,11 +50,11 @@ async function run(): Promise<void> {
 
     // Configure DNSMasq in ANALYZE mode (permissive, log everything)
     core.info('Configuring DNSMasq in analyze mode...');
-    await setupDNSMasq('analyze', '', false, dnsUser.username, '/tmp/pre-dns.log');
+    await setupDNSMasq('analyze', '', false, dnsUser.username, '/var/log/safer-runner/pre-dns.log');
 
     // Start services
     core.info('Restarting services...');
-    await restartServices('/tmp/pre-dns.log');
+    await restartServices('/var/log/safer-runner/pre-dns.log');
 
     // Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
     core.info('Finalizing analyze mode rules...');
@@ -63,7 +63,7 @@ async function run(): Promise<void> {
     // Setup sudo logging AFTER all security configuration is complete
     // This captures sudo usage by other actions' pre-hooks
     core.info('Configuring sudo logging for pre-hook monitoring...');
-    await setupSudoLogging('/tmp/pre-sudo.log');
+    await setupSudoLogging('/var/log/safer-runner/pre-sudo.log');
 
     core.info('✅ Pre-action: Security monitoring active (analyze mode)');
     core.info('   Main action will apply user configuration...');

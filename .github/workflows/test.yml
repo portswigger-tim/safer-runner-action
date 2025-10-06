@@ -64,10 +64,10 @@ jobs:
         run: |
           echo "=== DNS Log File Permissions ==="
           echo "Pre-hook DNS log:"
-          ls -l /tmp/pre-dns.log || echo "Pre-hook DNS log not found"
+          ls -l /var/log/safer-runner/pre-dns.log || echo "Pre-hook DNS log not found"
           echo ""
           echo "Main action DNS log:"
-          ls -l /tmp/main-dns.log || echo "Main action DNS log not found"
+          ls -l /var/log/safer-runner/main-dns.log || echo "Main action DNS log not found"
 
       - name: Test GitHub domain access
         run: |
@@ -127,28 +127,28 @@ jobs:
           echo ""
           echo "=== iptables Log File Permissions ==="
           echo "Pre-hook iptables log:"
-          ls -la /tmp/pre-iptables.log 2>/dev/null || echo "Pre-hook iptables log not found"
+          ls -la /var/log/safer-runner/pre-iptables.log 2>/dev/null || echo "Pre-hook iptables log not found"
           echo "Main action iptables log:"
-          ls -la /tmp/main-iptables.log 2>/dev/null || echo "Main action iptables log not found"
+          ls -la /var/log/safer-runner/main-iptables.log 2>/dev/null || echo "Main action iptables log not found"
 
           echo ""
           echo "=== Pre-hook Network Logs (from dedicated file) ==="
-          if [ -f /tmp/pre-iptables.log ]; then
-            echo "Pre-hook iptables log file found ($(wc -l < /tmp/pre-iptables.log) lines):"
-            cat /tmp/pre-iptables.log | head -30
+          if [ -f /var/log/safer-runner/pre-iptables.log ]; then
+            echo "Pre-hook iptables log file found ($(wc -l < /var/log/safer-runner/pre-iptables.log) lines):"
+            cat /var/log/safer-runner/pre-iptables.log | head -30
           else
-            echo "Pre-hook iptables log file not found at /tmp/pre-iptables.log"
+            echo "Pre-hook iptables log file not found at /var/log/safer-runner/pre-iptables.log"
             echo "Checking syslog fallback:"
             sudo grep -E 'Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ' /var/log/syslog | tail -20 || echo "No Pre- logs in syslog either"
           fi
 
           echo ""
           echo "=== Main Action Network Logs (from dedicated file) ==="
-          if [ -f /tmp/main-iptables.log ]; then
-            echo "Main action iptables log file found ($(wc -l < /tmp/main-iptables.log) lines):"
-            cat /tmp/main-iptables.log | head -30
+          if [ -f /var/log/safer-runner/main-iptables.log ]; then
+            echo "Main action iptables log file found ($(wc -l < /var/log/safer-runner/main-iptables.log) lines):"
+            cat /var/log/safer-runner/main-iptables.log | head -30
           else
-            echo "Main action iptables log file not found at /tmp/main-iptables.log"
+            echo "Main action iptables log file not found at /var/log/safer-runner/main-iptables.log"
             echo "Checking syslog fallback:"
             sudo grep -E 'Main-GitHub-Allow: |Main-User-Allow: |Main-Allow-Analyze: |Main-Drop-Enforce: ' /var/log/syslog | tail -20 || echo "No Main- logs in syslog either"
           fi
@@ -159,39 +159,39 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-dns.log ]; then
+          if [ -f /var/log/safer-runner/pre-dns.log ]; then
             echo "Pre-hook DNS logs file found:"
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
+            echo "Pre-hook DNS logs file not found at /var/log/safer-runner/pre-dns.log"
           fi
 
           echo ""
           echo "=== Main Action DNS Logs ==="
-          if [ -f /tmp/main-dns.log ]; then
+          if [ -f /var/log/safer-runner/main-dns.log ]; then
             echo "Main action DNS logs file found:"
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
           else
-            echo "Main action DNS logs file not found at /tmp/main-dns.log"
+            echo "Main action DNS logs file not found at /var/log/safer-runner/main-dns.log"
           fi
 
           echo ""
           echo "=== Sudo Usage Logs ==="
           echo "Pre-hook sudo log file:"
-          ls -lh /tmp/pre-sudo.log 2>/dev/null || echo "Pre-hook sudo log file not found"
-          if [ -f /tmp/pre-sudo.log ]; then
+          ls -lh /var/log/safer-runner/pre-sudo.log 2>/dev/null || echo "Pre-hook sudo log file not found"
+          if [ -f /var/log/safer-runner/pre-sudo.log ]; then
             echo "Pre-hook sudo log contents (last 20 lines):"
-            tail -20 /tmp/pre-sudo.log 2>/dev/null || echo "Could not read pre-hook sudo log"
+            tail -20 /var/log/safer-runner/pre-sudo.log 2>/dev/null || echo "Could not read pre-hook sudo log"
           fi
           echo ""
           echo "Main action sudo log file:"
-          ls -lh /tmp/main-sudo.log 2>/dev/null || echo "Main action sudo log file not found"
-          if [ -f /tmp/main-sudo.log ]; then
+          ls -lh /var/log/safer-runner/main-sudo.log 2>/dev/null || echo "Main action sudo log file not found"
+          if [ -f /var/log/safer-runner/main-sudo.log ]; then
             echo "Main action sudo log contents (last 20 lines):"
-            tail -20 /tmp/main-sudo.log 2>/dev/null || echo "Could not read main action sudo log"
+            tail -20 /var/log/safer-runner/main-sudo.log 2>/dev/null || echo "Could not read main action sudo log"
             echo ""
             echo "Count of sudo commands in main log:"
-            wc -l /tmp/main-sudo.log 2>/dev/null || echo "Could not count sudo commands"
+            wc -l /var/log/safer-runner/main-sudo.log 2>/dev/null || echo "Could not count sudo commands"
           fi
 
       - name: Verify job summary was created
@@ -246,20 +246,20 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-dns.log ]; then
+          if [ -f /var/log/safer-runner/pre-dns.log ]; then
             echo "Pre-hook DNS logs file found:"
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/pre-dns.log | tail -30 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
+            echo "Pre-hook DNS logs file not found at /var/log/safer-runner/pre-dns.log"
           fi
 
           echo ""
           echo "=== Main Action DNS Logs ==="
-          if [ -f /tmp/main-dns.log ]; then
+          if [ -f /var/log/safer-runner/main-dns.log ]; then
             echo "Main action DNS logs file found:"
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/main-dns.log | tail -30 || echo "Could not read main action DNS logs"
           else
-            echo "Main action DNS logs file not found at /tmp/main-dns.log"
+            echo "Main action DNS logs file not found at /var/log/safer-runner/main-dns.log"
           fi
 
       - name: Verify job summary was created
@@ -311,18 +311,18 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-dns.log ]; then
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
+          if [ -f /var/log/safer-runner/pre-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
+            echo "Pre-hook DNS logs file not found at /var/log/safer-runner/pre-dns.log"
           fi
 
           echo ""
           echo "=== Main Action DNS Logs ==="
-          if [ -f /tmp/main-dns.log ]; then
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
+          if [ -f /var/log/safer-runner/main-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
           else
-            echo "Main action DNS logs file not found at /tmp/main-dns.log"
+            echo "Main action DNS logs file not found at /var/log/safer-runner/main-dns.log"
           fi
 
   test-edge-cases:
@@ -396,18 +396,18 @@ jobs:
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
-          if [ -f /tmp/pre-dns.log ]; then
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
+          if [ -f /var/log/safer-runner/pre-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/pre-dns.log | tail -20 || echo "Could not read pre-hook DNS logs"
           else
-            echo "Pre-hook DNS logs file not found at /tmp/pre-dns.log"
+            echo "Pre-hook DNS logs file not found at /var/log/safer-runner/pre-dns.log"
           fi
 
           echo ""
           echo "=== Main Action DNS Logs ==="
-          if [ -f /tmp/main-dns.log ]; then
-            grep -E 'query\[A\]|reply|NXDOMAIN' /tmp/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
+          if [ -f /var/log/safer-runner/main-dns.log ]; then
+            grep -E 'query\[A\]|reply|NXDOMAIN' /var/log/safer-runner/main-dns.log | tail -20 || echo "Could not read main action DNS logs"
           else
-            echo "Main action DNS logs file not found at /tmp/main-dns.log"
+            echo "Main action DNS logs file not found at /var/log/safer-runner/main-dns.log"
           fi
 
       - name: Final security audit

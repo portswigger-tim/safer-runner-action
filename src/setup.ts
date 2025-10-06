@@ -17,7 +17,7 @@ export interface DnsUser {
 export { setupSudoLogging, removeSudoLogging, applyCustomSudoConfig, disableSudoForRunner } from './sudo';
 
 /**
- * Perform initial system setup: install dependencies, create DNS user, setup ipsets
+ * Perform initial system setup: install dependencies, create DNS user, setup ipsets, create log directory
  * Note: Sudo logging is NOT configured here - it's set up at the end of pre/main actions
  * to avoid capturing setup commands
  * Returns the created DNS user
@@ -27,6 +27,10 @@ export async function performInitialSetup(): Promise<DnsUser> {
   core.info('Installing dependencies...');
   await exec.exec('sudo', ['apt-get', 'update', '-qq']);
   await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+
+  // Create log directory for all safer-runner logs
+  core.info('Creating log directory...');
+  await createLogDirectory();
 
   // Create random DNS user for privilege separation
   core.info('Creating isolated DNS user...');
@@ -38,6 +42,23 @@ export async function performInitialSetup(): Promise<DnsUser> {
   await setupIpsets();
 
   return dnsUser;
+}
+
+/**
+ * Create /var/log/safer-runner directory with proper permissions
+ * This directory will contain all safer-runner log files (DNS, iptables, sudo)
+ */
+export async function createLogDirectory(): Promise<void> {
+  const logDir = '/var/log/safer-runner';
+
+  // Create directory
+  await exec.exec('sudo', ['mkdir', '-p', logDir]);
+
+  // Set ownership to syslog:adm (rsyslog runs as syslog, runner is in adm group)
+  await exec.exec('sudo', ['chown', 'syslog:adm', logDir]);
+
+  // Make directory readable by all (so runner can read logs without sudo)
+  await exec.exec('sudo', ['chmod', '755', logDir]);
 }
 
 export async function createRandomDNSUser(): Promise<DnsUser> {
