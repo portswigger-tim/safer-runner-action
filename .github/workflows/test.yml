@@ -99,12 +99,46 @@ jobs:
       
       - name: Check logs
         run: |
-          echo "=== Pre-hook Network Logs ==="
-          sudo grep -E 'Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ' /var/log/syslog | tail -20 || echo "No Pre- logs found"
+          echo "=== rsyslog Configuration ==="
+          echo "Checking if rsyslog config exists:"
+          ls -la /etc/rsyslog.d/10-iptables-safer-runner.conf 2>/dev/null || echo "rsyslog config not found"
+          if [ -f /etc/rsyslog.d/10-iptables-safer-runner.conf ]; then
+            echo "rsyslog config contents:"
+            sudo cat /etc/rsyslog.d/10-iptables-safer-runner.conf
+          fi
 
           echo ""
-          echo "=== Main Action Network Logs ==="
-          sudo grep -E ' GitHub-Allow: | User-Allow: | Allow-Analyze: | Drop-Enforce: ' /var/log/syslog | tail -20 || echo "No main action logs found"
+          echo "=== iptables Log File Permissions ==="
+          echo "Pre-hook iptables log:"
+          ls -la /tmp/pre-iptables.log 2>/dev/null || echo "Pre-hook iptables log not found"
+          echo "Main action iptables log:"
+          ls -la /tmp/main-iptables.log 2>/dev/null || echo "Main action iptables log not found"
+
+          echo ""
+          echo "=== Pre-hook Network Logs (from dedicated file) ==="
+          if [ -f /tmp/pre-iptables.log ]; then
+            echo "Pre-hook iptables log file found ($(wc -l < /tmp/pre-iptables.log) lines):"
+            cat /tmp/pre-iptables.log | head -30
+          else
+            echo "Pre-hook iptables log file not found at /tmp/pre-iptables.log"
+            echo "Checking syslog fallback:"
+            sudo grep -E 'Pre-GitHub-Allow: |Pre-User-Allow: |Pre-Allow-Analyze: ' /var/log/syslog | tail -20 || echo "No Pre- logs in syslog either"
+          fi
+
+          echo ""
+          echo "=== Main Action Network Logs (from dedicated file) ==="
+          if [ -f /tmp/main-iptables.log ]; then
+            echo "Main action iptables log file found ($(wc -l < /tmp/main-iptables.log) lines):"
+            cat /tmp/main-iptables.log | head -30
+          else
+            echo "Main action iptables log file not found at /tmp/main-iptables.log"
+            echo "Checking syslog fallback:"
+            sudo grep -E 'Main-GitHub-Allow: |Main-User-Allow: |Main-Allow-Analyze: |Main-Drop-Enforce: ' /var/log/syslog | tail -20 || echo "No Main- logs in syslog either"
+          fi
+
+          echo ""
+          echo "=== Raw syslog iptables entries (all prefixes) ==="
+          sudo grep -E 'Pre-|Main-' /var/log/syslog | grep -E 'GitHub-Allow:|User-Allow:|Allow-Analyze:|Drop-Enforce:' | tail -30 || echo "No iptables logs in syslog"
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
@@ -191,7 +225,7 @@ jobs:
 
           echo ""
           echo "=== Main Action Network Logs ==="
-          sudo grep -E ' GitHub-Allow: | User-Allow: | Drop-Enforce: ' /var/log/syslog | tail -30 || echo "No main action logs found"
+          sudo grep -E 'Main-GitHub-Allow: |Main-User-Allow: |Main-Drop-Enforce: ' /var/log/syslog | tail -30 || echo "No main action logs found"
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
@@ -256,7 +290,7 @@ jobs:
 
           echo ""
           echo "=== Main Action GitHub Domain Access Logs ==="
-          sudo grep -E ' GitHub-Allow: ' /var/log/syslog | tail -20 || echo "No GitHub domain access logs found"
+          sudo grep -E 'Main-GitHub-Allow: ' /var/log/syslog | tail -20 || echo "No GitHub domain access logs found"
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
@@ -341,7 +375,7 @@ jobs:
 
           echo ""
           echo "=== Main Action Network Logs ==="
-          sudo grep -E ' GitHub-Allow: | User-Allow: | Drop-Enforce: | Allow-Analyze: ' /var/log/syslog | tail -30 || echo "No main action logs found"
+          sudo grep -E 'Main-GitHub-Allow: |Main-User-Allow: |Main-Drop-Enforce: |Main-Allow-Analyze: ' /var/log/syslog | tail -30 || echo "No main action logs found"
 
           echo ""
           echo "=== Pre-hook DNS Logs ==="
