@@ -567,6 +567,7 @@ jobs:
           echo "=== Testing Docker access (should still work) ==="
           docker --version
           docker ps
+          curl -I https://google.com
           echo "✅ Docker access still works (runner user still in docker group)"
 
       - name: Verify log file access still works
