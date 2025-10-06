@@ -176,6 +176,7 @@ export class SystemValidator {
     try {
       let fileContent = '';
       const exitCode = await exec.exec('sudo', ['cat', filePath], {
+        silent: true,
         listeners: {
           stdout: data => {
             fileContent += data.toString();
@@ -212,6 +213,7 @@ export class SystemValidator {
   protected async getIptablesChainOutput(chain: string): Promise<string> {
     let rulesOutput = '';
     await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+      silent: true,
       listeners: {
         stdout: data => {
           rulesOutput += data.toString();

@@ -392,7 +392,6 @@ exports.parseDnsLogsFromString = parseDnsLogsFromString;
 exports.parseRequestChains = parseRequestChains;
 exports.deduplicateDnsResolutions = deduplicateDnsResolutions;
 const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
 /**
  * Parse DNS logs from syslog to extract domain resolutions
  * @param logFile Optional path to a specific log file (defaults to /var/log/syslog)
@@ -400,17 +399,19 @@ const exec = __importStar(__nccwpck_require__(5236));
 async function parseDnsLogs(logFile) {
     try {
         const targetFile = logFile || '/var/log/syslog';
-        // Get DNS-related logs from file
-        let syslogOutput = '';
-        await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', targetFile], {
-            listeners: {
-                stdout: data => {
-                    syslogOutput += data.toString();
-                }
-            },
-            ignoreReturnCode: true
-        });
-        return parseDnsLogsFromString(syslogOutput);
+        // Read log file directly (no sudo required - file is world-readable)
+        const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
+        if (!fs.existsSync(targetFile)) {
+            core.warning(`DNS log file not found: ${targetFile}`);
+            return [];
+        }
+        const logContent = fs.readFileSync(targetFile, 'utf8');
+        // Filter to DNS-related lines only
+        const dnsLines = logContent
+            .split('\n')
+            .filter(line => line.match(/query\[A\]|reply|config.*NXDOMAIN/))
+            .join('\n');
+        return parseDnsLogsFromString(dnsLines);
     }
     catch (error) {
         core.warning(`Failed to parse DNS logs: ${error}`);
@@ -1613,6 +1614,7 @@ class SystemValidator {
         try {
             let fileContent = '';
             const exitCode = await exec.exec('sudo', ['cat', filePath], {
+                silent: true,
                 listeners: {
                     stdout: data => {
                         fileContent += data.toString();
@@ -1646,6 +1648,7 @@ class SystemValidator {
     async getIptablesChainOutput(chain) {
         let rulesOutput = '';
         await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+            silent: true,
             listeners: {
                 stdout: data => {
                     rulesOutput += data.toString();

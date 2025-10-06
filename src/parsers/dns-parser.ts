@@ -24,18 +24,22 @@ export async function parseDnsLogs(logFile?: string): Promise<DnsResolution[]> {
   try {
     const targetFile = logFile || '/var/log/syslog';
 
-    // Get DNS-related logs from file
-    let syslogOutput = '';
-    await exec.exec('sudo', ['grep', '-E', 'query\\[A\\]|reply|config.*NXDOMAIN', targetFile], {
-      listeners: {
-        stdout: data => {
-          syslogOutput += data.toString();
-        }
-      },
-      ignoreReturnCode: true
-    });
+    // Read log file directly (no sudo required - file is world-readable)
+    const fs = await import('fs');
+    if (!fs.existsSync(targetFile)) {
+      core.warning(`DNS log file not found: ${targetFile}`);
+      return [];
+    }
 
-    return parseDnsLogsFromString(syslogOutput);
+    const logContent = fs.readFileSync(targetFile, 'utf8');
+
+    // Filter to DNS-related lines only
+    const dnsLines = logContent
+      .split('\n')
+      .filter(line => line.match(/query\[A\]|reply|config.*NXDOMAIN/))
+      .join('\n');
+
+    return parseDnsLogsFromString(dnsLines);
   } catch (error) {
     core.warning(`Failed to parse DNS logs: ${error}`);
     return [];
