@@ -854,10 +854,13 @@ async function removeSudoLogging() {
  * - Query iptables rules for firewall validation
  * - Parse DNS and network logs for reporting
  *
- * Uses Cmnd_Alias and Defaults!<alias> !log_allowed to exclude these commands
- * from sudo logging (they're internal validation, not user workflow commands).
+ * Also includes commands used by applyCustomSudoConfig() to avoid logging
+ * internal sudo configuration operations.
  *
- * @param username - The username to generate rules for (default: 'runner')
+ * Uses Cmnd_Alias and Defaults!<alias> !log_allowed to exclude these commands
+ * from sudo logging (they're internal operations, not user workflow commands).
+ *
+ * @param username - The username to generate rules for
  * @returns Sudoers configuration string with required commands
  */
 function getRequiredSudoCommands(username) {
@@ -876,11 +879,20 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
                                       /usr/bin/grep -E * /tmp/pre-sudo.log, \\
                                       /usr/bin/grep -E * /tmp/main-sudo.log
 
-# Exclude validation commands from sudo logging
-Defaults!SAFER_RUNNER_VALIDATION !log_allowed
+# Define command alias for sudo configuration commands (used by applyCustomSudoConfig)
+Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/visudo -c -f /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/chmod * /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/chown * /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/mv /tmp/${username}-sudoers.tmp /etc/sudoers.d/${username}, \\
+                                 /usr/bin/rm -f /tmp/${username}-sudoers.tmp
 
-# Allow validation commands without password
-${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
+# Exclude validation and config commands from sudo logging
+Defaults!SAFER_RUNNER_VALIDATION !log_allowed
+Defaults!SAFER_RUNNER_CONFIG !log_allowed
+
+# Allow validation and config commands without password
+${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION, SAFER_RUNNER_CONFIG
 `;
 }
 /**

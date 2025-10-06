@@ -27,7 +27,6 @@ async function run(): Promise<void> {
     }
 
     // Remove sudo logging config from pre-hook to stop capturing in pre-sudo.log
-    // We'll reconfigure it at the end of main setup to capture only workflow commands
     await removeSudoLogging();
 
     core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
@@ -93,8 +92,9 @@ async function run(): Promise<void> {
     const validator = new SystemValidator();
     await validator.capturePostSetupBaseline();
 
-    // Setup sudo logging AFTER all security configuration is complete
-    // This captures sudo usage during the workflow execution only
+    // Setup sudo logging BEFORE applying sudo configuration
+    // This ensures we don't capture our own sudo config commands
+    // but DO capture any workflow commands that follow
     core.info('Configuring sudo logging for workflow monitoring...');
     await setupSudoLogging('/tmp/main-sudo.log');
 

@@ -178,7 +178,6 @@ async function run() {
             core.warning('⚠️ Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
         }
         // Remove sudo logging config from pre-hook to stop capturing in pre-sudo.log
-        // We'll reconfigure it at the end of main setup to capture only workflow commands
         await (0, sudo_1.removeSudoLogging)();
         core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
         if (mode === 'enforce' && blockRiskySubdomains) {
@@ -227,8 +226,9 @@ async function run() {
         core.info('Capturing post-setup security baseline...');
         const validator = new validation_1.SystemValidator();
         await validator.capturePostSetupBaseline();
-        // Setup sudo logging AFTER all security configuration is complete
-        // This captures sudo usage during the workflow execution only
+        // Setup sudo logging BEFORE applying sudo configuration
+        // This ensures we don't capture our own sudo config commands
+        // but DO capture any workflow commands that follow
         core.info('Configuring sudo logging for workflow monitoring...');
         await (0, sudo_1.setupSudoLogging)('/tmp/main-sudo.log');
         // Apply sudo configuration (must be done LAST, after sudo logging is configured)
@@ -890,10 +890,13 @@ async function removeSudoLogging() {
  * - Query iptables rules for firewall validation
  * - Parse DNS and network logs for reporting
  *
- * Uses Cmnd_Alias and Defaults!<alias> !log_allowed to exclude these commands
- * from sudo logging (they're internal validation, not user workflow commands).
+ * Also includes commands used by applyCustomSudoConfig() to avoid logging
+ * internal sudo configuration operations.
  *
- * @param username - The username to generate rules for (default: 'runner')
+ * Uses Cmnd_Alias and Defaults!<alias> !log_allowed to exclude these commands
+ * from sudo logging (they're internal operations, not user workflow commands).
+ *
+ * @param username - The username to generate rules for
  * @returns Sudoers configuration string with required commands
  */
 function getRequiredSudoCommands(username) {
@@ -912,11 +915,20 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
                                       /usr/bin/grep -E * /tmp/pre-sudo.log, \\
                                       /usr/bin/grep -E * /tmp/main-sudo.log
 
-# Exclude validation commands from sudo logging
-Defaults!SAFER_RUNNER_VALIDATION !log_allowed
+# Define command alias for sudo configuration commands (used by applyCustomSudoConfig)
+Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/visudo -c -f /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/chmod * /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/chown * /tmp/${username}-sudoers.tmp, \\
+                                 /usr/bin/mv /tmp/${username}-sudoers.tmp /etc/sudoers.d/${username}, \\
+                                 /usr/bin/rm -f /tmp/${username}-sudoers.tmp
 
-# Allow validation commands without password
-${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
+# Exclude validation and config commands from sudo logging
+Defaults!SAFER_RUNNER_VALIDATION !log_allowed
+Defaults!SAFER_RUNNER_CONFIG !log_allowed
+
+# Allow validation and config commands without password
+${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION, SAFER_RUNNER_CONFIG
 `;
 }
 /**
