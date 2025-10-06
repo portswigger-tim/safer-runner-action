@@ -116,6 +116,10 @@ jobs:
           sudo systemctl status rsyslog --no-pager || true
 
           echo ""
+          echo "=== rsyslog Error Logs ==="
+          sudo journalctl -u rsyslog -n 50 --no-pager || true
+
+          echo ""
           echo "=== Test rsyslog Filtering ==="
           echo "Testing if rsyslog would match our patterns:"
           sudo grep -E "(Main-GitHub-Allow:|Main-User-Allow:|Main-Drop-Enforce:|Main-Allow-Analyze:)" /var/log/syslog | head -5 || echo "No matching patterns in syslog"
