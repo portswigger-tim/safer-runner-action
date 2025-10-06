@@ -635,9 +635,9 @@ async function setupIpsets() {
  */
 async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
     // Build rsyslog configuration to filter iptables logs
-    // Use regex to match any of the provided prefixes
-    const prefixPattern = logPrefixes.join('|');
-    const rsyslogConfig = `:msg,regex,"(${prefixPattern})" ${logFile}
+    // Use expression-based filter with contains for reliable matching
+    const conditions = logPrefixes.map(prefix => `$msg contains '${prefix}'`).join(' or ');
+    const rsyslogConfig = `if (${conditions}) then ${logFile}
 & stop
 `;
     // Use different config file names for pre-hook and main action
