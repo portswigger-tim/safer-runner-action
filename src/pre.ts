@@ -36,7 +36,7 @@ async function run(): Promise<void> {
     core.info('Configuring iptables log filtering...');
     await setupIptablesLogging(
       '/tmp/pre-iptables.log',
-      ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:'],
+      ['Pre-GitHub-Allow', 'Pre-User-Allow', 'Pre-Allow-Analyze'],
       'pre'
     );
 

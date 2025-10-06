@@ -194,7 +194,7 @@ async function run() {
             dnsUser = await (0, setup_1.performInitialSetup)();
             // Setup rsyslog for main action iptables logs (pre-action would have already done this)
             core.info('Configuring iptables log filtering...');
-            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', ['Main-GitHub-Allow:', 'Main-User-Allow:', 'Main-Drop-Enforce:', 'Main-Allow-Analyze:'], 'main');
+            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'], 'main');
         }
         else {
             // Pre-action already set up infrastructure - just reconfigure
@@ -205,7 +205,7 @@ async function run() {
             };
             // Setup rsyslog for main action iptables logs (separate from pre-hook logs)
             core.info('Configuring iptables log filtering for main action...');
-            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', ['Main-GitHub-Allow:', 'Main-User-Allow:', 'Main-Drop-Enforce:', 'Main-Allow-Analyze:'], 'main');
+            await (0, setup_1.setupIptablesLogging)('/tmp/main-iptables.log', ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'], 'main');
         }
         // Configure iptables rules with Main- log prefix
         core.info('Configuring iptables rules...');

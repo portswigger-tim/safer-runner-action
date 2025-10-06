@@ -51,7 +51,7 @@ async function run(): Promise<void> {
       core.info('Configuring iptables log filtering...');
       await setupIptablesLogging(
         '/tmp/main-iptables.log',
-        ['Main-GitHub-Allow:', 'Main-User-Allow:', 'Main-Drop-Enforce:', 'Main-Allow-Analyze:'],
+        ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'],
         'main'
       );
     } else {
@@ -66,7 +66,7 @@ async function run(): Promise<void> {
       core.info('Configuring iptables log filtering for main action...');
       await setupIptablesLogging(
         '/tmp/main-iptables.log',
-        ['Main-GitHub-Allow:', 'Main-User-Allow:', 'Main-Drop-Enforce:', 'Main-Allow-Analyze:'],
+        ['Main-GitHub-Allow', 'Main-User-Allow', 'Main-Drop-Enforce', 'Main-Allow-Analyze'],
         'main'
       );
     }

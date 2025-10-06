@@ -424,7 +424,7 @@ async function run() {
         core.saveState('dns-uid', dnsUser.uid.toString());
         // Setup rsyslog to filter pre-hook iptables logs to dedicated file
         core.info('Configuring iptables log filtering...');
-        await (0, setup_1.setupIptablesLogging)('/tmp/pre-iptables.log', ['Pre-GitHub-Allow:', 'Pre-User-Allow:', 'Pre-Allow-Analyze:'], 'pre');
+        await (0, setup_1.setupIptablesLogging)('/tmp/pre-iptables.log', ['Pre-GitHub-Allow', 'Pre-User-Allow', 'Pre-Allow-Analyze'], 'pre');
         // Configure iptables rules with Pre- log prefix
         core.info('Configuring iptables rules...');
         await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Pre-');
