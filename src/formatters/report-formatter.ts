@@ -8,7 +8,8 @@
 import { NetworkConnection } from '../parsers/network-parser';
 import { DnsResolution } from '../parsers/dns-parser';
 import { isGitHubRelated } from '../parsers/github-parser';
-import { SudoCommand } from '../parsers/sudo-parser';
+import { generateSudoersConfig, type SudoCommand } from '../parsers/sudo-parser';
+import { RUNNER_USERNAME } from '../sudo';
 
 /**
  * Generate network connection table (without heading)
@@ -177,14 +178,9 @@ function extractAllowedDomains(dnsResolutions: DnsResolution[]): string[] {
  *
  * @param dnsResolutions - List of DNS resolutions to analyze
  * @param sudoCommands - List of sudo commands executed (optional)
- * @param username - Username for sudoers config (default: 'runner')
  * @returns Markdown-formatted configuration advice
  */
-export function generateConfigurationAdvice(
-  dnsResolutions: DnsResolution[],
-  sudoCommands?: SudoCommand[],
-  username: string = 'runner'
-): string {
+export function generateConfigurationAdvice(dnsResolutions: DnsResolution[], sudoCommands?: SudoCommand[]): string {
   const suggestedDomains = extractAllowedDomains(dnsResolutions);
 
   let advice = `## Configuration Advice\n\n`;
@@ -234,29 +230,12 @@ export function generateConfigurationAdvice(
   if (hasSudoCommands) {
     advice += `    sudo-config: |\n`;
 
-    // Group commands by executable
-    const commandsByExecutable = new Map<string, Set<string>>();
-
-    for (const cmd of sudoCommands!) {
-      if (!commandsByExecutable.has(cmd.command)) {
-        commandsByExecutable.set(cmd.command, new Set());
-      }
-      commandsByExecutable.get(cmd.command)!.add(cmd.args);
-    }
-
-    // Generate sudoers rules with proper indentation
-    for (const [executable, argsSet] of commandsByExecutable.entries()) {
-      const args = Array.from(argsSet);
-
-      if (args.length === 1 && args[0] === '') {
-        // No arguments - allow bare command
-        advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
-      } else if (args.length === 1) {
-        // Single argument pattern - allow specific invocation
-        advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable} ${args[0]}\n`;
-      } else {
-        // Multiple argument patterns - allow executable with any args
-        advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
+    // Use the sudo-parser's generateSudoersConfig function
+    const sudoersConfig = generateSudoersConfig(sudoCommands!, RUNNER_USERNAME);
+    const lines = sudoersConfig.split('\n');
+    for (const line of lines) {
+      if (line.trim()) {
+        advice += `      ${line}\n`;
       }
     }
   } else if (noSudoCommands) {

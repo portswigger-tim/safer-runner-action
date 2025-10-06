@@ -1,5 +1,4 @@
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import { SystemValidator } from './validation';
 import {
   type DnsUser,
@@ -8,11 +7,9 @@ import {
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
-  finalizeFirewallRules,
-  disableSudoForRunner,
-  applyCustomSudoConfig,
-  setupSudoLogging
+  finalizeFirewallRules
 } from './setup';
+import { removeSudoLogging, setupSudoLogging, disableSudoForRunner, applyCustomSudoConfig } from './sudo';
 
 async function run(): Promise<void> {
   try {
@@ -31,8 +28,7 @@ async function run(): Promise<void> {
 
     // Remove sudo logging config from pre-hook to stop capturing in pre-sudo.log
     // We'll reconfigure it at the end of main setup to capture only workflow commands
-    core.info('Removing pre-hook sudo logging configuration...');
-    await exec.exec('sudo', ['rm', '-f', '/etc/sudoers.d/00-sudo-logging']);
+    await removeSudoLogging();
 
     core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
     if (mode === 'enforce' && blockRiskySubdomains) {

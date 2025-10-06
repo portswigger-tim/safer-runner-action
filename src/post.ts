@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import { SystemValidator } from './validation';
 import { parseNetworkLogs, parsePreHookNetworkLogs, NetworkConnection } from './parsers/network-parser';
 import { parseDnsLogs, DnsResolution } from './parsers/dns-parser';
-import { parseSudoLogsFromString, SudoCommand } from './parsers/sudo-parser';
+import { parseSudoLogs, generateSudoSummarySection, type SudoCommand } from './sudo';
 import {
   generateNetworkConnectionDetails,
   generateDnsTable,
@@ -22,16 +22,9 @@ async function run(): Promise<void> {
     const dnsResolutions = await parseDnsLogs('/tmp/main-dns.log');
 
     // Parse main sudo logs (workflow commands only)
-    let sudoCommands: SudoCommand[] = [];
-    try {
-      const fs = await import('fs');
-      if (fs.existsSync('/tmp/main-sudo.log')) {
-        const sudoLogContent = fs.readFileSync('/tmp/main-sudo.log', 'utf-8');
-        sudoCommands = parseSudoLogsFromString(sudoLogContent);
-        core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
-      }
-    } catch (error) {
-      core.warning(`Could not parse main sudo logs: ${error}`);
+    const sudoCommands = parseSudoLogs('/tmp/main-sudo.log');
+    if (sudoCommands.length > 0) {
+      core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
     }
 
     // Parse pre-hook logs if pre-action ran
@@ -58,9 +51,8 @@ async function run(): Promise<void> {
 
         // Parse pre-hook sudo logs (other actions' pre-hooks only)
         // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
-        if (fs.existsSync('/tmp/pre-sudo.log')) {
-          const preSudoLogContent = fs.readFileSync('/tmp/pre-sudo.log', 'utf-8');
-          preHookSudoCommands = parseSudoLogsFromString(preSudoLogContent);
+        preHookSudoCommands = parseSudoLogs('/tmp/pre-sudo.log');
+        if (preHookSudoCommands.length > 0) {
           core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
         }
       } catch (error) {
@@ -122,19 +114,7 @@ function generatePreHookAnalysis(
   report += generateDnsDetails(preHookDnsResolutions);
 
   // Sudo Commands
-  if (preHookSudoCommands.length > 0) {
-    report += `## Sudo Commands\n\n`;
-    report += `Pre-hook executed **${preHookSudoCommands.length}** sudo command${preHookSudoCommands.length === 1 ? '' : 's'}:\n\n`;
-    report += `| Command | Arguments |\n`;
-    report += `|---------|----------|\n`;
-    for (const cmd of preHookSudoCommands.slice(0, 50)) {
-      report += `| \`${cmd.command}\` | \`${cmd.args || '(none)'}\` |\n`;
-    }
-    if (preHookSudoCommands.length > 50) {
-      report += `\n*Showing first 50 of ${preHookSudoCommands.length} commands*\n`;
-    }
-    report += `\n`;
-  }
+  report += generateSudoSummarySection(preHookSudoCommands, 'Sudo Commands');
 
   report += `</details>\n\n`;
   return report;

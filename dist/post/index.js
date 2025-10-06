@@ -25,6 +25,8 @@ exports.formatCnameChain = formatCnameChain;
 exports.getStatusIcon = getStatusIcon;
 exports.getDnsStatusIcon = getDnsStatusIcon;
 const github_parser_1 = __nccwpck_require__(9170);
+const sudo_parser_1 = __nccwpck_require__(7516);
+const sudo_1 = __nccwpck_require__(1279);
 /**
  * Generate network connection table (without heading)
  *
@@ -167,10 +169,9 @@ function extractAllowedDomains(dnsResolutions) {
  *
  * @param dnsResolutions - List of DNS resolutions to analyze
  * @param sudoCommands - List of sudo commands executed (optional)
- * @param username - Username for sudoers config (default: 'runner')
  * @returns Markdown-formatted configuration advice
  */
-function generateConfigurationAdvice(dnsResolutions, sudoCommands, username = 'runner') {
+function generateConfigurationAdvice(dnsResolutions, sudoCommands) {
     const suggestedDomains = extractAllowedDomains(dnsResolutions);
     let advice = `## Configuration Advice\n\n`;
     // Determine if we have any configuration to suggest
@@ -215,28 +216,12 @@ function generateConfigurationAdvice(dnsResolutions, sudoCommands, username = 'r
     // Add sudo configuration if we have commands
     if (hasSudoCommands) {
         advice += `    sudo-config: |\n`;
-        // Group commands by executable
-        const commandsByExecutable = new Map();
-        for (const cmd of sudoCommands) {
-            if (!commandsByExecutable.has(cmd.command)) {
-                commandsByExecutable.set(cmd.command, new Set());
-            }
-            commandsByExecutable.get(cmd.command).add(cmd.args);
-        }
-        // Generate sudoers rules with proper indentation
-        for (const [executable, argsSet] of commandsByExecutable.entries()) {
-            const args = Array.from(argsSet);
-            if (args.length === 1 && args[0] === '') {
-                // No arguments - allow bare command
-                advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
-            }
-            else if (args.length === 1) {
-                // Single argument pattern - allow specific invocation
-                advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable} ${args[0]}\n`;
-            }
-            else {
-                // Multiple argument patterns - allow executable with any args
-                advice += `      ${username} ALL=(ALL) NOPASSWD: ${executable}\n`;
+        // Use the sudo-parser's generateSudoersConfig function
+        const sudoersConfig = (0, sudo_parser_1.generateSudoersConfig)(sudoCommands, sudo_1.RUNNER_USERNAME);
+        const lines = sudoersConfig.split('\n');
+        for (const line of lines) {
+            if (line.trim()) {
+                advice += `      ${line}\n`;
             }
         }
     }
@@ -1037,7 +1022,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const validation_1 = __nccwpck_require__(8449);
 const network_parser_1 = __nccwpck_require__(8089);
 const dns_parser_1 = __nccwpck_require__(1106);
-const sudo_parser_1 = __nccwpck_require__(7516);
+const sudo_1 = __nccwpck_require__(1279);
 const report_formatter_1 = __nccwpck_require__(5601);
 async function run() {
     try {
@@ -1048,17 +1033,9 @@ async function run() {
         const connections = await (0, network_parser_1.parseNetworkLogs)();
         const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/tmp/main-dns.log');
         // Parse main sudo logs (workflow commands only)
-        let sudoCommands = [];
-        try {
-            const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
-            if (fs.existsSync('/tmp/main-sudo.log')) {
-                const sudoLogContent = fs.readFileSync('/tmp/main-sudo.log', 'utf-8');
-                sudoCommands = (0, sudo_parser_1.parseSudoLogsFromString)(sudoLogContent);
-                core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
-            }
-        }
-        catch (error) {
-            core.warning(`Could not parse main sudo logs: ${error}`);
+        const sudoCommands = (0, sudo_1.parseSudoLogs)('/tmp/main-sudo.log');
+        if (sudoCommands.length > 0) {
+            core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
         }
         // Parse pre-hook logs if pre-action ran
         let preHookConnections = [];
@@ -1080,9 +1057,8 @@ async function run() {
                 }
                 // Parse pre-hook sudo logs (other actions' pre-hooks only)
                 // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
-                if (fs.existsSync('/tmp/pre-sudo.log')) {
-                    const preSudoLogContent = fs.readFileSync('/tmp/pre-sudo.log', 'utf-8');
-                    preHookSudoCommands = (0, sudo_parser_1.parseSudoLogsFromString)(preSudoLogContent);
+                preHookSudoCommands = (0, sudo_1.parseSudoLogs)('/tmp/pre-sudo.log');
+                if (preHookSudoCommands.length > 0) {
                     core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
                 }
             }
@@ -1123,19 +1099,7 @@ function generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preH
     // DNS Information
     report += (0, report_formatter_1.generateDnsDetails)(preHookDnsResolutions);
     // Sudo Commands
-    if (preHookSudoCommands.length > 0) {
-        report += `## Sudo Commands\n\n`;
-        report += `Pre-hook executed **${preHookSudoCommands.length}** sudo command${preHookSudoCommands.length === 1 ? '' : 's'}:\n\n`;
-        report += `| Command | Arguments |\n`;
-        report += `|---------|----------|\n`;
-        for (const cmd of preHookSudoCommands.slice(0, 50)) {
-            report += `| \`${cmd.command}\` | \`${cmd.args || '(none)'}\` |\n`;
-        }
-        if (preHookSudoCommands.length > 50) {
-            report += `\n*Showing first 50 of ${preHookSudoCommands.length} commands*\n`;
-        }
-        report += `\n`;
-    }
+    report += (0, sudo_1.generateSudoSummarySection)(preHookSudoCommands, 'Sudo Commands');
     report += `</details>\n\n`;
     return report;
 }
@@ -1182,6 +1146,283 @@ async function generateJobSummary(connections, dnsResolutions, sudoCommands, pre
     await core.summary.addRaw(summary).write();
 }
 run();
+
+
+/***/ }),
+
+/***/ 1279:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Sudo logging and configuration module
+ * Handles sudo logging setup, custom sudo configuration, and permission management
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_RUNNER_SUDO_CONFIG = exports.RUNNER_USERNAME = void 0;
+exports.setupSudoLogging = setupSudoLogging;
+exports.removeSudoLogging = removeSudoLogging;
+exports.applyCustomSudoConfig = applyCustomSudoConfig;
+exports.disableSudoForRunner = disableSudoForRunner;
+exports.parseSudoLogs = parseSudoLogs;
+exports.generateSudoSummarySection = generateSudoSummarySection;
+exports.generateSudoConfigAdvice = generateSudoConfigAdvice;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const sudo_parser_1 = __nccwpck_require__(7516);
+// Constants
+exports.RUNNER_USERNAME = 'runner';
+/**
+ * Default sudoers configuration for GitHub Actions runner user
+ * This is the standard unrestricted sudo access that exists by default
+ */
+exports.DEFAULT_RUNNER_SUDO_CONFIG = `${exports.RUNNER_USERNAME} ALL=(ALL) NOPASSWD: ALL`;
+/**
+ * Configure sudo logging to capture all sudo usage
+ * Logs to specified file for visibility and auditability
+ *
+ * @param logFile - Path to sudo log file (e.g., /tmp/pre-sudo.log or /tmp/main-sudo.log)
+ */
+async function setupSudoLogging(logFile) {
+    core.info(`Configuring sudo logging to ${logFile}...`);
+    // Create a sudoers.d file to enable logging
+    const logConfig = `Defaults logfile=${logFile}\n`;
+    await exec.exec('sudo', ['tee', '/etc/sudoers.d/00-sudo-logging'], {
+        input: Buffer.from(logConfig)
+    });
+    // Set appropriate permissions (must be 0440 or 0400 for sudoers files)
+    await exec.exec('sudo', ['chmod', '0440', '/etc/sudoers.d/00-sudo-logging']);
+    await exec.exec('sudo', ['chown', 'root:root', '/etc/sudoers.d/00-sudo-logging']);
+    // Create the log file and make it readable by the runner
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chmod', '0644', logFile]);
+    core.info(`✅ Sudo logging configured to ${logFile}`);
+}
+/**
+ * Remove sudo logging configuration
+ * Used to stop capturing sudo commands between pre-hook and main action
+ */
+async function removeSudoLogging() {
+    core.info('Removing sudo logging configuration...');
+    await exec.exec('sudo', ['rm', '-f', '/etc/sudoers.d/00-sudo-logging']);
+    core.info('✅ Sudo logging removed');
+}
+/**
+ * Generate required sudo commands for validation and log parsing
+ * These commands are needed by the post-action to:
+ * - Read protected configuration files for integrity validation
+ * - Query iptables rules for firewall validation
+ * - Parse DNS and network logs for reporting
+ *
+ * Uses Cmnd_Alias and Defaults!<alias> !log_allowed to exclude these commands
+ * from sudo logging (they're internal validation, not user workflow commands).
+ *
+ * @param username - The username to generate rules for (default: 'runner')
+ * @returns Sudoers configuration string with required commands
+ */
+function getRequiredSudoCommands(username) {
+    return `
+# Required commands for post-action validation and reporting
+# These are automatically added by safer-runner-action
+
+# Define command alias for validation commands
+Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
+                                      /usr/bin/cat /etc/resolv.conf, \\
+                                      /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
+                                      /usr/sbin/iptables -L * -n --line-numbers, \\
+                                      /usr/bin/grep -E * /var/log/syslog, \\
+                                      /usr/bin/grep -E * /tmp/pre-dns.log, \\
+                                      /usr/bin/grep -E * /tmp/main-dns.log, \\
+                                      /usr/bin/grep -E * /tmp/pre-sudo.log, \\
+                                      /usr/bin/grep -E * /tmp/main-sudo.log
+
+# Exclude validation commands from sudo logging
+Defaults!SAFER_RUNNER_VALIDATION !log_allowed
+
+# Allow validation commands without password
+${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
+`;
+}
+/**
+ * Apply custom sudoers configuration for the runner user
+ * This rewrites the /etc/sudoers.d/runner file with the specified configuration
+ *
+ * If no config is provided, defaults to the standard GitHub Actions runner config.
+ * Always appends required commands for post-action validation and log parsing.
+ *
+ * @param sudoConfig - The custom sudoers configuration (defaults to unrestricted sudo)
+ */
+async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CONFIG) {
+    const isDefaultConfig = sudoConfig === exports.DEFAULT_RUNNER_SUDO_CONFIG;
+    if (isDefaultConfig) {
+        core.info(`Applying default sudo configuration for user: ${exports.RUNNER_USERNAME}`);
+    }
+    else {
+        core.info(`Applying custom sudo configuration for user: ${exports.RUNNER_USERNAME}`);
+    }
+    // Validate the sudo config using visudo
+    const sudoersFile = `/etc/sudoers.d/${exports.RUNNER_USERNAME}`;
+    const tempFile = `/tmp/${exports.RUNNER_USERNAME}-sudoers.tmp`;
+    // Build complete config: user config + required validation commands
+    const requiredCommands = getRequiredSudoCommands(exports.RUNNER_USERNAME);
+    const fullConfig = sudoConfig + '\n' + requiredCommands;
+    try {
+        // Write custom config + required commands to temp file
+        await exec.exec('sudo', ['tee', tempFile], {
+            input: Buffer.from(fullConfig + '\n')
+        });
+        // Validate with visudo
+        await exec.exec('sudo', ['visudo', '-c', '-f', tempFile]);
+        // If validation passes, set permissions before moving
+        await exec.exec('sudo', ['chmod', '0440', tempFile]);
+        await exec.exec('sudo', ['chown', 'root:root', tempFile]);
+        await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
+        if (isDefaultConfig) {
+            core.info(`✅ Default sudo configuration rewritten to ${sudoersFile}`);
+            core.info('ℹ️  Required validation and log parsing commands automatically added');
+        }
+        else {
+            core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
+            core.info(`🔒 ${exports.RUNNER_USERNAME} user now has restricted sudo access`);
+            core.info('ℹ️  Required validation and log parsing commands automatically added');
+        }
+    }
+    catch (error) {
+        core.error(`Failed to apply custom sudo config: ${error}`);
+        core.error('Invalid sudoers syntax. Please check your sudo-config input.');
+        // Clean up temp file
+        await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
+        throw new Error('Invalid sudoers configuration');
+    }
+}
+/**
+ * Disable sudo access for the runner user
+ * This prevents malicious code from using sudo to bypass security controls
+ *
+ * Replaces the sudoers file with only the commands needed for post-action operations:
+ * - sudo cat <file> - to read protected configuration files for integrity checks
+ * - sudo iptables -L <chain> -n --line-numbers - to verify firewall rules
+ * - sudo grep -E <pattern> <file> - to parse DNS and network logs for reporting
+ */
+async function disableSudoForRunner() {
+    core.info('Restricting sudo access to validation commands only');
+    // Rewrite with only a comment header - the required validation commands will be added
+    const validationOnlyHeader = `# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation
+# and log parsing. All other sudo commands will be denied.
+`;
+    await applyCustomSudoConfig(validationOnlyHeader);
+    core.info(`🔒 ${exports.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
+}
+/**
+ * Parse sudo logs from a file
+ *
+ * @param logFile - Path to sudo log file
+ * @returns Array of parsed sudo commands
+ */
+function parseSudoLogs(logFile) {
+    try {
+        if (fs.existsSync(logFile)) {
+            const logContent = fs.readFileSync(logFile, 'utf-8');
+            return (0, sudo_parser_1.parseSudoLogsFromString)(logContent);
+        }
+        return [];
+    }
+    catch (error) {
+        core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+        return [];
+    }
+}
+/**
+ * Generate a job summary section for sudo commands
+ *
+ * @param commands - Array of sudo commands to display
+ * @param title - Section title (e.g., "Workflow Sudo Commands" or "Pre-Hook Sudo Commands")
+ * @returns Markdown string for job summary
+ */
+function generateSudoSummarySection(commands, title) {
+    if (commands.length === 0) {
+        return '';
+    }
+    let report = `## ${title}\n\n`;
+    report += `Workflow executed **${commands.length}** sudo command${commands.length === 1 ? '' : 's'}:\n\n`;
+    report += `| Command | Arguments |\n`;
+    report += `|---------|----------|\n`;
+    for (const cmd of commands.slice(0, 50)) {
+        report += `| \`${cmd.command}\` | \`${cmd.args || '(none)'}\` |\n`;
+    }
+    if (commands.length > 50) {
+        report += `\n*Showing first 50 of ${commands.length} commands*\n`;
+    }
+    report += `\n`;
+    return report;
+}
+/**
+ * Generate sudoers configuration advice from captured sudo commands
+ *
+ * @param commands - Array of sudo commands to analyze
+ * @returns Markdown string with sudoers configuration advice
+ */
+function generateSudoConfigAdvice(commands) {
+    if (commands.length === 0) {
+        return '';
+    }
+    const sudoersConfig = (0, sudo_parser_1.generateSudoersConfig)(commands, exports.RUNNER_USERNAME);
+    let advice = `### Sudo Configuration\n\n`;
+    advice += `Based on observed sudo usage, you can restrict sudo access with this configuration:\n\n`;
+    advice += `\`\`\`yaml\n`;
+    advice += `- uses: portswigger-tim/safer-runner-action@main\n`;
+    advice += `  with:\n`;
+    advice += `    sudo-config: |\n`;
+    // Indent each line of the sudoers config
+    const lines = sudoersConfig.split('\n');
+    for (const line of lines) {
+        if (line.trim()) {
+            advice += `      ${line}\n`;
+        }
+    }
+    advice += `\`\`\`\n\n`;
+    advice += `This configuration:\n`;
+    advice += `- ✅ Allows only the commands your workflow actually needs\n`;
+    advice += `- ✅ Prevents malicious code from running arbitrary sudo commands\n`;
+    advice += `- ✅ Automatically includes required validation commands\n\n`;
+    return advice;
+}
 
 
 /***/ }),
