@@ -121,11 +121,8 @@ export async function setupIptablesLogging(
     input: Buffer.from(rsyslogConfig)
   });
 
-  // Create log file with proper permissions (world-readable)
-  await exec.exec('sudo', ['touch', logFile]);
-  await exec.exec('sudo', ['chmod', '644', logFile]);
-
   // Restart rsyslog to apply configuration
+  // rsyslog will create the log file automatically with proper permissions
   await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
 }
 
