@@ -677,21 +677,24 @@ jobs:
           echo "Checking group membership..."
           groups | grep -v docker || echo "✅ Runner is not in docker group"
 
-          echo "Attempting to run docker command (should fail)..."
+          echo "Attempting docker ps (should fail - requires daemon)..."
           if docker ps 2>&1; then
-            echo "❌ ERROR: Docker still works! It should have been disabled."
+            echo "❌ ERROR: Docker ps still works! It should have been disabled."
             exit 1
           else
-            echo "✅ SUCCESS: Docker is correctly disabled"
+            echo "✅ SUCCESS: docker ps correctly blocked"
           fi
 
-          echo "Attempting to run docker version (should also fail)..."
-          if docker --version 2>&1; then
-            echo "❌ ERROR: Docker version command still works!"
+          echo "Attempting docker info (should fail - requires daemon)..."
+          if docker info 2>&1; then
+            echo "❌ ERROR: Docker info still works! It should have been disabled."
             exit 1
           else
-            echo "✅ SUCCESS: Docker version command correctly blocked"
+            echo "✅ SUCCESS: docker info correctly blocked"
           fi
+
+          echo "Note: docker --version still works (client-only command, doesn't need daemon)"
+          docker --version || true
 
       - name: Verify sudo still works
         run: |
@@ -748,17 +751,27 @@ jobs:
             echo "✅ Sudo is correctly disabled"
           fi
 
-          echo "Checking Docker (should fail)..."
+          echo "Checking Docker daemon access (should fail)..."
           if docker ps 2>&1; then
-            echo "❌ ERROR: Docker still works!"
+            echo "❌ ERROR: Docker ps still works!"
             exit 1
           else
-            echo "✅ Docker is correctly disabled"
+            echo "✅ docker ps correctly blocked"
+          fi
+
+          if docker info 2>&1; then
+            echo "❌ ERROR: Docker info still works!"
+            exit 1
+          else
+            echo "✅ docker info correctly blocked"
           fi
 
           echo "Checking group membership..."
           groups
           groups | grep -v docker || echo "✅ Not in docker group"
+
+          echo "Note: docker --version (client-only) still works:"
+          docker --version || true
 
       - name: Verify workflow can still function
         run: |
