@@ -105,10 +105,10 @@ export async function setupIptablesLogging(
   configSuffix: string = ''
 ): Promise<void> {
   // Build rsyslog configuration to filter iptables logs
-  // Use expression-based filter with contains for reliable matching
-  const conditions = logPrefixes.map(prefix => `$msg contains '${prefix}'`).join(' or ');
+  // Use expression-based filter with contains array for clean, reliable matching
+  const prefixArray = "['" + logPrefixes.join("', '") + "']";
 
-  const rsyslogConfig = `if (${conditions}) then ${logFile}
+  const rsyslogConfig = `if $msg contains ${prefixArray} then ${logFile}
 & stop
 `;
 
