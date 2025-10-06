@@ -100,11 +100,15 @@ jobs:
       - name: Check logs
         run: |
           echo "=== rsyslog Configuration ==="
-          echo "Checking if rsyslog config exists:"
-          ls -la /etc/rsyslog.d/10-iptables-safer-runner.conf 2>/dev/null || echo "rsyslog config not found"
-          if [ -f /etc/rsyslog.d/10-iptables-safer-runner.conf ]; then
-            echo "rsyslog config contents:"
-            sudo cat /etc/rsyslog.d/10-iptables-safer-runner.conf
+          echo "Checking if rsyslog configs exist:"
+          ls -la /etc/rsyslog.d/10-iptables-safer-runner-*.conf 2>/dev/null || echo "rsyslog configs not found"
+          if [ -f /etc/rsyslog.d/10-iptables-safer-runner-pre.conf ]; then
+            echo "Pre-hook rsyslog config contents:"
+            sudo cat /etc/rsyslog.d/10-iptables-safer-runner-pre.conf
+          fi
+          if [ -f /etc/rsyslog.d/10-iptables-safer-runner-main.conf ]; then
+            echo "Main action rsyslog config contents:"
+            sudo cat /etc/rsyslog.d/10-iptables-safer-runner-main.conf
           fi
 
           echo ""
