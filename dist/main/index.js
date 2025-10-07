@@ -168,6 +168,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
 exports.disableDockerForRunner = disableDockerForRunner;
+exports.stopDockerService = stopDockerService;
 exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
@@ -202,6 +203,37 @@ async function disableDockerForRunner() {
     }
     catch (error) {
         core.warning(`Could not fully disable Docker access: ${error}`);
+    }
+}
+/**
+ * Stop and disable the Docker service completely
+ * This provides stronger protection than disableDockerForRunner by preventing
+ * all Docker usage system-wide, not just for the runner user.
+ *
+ * Strategy:
+ * 1. Stop the Docker service (kills all running containers)
+ * 2. Disable the Docker service (prevents automatic restart)
+ *
+ * Note: This affects the entire system and will terminate any running containers.
+ */
+async function stopDockerService() {
+    core.info('Stopping and disabling Docker service...');
+    try {
+        // Step 1: Stop the Docker service
+        core.info('Stopping Docker service...');
+        await exec.exec('sudo', ['systemctl', 'stop', 'docker.socket']);
+        await exec.exec('sudo', ['systemctl', 'stop', 'docker.service']);
+        core.info('✅ Docker service stopped');
+        // Step 2: Disable the Docker service (prevents restart)
+        core.info('Disabling Docker service...');
+        await exec.exec('sudo', ['systemctl', 'disable', 'docker.socket']);
+        await exec.exec('sudo', ['systemctl', 'disable', 'docker.service']);
+        core.info('✅ Docker service disabled');
+        core.info('🔒 Docker has been completely stopped and disabled');
+        core.info('ℹ️  This prevents all Docker usage system-wide');
+    }
+    catch (error) {
+        core.warning(`Could not stop Docker service: ${error}`);
     }
 }
 /**
@@ -281,9 +313,14 @@ async function run() {
         const disableSudo = core.getBooleanInput('disable-sudo');
         const sudoConfig = core.getInput('sudo-config') || '';
         const disableDocker = core.getBooleanInput('disable-docker');
+        const stopDocker = core.getBooleanInput('stop-docker');
         // Validate sudo-related inputs
         if (disableSudo && sudoConfig) {
             core.warning('⚠️ Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
+        }
+        // Validate Docker-related inputs
+        if (stopDocker && disableDocker) {
+            core.warning('⚠️ Both stop-docker and disable-docker are set. stop-docker takes precedence (more restrictive).');
         }
         // Remove sudo logging config from pre-hook to stop capturing in pre-sudo.log
         await (0, sudo_1.removeSudoLogging)();
@@ -340,7 +377,16 @@ async function run() {
         core.info('Capturing post-setup security baseline...');
         const validator = new validation_1.SystemValidator();
         await validator.capturePostSetupBaseline();
-        // Apply sudo configuration FIRST to set up exclusion rules
+        // Handle Docker configuration BEFORE disabling sudo (Docker operations require sudo)
+        if (stopDocker) {
+            core.info('Stopping Docker service completely...');
+            await (0, docker_1.stopDockerService)();
+        }
+        else if (disableDocker) {
+            core.info('Disabling Docker access for runner user...');
+            await (0, docker_1.disableDockerForRunner)();
+        }
+        // Apply sudo configuration AFTER Docker is disabled
         // This must happen BEFORE setupSudoLogging() so that internal setup commands
         // are excluded from logs via Defaults!SAFER_RUNNER_CONFIG !log_allowed
         if (disableSudo) {
@@ -360,11 +406,6 @@ async function run() {
         // This ensures internal setup commands are not logged
         core.info('Configuring sudo logging for workflow monitoring...');
         await (0, sudo_1.setupSudoLogging)('/var/log/safer-runner/main-sudo.log');
-        // Disable Docker access if requested
-        if (disableDocker) {
-            core.info('Disabling Docker access for runner user...');
-            await (0, docker_1.disableDockerForRunner)();
-        }
         core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
     }
     catch (error) {

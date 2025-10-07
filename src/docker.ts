@@ -44,6 +44,40 @@ export async function disableDockerForRunner(): Promise<void> {
 }
 
 /**
+ * Stop and disable the Docker service completely
+ * This provides stronger protection than disableDockerForRunner by preventing
+ * all Docker usage system-wide, not just for the runner user.
+ *
+ * Strategy:
+ * 1. Stop the Docker service (kills all running containers)
+ * 2. Disable the Docker service (prevents automatic restart)
+ *
+ * Note: This affects the entire system and will terminate any running containers.
+ */
+export async function stopDockerService(): Promise<void> {
+  core.info('Stopping and disabling Docker service...');
+
+  try {
+    // Step 1: Stop the Docker service
+    core.info('Stopping Docker service...');
+    await exec.exec('sudo', ['systemctl', 'stop', 'docker.socket']);
+    await exec.exec('sudo', ['systemctl', 'stop', 'docker.service']);
+    core.info('✅ Docker service stopped');
+
+    // Step 2: Disable the Docker service (prevents restart)
+    core.info('Disabling Docker service...');
+    await exec.exec('sudo', ['systemctl', 'disable', 'docker.socket']);
+    await exec.exec('sudo', ['systemctl', 'disable', 'docker.service']);
+    core.info('✅ Docker service disabled');
+
+    core.info('🔒 Docker has been completely stopped and disabled');
+    core.info('ℹ️  This prevents all Docker usage system-wide');
+  } catch (error) {
+    core.warning(`Could not stop Docker service: ${error}`);
+  }
+}
+
+/**
  * Check if the runner user is a member of the docker group
  * @returns Promise<boolean> - true if runner is in docker group
  */

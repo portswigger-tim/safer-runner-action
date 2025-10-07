@@ -11,7 +11,7 @@ import {
   setupIptablesLogging
 } from './setup';
 import { removeSudoLogging, setupSudoLogging, disableSudoForRunner, applyCustomSudoConfig } from './sudo';
-import { disableDockerForRunner } from './docker';
+import { disableDockerForRunner, stopDockerService } from './docker';
 
 async function run(): Promise<void> {
   try {
@@ -21,12 +21,18 @@ async function run(): Promise<void> {
     const disableSudo = core.getBooleanInput('disable-sudo');
     const sudoConfig = core.getInput('sudo-config') || '';
     const disableDocker = core.getBooleanInput('disable-docker');
+    const stopDocker = core.getBooleanInput('stop-docker');
 
     // Validate sudo-related inputs
     if (disableSudo && sudoConfig) {
       core.warning(
         '⚠️ Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).'
       );
+    }
+
+    // Validate Docker-related inputs
+    if (stopDocker && disableDocker) {
+      core.warning('⚠️ Both stop-docker and disable-docker are set. stop-docker takes precedence (more restrictive).');
     }
 
     // Remove sudo logging config from pre-hook to stop capturing in pre-sudo.log
@@ -111,7 +117,16 @@ async function run(): Promise<void> {
     const validator = new SystemValidator();
     await validator.capturePostSetupBaseline();
 
-    // Apply sudo configuration FIRST to set up exclusion rules
+    // Handle Docker configuration BEFORE disabling sudo (Docker operations require sudo)
+    if (stopDocker) {
+      core.info('Stopping Docker service completely...');
+      await stopDockerService();
+    } else if (disableDocker) {
+      core.info('Disabling Docker access for runner user...');
+      await disableDockerForRunner();
+    }
+
+    // Apply sudo configuration AFTER Docker is disabled
     // This must happen BEFORE setupSudoLogging() so that internal setup commands
     // are excluded from logs via Defaults!SAFER_RUNNER_CONFIG !log_allowed
     if (disableSudo) {
@@ -130,12 +145,6 @@ async function run(): Promise<void> {
     // This ensures internal setup commands are not logged
     core.info('Configuring sudo logging for workflow monitoring...');
     await setupSudoLogging('/var/log/safer-runner/main-sudo.log');
-
-    // Disable Docker access if requested
-    if (disableDocker) {
-      core.info('Disabling Docker access for runner user...');
-      await disableDockerForRunner();
-    }
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
   } catch (error) {

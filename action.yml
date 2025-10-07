@@ -34,6 +34,10 @@ inputs:
     description: 'Whether to remove runner user from docker group. This prevents container usage, blocking container escape attacks and docker socket abuse.'
     required: false
     default: 'false'
+  stop-docker:
+    description: 'Whether to completely stop and disable the Docker service. This provides stronger protection than disable-docker by preventing all Docker usage system-wide.'
+    required: false
+    default: 'false'
 
 runs:
   using: 'node20'

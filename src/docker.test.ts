@@ -4,7 +4,13 @@
 
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
-import { disableDockerForRunner, isRunnerInDockerGroup, RUNNER_USERNAME, DOCKER_GROUP } from './docker';
+import {
+  disableDockerForRunner,
+  stopDockerService,
+  isRunnerInDockerGroup,
+  RUNNER_USERNAME,
+  DOCKER_GROUP
+} from './docker';
 
 // Mock the modules
 jest.mock('@actions/core');
@@ -112,6 +118,64 @@ describe('docker module', () => {
       const result = await isRunnerInDockerGroup();
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('stopDockerService', () => {
+    it('should stop and disable docker service and socket', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockResolvedValue(0);
+
+      await stopDockerService();
+
+      // Should stop both docker service and socket
+      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'stop', 'docker.socket']);
+      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'stop', 'docker.service']);
+
+      // Should disable both docker service and socket
+      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'disable', 'docker.socket']);
+      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'disable', 'docker.service']);
+
+      // Should log appropriate messages
+      expect(core.info).toHaveBeenCalledWith('Stopping and disabling Docker service...');
+      expect(core.info).toHaveBeenCalledWith('Stopping Docker service...');
+      expect(core.info).toHaveBeenCalledWith('✅ Docker service stopped');
+      expect(core.info).toHaveBeenCalledWith('Disabling Docker service...');
+      expect(core.info).toHaveBeenCalledWith('✅ Docker service disabled');
+      expect(core.info).toHaveBeenCalledWith('🔒 Docker has been completely stopped and disabled');
+      expect(core.info).toHaveBeenCalledWith('ℹ️  This prevents all Docker usage system-wide');
+    });
+
+    it('should handle errors gracefully', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockRejectedValue(new Error('Service not found'));
+
+      await stopDockerService();
+
+      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Could not stop Docker service'));
+    });
+
+    it('should stop service before disabling it', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      const calls: string[] = [];
+
+      mockExec.mockImplementation(async (cmd, args) => {
+        if (args && args.length >= 3) {
+          // args is: ['systemctl', 'stop|disable', 'docker.socket|docker.service']
+          calls.push(`${args[1]} ${args[2]}`);
+        }
+        return 0;
+      });
+
+      await stopDockerService();
+
+      // Verify order: stop socket, stop service, disable socket, disable service
+      expect(calls).toEqual([
+        'stop docker.socket',
+        'stop docker.service',
+        'disable docker.socket',
+        'disable docker.service'
+      ]);
     });
   });
 
