@@ -57,7 +57,7 @@ Multi-layer security for GitHub Actions runners with network filtering (DNS + ip
 ```yaml
 steps:
   - uses: portswigger-tim/safer-runner-action@v1  # Must be first step
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
   - run: |
       curl https://example.com  # Logged but not blocked
 ```
@@ -72,7 +72,7 @@ steps:
       allowed-domains: |
         example.com
         api.trusted-service.com
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
   - run: |
       curl https://api.trusted-service.com  # ✅ Allowed
       curl https://malicious.com  # ❌ Blocked
@@ -90,19 +90,6 @@ steps:
 | `sudo-config` | Custom sudoers configuration for runner user (multi-line string) | `''` |
 | `disable-docker` | Remove runner user from docker group (prevents container usage) | `false` |
 
-## How It Works
-
-1. Installs `dnsmasq` and `ipset` packages
-2. Configures sudo logging to `/var/log/safer-runner/main-sudo.log`
-3. Configures iptables rules to control outbound traffic with logs to `/var/log/safer-runner/main-iptables.log`
-4. Configures system DNS to use local DNSMasq instance with logs to `/var/log/safer-runner/main-dns.log`
-5. Sets up DNS policy with Quad9 upstream resolver
-6. Starts DNSMasq and applies security rules
-7. Optionally applies custom sudo config or disables sudo access
-8. Post-action analyzes logs and generates network access report
-
-GitHub Actions required domains are pre-configured and automatically allowed.
-
 ## Network Access Reports
 
 Job summaries include a Network Access Provenance table showing:
@@ -116,75 +103,27 @@ In analyze mode, the report suggests an `allowed-domains` configuration based on
 
 ## Security Model
 
-### Analyze Mode
-- All DNS queries logged but allowed
-- DNS queries, firewall activity, and connection attempts are logged
-- Workflow continues normally while collecting security intelligence
-
-### Enforce Mode
-- All DNS queries return NXDOMAIN unless explicitly allowed
-- iptables rules prevent bypassing DNS filtering
-- Only allowed domains accessible
-
-### Both Modes
-- Azure metadata service access preserved (required for GitHub Actions)
-- Return traffic for established connections allowed
-- Sudo usage logged to `/var/log/safer-runner/main-sudo.log` for auditability
+This action implements multi-layer security with DNS filtering, firewall rules, and privilege control. GitHub Actions required domains are automatically allowed. Sudo usage is always logged for auditability.
 
 ### Privilege Control (Optional)
 
-#### Sudo Disabling
+Control sudo and Docker access to prevent privilege escalation and container escape attacks:
 
-When `disable-sudo: true` is set:
-- Sudo access is disabled **after** security setup completes
-- Runner user can only execute commands needed for post-action validation
-- Prevents malicious code from using sudo to bypass security controls
-- **Note**: This is an advanced security feature - ensure your workflow doesn't require sudo after the action runs
-
-Example with sudo disabled:
 ```yaml
 steps:
   - uses: portswigger-tim/safer-runner-action@v1
     with:
       mode: 'enforce'
-      disable-sudo: 'true'
-  - run: npm test  # ✅ Works (no sudo needed)
-  - run: sudo apt-get install something  # ❌ Fails (sudo disabled)
-```
-
-#### Docker Disabling
-
-When `disable-docker: true` is set:
-- Runner user is removed from the `docker` group **after** security setup completes
-- Prevents container escape attacks, docker socket abuse, and privileged container execution
-- Useful for workflows that don't require Docker/containerization
-- **Note**: This disables all Docker commands - only use if your workflow doesn't need containers
-
-Example with Docker disabled:
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@v1
-    with:
-      mode: 'enforce'
-      disable-docker: 'true'
-  - run: npm test  # ✅ Works (no Docker needed)
-  - run: docker build .  # ❌ Fails (Docker disabled)
-```
-
-#### Combined Lockdown
-
-For maximum security in workflows that don't need elevated privileges:
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@v1
-    with:
-      mode: 'enforce'
-      disable-sudo: 'true'
-      disable-docker: 'true'
+      disable-sudo: 'true'    # Prevents sudo usage after setup
+      disable-docker: 'true'  # Prevents Docker/container usage
       allowed-domains: |
         registry.npmjs.org
-  - run: npm ci && npm test  # ✅ Works with restricted privileges
+  - run: npm ci && npm test   # ✅ Works without elevated privileges
+  - run: sudo apt install x   # ❌ Fails (sudo disabled)
+  - run: docker build .       # ❌ Fails (Docker disabled)
 ```
+
+**Note**: Only disable sudo/Docker if your workflow doesn't require them. These are advanced security features that prevent malicious code from bypassing security controls.
 
 ## Limitations
 
