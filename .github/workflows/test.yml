@@ -740,26 +740,25 @@ jobs:
         run: |
           echo "=== Testing Docker service AFTER stopping ==="
 
-          echo "Checking docker.service status (should be inactive)..."
-          if sudo systemctl is-active docker 2>&1 | grep -q "active"; then
-            echo "❌ ERROR: docker.service is still active!"
-            sudo systemctl status docker --no-pager
-            exit 1
+          echo "Checking docker.service status (should be inactive with exit code 3)..."
+          sudo systemctl status docker --no-pager || DOCKER_EXIT=$?
+          echo "docker.service exit code: $DOCKER_EXIT"
+          if [ "$DOCKER_EXIT" -eq 3 ]; then
+            echo "✅ docker.service is stopped (exit code 3 = not running)"
           else
-            echo "✅ docker.service is stopped"
+            echo "❌ ERROR: docker.service exit code is $DOCKER_EXIT (expected 3 for stopped service)"
+            exit 1
           fi
 
-          echo "Checking docker.socket status (should be inactive)..."
-          if sudo systemctl is-active docker.socket 2>&1 | grep -q "active"; then
-            echo "❌ ERROR: docker.socket is still active!"
-            sudo systemctl status docker.socket --no-pager
-            exit 1
+          echo "Checking docker.socket status (should be inactive with exit code 3)..."
+          sudo systemctl status docker.socket --no-pager || SOCKET_EXIT=$?
+          echo "docker.socket exit code: $SOCKET_EXIT"
+          if [ "$SOCKET_EXIT" -eq 3 ]; then
+            echo "✅ docker.socket is stopped (exit code 3 = not running)"
           else
-            echo "✅ docker.socket is stopped"
+            echo "❌ ERROR: docker.socket exit code is $SOCKET_EXIT (expected 3 for stopped service)"
+            exit 1
           fi
-
-          echo "Checking if docker.service is disabled (should be masked)..."
-          sudo systemctl status docker --no-pager || true
 
           echo "Attempting docker ps (should fail - no daemon)..."
           if timeout 5 docker ps 2>&1; then
