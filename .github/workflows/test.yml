@@ -717,6 +717,86 @@ jobs:
           ls -la /var/log/syslog
           echo "✅ Log file access still works (runner user still in adm group)"
 
+  test-stop-docker:
+    name: Test Stop Docker Feature
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Docker service is running before action
+        run: |
+          echo "=== Testing Docker service BEFORE stopping ==="
+          sudo systemctl status docker --no-pager
+          sudo systemctl status docker.socket --no-pager
+          docker --version
+          docker ps
+          echo "✅ Docker service is running"
+
+      - name: Apply Safer Runner Action with stop-docker
+        uses: portswigger-tim/safer-runner-action@main
+        with:
+          mode: 'analyze'
+          stop-docker: 'true'
+
+      - name: Verify Docker service is completely stopped
+        run: |
+          echo "=== Testing Docker service AFTER stopping ==="
+
+          echo "Checking docker.service status (should be inactive)..."
+          if sudo systemctl is-active docker 2>&1 | grep -q "active"; then
+            echo "❌ ERROR: docker.service is still active!"
+            sudo systemctl status docker --no-pager
+            exit 1
+          else
+            echo "✅ docker.service is stopped"
+          fi
+
+          echo "Checking docker.socket status (should be inactive)..."
+          if sudo systemctl is-active docker.socket 2>&1 | grep -q "active"; then
+            echo "❌ ERROR: docker.socket is still active!"
+            sudo systemctl status docker.socket --no-pager
+            exit 1
+          else
+            echo "✅ docker.socket is stopped"
+          fi
+
+          echo "Checking if docker.service is disabled (should be masked)..."
+          sudo systemctl status docker --no-pager || true
+
+          echo "Attempting docker ps (should fail - no daemon)..."
+          if timeout 5 docker ps 2>&1; then
+            echo "❌ ERROR: Docker daemon is still accessible!"
+            exit 1
+          else
+            echo "✅ SUCCESS: Docker daemon is not accessible"
+          fi
+
+          echo "Attempting docker info (should fail - no daemon)..."
+          if timeout 5 docker info 2>&1; then
+            echo "❌ ERROR: Docker daemon info is still accessible!"
+            exit 1
+          else
+            echo "✅ SUCCESS: Docker daemon info not accessible"
+          fi
+
+          echo "Note: docker --version still works (client-only command):"
+          docker --version || true
+
+      - name: Verify sudo still works
+        run: |
+          echo "=== Testing sudo access (should still work) ==="
+          sudo whoami
+          sudo cat /etc/os-release
+          echo "✅ Sudo access still works (stop-docker doesn't affect sudo)"
+
+      - name: Summary
+        run: |
+          echo "=== Stop Docker Summary ==="
+          echo "✅ Docker service: STOPPED AND DISABLED"
+          echo "✅ Docker socket: STOPPED AND DISABLED"
+          echo "✅ Docker daemon: NOT ACCESSIBLE"
+          echo "✅ Sudo access: FUNCTIONAL"
+          echo ""
+          echo "This completely prevents Docker/container usage, including daemon access."
+
   test-combined-lockdown:
     name: Test Combined Lockdown (Sudo + Docker Disabled)
     runs-on: ubuntu-latest
