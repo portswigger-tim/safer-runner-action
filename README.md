@@ -130,7 +130,7 @@ steps:
 ### Platform Support
 
 - **GitHub-hosted runners**: Only Ubuntu runners are supported. Windows and macOS runners are not supported.
-- **Self-hosted runners**: Linux runners with sudo access and iptables support. Windows and macOS runners are not supported.
+- **Self-hosted runners**: Only Ubuntu runners with sudo access and iptables support. Other Linux distributions (RHEL, Debian, etc.) and Windows/macOS runners are not supported.
 - **Containerized jobs**: Not supported when the job runs in a container due to sudo access requirements.
 
 ### Security Limitations
