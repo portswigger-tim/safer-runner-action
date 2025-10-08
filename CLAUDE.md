@@ -434,7 +434,7 @@ The action can disable Docker access via `docker.ts`:
 - Verify log files exist: `/var/log/safer-runner/main-dns.log`, `/var/log/safer-runner/pre-dns.log`
 
 **GitHub Actions Failing**:
-- Check `action.yml` syntax (pre, main, post must all reference correct files)
+- Check `action.yaml` syntax (pre, main, post must all reference correct files)
 - Verify all three dist files exist: `dist/pre/index.js`, `dist/main/index.js`, `dist/post/index.js`
 - Check for TypeScript compilation errors: `npx tsc --noEmit`
 
