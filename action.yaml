@@ -1,5 +1,5 @@
 name: 'Safer Runner Action'
-description: 'Multi-layer security for GitHub Actions with network filtering, privilege control, and integrity validation. Analyze or enforce mode with comprehensive security reporting.'
+description: 'Multi-layer security and reporting for GitHub Actions'
 author: 'PortSwigger'
 branding:
   icon: 'shield'
