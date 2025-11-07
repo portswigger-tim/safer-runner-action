@@ -278,13 +278,17 @@ function formatDnsStatus(status) {
 /**
  * Format IP addresses for markdown display
  * Converts comma-separated IPs to line-break separated for readability
+ * Deduplicates and sorts IP addresses
  *
  * @param ipString - IP address string (may be comma-separated)
  * @returns Formatted IP address string with HTML line breaks
  */
 function formatIpAddresses(ipString) {
     if (ipString.includes(', ')) {
-        return ipString.split(', ').join('<br/>');
+        // Split, deduplicate, sort, and join with line breaks
+        const ips = ipString.split(', ').map(ip => ip.trim());
+        const uniqueIps = [...new Set(ips)].sort();
+        return uniqueIps.join('<br/>');
     }
     return ipString;
 }
@@ -460,8 +464,10 @@ function parseRequestChains(lines) {
             const chain = requestChains.get(requestId);
             const replyDomain = ipReplyMatch[1];
             const replyIp = ipReplyMatch[2];
-            // Add the IP to the list
-            chain.ips.push(replyIp);
+            // Add the IP to the list only if it's not already present
+            if (!chain.ips.includes(replyIp)) {
+                chain.ips.push(replyIp);
+            }
             chain.status = 'RESOLVED';
             // If the domain in the reply is different from the queried domain, it's a CNAME
             if (replyDomain !== chain.queriedDomain && !chain.cnames.includes(replyDomain)) {
@@ -530,17 +536,25 @@ function deduplicateDnsResolutions(resolutions) {
         if (highestPriority.status === 'RESOLVED') {
             // For resolved domains, collect all unique IPs
             const resolvedIps = sortedResolutions.filter(r => r.status === 'RESOLVED' && r.ip !== 'CNAME').map(r => r.ip);
-            const uniqueIps = [...new Set(resolvedIps)];
+            // Flatten comma-separated IPs and deduplicate
+            const allIps = resolvedIps.flatMap(ip => ip.split(', ').map(i => i.trim()));
+            const uniqueIps = [...new Set(allIps)].sort();
             if (uniqueIps.length === 1) {
                 // Single IP - use that resolution
-                result.push(highestPriority);
+                result.push({
+                    domain: domain,
+                    ip: uniqueIps[0],
+                    status: 'RESOLVED',
+                    cnames: highestPriority.cnames
+                });
             }
             else if (uniqueIps.length > 1) {
-                // Multiple IPs - create summary entry
+                // Multiple IPs - create summary entry with sorted IPs
                 result.push({
                     domain: domain,
                     ip: uniqueIps.join(', '),
-                    status: 'RESOLVED'
+                    status: 'RESOLVED',
+                    cnames: highestPriority.cnames
                 });
             }
             else {

@@ -268,6 +268,53 @@ describe('DNS Parser', () => {
       expect(ips).toContain('52.204.95.73');
     });
 
+    it('should deduplicate duplicate IPs from multiple log entries', () => {
+      // Simulate a scenario where the same DNS query appears multiple times
+      // This can happen with repeated queries or log aggregation
+      const duplicateIpLogs = `
+2025-10-01T10:53:56.980647+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 query[A] maven-internal.devtools.portswigger.com from 127.0.0.1
+2025-10-01T10:53:56.985035+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.82.204
+2025-10-01T10:53:56.985089+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.83.28
+2025-10-01T10:53:56.985166+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.82.218
+2025-10-01T10:53:56.985217+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.83.237
+2025-10-01T10:53:56.985277+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.82.252
+2025-10-01T10:53:56.985495+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.83.176
+2025-10-01T10:53:56.985496+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.83.176
+2025-10-01T10:53:56.985497+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.82.204
+2025-10-01T10:53:56.985498+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.82.218
+2025-10-01T10:53:56.985499+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.82.252
+2025-10-01T10:53:56.985500+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.83.28
+2025-10-01T10:53:56.985501+00:00 runnervm3ublj dnsmasq[3001]: 7 127.0.0.1/51924 reply maven-internal.devtools.portswigger.com is 10.200.83.237
+      `;
+
+      const result = parseDnsLogsFromString(duplicateIpLogs);
+
+      const mavenInternal = result.find(r => r.domain === 'maven-internal.devtools.portswigger.com');
+      expect(mavenInternal).toBeDefined();
+      expect(mavenInternal?.status).toBe('RESOLVED');
+
+      // Should have deduplicated and sorted IPs
+      const ips = mavenInternal?.ip.split(', ');
+      expect(ips).toBeDefined();
+      expect(ips!.length).toBe(6); // Only 6 unique IPs, not 12
+
+      // Verify specific IPs are present
+      expect(ips).toContain('10.200.82.204');
+      expect(ips).toContain('10.200.82.218');
+      expect(ips).toContain('10.200.82.252');
+      expect(ips).toContain('10.200.83.28');
+      expect(ips).toContain('10.200.83.176');
+      expect(ips).toContain('10.200.83.237');
+
+      // Verify no duplicates
+      const uniqueIps = new Set(ips);
+      expect(ips!.length).toBe(uniqueIps.size);
+
+      // Verify sorted order
+      const sortedIps = [...ips!].sort();
+      expect(ips).toEqual(sortedIps);
+    });
+
     it('should resolve CNAME chains to final IPs', () => {
       const result = parseDnsLogsFromString(fixtureContent);
 

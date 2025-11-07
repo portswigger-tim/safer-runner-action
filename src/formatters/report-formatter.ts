@@ -293,13 +293,17 @@ export function formatDnsStatus(status: string): string {
 /**
  * Format IP addresses for markdown display
  * Converts comma-separated IPs to line-break separated for readability
+ * Deduplicates and sorts IP addresses
  *
  * @param ipString - IP address string (may be comma-separated)
  * @returns Formatted IP address string with HTML line breaks
  */
 export function formatIpAddresses(ipString: string): string {
   if (ipString.includes(', ')) {
-    return ipString.split(', ').join('<br/>');
+    // Split, deduplicate, sort, and join with line breaks
+    const ips = ipString.split(', ').map(ip => ip.trim());
+    const uniqueIps = [...new Set(ips)].sort();
+    return uniqueIps.join('<br/>');
   }
   return ipString;
 }

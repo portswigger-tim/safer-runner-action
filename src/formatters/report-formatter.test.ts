@@ -460,6 +460,27 @@ describe('Report Formatter', () => {
       const result = formatIpAddresses('1.2.3.4, 5.6.7.8');
       expect(result).toBe('1.2.3.4<br/>5.6.7.8');
     });
+
+    it('should deduplicate and sort duplicate IPs', () => {
+      // Real-world example from maven-internal.devtools.portswigger.com
+      const duplicateIps =
+        '10.200.82.204, 10.200.83.28, 10.200.82.218, 10.200.83.237, 10.200.82.252, 10.200.83.176, 10.200.83.176, 10.200.82.204, 10.200.82.218, 10.200.82.252, 10.200.83.28, 10.200.83.237';
+      const result = formatIpAddresses(duplicateIps);
+
+      // Should deduplicate and sort (lexicographically)
+      expect(result).toBe(
+        '10.200.82.204<br/>10.200.82.218<br/>10.200.82.252<br/>10.200.83.176<br/>10.200.83.237<br/>10.200.83.28'
+      );
+
+      // Verify no duplicates
+      const ips = result.split('<br/>');
+      const uniqueIps = new Set(ips);
+      expect(ips.length).toBe(uniqueIps.size);
+
+      // Verify sorted
+      const sortedIps = [...ips].sort();
+      expect(ips).toEqual(sortedIps);
+    });
   });
 
   describe('formatCnameChain', () => {
