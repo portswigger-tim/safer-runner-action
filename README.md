@@ -56,7 +56,7 @@ Multi-layer security for GitHub Actions runners with network filtering (DNS + ip
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@051c15b702704d3a144049cc992714a4997d107c # v1.1.0
+  - uses: portswigger-tim/safer-runner-action@0d9a798b9ddea4a6b9ab3c4375f8018b191c2e3d # v1.1.2
   - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
   - run: |
       curl https://example.com  # Logged but not blocked
@@ -66,7 +66,7 @@ steps:
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@051c15b702704d3a144049cc992714a4997d107c # v1.1.0
+  - uses: portswigger-tim/safer-runner-action@0d9a798b9ddea4a6b9ab3c4375f8018b191c2e3d # v1.1.2
     with:
       mode: 'enforce'
       allowed-domains: |
@@ -111,7 +111,7 @@ Control sudo and Docker access to prevent privilege escalation and container esc
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@051c15b702704d3a144049cc992714a4997d107c # v1.1.0
+  - uses: portswigger-tim/safer-runner-action@0d9a798b9ddea4a6b9ab3c4375f8018b191c2e3d # v1.1.2
     with:
       mode: 'enforce'
       disable-sudo: 'true'    # Prevents sudo usage after setup
