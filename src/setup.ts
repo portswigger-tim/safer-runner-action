@@ -7,6 +7,7 @@ import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
 import { buildDnsConfig, DEFAULT_DNS_SERVER } from './config/dns-config-builder';
 import { setupSudoLogging, removeSudoLogging, applyCustomSudoConfig, disableSudoForRunner } from './sudo';
+import { ensureDnsHealthy } from './dns-health';
 
 export interface DnsUser {
   username: string;
@@ -26,7 +27,7 @@ export async function performInitialSetup(): Promise<DnsUser> {
   // Install dependencies
   core.info('Installing dependencies...');
   await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-  await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+  await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'dnsutils']);
 
   // Create log directory for all safer-runner logs
   core.info('Creating log directory...');
@@ -313,11 +314,14 @@ export async function restartServices(logFile?: string): Promise<void> {
   await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
   await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
 
-  // After dnsmasq starts and creates log files, make them readable by all
-  if (logFile) {
-    // Wait a moment for dnsmasq to create the log file
-    await new Promise(resolve => setTimeout(resolve, 500));
+  // Verify DNS services are healthy with retry logic
+  core.info('Waiting for DNS services to become healthy...');
+  await ensureDnsHealthy();
 
+  core.info('✅ DNS services confirmed healthy');
+
+  // After DNS confirmed healthy, fix log file permissions
+  if (logFile) {
     // Make log file world-readable (dnsmasq creates it as 660)
     await exec.exec('sudo', ['chmod', '0644', logFile]);
   }

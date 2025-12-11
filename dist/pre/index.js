@@ -123,6 +123,345 @@ function getRiskySubdomains() {
 
 /***/ }),
 
+/***/ 5338:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * DNS health check module
+ *
+ * Verifies DNS services (systemd-resolved, dnsmasq) are responsive
+ * after restart. Uses multi-layer verification with retry logic.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_HEALTH_CHECK_CONFIG = void 0;
+exports.checkDnsHealth = checkDnsHealth;
+exports.ensureDnsHealthy = ensureDnsHealthy;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+exports.DEFAULT_HEALTH_CHECK_CONFIG = {
+    maxWaitMs: 30000,
+    initialDelayMs: 100,
+    maxDelayMs: 2000,
+    testDomains: ['github.com', 'actions.githubusercontent.com'],
+    verbose: false
+};
+/**
+ * Check if systemd-resolved is active
+ */
+async function checkSystemdResolvedStatus() {
+    try {
+        let output = '';
+        await exec.exec('sudo', ['systemctl', 'is-active', 'systemd-resolved'], {
+            silent: true,
+            listeners: {
+                stdout: (data) => {
+                    output += data.toString();
+                }
+            }
+        });
+        return output.trim() === 'active';
+    }
+    catch {
+        core.debug('systemd-resolved is not active');
+        return false;
+    }
+}
+/**
+ * Check if dnsmasq is active
+ */
+async function checkDnsmasqStatus() {
+    try {
+        let output = '';
+        await exec.exec('sudo', ['systemctl', 'is-active', 'dnsmasq'], {
+            silent: true,
+            listeners: {
+                stdout: (data) => {
+                    output += data.toString();
+                }
+            }
+        });
+        return output.trim() === 'active';
+    }
+    catch {
+        core.debug('dnsmasq is not active');
+        return false;
+    }
+}
+/**
+ * Check if dnsmasq is listening on port 53
+ */
+async function checkDnsmasqPort() {
+    try {
+        let output = '';
+        await exec.exec('ss', ['-lun'], {
+            silent: true,
+            listeners: {
+                stdout: (data) => {
+                    output += data.toString();
+                }
+            }
+        });
+        // Check if 127.0.0.1:53 or 0.0.0.0:53 is in the output
+        return output.includes('127.0.0.1:53') || output.includes('0.0.0.0:53');
+    }
+    catch {
+        core.debug('Failed to check dnsmasq port binding');
+        return false;
+    }
+}
+/**
+ * Test DNS resolution for a specific domain
+ */
+async function testDnsResolution(domain, server = '127.0.0.1') {
+    try {
+        let output = '';
+        const exitCode = await exec.exec('dig', ['+short', '+time=2', '+tries=1', `@${server}`, domain, 'A'], {
+            silent: true,
+            ignoreReturnCode: true,
+            listeners: {
+                stdout: (data) => {
+                    output += data.toString();
+                }
+            }
+        });
+        // dig returns 0 on success, non-zero on failure
+        // Output should be non-empty and contain an IP address
+        if (exitCode !== 0) {
+            return false;
+        }
+        const trimmed = output.trim();
+        // Check if output looks like an IP address (simple validation)
+        const ipPattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+        return trimmed.length > 0 && trimmed.split('\n').some(line => ipPattern.test(line.trim()));
+    }
+    catch {
+        core.debug(`DNS resolution test failed for ${domain}`);
+        return false;
+    }
+}
+/**
+ * Sleep with exponential backoff and jitter
+ */
+async function sleepWithBackoff(attempt, config) {
+    // Calculate exponential backoff: initialDelay * 2^attempt, capped at maxDelay
+    const exponentialDelay = Math.min(config.initialDelayMs * Math.pow(2, attempt), config.maxDelayMs);
+    // Add ±20% jitter to prevent thundering herd
+    const jitter = exponentialDelay * 0.2 * (Math.random() * 2 - 1);
+    const delayMs = Math.max(0, exponentialDelay + jitter);
+    if (config.verbose) {
+        core.debug(`Waiting ${delayMs.toFixed(0)}ms before retry (attempt ${attempt + 1})`);
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+}
+/**
+ * Check if we've exceeded the maximum wait time
+ */
+function hasExceededMaxWait(startTime, config) {
+    return Date.now() - startTime > config.maxWaitMs;
+}
+/**
+ * Performs comprehensive DNS health check with retry logic
+ *
+ * Verifies three layers:
+ * 1. Service status - systemd-resolved and dnsmasq are active
+ * 2. Port availability - dnsmasq listening on 127.0.0.1:53
+ * 3. DNS resolution - Actual queries succeed for test domains
+ *
+ * Uses exponential backoff with jitter for retries. Will continue
+ * retrying until maxWaitMs is exceeded.
+ *
+ * @param config - Optional configuration (uses defaults if not provided)
+ * @returns Detailed health check result with status and errors
+ *
+ * @example
+ * ```typescript
+ * const result = await checkDnsHealth();
+ * if (!result.healthy) {
+ *   console.error(`DNS check failed after ${result.durationMs}ms`);
+ *   result.errors.forEach(err => console.error(err));
+ * }
+ * ```
+ */
+async function checkDnsHealth(config = exports.DEFAULT_HEALTH_CHECK_CONFIG) {
+    const startTime = Date.now();
+    const result = {
+        healthy: false,
+        durationMs: 0,
+        checks: {
+            systemdResolved: false,
+            dnsmasq: false,
+            dnsResolution: false
+        },
+        errors: []
+    };
+    let attempt = 0;
+    while (!hasExceededMaxWait(startTime, config)) {
+        const attemptStartTime = Date.now();
+        // Layer 1: Check systemd-resolved status
+        result.checks.systemdResolved = await checkSystemdResolvedStatus();
+        if (!result.checks.systemdResolved) {
+            const error = `Attempt ${attempt + 1} (${Date.now() - startTime}ms): systemd-resolved not active`;
+            result.errors.push(error);
+            if (config.verbose) {
+                core.debug(error);
+            }
+            await sleepWithBackoff(attempt, config);
+            attempt++;
+            continue;
+        }
+        // Layer 2: Check dnsmasq status
+        result.checks.dnsmasq = await checkDnsmasqStatus();
+        if (!result.checks.dnsmasq) {
+            const error = `Attempt ${attempt + 1} (${Date.now() - startTime}ms): dnsmasq not active`;
+            result.errors.push(error);
+            if (config.verbose) {
+                core.debug(error);
+            }
+            await sleepWithBackoff(attempt, config);
+            attempt++;
+            continue;
+        }
+        // Layer 3: Check dnsmasq port binding
+        const portBound = await checkDnsmasqPort();
+        if (!portBound) {
+            const error = `Attempt ${attempt + 1} (${Date.now() - startTime}ms): dnsmasq not listening on port 53`;
+            result.errors.push(error);
+            if (config.verbose) {
+                core.debug(error);
+            }
+            await sleepWithBackoff(attempt, config);
+            attempt++;
+            continue;
+        }
+        // Layer 4: Test DNS resolution (at least one domain must succeed)
+        let resolvedAny = false;
+        for (const domain of config.testDomains) {
+            if (await testDnsResolution(domain)) {
+                resolvedAny = true;
+                break;
+            }
+        }
+        if (!resolvedAny) {
+            const error = `Attempt ${attempt + 1} (${Date.now() - startTime}ms): DNS resolution failed for all test domains`;
+            result.errors.push(error);
+            if (config.verbose) {
+                core.debug(error);
+            }
+            await sleepWithBackoff(attempt, config);
+            attempt++;
+            continue;
+        }
+        // All checks passed!
+        result.checks.dnsResolution = true;
+        result.healthy = true;
+        result.durationMs = Date.now() - startTime;
+        return result;
+    }
+    // Timeout exceeded
+    result.durationMs = Date.now() - startTime;
+    result.errors.push(`DNS health check timed out after ${result.durationMs}ms (${attempt} attempts)`);
+    return result;
+}
+/**
+ * Performs DNS health check and throws on failure
+ *
+ * This is a convenience wrapper around checkDnsHealth() that throws
+ * an error with a detailed message if the health check fails.
+ *
+ * @param config - Optional configuration (uses defaults if not provided)
+ * @throws Error with detailed failure information if health check fails
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await ensureDnsHealthy();
+ *   console.log('DNS is healthy!');
+ * } catch (error) {
+ *   console.error('DNS health check failed:', error.message);
+ * }
+ * ```
+ */
+async function ensureDnsHealthy(config = exports.DEFAULT_HEALTH_CHECK_CONFIG) {
+    const result = await checkDnsHealth(config);
+    if (!result.healthy) {
+        // Build detailed error message
+        const checkResults = [
+            `  ${result.checks.systemdResolved ? '✅' : '❌'} systemd-resolved: ${result.checks.systemdResolved ? 'ACTIVE' : 'INACTIVE'}`,
+            `  ${result.checks.dnsmasq ? '✅' : '❌'} dnsmasq: ${result.checks.dnsmasq ? 'ACTIVE' : 'INACTIVE'}`,
+            `  ${result.checks.dnsResolution ? '✅' : '❌'} DNS resolution: ${result.checks.dnsResolution ? 'WORKING' : 'FAILED'}`
+        ].join('\n');
+        const errorHistory = result.errors
+            .slice(0, 10)
+            .map(err => `  ${err}`)
+            .join('\n');
+        const moreErrors = result.errors.length > 10 ? `  ... and ${result.errors.length - 10} more errors\n` : '';
+        const debuggingSteps = `
+Debugging Steps:
+  1. Check dnsmasq status:
+     sudo systemctl status dnsmasq
+
+  2. Test DNS manually:
+     dig @127.0.0.1 github.com
+
+  3. Check logs:
+     sudo journalctl -u dnsmasq -n 50
+     cat /var/log/safer-runner/main-dns.log
+
+  4. Verify network connectivity:
+     ping 9.9.9.9
+`;
+        const errorMessage = `
+DNS health check failed after ${result.durationMs}ms (${result.errors.length} attempts):
+
+Check Results:
+${checkResults}
+
+Error History:
+${errorHistory}
+${moreErrors}
+${debuggingSteps}`.trim();
+        throw new Error(errorMessage);
+    }
+}
+
+
+/***/ }),
+
 /***/ 9170:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -520,6 +859,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const dns_config_builder_1 = __nccwpck_require__(1877);
+const dns_health_1 = __nccwpck_require__(5338);
 // Re-export sudo functions from the sudo module for backwards compatibility
 var sudo_1 = __nccwpck_require__(1279);
 Object.defineProperty(exports, "setupSudoLogging", ({ enumerable: true, get: function () { return sudo_1.setupSudoLogging; } }));
@@ -536,7 +876,7 @@ async function performInitialSetup() {
     // Install dependencies
     core.info('Installing dependencies...');
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-    await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset']);
+    await exec.exec('sudo', ['apt-get', 'install', '-y', 'dnsmasq', 'ipset', 'dnsutils']);
     // Create log directory for all safer-runner logs
     core.info('Creating log directory...');
     await createLogDirectory();
@@ -778,10 +1118,12 @@ async function restartServices(logFile) {
     // Restart systemd-resolved and start dnsmasq
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
     await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
-    // After dnsmasq starts and creates log files, make them readable by all
+    // Verify DNS services are healthy with retry logic
+    core.info('Waiting for DNS services to become healthy...');
+    await (0, dns_health_1.ensureDnsHealthy)();
+    core.info('✅ DNS services confirmed healthy');
+    // After DNS confirmed healthy, fix log file permissions
     if (logFile) {
-        // Wait a moment for dnsmasq to create the log file
-        await new Promise(resolve => setTimeout(resolve, 500));
         // Make log file world-readable (dnsmasq creates it as 660)
         await exec.exec('sudo', ['chmod', '0644', logFile]);
     }

@@ -176,6 +176,44 @@ cat /var/log/safer-runner/pre-sudo.log      # Pre-hook sudo commands
 cat /var/log/safer-runner/main-sudo.log     # Main action sudo commands
 ```
 
+## DNS Health Check
+
+After restarting DNS services, the action performs comprehensive health checks to ensure DNS is ready before continuing. This prevents intermittent DNS resolution failures that can cause builds to fail.
+
+### Health Check Process
+
+The DNS health check verifies three layers:
+
+1. **Service Status**: Confirms systemd-resolved and dnsmasq are active
+2. **Port Binding**: Verifies dnsmasq is listening on 127.0.0.1:53
+3. **DNS Resolution**: Tests actual DNS queries for github.com and actions.githubusercontent.com
+
+The health check uses exponential backoff retry logic (100ms → 200ms → 400ms → ... up to 2000ms) with ±20% jitter to prevent thundering herd problems. It will retry for up to 30 seconds before failing.
+
+### Troubleshooting DNS Issues
+
+If the DNS health check fails, the action will provide detailed error messages showing which layer failed. You can investigate further using these commands:
+
+```bash
+# Check service status
+sudo systemctl status systemd-resolved
+sudo systemctl status dnsmasq
+
+# Test DNS resolution manually
+dig @127.0.0.1 github.com
+dig @127.0.0.1 actions.githubusercontent.com
+
+# Check if dnsmasq is listening on port 53
+sudo ss -lun | grep :53
+
+# View DNS service logs
+sudo journalctl -u dnsmasq -n 50
+sudo journalctl -u systemd-resolved -n 50
+
+# View DNS query logs (if DNS is working)
+cat /var/log/safer-runner/main-dns.log
+```
+
 ## License
 
 This action is provided as-is for defensive security purposes.
