@@ -14,6 +14,14 @@ inputs:
     description: 'Space-separated list of additional domains to allow (beyond GitHub required domains)'
     required: false
     default: ''
+  primary-dns-server:
+    description: 'Primary DNS server for allowed domains (defaults to Quad9: 9.9.9.9)'
+    required: false
+    default: '9.9.9.9'
+  secondary-dns-server:
+    description: 'Secondary DNS server for redundancy (defaults to Quad9 secondary: 149.112.112.112)'
+    required: false
+    default: '149.112.112.112'
   fail-on-tampering:
     description: 'Whether to fail the workflow after job completion if security configuration tampering is detected'
     required: false

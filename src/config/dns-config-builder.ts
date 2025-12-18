@@ -19,17 +19,31 @@ export const RISKY_GITHUB_SUBDOMAINS = [
 ] as const;
 
 /**
- * Default DNS server (Quad9 - 98% malware blocking)
+ * Default DNS server (Quad9 primary - 98% malware blocking)
  */
 export const DEFAULT_DNS_SERVER = '9.9.9.9';
+
+/**
+ * Secondary DNS server (Quad9 secondary - failover redundancy)
+ */
+export const SECONDARY_DNS_SERVER = '149.112.112.112';
+
+/**
+ * Default cache size for DNSMasq
+ * 1000 entries provides good performance for typical GitHub Actions workflows
+ * while using minimal memory (~100KB). DNSMasq default is only 150.
+ */
+export const DEFAULT_CACHE_SIZE = 1000;
 
 export interface DnsConfigOptions {
   mode: 'analyze' | 'enforce';
   allowedDomains: string;
   blockRiskySubdomains: boolean;
-  dnsServer?: string;
+  primaryDnsServer?: string;
+  secondaryDnsServer?: string;
   dnsUsername?: string;
   logFile?: string;
+  cacheSize?: number;
 }
 
 export interface DnsConfigResult {
@@ -63,10 +77,27 @@ export function parseAllowedDomains(allowedDomains: string): string[] {
  * @returns DNSmasq configuration and list of blocked subdomains
  */
 export function buildDnsConfig(options: DnsConfigOptions): DnsConfigResult {
-  const { mode, allowedDomains, blockRiskySubdomains, dnsServer = DEFAULT_DNS_SERVER, dnsUsername, logFile } = options;
+  const {
+    mode,
+    allowedDomains,
+    blockRiskySubdomains,
+    primaryDnsServer = DEFAULT_DNS_SERVER,
+    secondaryDnsServer = SECONDARY_DNS_SERVER,
+    dnsUsername,
+    logFile,
+    cacheSize = DEFAULT_CACHE_SIZE
+  } = options;
 
   let config = `# Enable query logging for summary generation
 log-queries=extra
+
+# Configure DNS cache for improved performance
+cache-size=${cacheSize}
+
+# Serve stale cache entries if upstream DNS fails (resilience for CI/CD)
+# Limited to 1 hour staleness for safety (balances freshness with resilience)
+use-stale-cache
+max-cache-ttl=3600
 
 `;
 
@@ -86,13 +117,32 @@ user=${dnsUsername}
 `;
   }
 
+  // Explicitly disable DHCP functionality (defense in depth)
+  config += `# Disable DHCP - we only use DNS functionality
+# This prevents DHCP address conflict detection via ICMP
+no-dhcp-interface=*
+
+`;
+
+  // Enable all-servers for lower latency and better resilience
+  if (secondaryDnsServer) {
+    config += `# Query all upstream DNS servers simultaneously for best performance
+# Returns whichever server responds first (lower latency, better resilience)
+all-servers
+
+`;
+  }
+
   // Configure DNS policy based on mode
   if (mode === 'enforce') {
     // NXDOMAIN all unlisted DNS (default deny)
     config += 'server=\n';
   } else {
-    // Analyze mode: allow all DNS queries
-    config += `server=${dnsServer}\n`;
+    // Analyze mode: allow all DNS queries with primary and secondary servers for redundancy
+    config += `server=${primaryDnsServer}\n`;
+    if (secondaryDnsServer) {
+      config += `server=${secondaryDnsServer}\n`;
+    }
   }
 
   // Track which subdomains we actually blocked
@@ -115,14 +165,20 @@ user=${dnsUsername}
     if (mode === 'enforce' && RISKY_GITHUB_SUBDOMAINS.includes(domain as any)) {
       continue;
     }
-    config += `server=/${domain}/${dnsServer}\n`;
+    config += `server=/${domain}/${primaryDnsServer}\n`;
+    if (secondaryDnsServer) {
+      config += `server=/${domain}/${secondaryDnsServer}\n`;
+    }
     config += `ipset=/${domain}/github\n`;
   }
 
   // Add custom allowed domains if provided
   const userDomains = parseAllowedDomains(allowedDomains);
   for (const domain of userDomains) {
-    config += `server=/${domain}/${dnsServer}\n`;
+    config += `server=/${domain}/${primaryDnsServer}\n`;
+    if (secondaryDnsServer) {
+      config += `server=/${domain}/${secondaryDnsServer}\n`;
+    }
     config += `ipset=/${domain}/user\n`;
   }
 

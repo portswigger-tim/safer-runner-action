@@ -51,7 +51,15 @@ async function run(): Promise<void> {
 
     // Configure DNSMasq in ANALYZE mode (permissive, log everything)
     core.info('Configuring DNSMasq in analyze mode...');
-    await setupDNSMasq('analyze', '', false, dnsUser.username, '/var/log/safer-runner/pre-dns.log');
+    await setupDNSMasq(
+      'analyze',
+      '',
+      false,
+      dnsUser.username,
+      '/var/log/safer-runner/pre-dns.log',
+      undefined,
+      undefined
+    );
 
     // Start services
     core.info('Restarting services...');

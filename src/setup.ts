@@ -5,7 +5,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
-import { buildDnsConfig, DEFAULT_DNS_SERVER } from './config/dns-config-builder';
+import { buildDnsConfig, DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER } from './config/dns-config-builder';
 import { setupSudoLogging, removeSudoLogging, applyCustomSudoConfig, disableSudoForRunner } from './sudo';
 
 export interface DnsUser {
@@ -153,7 +153,23 @@ export async function setupIptablesLogging(
   await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
 }
 
-export async function setupFirewallRules(dnsUid: number, logPrefix: string = ''): Promise<void> {
+/**
+ * Setup iptables firewall rules
+ *
+ * IMPORTANT: The DNS server parameters MUST match what will be configured in setupDNSMasq().
+ * If you add custom DNS server inputs to the action, you MUST pass them to both functions.
+ *
+ * @param dnsUid - UID of the DNS user (dnsmasq will run as this user)
+ * @param logPrefix - Prefix for iptables log messages (e.g., 'Pre-' or 'Main-')
+ * @param primaryDnsServer - Primary DNS server IP (defaults to Quad9: 9.9.9.9)
+ * @param secondaryDnsServer - Secondary DNS server IP (defaults to Quad9: 149.112.112.112)
+ */
+export async function setupFirewallRules(
+  dnsUid: number,
+  logPrefix: string = '',
+  primaryDnsServer: string = DEFAULT_DNS_SERVER,
+  secondaryDnsServer: string = SECONDARY_DNS_SERVER
+): Promise<void> {
   // Flush OUTPUT chain
   await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
 
@@ -238,7 +254,8 @@ export async function setupFirewallRules(dnsUid: number, logPrefix: string = '')
     'ACCEPT'
   ]);
 
-  // Allow DNS traffic to our upstream server - only from the random DNS user UID
+  // Allow DNS traffic to our upstream servers - only from the random DNS user UID
+  // Primary DNS server (configurable, defaults to Quad9 primary: 9.9.9.9)
   await exec.exec('sudo', [
     'iptables',
     '-A',
@@ -246,7 +263,7 @@ export async function setupFirewallRules(dnsUid: number, logPrefix: string = '')
     '-o',
     'eth0',
     '-d',
-    DEFAULT_DNS_SERVER,
+    primaryDnsServer,
     '-p',
     'udp',
     '--dport',
@@ -258,6 +275,30 @@ export async function setupFirewallRules(dnsUid: number, logPrefix: string = '')
     '-j',
     'ACCEPT'
   ]);
+
+  // Secondary DNS server (configurable, defaults to Quad9 secondary: 149.112.112.112)
+  // Only add rule if secondary DNS server is provided
+  if (secondaryDnsServer) {
+    await exec.exec('sudo', [
+      'iptables',
+      '-A',
+      'OUTPUT',
+      '-o',
+      'eth0',
+      '-d',
+      secondaryDnsServer,
+      '-p',
+      'udp',
+      '--dport',
+      '53',
+      '-m',
+      'owner',
+      '--uid-owner',
+      dnsUid.toString(),
+      '-j',
+      'ACCEPT'
+    ]);
+  }
 }
 
 export async function setupDNSConfig(): Promise<void> {
@@ -285,7 +326,9 @@ export async function setupDNSMasq(
   allowedDomains: string,
   blockRiskySubdomains: boolean,
   dnsUsername: string,
-  logFile?: string
+  logFile?: string,
+  primaryDnsServer?: string,
+  secondaryDnsServer?: string
 ): Promise<string[]> {
   // Build DNS configuration using the config builder module
   const { config: dnsmasqConfig, blockedSubdomains } = buildDnsConfig({
@@ -293,7 +336,9 @@ export async function setupDNSMasq(
     allowedDomains,
     blockRiskySubdomains,
     dnsUsername,
-    logFile
+    logFile,
+    primaryDnsServer,
+    secondaryDnsServer
   });
 
   // Write configuration to file

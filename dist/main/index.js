@@ -14,7 +14,7 @@
  * for testability - it doesn't execute any commands or have side effects.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DEFAULT_DNS_SERVER = exports.RISKY_GITHUB_SUBDOMAINS = void 0;
+exports.DEFAULT_CACHE_SIZE = exports.SECONDARY_DNS_SERVER = exports.DEFAULT_DNS_SERVER = exports.RISKY_GITHUB_SUBDOMAINS = void 0;
 exports.parseAllowedDomains = parseAllowedDomains;
 exports.buildDnsConfig = buildDnsConfig;
 exports.getRiskySubdomains = getRiskySubdomains;
@@ -29,9 +29,19 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
     'raw.githubusercontent.com' // Common vector for serving malicious raw file content
 ];
 /**
- * Default DNS server (Quad9 - 98% malware blocking)
+ * Default DNS server (Quad9 primary - 98% malware blocking)
  */
 exports.DEFAULT_DNS_SERVER = '9.9.9.9';
+/**
+ * Secondary DNS server (Quad9 secondary - failover redundancy)
+ */
+exports.SECONDARY_DNS_SERVER = '149.112.112.112';
+/**
+ * Default cache size for DNSMasq
+ * 1000 entries provides good performance for typical GitHub Actions workflows
+ * while using minimal memory (~100KB). DNSMasq default is only 150.
+ */
+exports.DEFAULT_CACHE_SIZE = 1000;
 /**
  * Parse user-provided allowed domains from input string
  * Supports both space-separated and newline-separated formats
@@ -56,9 +66,17 @@ function parseAllowedDomains(allowedDomains) {
  * @returns DNSmasq configuration and list of blocked subdomains
  */
 function buildDnsConfig(options) {
-    const { mode, allowedDomains, blockRiskySubdomains, dnsServer = exports.DEFAULT_DNS_SERVER, dnsUsername, logFile } = options;
+    const { mode, allowedDomains, blockRiskySubdomains, primaryDnsServer = exports.DEFAULT_DNS_SERVER, secondaryDnsServer = exports.SECONDARY_DNS_SERVER, dnsUsername, logFile, cacheSize = exports.DEFAULT_CACHE_SIZE } = options;
     let config = `# Enable query logging for summary generation
 log-queries=extra
+
+# Configure DNS cache for improved performance
+cache-size=${cacheSize}
+
+# Serve stale cache entries if upstream DNS fails (resilience for CI/CD)
+# Limited to 1 hour staleness for safety (balances freshness with resilience)
+use-stale-cache
+max-cache-ttl=3600
 
 `;
     // Configure log facility if provided (separate log file)
@@ -75,14 +93,31 @@ user=${dnsUsername}
 
 `;
     }
+    // Explicitly disable DHCP functionality (defense in depth)
+    config += `# Disable DHCP - we only use DNS functionality
+# This prevents DHCP address conflict detection via ICMP
+no-dhcp-interface=*
+
+`;
+    // Enable all-servers for lower latency and better resilience
+    if (secondaryDnsServer) {
+        config += `# Query all upstream DNS servers simultaneously for best performance
+# Returns whichever server responds first (lower latency, better resilience)
+all-servers
+
+`;
+    }
     // Configure DNS policy based on mode
     if (mode === 'enforce') {
         // NXDOMAIN all unlisted DNS (default deny)
         config += 'server=\n';
     }
     else {
-        // Analyze mode: allow all DNS queries
-        config += `server=${dnsServer}\n`;
+        // Analyze mode: allow all DNS queries with primary and secondary servers for redundancy
+        config += `server=${primaryDnsServer}\n`;
+        if (secondaryDnsServer) {
+            config += `server=${secondaryDnsServer}\n`;
+        }
     }
     // Track which subdomains we actually blocked
     const blockedSubdomains = [];
@@ -102,13 +137,19 @@ user=${dnsUsername}
         if (mode === 'enforce' && exports.RISKY_GITHUB_SUBDOMAINS.includes(domain)) {
             continue;
         }
-        config += `server=/${domain}/${dnsServer}\n`;
+        config += `server=/${domain}/${primaryDnsServer}\n`;
+        if (secondaryDnsServer) {
+            config += `server=/${domain}/${secondaryDnsServer}\n`;
+        }
         config += `ipset=/${domain}/github\n`;
     }
     // Add custom allowed domains if provided
     const userDomains = parseAllowedDomains(allowedDomains);
     for (const domain of userDomains) {
-        config += `server=/${domain}/${dnsServer}\n`;
+        config += `server=/${domain}/${primaryDnsServer}\n`;
+        if (secondaryDnsServer) {
+            config += `server=/${domain}/${secondaryDnsServer}\n`;
+        }
         config += `ipset=/${domain}/user\n`;
     }
     return { config, blockedSubdomains };
@@ -309,6 +350,8 @@ async function run() {
     try {
         const mode = core.getInput('mode') || 'analyze';
         const allowedDomains = core.getInput('allowed-domains') || '';
+        const primaryDnsServer = core.getInput('primary-dns-server') || '9.9.9.9';
+        const secondaryDnsServer = core.getInput('secondary-dns-server') || '149.112.112.112';
         const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
         const disableSudo = core.getBooleanInput('disable-sudo');
         const sudoConfig = core.getInput('sudo-config') || '';
@@ -360,7 +403,7 @@ async function run() {
         await (0, setup_1.setupDNSConfig)();
         // Configure DNSMasq
         core.info('Configuring DNSMasq...');
-        const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username, '/var/log/safer-runner/main-dns.log');
+        const blockedSubdomains = await (0, setup_1.setupDNSMasq)(mode, allowedDomains, blockRiskySubdomains, dnsUser.username, '/var/log/safer-runner/main-dns.log', primaryDnsServer, secondaryDnsServer);
         if (blockedSubdomains.length > 0) {
             core.info('🛡️ Blocking risky GitHub subdomains in enforce mode:');
             for (const subdomain of blockedSubdomains) {
@@ -833,7 +876,18 @@ async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
     // Restart rsyslog to apply configuration
     await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
 }
-async function setupFirewallRules(dnsUid, logPrefix = '') {
+/**
+ * Setup iptables firewall rules
+ *
+ * IMPORTANT: The DNS server parameters MUST match what will be configured in setupDNSMasq().
+ * If you add custom DNS server inputs to the action, you MUST pass them to both functions.
+ *
+ * @param dnsUid - UID of the DNS user (dnsmasq will run as this user)
+ * @param logPrefix - Prefix for iptables log messages (e.g., 'Pre-' or 'Main-')
+ * @param primaryDnsServer - Primary DNS server IP (defaults to Quad9: 9.9.9.9)
+ * @param secondaryDnsServer - Secondary DNS server IP (defaults to Quad9: 149.112.112.112)
+ */
+async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns_config_builder_1.DEFAULT_DNS_SERVER, secondaryDnsServer = dns_config_builder_1.SECONDARY_DNS_SERVER) {
     // Flush OUTPUT chain
     await exec.exec('sudo', ['iptables', '-F', 'OUTPUT']);
     // Allow established connections on eth0
@@ -913,7 +967,8 @@ async function setupFirewallRules(dnsUid, logPrefix = '') {
         '-j',
         'ACCEPT'
     ]);
-    // Allow DNS traffic to our upstream server - only from the random DNS user UID
+    // Allow DNS traffic to our upstream servers - only from the random DNS user UID
+    // Primary DNS server (configurable, defaults to Quad9 primary: 9.9.9.9)
     await exec.exec('sudo', [
         'iptables',
         '-A',
@@ -921,7 +976,7 @@ async function setupFirewallRules(dnsUid, logPrefix = '') {
         '-o',
         'eth0',
         '-d',
-        dns_config_builder_1.DEFAULT_DNS_SERVER,
+        primaryDnsServer,
         '-p',
         'udp',
         '--dport',
@@ -933,6 +988,29 @@ async function setupFirewallRules(dnsUid, logPrefix = '') {
         '-j',
         'ACCEPT'
     ]);
+    // Secondary DNS server (configurable, defaults to Quad9 secondary: 149.112.112.112)
+    // Only add rule if secondary DNS server is provided
+    if (secondaryDnsServer) {
+        await exec.exec('sudo', [
+            'iptables',
+            '-A',
+            'OUTPUT',
+            '-o',
+            'eth0',
+            '-d',
+            secondaryDnsServer,
+            '-p',
+            'udp',
+            '--dport',
+            '53',
+            '-m',
+            'owner',
+            '--uid-owner',
+            dnsUid.toString(),
+            '-j',
+            'ACCEPT'
+        ]);
+    }
 }
 async function setupDNSConfig() {
     // Configure systemd-resolved to use our DNS server
@@ -950,14 +1028,16 @@ DNSStubListener=no`;
         input: Buffer.from('nameserver 127.0.0.1\n')
     });
 }
-async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsername, logFile) {
+async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsername, logFile, primaryDnsServer, secondaryDnsServer) {
     // Build DNS configuration using the config builder module
     const { config: dnsmasqConfig, blockedSubdomains } = (0, dns_config_builder_1.buildDnsConfig)({
         mode: mode,
         allowedDomains,
         blockRiskySubdomains,
         dnsUsername,
-        logFile
+        logFile,
+        primaryDnsServer,
+        secondaryDnsServer
     });
     // Write configuration to file
     await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {

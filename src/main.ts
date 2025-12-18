@@ -17,6 +17,8 @@ async function run(): Promise<void> {
   try {
     const mode = core.getInput('mode') || 'analyze';
     const allowedDomains = core.getInput('allowed-domains') || '';
+    const primaryDnsServer = core.getInput('primary-dns-server') || '9.9.9.9';
+    const secondaryDnsServer = core.getInput('secondary-dns-server') || '149.112.112.112';
     const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
     const disableSudo = core.getBooleanInput('disable-sudo');
     const sudoConfig = core.getInput('sudo-config') || '';
@@ -94,7 +96,9 @@ async function run(): Promise<void> {
       allowedDomains,
       blockRiskySubdomains,
       dnsUser.username,
-      '/var/log/safer-runner/main-dns.log'
+      '/var/log/safer-runner/main-dns.log',
+      primaryDnsServer,
+      secondaryDnsServer
     );
 
     if (blockedSubdomains.length > 0) {
