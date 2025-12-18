@@ -56,7 +56,7 @@ Multi-layer security for GitHub Actions runners with network filtering (DNS + ip
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@0d9a798b9ddea4a6b9ab3c4375f8018b191c2e3d # v1.1.2
+  - uses: portswigger-tim/safer-runner-action@ad1b998ff2be7092b1540a86ae8cd54524082e87 # v1.2.0
   - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
   - run: |
       curl https://example.com  # Logged but not blocked
@@ -66,7 +66,7 @@ steps:
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@0d9a798b9ddea4a6b9ab3c4375f8018b191c2e3d # v1.1.2
+  - uses: portswigger-tim/safer-runner-action@ad1b998ff2be7092b1540a86ae8cd54524082e87 # v1.2.0
     with:
       mode: 'enforce'
       allowed-domains: |
@@ -84,6 +84,8 @@ steps:
 |-------|-------------|---------|
 | `mode` | `analyze` (log only) or `enforce` (block) | `analyze` |
 | `allowed-domains` | Additional domains to allow | `''` |
+| `primary-dns-server` | Primary DNS server for allowed domains | `9.9.9.9` (Quad9) |
+| `secondary-dns-server` | Secondary DNS server for redundancy | `149.112.112.112` (Quad9) |
 | `fail-on-tampering` | Fail workflow if security config is tampered | `false` |
 | `block-risky-github-subdomains` | Block gist.github.com and raw.githubusercontent.com in enforce mode | `true` |
 | `disable-sudo` | Disable sudo access for runner user after setup | `false` |
@@ -111,7 +113,7 @@ Control sudo and Docker access to prevent privilege escalation and container esc
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@0d9a798b9ddea4a6b9ab3c4375f8018b191c2e3d # v1.1.2
+  - uses: portswigger-tim/safer-runner-action@ad1b998ff2be7092b1540a86ae8cd54524082e87 # v1.2.0
     with:
       mode: 'enforce'
       disable-sudo: 'true'    # Prevents sudo usage after setup
@@ -124,6 +126,37 @@ steps:
 ```
 
 **Note**: Only disable sudo/Docker if your workflow doesn't require them. These are advanced security features that prevent malicious code from bypassing security controls.
+
+### Custom DNS Servers
+
+Configure alternative DNS providers while maintaining the same security guarantees:
+
+```yaml
+steps:
+  - uses: portswigger-tim/safer-runner-action@ad1b998ff2be7092b1540a86ae8cd54524082e87 # v1.2.0
+    with:
+      mode: 'enforce'
+      allowed-domains: 'npmjs.org pypi.org'
+      primary-dns-server: '1.1.1.1'      # Cloudflare DNS
+      secondary-dns-server: '1.0.0.1'    # Cloudflare secondary
+  - run: npm install  # DNS queries use Cloudflare instead of Quad9
+```
+
+**Default DNS**: Quad9 (`9.9.9.9` / `149.112.112.112`) with 98% malware blocking
+
+**Disable secondary DNS** by passing an empty string (single DNS server only):
+
+```yaml
+steps:
+  - uses: portswigger-tim/safer-runner-action@ad1b998ff2be7092b1540a86ae8cd54524082e87 # v1.2.0
+    with:
+      mode: 'enforce'
+      allowed-domains: 'example.com'
+      primary-dns-server: '8.8.8.8'
+      secondary-dns-server: ''  # Disable secondary DNS
+```
+
+**Note**: Both DNS servers must be explicitly allowed in firewall rules. The action automatically configures iptables to allow DNS traffic only from the dnsmasq process to the configured servers.
 
 ## Limitations
 

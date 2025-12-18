@@ -325,6 +325,37 @@ await setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUser.username,
 
 **Also update**: `src/post.ts` to read from the new locations
 
+### Configure Custom DNS Servers
+
+The action supports configurable DNS servers (v1.2.0+) via `primary-dns-server` and `secondary-dns-server` inputs.
+
+**Files to modify**: `src/main.ts`, `src/pre.ts`, and `src/setup.ts`
+
+**Key functions**:
+- `setupDNSMasq()` - Accepts `primaryDnsServer` and `secondaryDnsServer` parameters
+- `setupFirewallRules()` - Must use same DNS servers to configure iptables rules
+- `buildDnsConfig()` in `dns-config-builder.ts` - Generates DNSmasq config with custom servers
+
+**Important**: DNS server parameters MUST match between `setupDNSMasq()` and `setupFirewallRules()`. The firewall only allows DNS traffic to the configured servers.
+
+**Testing custom DNS servers**:
+```typescript
+// In test
+const result = buildDnsConfig({
+  mode: 'enforce',
+  allowedDomains: 'example.com',
+  blockRiskySubdomains: false,
+  primaryDnsServer: '1.1.1.1',      // Cloudflare
+  secondaryDnsServer: '1.0.0.1'     // Cloudflare secondary
+});
+
+// Verify config uses custom servers
+expect(result.config).toContain('server=/example.com/1.1.1.1');
+expect(result.config).toContain('server=/example.com/1.0.0.1');
+```
+
+**Disabling secondary DNS**: Pass empty string for `secondaryDnsServer` to use only primary DNS.
+
 ### Enhance Validation
 
 **File**: `validation.ts:44-48`
