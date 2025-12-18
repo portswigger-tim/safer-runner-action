@@ -223,6 +223,56 @@ describe('DNS Config Builder', () => {
       expect(result.config).toContain(`server=${customPrimary}\n`);
       expect(result.config).toContain(`server=${customSecondary}\n`);
     });
+
+    it('should NOT use default secondary when explicitly set to empty string with custom primary', () => {
+      const customPrimary = '1.1.1.1';
+      const result = buildDnsConfig({
+        mode: 'analyze',
+        allowedDomains: '',
+        blockRiskySubdomains: false,
+        primaryDnsServer: customPrimary,
+        secondaryDnsServer: ''
+      });
+
+      // Should use custom primary
+      expect(result.config).toContain(`server=${customPrimary}\n`);
+
+      // Should NOT use default secondary
+      expect(result.config).not.toContain(`server=${SECONDARY_DNS_SERVER}\n`);
+
+      // Should NOT use ANY secondary server (check for general upstream server lines only)
+      // General upstream servers look like: server=1.1.1.1 (no domain specification)
+      const generalServerLines = result.config.match(/^server=[0-9.]+$/gm) || [];
+      expect(generalServerLines.length).toBe(1); // Only the primary server
+      expect(generalServerLines[0]).toBe(`server=${customPrimary}`);
+
+      // Should NOT enable all-servers directive (requires secondary)
+      expect(result.config).not.toContain('all-servers');
+    });
+
+    it('should NOT use default secondary in enforce mode when explicitly set to empty string', () => {
+      const customPrimary = '8.8.8.8';
+      const result = buildDnsConfig({
+        mode: 'enforce',
+        allowedDomains: 'example.com',
+        blockRiskySubdomains: false,
+        primaryDnsServer: customPrimary,
+        secondaryDnsServer: ''
+      });
+
+      // Should use custom primary for allowed domains
+      expect(result.config).toContain(`server=/example.com/${customPrimary}`);
+
+      // Should NOT use default secondary for allowed domains
+      expect(result.config).not.toContain(`server=/example.com/${SECONDARY_DNS_SERVER}`);
+
+      // Verify no secondary server lines exist for allowed domains
+      const exampleServerLines = result.config.match(/server=\/example\.com\/.+$/gm) || [];
+      expect(exampleServerLines.length).toBe(1); // Only the primary server
+
+      // Should NOT enable all-servers directive
+      expect(result.config).not.toContain('all-servers');
+    });
   });
 
   describe('buildDnsConfig - DHCP disabling', () => {
