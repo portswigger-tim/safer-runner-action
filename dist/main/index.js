@@ -988,7 +988,8 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
         '-j',
         'ACCEPT'
     ]);
-    // Allow ICMP to primary DNS server (for error messages, path MTU discovery, etc.)
+    // Drop ICMP destination-unreachable to primary DNS server without logging
+    // These are kernel-generated responses to DNS queries, not security-relevant
     await exec.exec('sudo', [
         'iptables',
         '-A',
@@ -999,12 +1000,10 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
         primaryDnsServer,
         '-p',
         'icmp',
-        '-m',
-        'owner',
-        '--uid-owner',
-        dnsUid.toString(),
+        '--icmp-type',
+        'destination-unreachable',
         '-j',
-        'ACCEPT'
+        'DROP'
     ]);
     // Secondary DNS server (configurable, defaults to Quad9 secondary: 149.112.112.112)
     // Only add rule if secondary DNS server is provided
@@ -1028,7 +1027,8 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
             '-j',
             'ACCEPT'
         ]);
-        // Allow ICMP to secondary DNS server (for error messages, path MTU discovery, etc.)
+        // Drop ICMP destination-unreachable to secondary DNS server without logging
+        // These are kernel-generated responses to DNS queries, not security-relevant
         await exec.exec('sudo', [
             'iptables',
             '-A',
@@ -1039,12 +1039,10 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
             secondaryDnsServer,
             '-p',
             'icmp',
-            '-m',
-            'owner',
-            '--uid-owner',
-            dnsUid.toString(),
+            '--icmp-type',
+            'destination-unreachable',
             '-j',
-            'ACCEPT'
+            'DROP'
         ]);
     }
 }
