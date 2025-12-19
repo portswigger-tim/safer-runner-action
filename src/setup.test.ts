@@ -277,6 +277,105 @@ describe('setup.ts - iptables configuration', () => {
       expect(secondaryCommand).toBeDefined();
     });
 
+    it('should allow ICMP traffic to primary DNS server from DNS user', async () => {
+      await setupFirewallRules(1001, 'Test-', DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER);
+
+      const primaryIcmpCommand = capturedCommands.find(
+        cmd =>
+          cmd.args.includes('iptables') &&
+          cmd.args.includes('-d') &&
+          cmd.args.includes(DEFAULT_DNS_SERVER) &&
+          cmd.args.includes('-p') &&
+          cmd.args.includes('icmp') &&
+          cmd.args.includes('--uid-owner')
+      );
+
+      expect(primaryIcmpCommand).toBeDefined();
+      expect(primaryIcmpCommand?.args).toEqual([
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-d',
+        DEFAULT_DNS_SERVER,
+        '-p',
+        'icmp',
+        '-m',
+        'owner',
+        '--uid-owner',
+        '1001',
+        '-j',
+        'ACCEPT'
+      ]);
+    });
+
+    it('should allow ICMP traffic to secondary DNS server from DNS user', async () => {
+      await setupFirewallRules(1001, 'Test-', DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER);
+
+      const secondaryIcmpCommand = capturedCommands.find(
+        cmd =>
+          cmd.args.includes('iptables') &&
+          cmd.args.includes('-d') &&
+          cmd.args.includes(SECONDARY_DNS_SERVER) &&
+          cmd.args.includes('-p') &&
+          cmd.args.includes('icmp') &&
+          cmd.args.includes('--uid-owner')
+      );
+
+      expect(secondaryIcmpCommand).toBeDefined();
+      expect(secondaryIcmpCommand?.args).toEqual([
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-d',
+        SECONDARY_DNS_SERVER,
+        '-p',
+        'icmp',
+        '-m',
+        'owner',
+        '--uid-owner',
+        '1001',
+        '-j',
+        'ACCEPT'
+      ]);
+    });
+
+    it('should not add ICMP rule for secondary DNS when secondary DNS is disabled', async () => {
+      await setupFirewallRules(1001, 'Test-', DEFAULT_DNS_SERVER, '');
+
+      const secondaryIcmpCommands = capturedCommands.filter(
+        cmd => cmd.args.includes('icmp') && cmd.args.includes(SECONDARY_DNS_SERVER)
+      );
+
+      // Should only have ICMP rule for primary DNS server
+      const icmpCommands = capturedCommands.filter(cmd => cmd.args.includes('icmp'));
+      expect(icmpCommands).toHaveLength(1);
+      expect(icmpCommands[0].args).toContain(DEFAULT_DNS_SERVER);
+      expect(secondaryIcmpCommands).toHaveLength(0);
+    });
+
+    it('should allow ICMP with custom DNS servers', async () => {
+      const customPrimary = '8.8.8.8';
+      const customSecondary = '8.8.4.4';
+
+      await setupFirewallRules(1001, 'Test-', customPrimary, customSecondary);
+
+      const primaryIcmpCommand = capturedCommands.find(
+        cmd => cmd.args.includes('icmp') && cmd.args.includes(customPrimary)
+      );
+      const secondaryIcmpCommand = capturedCommands.find(
+        cmd => cmd.args.includes('icmp') && cmd.args.includes(customSecondary)
+      );
+
+      expect(primaryIcmpCommand).toBeDefined();
+      expect(secondaryIcmpCommand).toBeDefined();
+      expect(primaryIcmpCommand?.args).toContain('ACCEPT');
+      expect(secondaryIcmpCommand?.args).toContain('ACCEPT');
+    });
+
     it('should execute commands in correct order', async () => {
       await setupFirewallRules(1001, 'Test-');
 

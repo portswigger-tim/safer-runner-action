@@ -276,6 +276,25 @@ export async function setupFirewallRules(
     'ACCEPT'
   ]);
 
+  // Allow ICMP to primary DNS server (for error messages, path MTU discovery, etc.)
+  await exec.exec('sudo', [
+    'iptables',
+    '-A',
+    'OUTPUT',
+    '-o',
+    'eth0',
+    '-d',
+    primaryDnsServer,
+    '-p',
+    'icmp',
+    '-m',
+    'owner',
+    '--uid-owner',
+    dnsUid.toString(),
+    '-j',
+    'ACCEPT'
+  ]);
+
   // Secondary DNS server (configurable, defaults to Quad9 secondary: 149.112.112.112)
   // Only add rule if secondary DNS server is provided
   if (secondaryDnsServer) {
@@ -291,6 +310,25 @@ export async function setupFirewallRules(
       'udp',
       '--dport',
       '53',
+      '-m',
+      'owner',
+      '--uid-owner',
+      dnsUid.toString(),
+      '-j',
+      'ACCEPT'
+    ]);
+
+    // Allow ICMP to secondary DNS server (for error messages, path MTU discovery, etc.)
+    await exec.exec('sudo', [
+      'iptables',
+      '-A',
+      'OUTPUT',
+      '-o',
+      'eth0',
+      '-d',
+      secondaryDnsServer,
+      '-p',
+      'icmp',
       '-m',
       'owner',
       '--uid-owner',
