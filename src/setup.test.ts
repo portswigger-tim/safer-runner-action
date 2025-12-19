@@ -277,7 +277,7 @@ describe('setup.ts - iptables configuration', () => {
       expect(secondaryCommand).toBeDefined();
     });
 
-    it('should allow ICMP traffic to primary DNS server from DNS user', async () => {
+    it('should drop ICMP destination-unreachable to primary DNS server', async () => {
       await setupFirewallRules(1001, 'Test-', DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER);
 
       const primaryIcmpCommand = capturedCommands.find(
@@ -287,7 +287,7 @@ describe('setup.ts - iptables configuration', () => {
           cmd.args.includes(DEFAULT_DNS_SERVER) &&
           cmd.args.includes('-p') &&
           cmd.args.includes('icmp') &&
-          cmd.args.includes('--uid-owner')
+          cmd.args.includes('--icmp-type')
       );
 
       expect(primaryIcmpCommand).toBeDefined();
@@ -301,16 +301,14 @@ describe('setup.ts - iptables configuration', () => {
         DEFAULT_DNS_SERVER,
         '-p',
         'icmp',
-        '-m',
-        'owner',
-        '--uid-owner',
-        '1001',
+        '--icmp-type',
+        'destination-unreachable',
         '-j',
-        'ACCEPT'
+        'DROP'
       ]);
     });
 
-    it('should allow ICMP traffic to secondary DNS server from DNS user', async () => {
+    it('should drop ICMP destination-unreachable to secondary DNS server', async () => {
       await setupFirewallRules(1001, 'Test-', DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER);
 
       const secondaryIcmpCommand = capturedCommands.find(
@@ -320,7 +318,7 @@ describe('setup.ts - iptables configuration', () => {
           cmd.args.includes(SECONDARY_DNS_SERVER) &&
           cmd.args.includes('-p') &&
           cmd.args.includes('icmp') &&
-          cmd.args.includes('--uid-owner')
+          cmd.args.includes('--icmp-type')
       );
 
       expect(secondaryIcmpCommand).toBeDefined();
@@ -334,12 +332,10 @@ describe('setup.ts - iptables configuration', () => {
         SECONDARY_DNS_SERVER,
         '-p',
         'icmp',
-        '-m',
-        'owner',
-        '--uid-owner',
-        '1001',
+        '--icmp-type',
+        'destination-unreachable',
         '-j',
-        'ACCEPT'
+        'DROP'
       ]);
     });
 
@@ -357,7 +353,7 @@ describe('setup.ts - iptables configuration', () => {
       expect(secondaryIcmpCommands).toHaveLength(0);
     });
 
-    it('should allow ICMP with custom DNS servers', async () => {
+    it('should drop ICMP destination-unreachable with custom DNS servers', async () => {
       const customPrimary = '8.8.8.8';
       const customSecondary = '8.8.4.4';
 
@@ -372,8 +368,10 @@ describe('setup.ts - iptables configuration', () => {
 
       expect(primaryIcmpCommand).toBeDefined();
       expect(secondaryIcmpCommand).toBeDefined();
-      expect(primaryIcmpCommand?.args).toContain('ACCEPT');
-      expect(secondaryIcmpCommand?.args).toContain('ACCEPT');
+      expect(primaryIcmpCommand?.args).toContain('DROP');
+      expect(primaryIcmpCommand?.args).toContain('destination-unreachable');
+      expect(secondaryIcmpCommand?.args).toContain('DROP');
+      expect(secondaryIcmpCommand?.args).toContain('destination-unreachable');
     });
 
     it('should execute commands in correct order', async () => {
@@ -625,8 +623,16 @@ describe('setup.ts - iptables configuration', () => {
       expect(capturedCommands.find(cmd => cmd.args.includes('ACCEPT') && cmd.args.includes('eth0'))).toBeDefined(); // Final ACCEPT
       expect(capturedCommands.find(cmd => cmd.args.includes('--log-prefix=Pre-Allow-Analyze: '))).toBeDefined(); // Analyze logging
 
-      // Should NOT have DROP
-      expect(capturedCommands.find(cmd => cmd.args.includes('DROP'))).toBeUndefined();
+      // Should have DROP for ICMP destination-unreachable (silently drop noise)
+      const icmpDropRule = capturedCommands.find(
+        cmd => cmd.args.includes('DROP') && cmd.args.includes('destination-unreachable')
+      );
+      expect(icmpDropRule).toBeDefined();
+
+      // Final rule should be ACCEPT (not DROP) in analyze mode
+      const lastRule = capturedCommands[capturedCommands.length - 1];
+      expect(lastRule.args).toContain('ACCEPT');
+      expect(lastRule.args).not.toContain('DROP');
     });
   });
 });
