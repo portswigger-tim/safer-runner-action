@@ -9,9 +9,15 @@ import {
   generateDnsDetails,
   generateConfigurationAdvice
 } from './formatters/report-formatter';
+import { isActionDisabled } from './mode';
 
 async function run(): Promise<void> {
   try {
+    if (isActionDisabled()) {
+      core.info('⏭️ Safer Runner is disabled (mode is empty) - skipping log analysis');
+      return;
+    }
+
     core.info('🔍 Analyzing network access logs...');
 
     // Wait for logs to be written

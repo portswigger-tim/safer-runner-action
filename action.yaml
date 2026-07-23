@@ -7,7 +7,7 @@ branding:
 
 inputs:
   mode:
-    description: 'Operation mode: "analyze" to log traffic without blocking, "enforce" to block unauthorized domains'
+    description: 'Operation mode: "analyze" to log traffic without blocking, "enforce" to block unauthorized domains. Set to an empty string to disable the action entirely (the pre/main/post hooks all become no-ops) - useful for wrapper workflows that expose safer-runner as optional, since GitHub runs pre/post hooks even when the step itself is skipped by an if: condition.'
     required: false
     default: 'analyze'
   allowed-domains:

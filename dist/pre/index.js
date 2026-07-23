@@ -164,6 +164,36 @@ function getRiskySubdomains() {
 
 /***/ }),
 
+/***/ 8745:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isActionDisabled = isActionDisabled;
+/**
+ * The action is explicitly disabled when the caller passes an empty `mode`
+ * input. This matters for wrapper workflows that expose safer-runner as an
+ * optional feature (e.g. `mode: ${{ inputs.safer-runner-mode }}` guarded by a
+ * step-level `if:`): GitHub runs an action's pre/post hooks for every job that
+ * references it, regardless of the step-level `if:`, so an empty mode is the
+ * only signal through which a disabled configuration can be honoured before
+ * any setup work happens.
+ *
+ * Deliberately checks the raw environment variable rather than
+ * `core.getInput()`: `getInput` cannot distinguish "explicitly empty" from
+ * "not set at all". On a real runner INPUT_MODE is always set (action.yaml's
+ * default is materialised), but in tests or direct invocation an unset input
+ * keeps the previous behaviour rather than silently disabling a security tool.
+ */
+function isActionDisabled() {
+    const raw = process.env['INPUT_MODE'];
+    return raw !== undefined && raw.trim() === '';
+}
+
+
+/***/ }),
+
 /***/ 9170:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -446,6 +476,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const setup_1 = __nccwpck_require__(1413);
 const sudo_1 = __nccwpck_require__(1279);
+const mode_1 = __nccwpck_require__(8745);
 /**
  * Pre-action hook: Establish security in analyze mode
  *
@@ -458,6 +489,10 @@ const sudo_1 = __nccwpck_require__(1279);
  */
 async function run() {
     try {
+        if ((0, mode_1.isActionDisabled)()) {
+            core.info('⏭️ Safer Runner is disabled (mode is empty) - skipping pre-action setup');
+            return;
+        }
         core.info('🔍 Pre-action: Establishing security monitoring...');
         // Perform initial system setup
         const dnsUser = await (0, setup_1.performInitialSetup)();

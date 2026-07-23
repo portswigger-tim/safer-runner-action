@@ -11,6 +11,7 @@ import {
   setupIptablesLogging
 } from './setup';
 import { applyCustomSudoConfig } from './sudo';
+import { isActionDisabled } from './mode';
 
 /**
  * Pre-action hook: Establish security in analyze mode
@@ -24,6 +25,11 @@ import { applyCustomSudoConfig } from './sudo';
  */
 async function run(): Promise<void> {
   try {
+    if (isActionDisabled()) {
+      core.info('⏭️ Safer Runner is disabled (mode is empty) - skipping pre-action setup');
+      return;
+    }
+
     core.info('🔍 Pre-action: Establishing security monitoring...');
 
     // Perform initial system setup

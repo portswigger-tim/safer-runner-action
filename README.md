@@ -82,7 +82,7 @@ steps:
 
 | Input | Description | Default |
 |-------|-------------|---------|
-| `mode` | `analyze` (log only) or `enforce` (block) | `analyze` |
+| `mode` | `analyze` (log only), `enforce` (block), or `''` (empty string) to disable the action entirely | `analyze` |
 | `allowed-domains` | Additional domains to allow | `''` |
 | `primary-dns-server` | Primary DNS server for allowed domains | `9.9.9.9` (Quad9) |
 | `secondary-dns-server` | Secondary DNS server for redundancy | `149.112.112.112` (Quad9) |
@@ -91,6 +91,27 @@ steps:
 | `disable-sudo` | Disable sudo access for runner user after setup | `false` |
 | `sudo-config` | Custom sudoers configuration for runner user (multi-line string) | `''` |
 | `disable-docker` | Remove runner user from docker group (prevents container usage) | `false` |
+
+### Disabling the action
+
+Passing an empty `mode` disables the action entirely: the pre, main, and post hooks all
+exit immediately without touching the system.
+
+This exists for wrapper workflows that expose safer-runner as an optional feature. GitHub
+runs an action's pre/post hooks for every job that references it, even when the step
+itself is skipped by an `if:` condition - so without this, a disabled safer-runner still
+performs its full network setup at the start of every job (typically 10-40 seconds). A
+wrapper can pass its own optional input straight through and pay nothing when it is off:
+
+```yaml
+- name: Safer runner
+  if: inputs.safer-runner-mode != ''
+  uses: portswigger-tim/safer-runner-action@v1
+  with:
+    mode: ${{ inputs.safer-runner-mode }}  # '' disables all hooks, including pre/post
+```
+
+Omitting `mode` is unchanged and still defaults to `analyze`.
 
 ## Network Access Reports
 

@@ -345,6 +345,36 @@ function getDnsStatusIcon(status) {
 
 /***/ }),
 
+/***/ 8745:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isActionDisabled = isActionDisabled;
+/**
+ * The action is explicitly disabled when the caller passes an empty `mode`
+ * input. This matters for wrapper workflows that expose safer-runner as an
+ * optional feature (e.g. `mode: ${{ inputs.safer-runner-mode }}` guarded by a
+ * step-level `if:`): GitHub runs an action's pre/post hooks for every job that
+ * references it, regardless of the step-level `if:`, so an empty mode is the
+ * only signal through which a disabled configuration can be honoured before
+ * any setup work happens.
+ *
+ * Deliberately checks the raw environment variable rather than
+ * `core.getInput()`: `getInput` cannot distinguish "explicitly empty" from
+ * "not set at all". On a real runner INPUT_MODE is always set (action.yaml's
+ * default is materialised), but in tests or direct invocation an unset input
+ * keeps the previous behaviour rather than silently disabling a security tool.
+ */
+function isActionDisabled() {
+    const raw = process.env['INPUT_MODE'];
+    return raw !== undefined && raw.trim() === '';
+}
+
+
+/***/ }),
+
 /***/ 1106:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -1028,8 +1058,13 @@ const network_parser_1 = __nccwpck_require__(8089);
 const dns_parser_1 = __nccwpck_require__(1106);
 const sudo_1 = __nccwpck_require__(1279);
 const report_formatter_1 = __nccwpck_require__(5601);
+const mode_1 = __nccwpck_require__(8745);
 async function run() {
     try {
+        if ((0, mode_1.isActionDisabled)()) {
+            core.info('⏭️ Safer Runner is disabled (mode is empty) - skipping log analysis');
+            return;
+        }
         core.info('🔍 Analyzing network access logs...');
         // Wait for logs to be written
         await new Promise(resolve => setTimeout(resolve, 2000));

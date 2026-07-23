@@ -12,9 +12,15 @@ import {
 } from './setup';
 import { removeSudoLogging, setupSudoLogging, disableSudoForRunner, applyCustomSudoConfig } from './sudo';
 import { disableDockerForRunner, stopDockerService } from './docker';
+import { isActionDisabled } from './mode';
 
 async function run(): Promise<void> {
   try {
+    if (isActionDisabled()) {
+      core.info('⏭️ Safer Runner is disabled (mode is empty) - skipping setup');
+      return;
+    }
+
     const mode = core.getInput('mode') || 'analyze';
     const allowedDomains = core.getInput('allowed-domains') || '';
     const primaryDnsServer = core.getInput('primary-dns-server') || '9.9.9.9';
