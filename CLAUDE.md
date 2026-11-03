@@ -51,6 +51,7 @@ npm test             # Run Jest tests only
    - Reuses infrastructure from pre-hook (if available)
    - Removes pre-hook sudo logging and sets up main action sudo logging to `/var/log/safer-runner/main-sudo.log`
    - Applies user configuration (analyze/enforce mode)
+   - Order at the end matters: Docker restrictions → sudo logging → baseline capture → sudo restrictions (last)
    - Logs DNS to `/var/log/safer-runner/main-dns.log`
    - Logs iptables to `/var/log/safer-runner/main-iptables.log` with `Main-` prefix
    - Captures security baseline for validation
@@ -80,11 +81,14 @@ npm test             # Run Jest tests only
    - Log prefixes: `Pre-` for pre-hook, `Main-` for main action
 
 3. **Privilege Layer (sudo)** - `sudo.ts:setupSudoLogging()`, `disableSudoForRunner()`, and `applyCustomSudoConfig()`
+   - **Two sudo implementations**: classic sudo (Ubuntu ≤24.04) and sudo-rs (default `sudo` on Ubuntu 25.10+ / 26.04), detected via `detectSudoFlavour()` (`sudo --version`)
    - **Logging**: Pre-hook sudo usage logged to `/var/log/safer-runner/pre-sudo.log`, main action logged to `/var/log/safer-runner/main-sudo.log`
-   - **Disable**: Optionally disable sudo access by renaming `/etc/sudoers.d/runner`
-   - **Custom Config**: Optionally apply custom sudoers configuration for runner user
-   - Preserves other group memberships (docker, adm, systemd-journal)
-   - File renamed to `.disabled-by-safer-runner` for debugging/recovery
+     - Classic sudo: `Defaults logfile=` drop-in at `/etc/sudoers.d/00-sudo-logging`
+     - sudo-rs: no logfile support - rsyslog rule `/etc/rsyslog.d/10-sudo-safer-runner.conf` copies sudo's syslog messages into the same file/format
+   - **Disable**: `disable-sudo` rewrites `/etc/sudoers.d/runner` to allow only the exact read-only validation commands (`getValidationSudoCommands()`)
+   - **Custom Config**: Optionally apply custom sudoers configuration for runner user (validated with the active `visudo`)
+   - **sudoers must be valid for BOTH implementations**: no wildcards in command arguments, no `Defaults!<alias>`/`log_allowed`
+   - **Never allow write/config commands** (tee, chmod, chown, mv, visudo, systemctl...) after restriction - sudo logging is therefore set up *before* restrictions are applied, and the action's own sudo commands are filtered from reports via `INTERNAL_SUDO_COMMANDS`
 
 ### Validation System - `validation.ts`
 
@@ -99,6 +103,7 @@ npm test             # Run Jest tests only
 - `/etc/dnsmasq.conf` - DNS filtering rules
 - `/etc/resolv.conf` - DNS resolver configuration
 - `/etc/systemd/resolved.conf.d/no-stub.conf` - systemd DNS config
+- Sudo logging config (`/etc/sudoers.d/00-sudo-logging` or `/etc/rsyslog.d/10-sudo-safer-runner.conf` on sudo-rs)
 - `iptables` chains (INPUT, OUTPUT, FORWARD) - Firewall rules
 
 ## 📊 Logging & Reporting
@@ -122,8 +127,8 @@ npm test             # Run Jest tests only
 **Sudo Logs** (sudo logfile):
 - Pre-hook sudo usage logged to `/var/log/safer-runner/pre-sudo.log`
 - Main action sudo usage logged to `/var/log/safer-runner/main-sudo.log`
-- Configured via `/etc/sudoers.d/00-sudo-logging`
-- Captures: user, tty, pwd, user, command for every sudo invocation
+- Configured via `/etc/sudoers.d/00-sudo-logging` (classic sudo) or `/etc/rsyslog.d/10-sudo-safer-runner.conf` (sudo-rs)
+- Captures: user, tty, pwd, user, command for every sudo invocation (sudo-rs: allowed commands only, no TTY)
 - Readable by runner user (no sudo required to view)
 - Parsed by `parsers/sudo-parser.ts`
 
@@ -389,6 +394,8 @@ The action supports three sudo modes via `sudo.ts`:
 - Runner can only execute commands needed for post-action validation
 
 **Implementation**: See `sudo.ts:applyCustomSudoConfig()` and `disableSudoForRunner()`
+
+**Testing sudoers changes**: validate generated config against both implementations, e.g. in an `ubuntu:26.04` container (`apt-get install sudo` installs both): `visudo -c -f file` (sudo-rs) and `visudo.ws -c -f file` (classic).
 
 ### Docker Access Control
 
