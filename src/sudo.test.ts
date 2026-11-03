@@ -108,26 +108,27 @@ describe('sudo module', () => {
       expect(config).not.toContain('log_allowed');
     });
 
-    it.each(['tee', 'chmod', 'chown', 'mv', 'visudo', 'rm', 'touch', 'systemctl', 'cp', 'install', 'ln'])(
-      'does not allow %s',
-      binary => {
-        for (const line of ruleLines) {
-          expect(line).not.toMatch(new RegExp(`/${binary}(\\s|,|$)`));
-        }
-      }
-    );
-
-    it('only allows exact read-only validation commands', () => {
-      const allowed = ruleLines
-        .join(' ')
-        .replace(/\\\s*/g, ' ')
-        .match(/(\/usr\/s?bin\/\S+[^,]*?)(?=,|\s*runner ALL|$)/g)!
-        .map(cmd => cmd.trim());
-      for (const cmd of allowed) {
-        expect(cmd).toMatch(
-          /^\/usr\/bin\/cat \/etc\/\S+$|^\/usr\/sbin\/iptables -L (INPUT|OUTPUT|FORWARD) -n --line-numbers$/
-        );
-      }
+    it('post-restriction sudoers contains only the validation allowlist', () => {
+      // Every non-comment line is either the alias definition or the single rule granting it
+      const commands = ruleLines
+        .join('\n')
+        .replace(/\\\n\s*/g, '')
+        .replace(/^Cmnd_Alias SAFER_RUNNER_VALIDATION = /m, '')
+        .split('\n');
+      expect(commands).toEqual([
+        getValidationSudoCommands().join(', '),
+        'runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION'
+      ]);
+      expect(getValidationSudoCommands()).toEqual([
+        '/usr/bin/cat /etc/dnsmasq.conf',
+        '/usr/bin/cat /etc/resolv.conf',
+        '/usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf',
+        `/usr/bin/cat ${SUDO_LOGGING_SUDOERS_FILE}`,
+        `/usr/bin/cat ${SUDO_LOGGING_RSYSLOG_FILE}`,
+        '/usr/sbin/iptables -L INPUT -n --line-numbers',
+        '/usr/sbin/iptables -L OUTPUT -n --line-numbers',
+        '/usr/sbin/iptables -L FORWARD -n --line-numbers'
+      ]);
     });
 
     it('allows every command post-action validation runs', () => {
@@ -255,7 +256,7 @@ describe('sudo module', () => {
       visudoResult(1, '/tmp/runner-sudoers.tmp:1:28: syntax error: wildcards are not allowed in command arguments');
 
       await expect(
-        applyCustomSudoConfig('runner ALL=(root) NOPASSWD: /usr/bin/chmod * /tmp/x', 'sudo-rs')
+        applyCustomSudoConfig('runner ALL=(root) NOPASSWD: /usr/bin/ls /home/*/x', 'sudo-rs')
       ).rejects.toThrow(/wildcards are not allowed/);
 
       expect(core.error).toHaveBeenCalledWith(expect.stringContaining('sudo-rs'));
@@ -322,6 +323,17 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
       const commands = parseSudoLogs(log);
       expect(commands).toHaveLength(1);
       expect(commands[0].command).toBe('/usr/bin/id');
+      expect(commands[0].denied).toBe(true);
+    });
+
+    it('classic sudo log: reports refused attempts at internal commands', () => {
+      const log = path.join(dir, 'main-sudo.log');
+      fs.writeFileSync(
+        log,
+        `Nov  3 16:24:32 : runner : a password is required ; PWD=/ ; USER=root ; COMMAND=/usr/bin/tee /tmp/runner-sudoers.tmp
+`
+      );
+      expect(parseSudoLogs(log)).toHaveLength(1);
     });
 
     it('still reports same-named binaries outside system paths', () => {

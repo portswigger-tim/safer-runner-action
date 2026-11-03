@@ -9,7 +9,15 @@ export interface SudoCommand {
   targetUser: string;
   command: string;
   args: string;
+  /** Set when sudo refused the command (classic sudo logs refusals; sudo-rs does not) */
+  denied?: boolean;
 }
+
+/**
+ * Classic sudo prefixes refused commands with a reason, e.g.
+ * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
+ */
+const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
 
 /**
  * Parse a single sudo log entry
@@ -35,7 +43,8 @@ export function parseSudoLogLine(line: string): SudoCommand | null {
     user,
     targetUser,
     command,
-    args
+    args,
+    ...(DENIED_PATTERN.test(line) && { denied: true })
   };
 }
 
@@ -166,7 +175,7 @@ function parseMultiLineSudoLogs(content: string): SudoCommand[] {
 }
 
 /**
- * Remove the action's own sudo commands from parsed logs
+ * Remove the action's own (successful) sudo commands from parsed logs
  *
  * @param commands - Parsed sudo commands
  * @param internalCommands - Internal commands as "<basename> <args>" (e.g. "cat /etc/resolv.conf")
@@ -176,6 +185,10 @@ export function filterInternalSudoCommands(commands: SudoCommand[], internalComm
   const internal = new Set(internalCommands);
 
   return commands.filter(cmd => {
+    // Refused attempts are always reported, even if they mimic an internal command
+    if (cmd.denied) {
+      return true;
+    }
     // Only system binaries are treated as internal - a same-named binary elsewhere is still reported
     const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
     if (!match) {

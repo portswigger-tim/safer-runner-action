@@ -223,6 +223,22 @@ Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/apt-get install
       expect(result).toHaveLength(2);
     });
 
+    it('keeps refused attempts that mimic internal commands', () => {
+      const result = filterInternalSudoCommands(
+        [{ ...cmd('/usr/bin/cat', '/etc/resolv.conf'), denied: true }],
+        internal
+      );
+      expect(result).toHaveLength(1);
+    });
+
+    it('marks classic sudo refusals as denied', () => {
+      const result = parseSudoLogsFromString(`Nov  3 16:24:32 : runner : a password is required ; PWD=/ ; USER=root ;
+    COMMAND=/usr/bin/tee /tmp/runner-sudoers.tmp
+Nov  3 16:24:33 : runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id
+Nov  3 16:24:34 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/whoami`);
+      expect(result.map(c => c.denied)).toEqual([true, true, undefined]);
+    });
+
     it('keeps same-named binaries outside system directories', () => {
       const result = filterInternalSudoCommands([cmd('/tmp/cat', '/etc/resolv.conf')], internal);
       expect(result).toHaveLength(1);

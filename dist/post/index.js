@@ -832,6 +832,11 @@ exports.parseSudoLogsFromString = parseSudoLogsFromString;
 exports.filterInternalSudoCommands = filterInternalSudoCommands;
 exports.generateSudoersConfig = generateSudoersConfig;
 /**
+ * Classic sudo prefixes refused commands with a reason, e.g.
+ * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
+ */
+const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
+/**
  * Parse a single sudo log entry
  * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
  */
@@ -851,7 +856,8 @@ function parseSudoLogLine(line) {
         user,
         targetUser,
         command,
-        args
+        args,
+        ...(DENIED_PATTERN.test(line) && { denied: true })
     };
 }
 /**
@@ -962,7 +968,7 @@ function parseMultiLineSudoLogs(content) {
     return commands;
 }
 /**
- * Remove the action's own sudo commands from parsed logs
+ * Remove the action's own (successful) sudo commands from parsed logs
  *
  * @param commands - Parsed sudo commands
  * @param internalCommands - Internal commands as "<basename> <args>" (e.g. "cat /etc/resolv.conf")
@@ -971,6 +977,10 @@ function parseMultiLineSudoLogs(content) {
 function filterInternalSudoCommands(commands, internalCommands) {
     const internal = new Set(internalCommands);
     return commands.filter(cmd => {
+        // Refused attempts are always reported, even if they mimic an internal command
+        if (cmd.denied) {
+            return true;
+        }
         // Only system binaries are treated as internal - a same-named binary elsewhere is still reported
         const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
         if (!match) {

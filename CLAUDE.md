@@ -88,7 +88,7 @@ npm test             # Run Jest tests only
    - **Disable**: `disable-sudo` rewrites `/etc/sudoers.d/runner` to allow only the exact read-only validation commands (`getValidationSudoCommands()`)
    - **Custom Config**: Optionally apply custom sudoers configuration for runner user (validated with the active `visudo`)
    - **sudoers must be valid for BOTH implementations**: no wildcards in command arguments, no `Defaults!<alias>`/`log_allowed`
-   - **Never allow write/config commands** (tee, chmod, chown, mv, visudo, systemctl...) after restriction - sudo logging is therefore set up *before* restrictions are applied, and the action's own sudo commands are filtered from reports via `INTERNAL_SUDO_COMMANDS`
+   - **After restriction, only the read-only validation allowlist remains** - sudo logging is therefore set up *before* restrictions are applied, and the action's own sudo commands are filtered from reports via `INTERNAL_SUDO_COMMANDS`
 
 ### Validation System - `validation.ts`
 
