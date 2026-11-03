@@ -58,11 +58,32 @@ export function deduplicateSudoCommands(commands: SudoCommand[]): SudoCommand[] 
 }
 
 /**
+ * Join wrapped log entries back into single lines
+ * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
+ * continuation lines, which can split a command from its arguments:
+ *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
+ *       /etc/resolv.conf
+ */
+function joinContinuationLines(content: string): string[] {
+  const joined: string[] = [];
+
+  for (const line of content.split('\n')) {
+    if (/^\s+\S/.test(line) && joined.length > 0) {
+      joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
+    } else {
+      joined.push(line);
+    }
+  }
+
+  return joined;
+}
+
+/**
  * Parse sudo logs from string content
  * Handles both single-line and multi-line log formats
  */
 export function parseSudoLogsFromString(content: string): SudoCommand[] {
-  const lines = content.split('\n');
+  const lines = joinContinuationLines(content);
   const commands: SudoCommand[] = [];
 
   // First try single-line format (older sudo versions)
@@ -142,6 +163,27 @@ function parseMultiLineSudoLogs(content: string): SudoCommand[] {
   }
 
   return commands;
+}
+
+/**
+ * Remove the action's own sudo commands from parsed logs
+ *
+ * @param commands - Parsed sudo commands
+ * @param internalCommands - Internal commands as "<basename> <args>" (e.g. "cat /etc/resolv.conf")
+ * @returns Commands that were not run by the action itself
+ */
+export function filterInternalSudoCommands(commands: SudoCommand[], internalCommands: string[]): SudoCommand[] {
+  const internal = new Set(internalCommands);
+
+  return commands.filter(cmd => {
+    // Only system binaries are treated as internal - a same-named binary elsewhere is still reported
+    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+    if (!match) {
+      return true;
+    }
+    const key = cmd.args ? `${match[1]} ${cmd.args}` : match[1];
+    return !internal.has(key);
+  });
 }
 
 /**
