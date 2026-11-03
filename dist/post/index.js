@@ -1508,8 +1508,9 @@ const fs_1 = __nccwpck_require__(9896);
  */
 const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'];
 class SystemValidator {
+    validationStateFile = '/tmp/safer-runner-validation-state.json';
+    criticalFiles;
     constructor(criticalFiles) {
-        this.validationStateFile = '/tmp/safer-runner-validation-state.json';
         // Allow injection of critical files for testing
         this.criticalFiles = criticalFiles || [
             '/etc/dnsmasq.conf',
