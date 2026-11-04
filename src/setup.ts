@@ -389,10 +389,39 @@ export async function setupDNSMasq(
   return blockedSubdomains;
 }
 
+const DNSMASQ_START_ATTEMPTS = 2;
+
+/**
+ * (Re)start dnsmasq, retrying once if it fails
+ *
+ * dnsmasq occasionally fails to start on hosted runners right after systemd-resolved
+ * restarts. On failure the unit journal and port 53 listeners are printed so the cause
+ * is visible in the job log.
+ */
+export async function startDnsmasq(retryDelayMs: number = 2000): Promise<void> {
+  for (let attempt = 1; attempt <= DNSMASQ_START_ATTEMPTS; attempt++) {
+    const exitCode = await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq'], { ignoreReturnCode: true });
+    if (exitCode === 0) {
+      return;
+    }
+
+    core.warning(`dnsmasq failed to start (attempt ${attempt}/${DNSMASQ_START_ATTEMPTS})`);
+    await exec.exec('sudo', ['journalctl', '-xeu', 'dnsmasq', '--no-pager', '-n', '30'], { ignoreReturnCode: true });
+    await exec.exec('sudo', ['ss', '-lntup', 'sport = :53'], { ignoreReturnCode: true });
+
+    if (attempt < DNSMASQ_START_ATTEMPTS) {
+      await exec.exec('sudo', ['systemctl', 'reset-failed', 'dnsmasq'], { ignoreReturnCode: true });
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+    }
+  }
+
+  throw new Error('dnsmasq failed to start - see the journal output above');
+}
+
 export async function restartServices(logFile?: string): Promise<void> {
   // Restart systemd-resolved and start dnsmasq
   await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-  await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
+  await startDnsmasq();
 
   // After dnsmasq starts and creates log files, make them readable by all
   if (logFile) {

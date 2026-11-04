@@ -599,6 +599,7 @@ exports.setupIptablesLogging = setupIptablesLogging;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
+exports.startDnsmasq = startDnsmasq;
 exports.restartServices = restartServices;
 exports.finalizeFirewallRules = finalizeFirewallRules;
 const core = __importStar(__nccwpck_require__(7484));
@@ -930,10 +931,34 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsern
     await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
     return blockedSubdomains;
 }
+const DNSMASQ_START_ATTEMPTS = 2;
+/**
+ * (Re)start dnsmasq, retrying once if it fails
+ *
+ * dnsmasq occasionally fails to start on hosted runners right after systemd-resolved
+ * restarts. On failure the unit journal and port 53 listeners are printed so the cause
+ * is visible in the job log.
+ */
+async function startDnsmasq(retryDelayMs = 2000) {
+    for (let attempt = 1; attempt <= DNSMASQ_START_ATTEMPTS; attempt++) {
+        const exitCode = await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq'], { ignoreReturnCode: true });
+        if (exitCode === 0) {
+            return;
+        }
+        core.warning(`dnsmasq failed to start (attempt ${attempt}/${DNSMASQ_START_ATTEMPTS})`);
+        await exec.exec('sudo', ['journalctl', '-xeu', 'dnsmasq', '--no-pager', '-n', '30'], { ignoreReturnCode: true });
+        await exec.exec('sudo', ['ss', '-lntup', 'sport = :53'], { ignoreReturnCode: true });
+        if (attempt < DNSMASQ_START_ATTEMPTS) {
+            await exec.exec('sudo', ['systemctl', 'reset-failed', 'dnsmasq'], { ignoreReturnCode: true });
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        }
+    }
+    throw new Error('dnsmasq failed to start - see the journal output above');
+}
 async function restartServices(logFile) {
     // Restart systemd-resolved and start dnsmasq
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-    await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
+    await startDnsmasq();
     // After dnsmasq starts and creates log files, make them readable by all
     if (logFile) {
         // Wait a moment for dnsmasq to create the log file
@@ -1179,8 +1204,8 @@ exports.INTERNAL_SUDO_COMMANDS = [
 /**
  * Generate the sudoers rules the action always needs for post-action validation
  *
- * Only exact read-only commands are allowed: no wildcards (unsupported by sudo-rs
- * and they match arbitrary extra arguments in classic sudo), and nothing that can
+ * Only exact read-only commands are allowed: no wildcards (embedded wildcards are
+ * unsupported by sudo-rs, and any wildcard matches arbitrary extra arguments), and nothing that can
  * write files or modify sudo/syslog configuration.
  *
  * @param username - The username to generate rules for
@@ -1232,7 +1257,8 @@ async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CO
         core.error('Invalid sudoers syntax. Please check your sudo-config input.');
         if (sudoFlavour === 'sudo-rs') {
             core.error('This runner uses sudo-rs (the default sudo on Ubuntu 25.10+ / 26.04), which supports a subset of sudoers: ' +
-                'wildcards are not allowed in command arguments (list each exact command or allow the bare command path) ' +
+                'a wildcard may only be the whole argument list (`/usr/bin/apt-get *`), not embedded among other arguments ' +
+                '(`/usr/bin/chmod * /tmp/x`), ' +
                 'and many Defaults settings are not recognised.');
         }
         throw new Error(`Invalid sudoers configuration: ${(visudo.stderr || visudo.stdout).trim()}`);

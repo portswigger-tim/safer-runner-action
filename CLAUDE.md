@@ -87,7 +87,7 @@ npm test             # Run Jest tests only
      - sudo-rs: no logfile support - rsyslog rule `/etc/rsyslog.d/10-sudo-safer-runner.conf` copies sudo's syslog messages into the same file/format
    - **Disable**: `disable-sudo` rewrites `/etc/sudoers.d/runner` to allow only the exact read-only validation commands (`getValidationSudoCommands()`)
    - **Custom Config**: Optionally apply custom sudoers configuration for runner user (validated with the active `visudo`)
-   - **sudoers must be valid for BOTH implementations**: no wildcards in command arguments, no `Defaults!<alias>`/`log_allowed`
+   - **sudoers must be valid for BOTH implementations**: no wildcards embedded among command arguments (sudo-rs only accepts a lone trailing `*`), no `Defaults!<alias>`/`log_allowed`
    - **After restriction, only the read-only validation allowlist remains** - sudo logging is therefore set up *before* restrictions are applied, and the action's own sudo commands are filtered from reports via `INTERNAL_SUDO_COMMANDS`
 
 ### Validation System - `validation.ts`

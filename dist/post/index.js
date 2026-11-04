@@ -1405,8 +1405,8 @@ exports.INTERNAL_SUDO_COMMANDS = [
 /**
  * Generate the sudoers rules the action always needs for post-action validation
  *
- * Only exact read-only commands are allowed: no wildcards (unsupported by sudo-rs
- * and they match arbitrary extra arguments in classic sudo), and nothing that can
+ * Only exact read-only commands are allowed: no wildcards (embedded wildcards are
+ * unsupported by sudo-rs, and any wildcard matches arbitrary extra arguments), and nothing that can
  * write files or modify sudo/syslog configuration.
  *
  * @param username - The username to generate rules for
@@ -1458,7 +1458,8 @@ async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CO
         core.error('Invalid sudoers syntax. Please check your sudo-config input.');
         if (sudoFlavour === 'sudo-rs') {
             core.error('This runner uses sudo-rs (the default sudo on Ubuntu 25.10+ / 26.04), which supports a subset of sudoers: ' +
-                'wildcards are not allowed in command arguments (list each exact command or allow the bare command path) ' +
+                'a wildcard may only be the whole argument list (`/usr/bin/apt-get *`), not embedded among other arguments ' +
+                '(`/usr/bin/chmod * /tmp/x`), ' +
                 'and many Defaults settings are not recognised.');
         }
         throw new Error(`Invalid sudoers configuration: ${(visudo.stderr || visudo.stdout).trim()}`);

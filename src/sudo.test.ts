@@ -260,6 +260,7 @@ describe('sudo module', () => {
       ).rejects.toThrow(/wildcards are not allowed/);
 
       expect(core.error).toHaveBeenCalledWith(expect.stringContaining('sudo-rs'));
+      expect(core.error).toHaveBeenCalledWith(expect.stringContaining('whole argument list'));
       expect(sudoCalls()).toContain('rm -f /tmp/runner-sudoers.tmp');
       expect(sudoCalls()).not.toContain('mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner');
     });
