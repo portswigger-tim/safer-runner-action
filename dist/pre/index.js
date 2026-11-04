@@ -395,6 +395,7 @@ exports.parseSudoLogLine = parseSudoLogLine;
 exports.deduplicateSudoCommands = deduplicateSudoCommands;
 exports.parseSudoLogsFromString = parseSudoLogsFromString;
 exports.filterInternalSudoCommands = filterInternalSudoCommands;
+exports.isDangerousSudoCommand = isDangerousSudoCommand;
 exports.generateSudoersConfig = generateSudoersConfig;
 /**
  * Classic sudo prefixes refused commands with a reason, e.g.
@@ -561,37 +562,159 @@ function filterInternalSudoCommands(commands, internalCommands) {
  *
  * Note: No filtering needed - commands are captured after setup is complete
  */
+/**
+ * Binaries that can typically be escalated to full root even when "restricted" via
+ * sudoers - because they run arbitrary code (shells, interpreters, package/service
+ * managers), write arbitrary files as root (tee/dd/cp/chmod/...), or offer a shell
+ * escape (editors/pagers). Matched by basename so the path doesn't matter.
+ *
+ * When one of these appears in observed usage we emit the suggested rule COMMENTED OUT
+ * with a warning, rather than presenting it as a safe restriction.
+ */
+const DANGEROUS_SUDO_BASENAMES = new Set([
+    // shells / interpreters - arbitrary code execution
+    'sh',
+    'bash',
+    'zsh',
+    'dash',
+    'ksh',
+    'fish',
+    'csh',
+    'tcsh',
+    'perl',
+    'python',
+    'python2',
+    'python3',
+    'ruby',
+    'php',
+    'node',
+    'nodejs',
+    'lua',
+    'awk',
+    'gawk',
+    'tclsh',
+    'expect',
+    // arbitrary file write / ownership - trivial root via writing to system files
+    'tee',
+    'dd',
+    'cp',
+    'mv',
+    'chmod',
+    'chown',
+    'chgrp',
+    'install',
+    'truncate',
+    'ln',
+    'rsync',
+    'cpio',
+    // exec wrappers that can run any command
+    'env',
+    'nohup',
+    'setsid',
+    'xargs',
+    'find',
+    'nice',
+    'ionice',
+    'timeout',
+    'stdbuf',
+    'unshare',
+    'chroot',
+    'nsenter',
+    // editors / pagers - shell escape
+    'vi',
+    'vim',
+    'nvim',
+    'nano',
+    'emacs',
+    'less',
+    'more',
+    'man',
+    'ed',
+    'pico',
+    'view',
+    // package / build / service managers - run arbitrary code as root (hooks, scripts, units)
+    'apt',
+    'apt-get',
+    'aptitude',
+    'dpkg',
+    'snap',
+    'pip',
+    'pip2',
+    'pip3',
+    'gem',
+    'npm',
+    'npx',
+    'yarn',
+    'make',
+    'gcc',
+    'cc',
+    'systemctl',
+    'service',
+    'journalctl',
+    'docker',
+    'podman',
+    'ctr',
+    'nerdctl',
+    // privilege / account management
+    'su',
+    'sudo',
+    'visudo',
+    'useradd',
+    'usermod',
+    'adduser',
+    'passwd',
+    'crontab',
+    'at',
+    'chpasswd'
+]);
+/**
+ * Whether a sudo command path is escalation-prone (see DANGEROUS_SUDO_BASENAMES).
+ */
+function isDangerousSudoCommand(command) {
+    const base = command.split('/').pop() || command;
+    return DANGEROUS_SUDO_BASENAMES.has(base);
+}
+/**
+ * Generate suggested sudoers rules from observed sudo usage.
+ *
+ * This is ADVISORY output (a starting point for the `sudo-config` input), not a
+ * guarantee of safety. Design choices that make it least-privilege:
+ * - run-as the exact target user observed (usually root), not `(ALL)`;
+ * - pin the EXACT arguments observed. A bare command with no argument spec would
+ *   allow ANY arguments in sudoers, so a no-argument invocation is emitted as
+ *   `cmd ""` (require no args), never a bare `cmd`;
+ * - escalation-prone binaries (shells, interpreters, file-writers, package/service
+ *   managers, ...) are emitted COMMENTED OUT with a warning, because allowing them
+ *   usually defeats the restriction.
+ */
 function generateSudoersConfig(commands, username = 'runner') {
     if (commands.length === 0) {
         return '';
     }
-    // Group commands by executable
-    const commandsByExecutable = new Map();
+    // De-duplicate on the exact (runAs, command, args) invocation
+    const seen = new Set();
+    const lines = [];
     for (const cmd of commands) {
-        if (!commandsByExecutable.has(cmd.command)) {
-            commandsByExecutable.set(cmd.command, new Set());
+        const runAs = cmd.targetUser || 'root';
+        const key = `${runAs}\u0000${cmd.command}\u0000${cmd.args}`;
+        if (seen.has(key)) {
+            continue;
         }
-        commandsByExecutable.get(cmd.command).add(cmd.args);
-    }
-    // Generate sudoers rules
-    const rules = [];
-    for (const [executable, argsSet] of commandsByExecutable.entries()) {
-        const args = Array.from(argsSet);
-        if (args.length === 1 && args[0] === '') {
-            // No arguments - allow bare command
-            rules.push(`${username} ALL=(ALL) NOPASSWD: ${executable}`);
-        }
-        else if (args.length === 1) {
-            // Single argument pattern - allow specific invocation
-            rules.push(`${username} ALL=(ALL) NOPASSWD: ${executable} ${args[0]}`);
+        seen.add(key);
+        // Pin exact args; `""` means "no arguments allowed" (a bare command allows any args).
+        const argSpec = cmd.args ? cmd.args : '""';
+        const rule = `${username} ALL=(${runAs}) NOPASSWD: ${cmd.command} ${argSpec}`;
+        if (isDangerousSudoCommand(cmd.command)) {
+            lines.push(`# WARNING: '${cmd.command}' can usually be escalated to full root (shell escape,`);
+            lines.push(`#   arbitrary file write, or running code as root). Uncomment only if you are sure`);
+            lines.push(`#   this exact invocation is safe - otherwise allowing it defeats the restriction.`);
+            lines.push(`# ${rule}`);
         }
         else {
-            // Multiple argument patterns - allow executable with any args
-            rules.push(`${username} ALL=(ALL) NOPASSWD: ${executable}`);
-            rules.push(`# Used with: ${args.slice(0, 3).join(', ')}${args.length > 3 ? ', ...' : ''}`);
+            lines.push(rule);
         }
     }
-    return rules.join('\n');
+    return lines.join('\n');
 }
 
 
@@ -1559,23 +1682,30 @@ function generateSudoConfigAdvice(commands) {
     }
     const sudoersConfig = (0, sudo_parser_1.generateSudoersConfig)(commands, exports.RUNNER_USERNAME);
     let advice = `### Sudo Configuration\n\n`;
-    advice += `Based on observed sudo usage, you can restrict sudo access with this configuration:\n\n`;
+    advice += `Your workflow used sudo. Below is a **starting point** for restricting it via the \`sudo-config\` `;
+    advice += `input, generated from the exact commands observed. **Review it before use** — it is derived from `;
+    advice += `observed usage, not a guarantee of safety.\n\n`;
     advice += `\`\`\`yaml\n`;
     advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
     advice += `  with:\n`;
     advice += `    sudo-config: |\n`;
-    // Indent each line of the sudoers config
+    // Indent each line of the sudoers config (keep comment lines - they carry the warnings)
     const lines = sudoersConfig.split('\n');
     for (const line of lines) {
-        if (line.trim()) {
+        if (line.length > 0) {
             advice += `      ${line}\n`;
         }
     }
     advice += `\`\`\`\n\n`;
-    advice += `This configuration:\n`;
-    advice += `- ✅ Allows only the commands your workflow actually needs\n`;
-    advice += `- ✅ Prevents malicious code from running arbitrary sudo commands\n`;
-    advice += `- ✅ Automatically includes required validation commands\n\n`;
+    advice += `Before you apply this:\n`;
+    advice += `- ⚠️ Lines starting with \`#\` are commands that can usually be escalated to full root `;
+    advice += `(shells, interpreters, file-writers like tee/dd/cp, package/service managers, docker). They are `;
+    advice += `**commented out** — uncomment one only if you are certain that exact invocation is safe.\n`;
+    advice += `- Each rule pins the **exact arguments** observed and runs as the observed user, not \`(ALL)\`. `;
+    advice += `A command with no argument restriction would allow *any* arguments, so avoid broadening these.\n`;
+    advice += `- Keep only what your workflow strictly needs; remove the rest.\n`;
+    advice += `- If you don't actually need sudo, set \`disable-sudo: true\` instead.\n`;
+    advice += `- The action's own required validation commands are added automatically — you don't need to list them.\n\n`;
     return advice;
 }
 

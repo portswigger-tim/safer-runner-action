@@ -368,16 +368,21 @@ describe('Report Formatter', () => {
     it('should suggest sudo-config when sudo commands are used', () => {
       const resolutions: DnsResolution[] = [{ domain: 'example.com', ip: '1.2.3.4', status: 'RESOLVED' }];
       const sudoCommands: SudoCommand[] = [
-        { timestamp: '2024-01-01', user: 'runner', targetUser: 'root', command: '/usr/bin/docker', args: '--version' },
-        { timestamp: '2024-01-01', user: 'runner', targetUser: 'root', command: '/usr/bin/apt-get', args: 'update' }
+        { timestamp: '2024-01-01', user: 'runner', targetUser: 'root', command: '/usr/bin/id', args: '' },
+        { timestamp: '2024-01-01', user: 'runner', targetUser: 'root', command: '/usr/bin/docker', args: '--version' }
       ];
 
       const result = generateConfigurationAdvice(resolutions, sudoCommands);
 
       expect(result).toContain('sudo-config: |');
-      expect(result).toContain('runner ALL=(ALL) NOPASSWD: /usr/bin/docker --version');
-      expect(result).toContain('runner ALL=(ALL) NOPASSWD: /usr/bin/apt-get update');
-      expect(result).not.toContain('disable-sudo: true');
+      // run-as the observed user (root), not (ALL); no-arg command pinned with ""
+      expect(result).toContain('runner ALL=(root) NOPASSWD: /usr/bin/id ""');
+      expect(result).not.toContain('(ALL)');
+      // docker is escalation-prone -> commented out with a warning, not an active rule
+      expect(result).toContain('# runner ALL=(root) NOPASSWD: /usr/bin/docker --version');
+      expect(result).toContain('WARNING');
+      // must not emit disable-sudo as the generated config line (it may appear as prose advice)
+      expect(result).not.toContain('\n    disable-sudo: true\n');
     });
 
     it('should suggest disable-sudo when no sudo commands and no domains', () => {

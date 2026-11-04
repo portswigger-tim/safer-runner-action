@@ -249,16 +249,26 @@ export function generateConfigurationAdvice(dnsResolutions: DnsResolution[], sud
   if (hasDomains || hasSudoCommands || noSudoCommands) {
     advice += `> **Security Note**: This configuration follows the principle of least privilege`;
     if (hasDomains && hasSudoCommands) {
-      advice += ` by restricting network access to specific domains and sudo access to specific commands.\n\n`;
+      advice += ` by restricting network access to specific domains and suggesting a tighter sudo policy.\n\n`;
     } else if (hasDomains && noSudoCommands) {
       advice += ` by restricting network access to specific domains and disabling sudo access.\n\n`;
     } else if (hasSudoCommands) {
-      advice += ` by restricting sudo access to specific commands.\n\n`;
+      advice += ` by suggesting a tighter sudo policy.\n\n`;
     } else if (noSudoCommands) {
       advice += ` by disabling sudo access.\n\n`;
     } else {
       advice += `.\n\n`;
     }
+  }
+
+  // Honest caveat for the generated sudo policy: it is a reviewed-before-use starting point,
+  // not a guarantee - see the WARNING lines and the least-privilege guidance.
+  if (hasSudoCommands) {
+    advice += `> ⚠️ **Review the \`sudo-config\` before using it.** It is generated from observed usage. `;
+    advice += `Lines starting with \`#\` are commands that can usually be escalated to full root `;
+    advice += `(shells, interpreters, file-writers, package/service managers, docker) and are left commented out. `;
+    advice += `Each active rule pins the exact arguments observed and runs as the observed user. `;
+    advice += `If you don't need sudo at all, use \`disable-sudo: true\`.\n\n`;
   }
 
   return advice;

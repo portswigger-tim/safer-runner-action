@@ -3,6 +3,7 @@ import {
   deduplicateSudoCommands,
   parseSudoLogsFromString,
   generateSudoersConfig,
+  isDangerousSudoCommand,
   filterInternalSudoCommands,
   type SudoCommand
 } from './sudo-parser';
@@ -298,106 +299,87 @@ another invalid line`;
   });
 
   describe('generateSudoersConfig', () => {
-    it('should generate config for single command with args', () => {
-      const commands: SudoCommand[] = [
-        {
-          timestamp: 'Oct  3 13:06:55',
-          user: 'runner',
-          targetUser: 'root',
-          command: '/usr/bin/docker',
-          args: 'build .'
-        }
-      ];
-
-      const result = generateSudoersConfig(commands);
-      expect(result).toBe('runner ALL=(ALL) NOPASSWD: /usr/bin/docker build .');
+    const mk = (command: string, args: string, targetUser = 'root'): SudoCommand => ({
+      timestamp: 'Oct  3 13:06:55',
+      user: 'runner',
+      targetUser,
+      command,
+      args
     });
 
-    it('should generate config for command without args', () => {
-      const commands: SudoCommand[] = [
-        {
-          timestamp: 'Oct  3 13:06:55',
-          user: 'runner',
-          targetUser: 'root',
-          command: '/usr/bin/whoami',
-          args: ''
-        }
-      ];
-
-      const result = generateSudoersConfig(commands);
-      expect(result).toBe('runner ALL=(ALL) NOPASSWD: /usr/bin/whoami');
+    it('runs as the observed target user, not (ALL), and pins exact args', () => {
+      const result = generateSudoersConfig([mk('/usr/sbin/iptables', '-L OUTPUT -n')]);
+      expect(result).toBe('runner ALL=(root) NOPASSWD: /usr/sbin/iptables -L OUTPUT -n');
+      expect(result).not.toContain('(ALL)');
     });
 
-    it('should generate config for multiple commands', () => {
-      const commands: SudoCommand[] = [
-        {
-          timestamp: 'Oct  3 13:06:55',
-          user: 'runner',
-          targetUser: 'root',
-          command: '/usr/bin/docker',
-          args: 'build .'
-        },
-        {
-          timestamp: 'Oct  3 13:06:56',
-          user: 'runner',
-          targetUser: 'root',
-          command: '/usr/bin/npm',
-          args: 'install'
-        }
-      ];
-
-      const result = generateSudoersConfig(commands);
-      expect(result).toContain('runner ALL=(ALL) NOPASSWD: /usr/bin/docker build .');
-      expect(result).toContain('runner ALL=(ALL) NOPASSWD: /usr/bin/npm install');
+    it('emits `cmd ""` for a no-argument command (a bare command would allow any args)', () => {
+      const result = generateSudoersConfig([mk('/usr/bin/id', '')]);
+      expect(result).toBe('runner ALL=(root) NOPASSWD: /usr/bin/id ""');
     });
 
-    it('should handle command with multiple different args', () => {
-      const commands: SudoCommand[] = [
-        {
-          timestamp: 'Oct  3 13:06:55',
-          user: 'runner',
-          targetUser: 'root',
-          command: '/usr/bin/docker',
-          args: 'build .'
-        },
-        {
-          timestamp: 'Oct  3 13:06:56',
-          user: 'runner',
-          targetUser: 'root',
-          command: '/usr/bin/docker',
-          args: 'push image'
-        },
-        {
-          timestamp: 'Oct  3 13:06:57',
-          user: 'runner',
-          targetUser: 'root',
-          command: '/usr/bin/docker',
-          args: 'run -it image'
-        }
-      ];
-
-      const result = generateSudoersConfig(commands);
-      expect(result).toContain('runner ALL=(ALL) NOPASSWD: /usr/bin/docker');
-      expect(result).toContain('# Used with:');
+    it('comments out escalation-prone commands with a warning', () => {
+      const result = generateSudoersConfig([mk('/usr/bin/docker', 'run -it image')]);
+      expect(result).toContain('# WARNING:');
+      expect(result).toContain('# runner ALL=(root) NOPASSWD: /usr/bin/docker run -it image');
+      // the active (uncommented) rule must NOT be present
+      expect(result).not.toMatch(/^runner ALL=\(root\) NOPASSWD: \/usr\/bin\/docker/m);
     });
 
-    it('should use custom username', () => {
-      const commands: SudoCommand[] = [
-        {
-          timestamp: 'Oct  3 13:06:55',
-          user: 'testuser',
-          targetUser: 'root',
-          command: '/usr/bin/docker',
-          args: 'build .'
-        }
-      ];
-
-      const result = generateSudoersConfig(commands, 'testuser');
-      expect(result).toContain('testuser ALL=(ALL) NOPASSWD:');
+    it('comments out package managers and file-writers (apt-get, tee)', () => {
+      const result = generateSudoersConfig([mk('/usr/bin/apt-get', 'update'), mk('/usr/bin/tee', '/etc/hosts')]);
+      expect(result).toContain('# runner ALL=(root) NOPASSWD: /usr/bin/apt-get update');
+      expect(result).toContain('# runner ALL=(root) NOPASSWD: /usr/bin/tee /etc/hosts');
     });
 
-    it('should handle empty array', () => {
+    it('emits a separate exact rule per distinct invocation (no "any args" fallback)', () => {
+      const result = generateSudoersConfig([
+        mk('/usr/bin/systemctl', 'restart nginx'),
+        mk('/usr/bin/systemctl', 'status nginx')
+      ]);
+      // systemctl is escalation-prone, so both are commented, but each exact invocation appears
+      expect(result).toContain('# runner ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx');
+      expect(result).toContain('# runner ALL=(root) NOPASSWD: /usr/bin/systemctl status nginx');
+      // never the unrestricted bare form
+      expect(result).not.toMatch(/NOPASSWD: \/usr\/bin\/systemctl\s*$/m);
+    });
+
+    it('de-duplicates identical invocations', () => {
+      const result = generateSudoersConfig([mk('/usr/bin/id', ''), mk('/usr/bin/id', '')]);
+      expect(result).toBe('runner ALL=(root) NOPASSWD: /usr/bin/id ""');
+    });
+
+    it('uses a custom username', () => {
+      const result = generateSudoersConfig([mk('/usr/bin/id', '')], 'testuser');
+      expect(result).toContain('testuser ALL=(root) NOPASSWD:');
+    });
+
+    it('handles the empty array', () => {
       expect(generateSudoersConfig([])).toBe('');
+    });
+  });
+
+  describe('isDangerousSudoCommand', () => {
+    it('flags shells, interpreters, file-writers, package/service managers and docker', () => {
+      for (const c of [
+        '/bin/bash',
+        '/usr/bin/python3',
+        '/usr/bin/tee',
+        '/usr/bin/dd',
+        '/usr/bin/apt-get',
+        '/usr/bin/systemctl',
+        '/usr/bin/docker',
+        '/usr/bin/vim',
+        '/usr/bin/env'
+      ]) {
+        expect(isDangerousSudoCommand(c)).toBe(true);
+      }
+    });
+
+    it('does not flag narrow read-only tools', () => {
+      for (const c of ['/usr/bin/id', '/usr/bin/whoami', '/usr/sbin/iptables', '/usr/bin/cat']) {
+        expect(isDangerousSudoCommand(c)).toBe(false);
+      }
     });
   });
 });
