@@ -173,10 +173,21 @@ is only a real boundary alongside `disable-sudo` (§12), same as the exempt prox
    | `GIT_SSL_CAINFO` | bundle path | git (when not using system certs) |
    | `AWS_CA_BUNDLE` | bundle path | AWS CLI/SDKs |
    | `CURL_CA_BUNDLE` | bundle path | curl (explicit) |
-   | (Java) | `keytool -importcert` into `cacerts` | JVM clients (P1) |
 
    `bundle path` = the regenerated `/etc/ssl/certs/ca-certificates.crt` (CA + system roots),
    so clients that read a single bundle still trust the public web too.
+
+   **Java (not an env var — P1, verify on a runner):** on Debian/Ubuntu, if the
+   `ca-certificates-java` package is installed, `update-ca-certificates` (step 2) runs its
+   `jks-keystore` hook, which imports the system CAs into the *system* Java store
+   `/etc/ssl/certs/java/cacerts` — so a JVM whose `$JAVA_HOME/lib/security/cacerts` is
+   symlinked to that (the system OpenJDK default) is covered **for free**. BUT: (a) it's
+   conditional on that package being present; (b) `actions/setup-java` and toolcache JDKs
+   (Temurin/Zulu/Corretto) ship their **own** `cacerts` that is *not* symlinked and *not*
+   touched — those need an explicit `keytool -importcert` into the active JDK's `cacerts`
+   (or `-Djavax.net.ssl.trustStore`). Since most Java workflows pick a JDK via `setup-java`,
+   plan to import into the active `$JAVA_HOME` as well, not rely on the hook alone. Java has
+   no simple `*_CA_CERTS` env var. (Untested in the P0 spike.)
 
 **Decision: set these unconditionally whenever the proxy is active** (both analyze and
 enforce). Rationale: maximum compatibility with the fewest surprises; it is a *compatibility*
