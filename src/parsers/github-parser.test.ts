@@ -1,4 +1,11 @@
-import { getGitHubRequiredDomains, isGitHubDomain, isGitHubRelated } from './github-parser';
+import {
+  getGitHubRequiredDomains,
+  isGitHubDomain,
+  isGitHubRelated,
+  normalizeMetaDomain,
+  fetchGitHubActionsDomains,
+  resolveGitHubDomains
+} from './github-parser';
 
 describe('GitHub Parser', () => {
   describe('getGitHubRequiredDomains', () => {
@@ -135,6 +142,113 @@ describe('GitHub Parser', () => {
       for (const domain of safeDomains) {
         expect(isGitHubRelated(domain)).toBe(true);
       }
+    });
+  });
+
+  describe('normalizeMetaDomain', () => {
+    it('strips a leading wildcard (dnsmasq matches subdomains)', () => {
+      expect(normalizeMetaDomain('*.githubapp.com')).toBe('githubapp.com');
+      expect(normalizeMetaDomain('*.actions.githubusercontent.com')).toBe('actions.githubusercontent.com');
+    });
+
+    it('keeps specific domains as-is (lowercased, trimmed)', () => {
+      expect(normalizeMetaDomain('  ProductionResultsSA100.blob.core.windows.net ')).toBe(
+        'productionresultssa100.blob.core.windows.net'
+      );
+      expect(normalizeMetaDomain('ghcr.io')).toBe('ghcr.io');
+    });
+
+    it('drops over-broad shared namespaces even if meta lists them', () => {
+      // SECURITY: these are multi-tenant suffixes; allowing them wholesale is an exfil channel.
+      expect(normalizeMetaDomain('*.core.windows.net')).toBeNull();
+      expect(normalizeMetaDomain('*.githubusercontent.com')).toBeNull();
+      expect(normalizeMetaDomain('blob.core.windows.net')).toBeNull();
+      expect(normalizeMetaDomain('*.amazonaws.com')).toBeNull();
+    });
+
+    it('drops empty or still-wildcarded entries', () => {
+      expect(normalizeMetaDomain('')).toBeNull();
+      expect(normalizeMetaDomain('foo.*.bar.com')).toBeNull();
+    });
+  });
+
+  describe('fetchGitHubActionsDomains', () => {
+    const realFetch = global.fetch;
+    afterEach(() => {
+      global.fetch = realFetch;
+      jest.restoreAllMocks();
+    });
+
+    it('returns normalised domains from .domains.actions on success', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          domains: {
+            actions: [
+              '*.github.com',
+              '*.githubapp.com',
+              'productionresultssa200.blob.core.windows.net',
+              '*.core.windows.net' // must be filtered out
+            ]
+          }
+        })
+      }) as unknown as typeof fetch;
+
+      const result = await fetchGitHubActionsDomains();
+      expect(result).toContain('github.com');
+      expect(result).toContain('githubapp.com');
+      expect(result).toContain('productionresultssa200.blob.core.windows.net');
+      expect(result).not.toContain('core.windows.net');
+      expect(result).not.toContain('*.core.windows.net');
+    });
+
+    it('returns null on a non-OK response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => ({}) }) as unknown as typeof fetch;
+      expect(await fetchGitHubActionsDomains()).toBeNull();
+    });
+
+    it('returns null when the fetch throws (network/timeout)', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('network down')) as unknown as typeof fetch;
+      expect(await fetchGitHubActionsDomains()).toBeNull();
+    });
+
+    it('returns null when .domains.actions is missing or empty', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ domains: { actions: [] } })
+      }) as unknown as typeof fetch;
+      expect(await fetchGitHubActionsDomains()).toBeNull();
+    });
+  });
+
+  describe('resolveGitHubDomains', () => {
+    const realFetch = global.fetch;
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('prefers the live meta list and unions it with the core domains', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ domains: { actions: ['productionresultssa200.blob.core.windows.net'] } })
+      }) as unknown as typeof fetch;
+
+      const { domains, source } = await resolveGitHubDomains();
+      expect(source).toBe('meta');
+      // core domain always present
+      expect(domains).toContain('github.com');
+      // live account present even though it is NOT in the static snapshot
+      expect(domains).toContain('productionresultssa200.blob.core.windows.net');
+      // static snapshot accounts not re-added from the stale list when meta succeeds
+      expect(domains).not.toContain('productionresultssa0.blob.core.windows.net');
+    });
+
+    it('falls back to the static list when the fetch fails', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as unknown as typeof fetch;
+      const { domains, source } = await resolveGitHubDomains();
+      expect(source).toBe('static');
+      expect(domains).toEqual(getGitHubRequiredDomains());
+      expect(domains).toContain('productionresultssa0.blob.core.windows.net');
     });
   });
 });

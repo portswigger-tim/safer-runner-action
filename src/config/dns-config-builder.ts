@@ -44,6 +44,12 @@ export interface DnsConfigOptions {
   dnsUsername?: string;
   logFile?: string;
   cacheSize?: number;
+  /**
+   * GitHub required domains to allow. Defaults to the static list from
+   * getGitHubRequiredDomains(). Callers pass the runtime-resolved list (from
+   * api.github.com/meta) via resolveGitHubDomains() so the config stays current.
+   */
+  githubDomains?: string[];
 }
 
 export interface DnsConfigResult {
@@ -167,8 +173,8 @@ all-servers
     }
   }
 
-  // Add GitHub required domains
-  const githubDomains = getGitHubRequiredDomains();
+  // Add GitHub required domains (runtime-resolved list if provided, else static)
+  const githubDomains = options.githubDomains ?? getGitHubRequiredDomains();
   for (const domain of githubDomains) {
     // Skip domains that are in the risky subdomain blocklist
     if (mode === 'enforce' && RISKY_GITHUB_SUBDOMAINS.includes(domain as any)) {

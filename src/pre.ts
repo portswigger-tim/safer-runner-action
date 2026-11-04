@@ -10,6 +10,7 @@ import {
   setupSudoLogging,
   setupIptablesLogging
 } from './setup';
+import { resolveGitHubDomains } from './parsers/github-parser';
 
 /**
  * Pre-action hook: Establish security in analyze mode
@@ -24,6 +25,11 @@ import {
 async function run(): Promise<void> {
   try {
     core.info('🔍 Pre-action: Establishing security monitoring...');
+
+    // Resolve the GitHub allowlist from api.github.com/meta while normal DNS still
+    // works (before we repoint resolv.conf). Falls back to the static list on failure.
+    const { domains: githubDomains, source: githubDomainsSource } = await resolveGitHubDomains();
+    core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${githubDomainsSource})`);
 
     // Perform initial system setup
     const dnsUser = await performInitialSetup();
@@ -57,7 +63,8 @@ async function run(): Promise<void> {
       dnsUser.username,
       '/var/log/safer-runner/pre-dns.log',
       undefined,
-      undefined
+      undefined,
+      githubDomains
     );
 
     // Start services

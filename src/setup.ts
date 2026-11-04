@@ -364,7 +364,8 @@ export async function setupDNSMasq(
   dnsUsername: string,
   logFile?: string,
   primaryDnsServer?: string,
-  secondaryDnsServer?: string
+  secondaryDnsServer?: string,
+  githubDomains?: string[]
 ): Promise<string[]> {
   // Build DNS configuration using the config builder module
   const { config: dnsmasqConfig, blockedSubdomains } = buildDnsConfig({
@@ -374,7 +375,8 @@ export async function setupDNSMasq(
     dnsUsername,
     logFile,
     primaryDnsServer,
-    secondaryDnsServer
+    secondaryDnsServer,
+    githubDomains
   });
 
   // Write configuration to file

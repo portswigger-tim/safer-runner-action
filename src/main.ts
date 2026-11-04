@@ -19,6 +19,7 @@ import {
   getSudoLoggingConfigFile
 } from './sudo';
 import { disableDockerForRunner, stopDockerService } from './docker';
+import { resolveGitHubDomains } from './parsers/github-parser';
 
 async function run(): Promise<void> {
   try {
@@ -55,6 +56,12 @@ async function run(): Promise<void> {
     if (mode === 'enforce' && blockRiskySubdomains) {
       core.info('🔒 Risky GitHub subdomain blocking: ENABLED');
     }
+
+    // Resolve the GitHub allowlist from api.github.com/meta while DNS still resolves
+    // (the pre-hook's analyze mode, or the system resolver, still allows it here).
+    // Falls back to the static list on failure.
+    const { domains: githubDomains, source: githubDomainsSource } = await resolveGitHubDomains();
+    core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${githubDomainsSource})`);
 
     // Check if pre-action already ran and set up infrastructure
     const preUsername = core.getState('dns-user');
@@ -109,7 +116,8 @@ async function run(): Promise<void> {
       dnsUser.username,
       '/var/log/safer-runner/main-dns.log',
       primaryDnsServer,
-      secondaryDnsServer
+      secondaryDnsServer,
+      githubDomains
     );
 
     if (blockedSubdomains.length > 0) {
