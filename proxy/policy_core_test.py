@@ -85,6 +85,54 @@ class Http(unittest.TestCase):
         self.assertEqual(policy().decide_http("hosted-compute-a.githubapp.com").action, "allow")
 
 
+class Upstream(unittest.TestCase):
+    """The resolved-IP guard (review H1): an allowlisted name must not lead to internal IPs."""
+
+    def test_forbidden(self):
+        for ip in (
+            "169.254.169.254",  # IMDS
+            "127.0.0.1",
+            "127.1.2.3",
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.1.1",
+            "100.64.0.1",  # CGNAT
+            "100.127.255.254",
+            "0.0.0.0",
+            "168.63.129.16",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "::",
+            "fe80::1",
+            "fe80::1%eth0",
+            "fd00::1",
+            "fc00::1",
+            "::ffff:169.254.169.254",  # IPv4-mapped
+            "::ffff:10.0.0.1",
+            "not-an-ip",
+        ):
+            with self.subTest(ip=ip):
+                self.assertTrue(pc.forbidden_upstream(ip))
+
+    def test_allowed(self):
+        for ip in ("140.82.112.3", "1.1.1.1", "172.32.0.1", "100.128.0.1", "192.169.0.1", "2606:4700::1111"):
+            with self.subTest(ip=ip):
+                self.assertFalse(pc.forbidden_upstream(ip))
+
+    def test_pick(self):
+        self.assertEqual(pc.pick_upstream([]), (None, pc.UPSTREAM_UNRESOLVED))
+        self.assertEqual(pc.pick_upstream(["140.82.112.3"]), ("140.82.112.3", None))
+        # IPv4 preferred
+        self.assertEqual(pc.pick_upstream(["2606:4700::1111", "1.1.1.1"]), ("1.1.1.1", None))
+        self.assertEqual(pc.pick_upstream(["2606:4700::1111"]), ("2606:4700::1111", None))
+
+    def test_one_bad_answer_poisons_the_rest(self):
+        self.assertEqual(pc.pick_upstream(["1.1.1.1", "169.254.169.254"]), ("169.254.169.254", pc.UPSTREAM_FORBIDDEN))
+        self.assertEqual(pc.pick_upstream(["2606:4700::1111", "1.1.1.1", "fd00::1"]), ("fd00::1", pc.UPSTREAM_FORBIDDEN))
+
+
 class Config(unittest.TestCase):
     def test_bad_mode(self):
         with self.assertRaises(pc.PolicyError):

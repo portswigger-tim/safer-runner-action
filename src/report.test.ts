@@ -188,3 +188,36 @@ describe('humanBytes', () => {
     expect(humanBytes(5 * 1024 * 1024)).toBe('5.0 MiB');
   });
 });
+
+describe('upstream IP guard records (H1)', () => {
+  it('reports a name refused for resolving to an internal address as blocked', () => {
+    const hosts = summarizeFlows(
+      parseFlowLog(
+        [
+          {
+            ev: 'upstream',
+            verdict: 'BLOCK',
+            reason: 'upstream-ip-forbidden',
+            layer: 'ip',
+            host: 'imds.example.org',
+            dst: '169.254.169.254:80'
+          },
+          {
+            ev: 'http',
+            verdict: 'BLOCK',
+            reason: 'upstream-ip-forbidden',
+            layer: 'http',
+            host: 'imds.example.org',
+            error: 'Connection killed: safer-runner: upstream blocked (upstream-ip-forbidden)'
+          }
+        ]
+          .map(r => JSON.stringify(r))
+          .join('\n')
+      )
+    );
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).toMatchObject({ name: 'imds.example.org', verdict: 'BLOCK', connections: 1, requests: 1 });
+    expect(hosts[0].reasons).toEqual(['upstream-ip-forbidden']);
+    expect(hosts[0].dsts).toEqual(['169.254.169.254']);
+  });
+});

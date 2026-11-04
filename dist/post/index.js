@@ -117,6 +117,14 @@ all-servers
     }
     // Configure DNS policy based on mode
     if (mode === 'enforce') {
+        // Drop upstream answers in loopback / RFC 1918 / link-local (incl. IMDS) / ULA space, so an
+        // allowlisted name an attacker controls can't point at internal hosts (review H1). The
+        // Azure IMDS / wireserver are reached by IP, never by name, so they are unaffected.
+        // CGNAT (100.64/10) is not covered here; the proxy's upstream IP guard refuses it.
+        config += `# DNS-rebind protection: never hand out private/loopback/link-local addresses
+stop-dns-rebind
+
+`;
         // NXDOMAIN all unlisted DNS (default deny)
         config += 'server=\n';
     }
@@ -2295,7 +2303,7 @@ const DENIED = new Set(['BLOCK', 'WOULD_BLOCK']);
 function summarizeFlows(records) {
     const byKey = new Map();
     for (const r of records) {
-        if (!['tls', 'http', 'https'].includes(r.ev) || !r.verdict)
+        if (!['tls', 'http', 'https', 'upstream'].includes(r.ev) || !r.verdict)
             continue;
         const name = nameOf(r);
         const denied = DENIED.has(r.verdict);
@@ -2323,7 +2331,10 @@ function summarizeFlows(records) {
             addUnique(h.reasons, r.reason);
             addUnique(h.layers, r.layer);
         }
-        if (r.ev === 'tls') {
+        if (r.ev === 'upstream') {
+            h.connections++; // refused by the upstream IP guard (an internal address behind the name)
+        }
+        else if (r.ev === 'tls') {
             h.connections++;
             addUnique(h.kinds, r.passthrough ? 'passthrough' : denied ? 'tls' : 'intercept');
         }

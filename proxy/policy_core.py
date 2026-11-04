@@ -84,6 +84,64 @@ def matches(host, compiled):
     return bool(host) and any(c.match(host) for c in compiled)
 
 
+# Upstream addresses the proxy never connects to, whatever name led there (review H1): an
+# allowlisted name whose DNS an attacker controls must not become a route to the metadata
+# service, loopback or the private network. Explicit list (not ipaddress.is_private, whose
+# meaning changed between Python versions).
+FORBIDDEN_UPSTREAM_NETS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "0.0.0.0/8",  # "this network"
+        "10.0.0.0/8",  # RFC 1918
+        "100.64.0.0/10",  # CGNAT (RFC 6598) - dnsmasq's stop-dns-rebind does not cover it
+        "127.0.0.0/8",  # loopback
+        "169.254.0.0/16",  # link-local, incl. IMDS 169.254.169.254
+        "172.16.0.0/12",  # RFC 1918
+        "192.168.0.0/16",  # RFC 1918
+        "168.63.129.16/32",  # Azure wireserver (reached directly by the platform, never by name)
+        "224.0.0.0/4",  # multicast
+        "240.0.0.0/4",  # reserved + broadcast
+        "::/128",
+        "::1/128",
+        "fe80::/10",  # link-local
+        "fc00::/7",  # ULA
+        "ff00::/8",  # multicast
+    )
+)
+
+UPSTREAM_FORBIDDEN = "upstream-ip-forbidden"
+UPSTREAM_UNRESOLVED = "upstream-unresolved"
+
+
+def forbidden_upstream(ip):
+    """True if the proxy must not connect to ``ip`` (unparseable counts as forbidden)."""
+    try:
+        a = ipaddress.ip_address(str(ip).split("%", 1)[0])  # drop an IPv6 zone id
+    except ValueError:
+        return True
+    if a.version == 6 and a.ipv4_mapped is not None:
+        a = a.ipv4_mapped
+    return any(a.version == n.version and a in n for n in FORBIDDEN_UPSTREAM_NETS)
+
+
+def pick_upstream(addrs):
+    """Choose the address to pin from a name's resolved addresses (resolver order).
+
+    Returns ``(ip, reason)``: reason None means connect to ip; otherwise ip is the offending
+    address (None if nothing resolved). One forbidden address rejects the whole answer, so an
+    attacker can't hide an internal address behind a public one. IPv4 is preferred because
+    there is no IPv6 egress path for the proxy (review L2).
+    """
+    addrs = [str(a) for a in addrs if a]
+    if not addrs:
+        return None, UPSTREAM_UNRESOLVED
+    for a in addrs:
+        if forbidden_upstream(a):
+            return a, UPSTREAM_FORBIDDEN
+    v4 = [a for a in addrs if ":" not in a]
+    return (v4 or addrs)[0], None
+
+
 class Decision:
     __slots__ = ("action", "reason")
 
@@ -185,4 +243,7 @@ def selftest(policy):
         if matches(concrete, policy._deny):
             continue
         assert policy.decide_http(concrete, sni=probe).action == "block", "Host!=SNI not blocked"
+    for ip in ("169.254.169.254", "127.0.0.1", "10.0.0.1", "100.64.0.1", "::1", "::ffff:169.254.169.254"):
+        assert pick_upstream([ip])[1] == UPSTREAM_FORBIDDEN, f"upstream {ip} not refused"
+    assert pick_upstream(["140.82.112.3"]) == ("140.82.112.3", None), "public upstream refused"
     return True

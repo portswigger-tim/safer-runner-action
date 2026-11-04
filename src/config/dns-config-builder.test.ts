@@ -289,6 +289,20 @@ describe('DNS Config Builder', () => {
     });
   });
 
+  describe('buildDnsConfig - DNS-rebind protection (H1)', () => {
+    it('drops private/loopback/link-local upstream answers in enforce mode', () => {
+      const result = buildDnsConfig({ mode: 'enforce', allowedDomains: 'example.com', blockRiskySubdomains: true });
+      expect(result.config).toMatch(/^stop-dns-rebind$/m);
+      // no exemptions: nothing allowlisted legitimately resolves to internal addresses
+      expect(result.config).not.toMatch(/^rebind-(localhost|domain)-ok/m);
+    });
+
+    it('leaves analyze mode (monitoring only) unchanged', () => {
+      const result = buildDnsConfig({ mode: 'analyze', allowedDomains: '', blockRiskySubdomains: false });
+      expect(result.config).not.toMatch(/stop-dns-rebind/);
+    });
+  });
+
   describe('buildDnsConfig - DHCP disabling', () => {
     it('should explicitly disable DHCP functionality in analyze mode', () => {
       const result = buildDnsConfig({

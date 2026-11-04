@@ -13,14 +13,21 @@ Security rules (docs/DESIGN-v2.md section 4):
   * TLS: SNI checked at the ClientHello. No SNI / IP-literal SNI / not allowlisted -> closed
     without opening any upstream connection.
   * HTTP: Host checked on every request; inside intercepted TLS it must equal the SNI.
+  * Upstream IP guard (review H1): every upstream connection (intercept, passthrough, plain
+    HTTP) is resolved ONCE here, refused if any address is internal (loopback, link-local
+    incl. IMDS, RFC 1918, CGNAT, ULA...), and pinned to the checked address so mitmproxy
+    cannot re-resolve to something else.
   * Any exception in a hook fails closed.
 
 Every decision is written as one JSON line to the flow log.
 """
 
+import asyncio
 import json
 import logging
 import os
+import re
+import socket
 import time
 import traceback
 
@@ -38,6 +45,7 @@ CONFIG_PATH = os.environ.get("SAFER_RUNNER_POLICY", "/etc/safer-runner/policy.js
 MAX_PATH_LOG = 256
 
 logger = logging.getLogger("safer_runner")
+UPSTREAM_KILLED = re.compile(r"safer-runner: upstream blocked \(([a-z-]+)\)")
 
 
 def addr(a):
@@ -85,6 +93,7 @@ class SaferRunnerPolicy:
         self.cfg = {}
         self.flowlog = None
         self.conns = {}  # client connection id -> state recorded at the outer layer decision
+        self.pinned = {}  # server connection id -> (name, port) while connecting to the pinned IP
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -301,12 +310,68 @@ class SaferRunnerPolicy:
             rec["upstream"] = addr(flow.server_conn.peername)
         if error:
             rec["error"] = error[:200]
+            killed = UPSTREAM_KILLED.search(error)
+            if killed:  # server_connect refused the upstream: the request was blocked, not allowed
+                rec["verdict"], rec["reason"] = pc.BLOCK, killed.group(1)
         self.emit(**rec)
+
+    # ---------------------------------------------------------------- upstream IP guard
+
+    async def server_connect(self, data):
+        try:
+            await self._server_connect(data)
+        except Exception:  # noqa: BLE001
+            data.server.error = "safer-runner: upstream blocked (internal-error)"
+            self.emit(ev="error", where="server_connect", error=traceback.format_exc(limit=3),
+                      client=addr(data.client.peername))
+
+    async def _server_connect(self, data):
+        s = data.server
+        if self.policy is None:
+            s.error = "safer-runner: upstream blocked (no-policy)"
+            return
+        name, port = s.address
+        if pc.is_ip_literal(name):
+            addrs = [name]  # not repointed (analyze-mode would-block on an IP): check what was dialled
+        else:
+            try:
+                infos = await asyncio.get_running_loop().getaddrinfo(name, port, type=socket.SOCK_STREAM)
+                addrs = [i[4][0] for i in infos]
+            except OSError:
+                addrs = []
+        ip, reason = pc.pick_upstream(addrs)
+        if reason:
+            self.emit(ev="upstream", verdict=self._verdict("block"), reason=reason, layer="ip",
+                      host=None if pc.is_ip_literal(name) else name, dst=addr((ip, port)) if ip else None,
+                      resolved=addrs[:8], client=addr(data.client.peername))
+            if self.policy.enforce:
+                s.error = f"safer-runner: upstream blocked ({reason})"
+                return
+            if ip is None:
+                return  # analyze, unresolvable: mitmproxy fails the connect itself
+        if ip != name:
+            # Pin: connect to the address just checked, not whatever a second lookup returns.
+            if s.tls and s.sni is None:
+                s.sni = name
+            self.pinned[s.id] = s.address
+            s.address = (ip, port)
+
+    def _unpin(self, s):
+        """Put the name back once connected: mitmproxy matches reusable connections by address."""
+        orig = self.pinned.pop(s.id, None)
+        if orig is not None:
+            # Server.__setattr__ refuses address changes on an open connection; this is the
+            # same name the connection was opened for, so bypass it.
+            object.__setattr__(s, "address", orig)
+
+    def server_connect_error(self, data):
+        self._unpin(data.server)
 
     # ---------------------------------------------------------------- connections
 
     def server_connected(self, data):
         s = data.server
+        self._unpin(s)
         self.emit(ev="server-connect", address=addr(s.address), peername=addr(s.peername),
                   client=addr(data.client.peername))
 

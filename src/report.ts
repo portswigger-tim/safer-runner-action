@@ -42,7 +42,7 @@ const DENIED = new Set(['BLOCK', 'WOULD_BLOCK']);
 export function summarizeFlows(records: FlowRecord[]): HostSummary[] {
   const byKey = new Map<string, HostSummary>();
   for (const r of records) {
-    if (!['tls', 'http', 'https'].includes(r.ev) || !r.verdict) continue;
+    if (!['tls', 'http', 'https', 'upstream'].includes(r.ev) || !r.verdict) continue;
     const name = nameOf(r);
     const denied = DENIED.has(r.verdict);
     const key = `${denied ? 'D' : 'A'} ${name}`;
@@ -68,7 +68,9 @@ export function summarizeFlows(records: FlowRecord[]): HostSummary[] {
       addUnique(h.reasons, r.reason);
       addUnique(h.layers, r.layer);
     }
-    if (r.ev === 'tls') {
+    if (r.ev === 'upstream') {
+      h.connections++; // refused by the upstream IP guard (an internal address behind the name)
+    } else if (r.ev === 'tls') {
       h.connections++;
       addUnique(h.kinds, r.passthrough ? 'passthrough' : denied ? 'tls' : 'intercept');
     } else {
