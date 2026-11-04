@@ -68,9 +68,27 @@ choice open. Each one is a default, not a final answer; revisit in P2/P3.
 15. **mitmproxy "vendoring" = sha256-pinned download** of the official tarball (only `mitmdump`
     is extracted), done in parallel with the dnsmasq install. See timings in the P1 report;
     an Actions-cache layer can be added if the CDN is slow.
-16. **Strict privilege defaults are documented, not forced.** `disable-sudo` stays opt-in
-    (most workflows use sudo); enforce without it logs a warning that the controls are
-    advisory.
+16. **~~Strict privilege defaults are documented, not forced.~~ Superseded in
+    v2.0.0-beta.2 (review H2): enforce removes sudo by default.** `disable-sudo` is tri-state.
+    If it is unset, it is **on in enforce** and off in analyze. An explicit `true`/`false`
+    always wins. A non-empty `sudo-config` keeps sudo unless `disable-sudo: true` is also set.
+    action.yaml has no default for it, so "unset" and "false" stay distinguishable
+    (`resolveDisableSudo`). Enforce with sudo kept (`disable-sudo: false` or `sudo-config`)
+    runs as **ADVISORY**. The run log gets a titled warning, and the job-summary header reads
+    "enforce (ADVISORY — sudo retained, not an enforced boundary)" with a WARNING callout. In
+    analyze mode, the summary says if the job used sudo. **Behaviour change:** a
+    default-enforce job that runs `sudo` after the action now fails. It must set
+    `disable-sudo: false` (advisory) or drop the sudo use. The action's own post step (CA
+    teardown and validation reads) uses only exact sudoers entries and works either way.
+    Docker group access is still kept by default and is also root-equivalent. Enforce warns
+    about it in the log and the summary (CAUTION), but it is not flipped.
+    *Proxy unit:* the proxy is a transient `systemd-run` unit with `Restart=always`. `Restart=`
+    only covers the process exiting. An explicit `systemctl stop` (root only) stops it for good:
+    the transient unit is then garbage-collected, and egress fails closed (REDIRECT to a closed
+    port) until someone with root also flushes the rules. A non-transient unit or a watchdog
+    would not change that, because root can stop or mask either. What closes it is removing
+    root, which is now the enforce default. The runner user can't stop the unit (polkit) or
+    signal the process (different uid). The real-runner harness checks both.
 
 17. **Allow `-d 127.0.0.0/8` in the filter chain.** Found on the first real-runner run: after a
     nat OUTPUT `REDIRECT`, filter OUTPUT still sees the *original* output interface (`OUT=eth0`,
@@ -81,6 +99,37 @@ choice open. Each one is a default, not a final answer; revisit in P2/P3.
 18. **The enforce reject log records new connections only.** Packets from connections that
     predate the cutover, and ownerless RST/FIN from sockets closed by `ss -K`, are still rejected
     but no longer fill the report.
+
+19. **Upstream IP guard (review H1).** Repoint fixed *which name* the proxy connects to, but not
+    *which address* that name resolves to. An allowlisted name an attacker can point at
+    `169.254.169.254`, `127.0.0.1` or RFC 1918 space was an SSRF route through the proxy (the
+    proxy uid may reach any IP on 80/443). There are now two layers:
+    - **dnsmasq** (enforce only): `stop-dns-rebind`, with no `rebind-*-ok` exemptions. It drops
+      upstream answers in loopback, RFC 1918, link-local (IMDS) and ULA space. The Azure IMDS
+      and wireserver are reached by IP (firewall exemptions), never by name, so they are
+      unaffected.
+    - **addon** (`server_connect` hook, the one place every upstream connection goes through:
+      intercept, passthrough and plain HTTP): the name is resolved **once**. The connection
+      is refused if *any* resolved address is in `FORBIDDEN_UPSTREAM_NETS` (loopback,
+      link-local, RFC 1918, CGNAT `100.64/10` — which dnsmasq does not cover — the
+      wireserver, multicast/reserved, `::1`, `fe80::/10`, `fc00::/7`, IPv4-mapped forms). Otherwise
+      the connection is **pinned** to the checked IPv4 address (IPv4 preferred: there is no
+      IPv6 egress path, L2), so mitmproxy cannot re-resolve (no TOCTOU/rebind). The name is put
+      back on the connection after connect (bypassing `Server.__setattr__`), because mitmproxy
+      matches reusable connections by address. Enforce: `BLOCK`, the client gets a 502/close,
+      and the flow log has an `ev=upstream` record with reason `upstream-ip-forbidden` /
+      `upstream-unresolved`. Analyze: `WOULD_BLOCK` and the connection goes ahead (analyze is
+      monitoring only).
+    - Caveat: GitHub-hosted runners with Azure private networking, which reach private
+      services by name, can't use those names in enforce. There is no exemption input yet.
+
+20. **The fail-on-tampering baseline is root-owned (review M1).** It used to be
+    `/tmp/safer-runner-validation-state.json`, written and read by the runner user, so a step
+    could rewrite it to match a tampered state. It is now
+    `/etc/safer-runner/validation-state.json`, `root:root 0600`, with mode and owner set before
+    the content is written. Post reads it with `sudo -n cat <exact path>`, an exact entry in
+    the validation sudoers allowlist, so it works with `disable-sudo`. If the baseline is
+    missing or unreadable, the job is reported as not intact.
 
 ## Measured on GitHub-hosted runners (P1)
 

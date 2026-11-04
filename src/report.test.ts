@@ -1,5 +1,5 @@
 import { parseFlowLog } from './flowlog';
-import { buildReport, humanBytes, parseFirewallLog, suggestedAllowlist, summarizeFlows } from './report';
+import { buildReport, humanBytes, modeLabel, parseFirewallLog, suggestedAllowlist, summarizeFlows } from './report';
 
 const log = [
   { ev: 'start', ok: true },
@@ -219,5 +219,43 @@ describe('upstream IP guard records (H1)', () => {
     expect(hosts[0]).toMatchObject({ name: 'imds.example.org', verdict: 'BLOCK', connections: 1, requests: 1 });
     expect(hosts[0].reasons).toEqual(['upstream-ip-forbidden']);
     expect(hosts[0].dsts).toEqual(['169.254.169.254']);
+  });
+});
+
+describe('enforce labelling (review H2)', () => {
+  const base = { job: 'j', hosts: [], firewall: [], dnsRefused: [], selfTests: [], extraSections: [] };
+
+  it('labels enforce with sudo retained as ADVISORY in the header and the mode', () => {
+    const md = buildReport({ ...base, mode: 'enforce', sudoRetained: true });
+    expect(md.split('\n')[0]).toBe(
+      '# Safer Runner v2 egress report — enforce (ADVISORY — sudo retained, not an enforced boundary)'
+    );
+    expect(md).toContain('> [!WARNING]');
+    expect(md).toContain('**Mode:** ⚠️ ENFORCE (ADVISORY — sudo retained, not an enforced boundary)');
+  });
+
+  it('labels enforce with sudo removed as plain enforce', () => {
+    const md = buildReport({ ...base, mode: 'enforce', sudoRetained: false });
+    expect(md.split('\n')[0]).toBe('# Safer Runner v2 egress report');
+    expect(md).not.toContain('ADVISORY');
+    expect(md).toContain('**Mode:** 🔒 ENFORCE');
+  });
+
+  it('never labels analyze as advisory enforce', () => {
+    expect(modeLabel('analyze', true)).toBe('📊 ANALYZE');
+    expect(buildReport({ ...base, mode: 'analyze', sudoRetained: true })).not.toContain('ADVISORY —');
+  });
+
+  it('warns when enforce left docker (root-equivalent) in place', () => {
+    expect(buildReport({ ...base, mode: 'enforce', dockerRetained: true })).toContain('> [!CAUTION]');
+    expect(buildReport({ ...base, mode: 'enforce', dockerRetained: false })).not.toContain('[!CAUTION]');
+  });
+
+  it('analyze: tells a sudo-using job that enforce removes sudo by default', () => {
+    const md = buildReport({ ...base, mode: 'analyze', sudoCommandCount: 3 });
+    expect(md).toContain('**This job ran 3 sudo command(s)**');
+    expect(md).toContain('disable-sudo: false');
+    expect(md).not.toContain('should run unchanged');
+    expect(buildReport({ ...base, mode: 'analyze', sudoCommandCount: 0 })).toContain('should run unchanged');
   });
 });

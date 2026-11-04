@@ -485,9 +485,20 @@ async function runSetup(inputs) {
     if (inputs.stopDocker && inputs.disableDocker) {
         core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
     }
-    if (mode === 'enforce' && !inputs.disableSudo) {
-        core.warning('enforce mode without disable-sudo: any step can use sudo to remove the egress controls. ' +
-            'Set disable-sudo: true (and disable-docker or stop-docker) to make enforce a real boundary.');
+    // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
+    const sudoRetained = mode === 'enforce' && !inputs.disableSudo;
+    const dockerRetained = !inputs.disableDocker && !inputs.stopDocker;
+    if (sudoRetained) {
+        core.warning(`enforce is ADVISORY in this job: sudo is retained (${inputs.sudoConfig ? 'sudo-config is set' : 'disable-sudo: false'}), ` +
+            'so any step can use it to remove the egress controls. This is not an enforced boundary. ' +
+            'Remove disable-sudo: false / sudo-config to make enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo retained)' });
+    }
+    else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
+        core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
+    }
+    if (mode === 'enforce' && dockerRetained) {
+        core.warning('enforce with docker access: the docker group is root-equivalent, so a step can use docker to remove ' +
+            'the egress controls. Set disable-docker: true or stop-docker: true unless the job needs docker.');
     }
     const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
     core.info(`sudo implementation: ${sudoFlavour}`);
@@ -556,7 +567,7 @@ async function runSetup(inputs) {
         core.warning(msg);
     }
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
-        input: Buffer.from(JSON.stringify({ mode, at: new Date().toISOString() }) + '\n'),
+        input: Buffer.from(JSON.stringify({ mode, sudoRetained, dockerRetained, at: new Date().toISOString() }) + '\n'),
         silent: true
     });
     // 9. Privilege layer (carried from v1). Docker first: it needs sudo.
@@ -955,6 +966,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseMode = parseMode;
 exports.parsePort = parsePort;
 exports.parseSize = parseSize;
+exports.resolveDisableSudo = resolveDisableSudo;
 exports.readInputs = readInputs;
 const core = __importStar(__nccwpck_require__(7484));
 function parseMode(raw) {
@@ -977,22 +989,45 @@ function parseSize(raw) {
         throw new Error(`proxy-stream-large-bodies must look like 512k / 1m / 1g, got "${raw}"`);
     return s;
 }
+/**
+ * disable-sudo is tri-state (review H2). Unset means ON in enforce mode: with sudo any step
+ * can switch the egress controls off, so enforce is only a boundary without it. A non-empty
+ * sudo-config is an explicit sudo policy and keeps sudo unless disable-sudo is set. Explicit
+ * true/false always wins. action.yaml declares no default for disable-sudo, so the runner
+ * leaves the input empty when the workflow doesn't set it (getBooleanInput would collapse
+ * "unset" and "false"). Returns [effective value, whether it was defaulted].
+ */
+function resolveDisableSudo(raw, mode, sudoConfig) {
+    const v = (raw || '').trim();
+    if (v === '')
+        return [mode === 'enforce' && sudoConfig.trim() === '', true];
+    if (['true', 'True', 'TRUE'].includes(v))
+        return [true, false];
+    if (['false', 'False', 'FALSE'].includes(v))
+        return [false, false];
+    throw new Error(`disable-sudo must be true or false, got "${raw}"`);
+}
 function bool(name) {
     // getBooleanInput throws on an empty value (e.g. when inputs are absent in the pre step on a local action)
     const v = core.getInput(name);
     return v === '' ? false : core.getBooleanInput(name);
 }
 function readInputs() {
+    const mode = parseMode(core.getInput('mode'));
+    const sudoConfig = core.getInput('sudo-config');
+    // core.getInput reads the raw INPUT_DISABLE-SUDO variable ('' when unset - no action.yaml default)
+    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode, sudoConfig);
     return {
-        mode: parseMode(core.getInput('mode')),
+        mode,
         allowedDomains: core.getInput('allowed-domains'),
         passthroughDomains: core.getInput('passthrough-domains'),
         blockRiskySubdomains: core.getInput('block-risky-github-subdomains') === '' ? true : bool('block-risky-github-subdomains'),
         primaryDnsServer: core.getInput('primary-dns-server') || '9.9.9.9',
         // action.yaml supplies the Quad9 default; an explicit '' disables the secondary (M1)
         secondaryDnsServer: core.getInput('secondary-dns-server'),
-        disableSudo: bool('disable-sudo'),
-        sudoConfig: core.getInput('sudo-config'),
+        disableSudo,
+        disableSudoDefaulted,
+        sudoConfig,
         disableDocker: bool('disable-docker'),
         stopDocker: bool('stop-docker'),
         failOnTampering: bool('fail-on-tampering'),

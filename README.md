@@ -30,8 +30,8 @@ jobs:
             registry.npmjs.org
             pypi.org
             files.pythonhosted.org
-          disable-sudo: true      # strongly recommended with enforce (see "Limitations")
-          disable-docker: true
+          disable-docker: true    # docker access is root-equivalent (see "Limitations")
+          # enforce removes sudo by default; `disable-sudo: false` keeps it but makes enforce ADVISORY
       - uses: actions/checkout@v5
       - run: npm ci
 ```
@@ -53,6 +53,7 @@ so the runner, `actions/checkout`, artifacts and caches work without configurati
 | Domain fronting (`Host` ≠ SNI) | HTTP 403 |
 | Plain HTTP | Decided by `Host`; the upstream is the `Host` name, never the client's IP |
 | DNS to any server (`@8.8.8.8`, `@168.63.129.16`, ...) | Answered by the local dnsmasq. Only allowlisted names resolve |
+| An allowlisted name that resolves to an internal address (IMDS `169.254.169.254`, loopback, RFC 1918, CGNAT `100.64/10`, IPv6 ULA / link-local) | Refused. dnsmasq drops such answers (`stop-dns-rebind`) and the proxy resolves every upstream once, refuses internal addresses and connects to the address it checked (no second lookup) |
 | Any other TCP/UDP port, ICMP, IPv6 | Rejected |
 | A hole in the redirect (proxy bypassed) | Still rejected by the filter (fail closed) |
 
@@ -69,9 +70,10 @@ fails if either check fails.
 | `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted). Use only for single-tenant hosts whose clients can't trust the CA. The default is always included |
 | `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
 | `primary-dns-server` / `secondary-dns-server` | Quad9 | Upstream resolvers for dnsmasq |
-| `disable-sudo` / `sudo-config` | `false` / | Remove or restrict the runner's sudo after setup |
+| `disable-sudo` | **on in `enforce`**, off in `analyze` | Remove the runner's sudo after setup. In enforce, `disable-sudo: false` keeps sudo and the job is labelled **ADVISORY** (see below) |
+| `sudo-config` | | Custom sudoers rules for the runner user. Keeps sudo in enforce (labelled ADVISORY) unless `disable-sudo: true` is also set |
 | `disable-docker` / `stop-docker` | `false` | Remove docker group membership or stop Docker |
-| `fail-on-tampering` | `false` | Fail the job if the configuration changed during the job |
+| `fail-on-tampering` | `false` | Fail the job if the configuration changed during the job (the baseline is stored root-owned, `/etc/safer-runner/validation-state.json`) |
 | `proxy-port` | `8080` | Loopback port of the proxy (advanced) |
 | `proxy-stream-large-bodies` | `1m` | Stream rather than buffer bodies above this size (advanced) |
 
@@ -84,10 +86,28 @@ runner itself) and Docker pulls trust it. The action also exports `NODE_EXTRA_CA
 image. The private key exists only on tmpfs, readable only by the proxy user, and the post
 step deletes it.
 
+## Enforce removes sudo by default (changed in v2.0.0-beta.2)
+
+With sudo, any step can stop the proxy and flush the firewall, so enforce is only a boundary
+without it. Since **v2.0.0-beta.2, `mode: enforce` removes the runner's sudo by default**
+(`disable-sudo` unset = on). Only the action's own exact, read-only validation commands and
+its post-step CA teardown stay allowed.
+
+If a job needs sudo after the action, opt out explicitly with `disable-sudo: false` (or give
+a `sudo-config`). The controls are still applied, but the job is **ADVISORY**: the run log
+gets a warning and the job summary header reads *"enforce (ADVISORY — sudo retained, not an
+enforced boundary)"*. In analyze mode, the summary tells you if the job used sudo, so you find
+out before switching to enforce.
+
 ## Limitations (read these)
 
-- **Without `disable-sudo`, enforce is advisory.** Any step with root can remove the proxy and
-  firewall. The same goes for docker group membership.
+- **`disable-sudo: false` (or `sudo-config`) makes enforce advisory.** Any step with root can
+  remove the proxy and firewall. **Docker group membership is root-equivalent too** and is
+  still kept by default: set `disable-docker: true` or `stop-docker: true` in enforce unless
+  the job needs docker. The summary warns when docker access was kept.
+- **Allowlisted names that resolve to internal addresses are refused.** That includes hosted
+  runners with Azure private networking that reach private services by name. Such names
+  can't be allowlisted in enforce yet.
 - **Allowlisted hosts are full-capability channels.** If `github.com` is allowed, a malicious
   step can push data to a repository it controls. v2 narrows egress to names; it can't judge
   what a request does.

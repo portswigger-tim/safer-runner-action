@@ -10,9 +10,15 @@ import { generateSudoSummarySection, parseSudoLogs } from './sudo';
 import { SystemValidator } from './validation';
 import type { Mode } from './policy';
 
-function setupMode(): Mode | null {
+interface SetupMarker {
+  mode: Mode;
+  sudoRetained?: boolean;
+  dockerRetained?: boolean;
+}
+
+function readSetupMarker(): SetupMarker | null {
   try {
-    return (JSON.parse(fs.readFileSync(SETUP_MARKER, 'utf8')) as { mode: Mode }).mode;
+    return JSON.parse(fs.readFileSync(SETUP_MARKER, 'utf8')) as SetupMarker;
   } catch {
     return null;
   }
@@ -23,8 +29,9 @@ function setupMode(): Mode | null {
  * runner's own "Complete job" traffic still goes through them, and the VM is destroyed after.
  */
 async function run(): Promise<void> {
-  const mode = setupMode();
-  if (!mode) {
+  const marker = readSetupMarker();
+  const mode = marker?.mode;
+  if (!marker || !mode) {
     core.warning('safer-runner setup did not complete - no report');
     return;
   }
@@ -55,10 +62,14 @@ async function run(): Promise<void> {
     const validator = new SystemValidator();
     const intact = await validator.verifyAgainstBaseline();
     const validationReport = await validator.generateValidationReport();
-    const sudoSection = generateSudoSummarySection(parseSudoLogs(SUDO_LOG), 'Sudo usage');
+    const sudoCommands = parseSudoLogs(SUDO_LOG);
+    const sudoSection = generateSudoSummarySection(sudoCommands, 'Sudo usage');
 
     const md = buildReport({
       mode,
+      sudoRetained: marker.sudoRetained === true,
+      dockerRetained: marker.dockerRetained === true,
+      sudoCommandCount: sudoCommands.length,
       job: process.env.GITHUB_JOB || 'unknown',
       hosts,
       firewall,

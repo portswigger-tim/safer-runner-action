@@ -13,7 +13,10 @@ export interface Inputs {
   primaryDnsServer: string;
   /** '' disables the secondary server */
   secondaryDnsServer: string;
+  /** effective value: see resolveDisableSudo() */
   disableSudo: boolean;
+  /** true when disable-sudo was not set and the mode decided it */
+  disableSudoDefaulted: boolean;
   sudoConfig: string;
   disableDocker: boolean;
   stopDocker: boolean;
@@ -44,6 +47,22 @@ export function parseSize(raw: string): string {
   return s;
 }
 
+/**
+ * disable-sudo is tri-state (review H2). Unset means ON in enforce mode: with sudo any step
+ * can switch the egress controls off, so enforce is only a boundary without it. A non-empty
+ * sudo-config is an explicit sudo policy and keeps sudo unless disable-sudo is set. Explicit
+ * true/false always wins. action.yaml declares no default for disable-sudo, so the runner
+ * leaves the input empty when the workflow doesn't set it (getBooleanInput would collapse
+ * "unset" and "false"). Returns [effective value, whether it was defaulted].
+ */
+export function resolveDisableSudo(raw: string, mode: Mode, sudoConfig: string): [boolean, boolean] {
+  const v = (raw || '').trim();
+  if (v === '') return [mode === 'enforce' && sudoConfig.trim() === '', true];
+  if (['true', 'True', 'TRUE'].includes(v)) return [true, false];
+  if (['false', 'False', 'FALSE'].includes(v)) return [false, false];
+  throw new Error(`disable-sudo must be true or false, got "${raw}"`);
+}
+
 function bool(name: string): boolean {
   // getBooleanInput throws on an empty value (e.g. when inputs are absent in the pre step on a local action)
   const v = core.getInput(name);
@@ -51,8 +70,12 @@ function bool(name: string): boolean {
 }
 
 export function readInputs(): Inputs {
+  const mode = parseMode(core.getInput('mode'));
+  const sudoConfig = core.getInput('sudo-config');
+  // core.getInput reads the raw INPUT_DISABLE-SUDO variable ('' when unset - no action.yaml default)
+  const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode, sudoConfig);
   return {
-    mode: parseMode(core.getInput('mode')),
+    mode,
     allowedDomains: core.getInput('allowed-domains'),
     passthroughDomains: core.getInput('passthrough-domains'),
     blockRiskySubdomains:
@@ -60,8 +83,9 @@ export function readInputs(): Inputs {
     primaryDnsServer: core.getInput('primary-dns-server') || '9.9.9.9',
     // action.yaml supplies the Quad9 default; an explicit '' disables the secondary (M1)
     secondaryDnsServer: core.getInput('secondary-dns-server'),
-    disableSudo: bool('disable-sudo'),
-    sudoConfig: core.getInput('sudo-config'),
+    disableSudo,
+    disableSudoDefaulted,
+    sudoConfig,
     disableDocker: bool('disable-docker'),
     stopDocker: bool('stop-docker'),
     failOnTampering: bool('fail-on-tampering'),

@@ -43,12 +43,15 @@ inputs:
     default: '149.112.112.112'
   disable-sudo:
     description: >-
-      Remove sudo from the runner user after setup. Strongly recommended with enforce: with
-      sudo any step can remove the egress controls.
+      Remove sudo from the runner user after setup. Default: ON in enforce mode (with sudo any
+      step can remove the egress controls), off in analyze mode. Set `false` to keep sudo in
+      enforce: the job then runs as "enforce (ADVISORY)" - the controls are applied but are not
+      an enforced boundary. Deliberately has no default here: unset and `false` differ.
     required: false
-    default: 'false'
   sudo-config:
-    description: 'Custom sudoers rules for the runner user (ignored when disable-sudo is true).'
+    description: >-
+      Custom sudoers rules for the runner user (ignored when disable-sudo is true). Setting it
+      keeps sudo in enforce mode unless disable-sudo is also set, and the job is labelled ADVISORY.
     required: false
     default: ''
   disable-docker:

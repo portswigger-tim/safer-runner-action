@@ -485,9 +485,20 @@ async function runSetup(inputs) {
     if (inputs.stopDocker && inputs.disableDocker) {
         core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
     }
-    if (mode === 'enforce' && !inputs.disableSudo) {
-        core.warning('enforce mode without disable-sudo: any step can use sudo to remove the egress controls. ' +
-            'Set disable-sudo: true (and disable-docker or stop-docker) to make enforce a real boundary.');
+    // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
+    const sudoRetained = mode === 'enforce' && !inputs.disableSudo;
+    const dockerRetained = !inputs.disableDocker && !inputs.stopDocker;
+    if (sudoRetained) {
+        core.warning(`enforce is ADVISORY in this job: sudo is retained (${inputs.sudoConfig ? 'sudo-config is set' : 'disable-sudo: false'}), ` +
+            'so any step can use it to remove the egress controls. This is not an enforced boundary. ' +
+            'Remove disable-sudo: false / sudo-config to make enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo retained)' });
+    }
+    else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
+        core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
+    }
+    if (mode === 'enforce' && dockerRetained) {
+        core.warning('enforce with docker access: the docker group is root-equivalent, so a step can use docker to remove ' +
+            'the egress controls. Set disable-docker: true or stop-docker: true unless the job needs docker.');
     }
     const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
     core.info(`sudo implementation: ${sudoFlavour}`);
@@ -556,7 +567,7 @@ async function runSetup(inputs) {
         core.warning(msg);
     }
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
-        input: Buffer.from(JSON.stringify({ mode, at: new Date().toISOString() }) + '\n'),
+        input: Buffer.from(JSON.stringify({ mode, sudoRetained, dockerRetained, at: new Date().toISOString() }) + '\n'),
         silent: true
     });
     // 9. Privilege layer (carried from v1). Docker first: it needs sudo.
@@ -1902,9 +1913,9 @@ const dns_parser_1 = __nccwpck_require__(1106);
 const report_1 = __nccwpck_require__(5444);
 const sudo_1 = __nccwpck_require__(1279);
 const validation_1 = __nccwpck_require__(8449);
-function setupMode() {
+function readSetupMarker() {
     try {
-        return JSON.parse(fs.readFileSync(egress_1.SETUP_MARKER, 'utf8')).mode;
+        return JSON.parse(fs.readFileSync(egress_1.SETUP_MARKER, 'utf8'));
     }
     catch {
         return null;
@@ -1915,8 +1926,9 @@ function setupMode() {
  * runner's own "Complete job" traffic still goes through them, and the VM is destroyed after.
  */
 async function run() {
-    const mode = setupMode();
-    if (!mode) {
+    const marker = readSetupMarker();
+    const mode = marker?.mode;
+    if (!marker || !mode) {
         core.warning('safer-runner setup did not complete - no report');
         return;
     }
@@ -1946,9 +1958,13 @@ async function run() {
         const validator = new validation_1.SystemValidator();
         const intact = await validator.verifyAgainstBaseline();
         const validationReport = await validator.generateValidationReport();
-        const sudoSection = (0, sudo_1.generateSudoSummarySection)((0, sudo_1.parseSudoLogs)(constants_1.SUDO_LOG), 'Sudo usage');
+        const sudoCommands = (0, sudo_1.parseSudoLogs)(constants_1.SUDO_LOG);
+        const sudoSection = (0, sudo_1.generateSudoSummarySection)(sudoCommands, 'Sudo usage');
         const md = (0, report_1.buildReport)({
             mode,
+            sudoRetained: marker.sudoRetained === true,
+            dockerRetained: marker.dockerRetained === true,
+            sudoCommandCount: sudoCommands.length,
             job: process.env.GITHUB_JOB || 'unknown',
             hosts,
             firewall,
@@ -2290,6 +2306,7 @@ exports.summarizeFlows = summarizeFlows;
 exports.parseFirewallLog = parseFirewallLog;
 exports.humanBytes = humanBytes;
 exports.suggestedAllowlist = suggestedAllowlist;
+exports.modeLabel = modeLabel;
 exports.buildReport = buildReport;
 const RANK = { BLOCK: 4, WOULD_BLOCK: 3, PASSTHROUGH: 2, INTERCEPT: 1, ALLOW: 1 };
 const MAX_ROWS = 300;
@@ -2414,14 +2431,33 @@ function suggestedAllowlist(hosts) {
         .filter(h => !h.name.startsWith('(no name)') && !h.name.endsWith('.invalid'))
         .map(h => h.name)));
 }
+/** Mode as shown in the summary header. enforce with sudo retained is never shown as plain enforce. */
+function modeLabel(mode, sudoRetained = false) {
+    if (mode === 'analyze')
+        return '📊 ANALYZE';
+    return sudoRetained ? '⚠️ ENFORCE (ADVISORY — sudo retained, not an enforced boundary)' : '🔒 ENFORCE';
+}
 function buildReport(input) {
     const { mode, hosts } = input;
     const denied = hosts.filter(h => DENIED.has(h.verdict));
     const allowed = hosts.filter(h => !denied.includes(h));
     const deniedWord = mode === 'enforce' ? 'Blocked' : 'Would be blocked';
-    const icon = mode === 'enforce' ? '🔒' : '📊';
-    let md = `# Safer Runner v2 egress report\n\n`;
-    md += `**Job:** ${input.job} · **Mode:** ${icon} ${mode.toUpperCase()} · **Generated:** ${new Date().toISOString()}\n\n`;
+    const advisory = mode === 'enforce' && input.sudoRetained === true;
+    let md = `# Safer Runner v2 egress report${advisory ? ' — enforce (ADVISORY — sudo retained, not an enforced boundary)' : ''}\n\n`;
+    if (advisory) {
+        md +=
+            '> [!WARNING]\n' +
+                '> **ADVISORY: sudo was retained** (`disable-sudo: false` or `sudo-config`), so any step could have used it to ' +
+                'remove the egress controls. The policy below was applied, but this job did not run inside an enforced boundary. ' +
+                'Remove `disable-sudo: false` / `sudo-config` to make enforce a boundary.\n\n';
+    }
+    if (mode === 'enforce' && input.dockerRetained) {
+        md +=
+            '> [!CAUTION]\n' +
+                '> The runner user kept **docker** access, which is root-equivalent: a step could use it to remove the egress ' +
+                'controls. Set `disable-docker: true` or `stop-docker: true` unless the job needs docker.\n\n';
+    }
+    md += `**Job:** ${input.job} · **Mode:** ${modeLabel(mode, input.sudoRetained)} · **Generated:** ${new Date().toISOString()}\n\n`;
     const totalReq = hosts.reduce((a, h) => a + h.requests, 0);
     const totalBytes = hosts.reduce((a, h) => a + h.reqBytes + h.respBytes, 0);
     md += `${allowed.length} host(s) allowed · **${denied.length} host(s) ${deniedWord.toLowerCase()}** · `;
@@ -2494,14 +2530,23 @@ function buildReport(input) {
     if (mode === 'analyze') {
         const suggest = suggestedAllowlist(hosts);
         md += `## Suggested configuration\n\n`;
+        const sudoUsed = (input.sudoCommandCount ?? 0) > 0;
         if (suggest.length === 0) {
-            md += `Everything seen is already allowed - this job should run unchanged with \`mode: enforce\`.\n\n`;
+            md += sudoUsed
+                ? `Every host seen is already allowed, but see the sudo note below.\n\n`
+                : `Everything seen is already allowed - this job should run unchanged with \`mode: enforce\`.\n\n`;
         }
         else {
             md += 'To run this job in enforce mode, allow these hosts (review each one first):\n\n';
             md +=
                 '```yaml\n- uses: portswigger-tim/safer-runner-action@v2\n  with:\n    mode: enforce\n    allowed-domains: |\n';
             md += suggest.map(s => `      ${s}`).join('\n') + '\n```\n\n';
+        }
+        if (sudoUsed) {
+            md +=
+                `**This job ran ${input.sudoCommandCount} sudo command(s)** (see "Sudo usage"). enforce removes sudo by default, ` +
+                    'so either remove that sudo usage from the job, or add `disable-sudo: false` - which makes enforce ' +
+                    'ADVISORY (sudo can remove the controls).\n\n';
         }
     }
     for (const s of input.extraSections)

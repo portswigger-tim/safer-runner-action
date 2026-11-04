@@ -83,10 +83,23 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   if (inputs.stopDocker && inputs.disableDocker) {
     core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
   }
-  if (mode === 'enforce' && !inputs.disableSudo) {
+  // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
+  const sudoRetained = mode === 'enforce' && !inputs.disableSudo;
+  const dockerRetained = !inputs.disableDocker && !inputs.stopDocker;
+  if (sudoRetained) {
     core.warning(
-      'enforce mode without disable-sudo: any step can use sudo to remove the egress controls. ' +
-        'Set disable-sudo: true (and disable-docker or stop-docker) to make enforce a real boundary.'
+      `enforce is ADVISORY in this job: sudo is retained (${inputs.sudoConfig ? 'sudo-config is set' : 'disable-sudo: false'}), ` +
+        'so any step can use it to remove the egress controls. This is not an enforced boundary. ' +
+        'Remove disable-sudo: false / sudo-config to make enforce a boundary.',
+      { title: 'safer-runner: enforce (ADVISORY - sudo retained)' }
+    );
+  } else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
+    core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
+  }
+  if (mode === 'enforce' && dockerRetained) {
+    core.warning(
+      'enforce with docker access: the docker group is root-equivalent, so a step can use docker to remove ' +
+        'the egress controls. Set disable-docker: true or stop-docker: true unless the job needs docker.'
     );
   }
 
@@ -175,7 +188,7 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   }
 
   await exec.exec('sudo', ['tee', SETUP_MARKER], {
-    input: Buffer.from(JSON.stringify({ mode, at: new Date().toISOString() }) + '\n'),
+    input: Buffer.from(JSON.stringify({ mode, sudoRetained, dockerRetained, at: new Date().toISOString() }) + '\n'),
     silent: true
   });
 

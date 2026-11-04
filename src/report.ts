@@ -148,6 +148,12 @@ function statusText(s: Record<string, number>): string {
 
 export interface ReportInput {
   mode: Mode;
+  /** enforce ran with sudo left in place: the controls were advisory (review H2) */
+  sudoRetained?: boolean;
+  /** the runner user kept docker access (root-equivalent) */
+  dockerRetained?: boolean;
+  /** sudo commands the job ran (analyze: tells the user enforce's default will remove sudo) */
+  sudoCommandCount?: number;
   job: string;
   hosts: HostSummary[];
   firewall: FirewallEvent[];
@@ -169,15 +175,34 @@ export function suggestedAllowlist(hosts: HostSummary[]): string[] {
   );
 }
 
+/** Mode as shown in the summary header. enforce with sudo retained is never shown as plain enforce. */
+export function modeLabel(mode: Mode, sudoRetained = false): string {
+  if (mode === 'analyze') return '📊 ANALYZE';
+  return sudoRetained ? '⚠️ ENFORCE (ADVISORY — sudo retained, not an enforced boundary)' : '🔒 ENFORCE';
+}
+
 export function buildReport(input: ReportInput): string {
   const { mode, hosts } = input;
   const denied = hosts.filter(h => DENIED.has(h.verdict));
   const allowed = hosts.filter(h => !denied.includes(h));
   const deniedWord = mode === 'enforce' ? 'Blocked' : 'Would be blocked';
-  const icon = mode === 'enforce' ? '🔒' : '📊';
+  const advisory = mode === 'enforce' && input.sudoRetained === true;
 
-  let md = `# Safer Runner v2 egress report\n\n`;
-  md += `**Job:** ${input.job} · **Mode:** ${icon} ${mode.toUpperCase()} · **Generated:** ${new Date().toISOString()}\n\n`;
+  let md = `# Safer Runner v2 egress report${advisory ? ' — enforce (ADVISORY — sudo retained, not an enforced boundary)' : ''}\n\n`;
+  if (advisory) {
+    md +=
+      '> [!WARNING]\n' +
+      '> **ADVISORY: sudo was retained** (`disable-sudo: false` or `sudo-config`), so any step could have used it to ' +
+      'remove the egress controls. The policy below was applied, but this job did not run inside an enforced boundary. ' +
+      'Remove `disable-sudo: false` / `sudo-config` to make enforce a boundary.\n\n';
+  }
+  if (mode === 'enforce' && input.dockerRetained) {
+    md +=
+      '> [!CAUTION]\n' +
+      '> The runner user kept **docker** access, which is root-equivalent: a step could use it to remove the egress ' +
+      'controls. Set `disable-docker: true` or `stop-docker: true` unless the job needs docker.\n\n';
+  }
+  md += `**Job:** ${input.job} · **Mode:** ${modeLabel(mode, input.sudoRetained)} · **Generated:** ${new Date().toISOString()}\n\n`;
   const totalReq = hosts.reduce((a, h) => a + h.requests, 0);
   const totalBytes = hosts.reduce((a, h) => a + h.reqBytes + h.respBytes, 0);
   md += `${allowed.length} host(s) allowed · **${denied.length} host(s) ${deniedWord.toLowerCase()}** · `;
@@ -259,13 +284,22 @@ export function buildReport(input: ReportInput): string {
   if (mode === 'analyze') {
     const suggest = suggestedAllowlist(hosts);
     md += `## Suggested configuration\n\n`;
+    const sudoUsed = (input.sudoCommandCount ?? 0) > 0;
     if (suggest.length === 0) {
-      md += `Everything seen is already allowed - this job should run unchanged with \`mode: enforce\`.\n\n`;
+      md += sudoUsed
+        ? `Every host seen is already allowed, but see the sudo note below.\n\n`
+        : `Everything seen is already allowed - this job should run unchanged with \`mode: enforce\`.\n\n`;
     } else {
       md += 'To run this job in enforce mode, allow these hosts (review each one first):\n\n';
       md +=
         '```yaml\n- uses: portswigger-tim/safer-runner-action@v2\n  with:\n    mode: enforce\n    allowed-domains: |\n';
       md += suggest.map(s => `      ${s}`).join('\n') + '\n```\n\n';
+    }
+    if (sudoUsed) {
+      md +=
+        `**This job ran ${input.sudoCommandCount} sudo command(s)** (see "Sudo usage"). enforce removes sudo by default, ` +
+        'so either remove that sudo usage from the job, or add `disable-sudo: false` - which makes enforce ' +
+        'ADVISORY (sudo can remove the controls).\n\n';
     }
   }
 
