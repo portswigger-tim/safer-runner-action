@@ -3,6 +3,7 @@ import {
   deduplicateSudoCommands,
   parseSudoLogsFromString,
   generateSudoersConfig,
+  filterInternalSudoCommands,
   type SudoCommand
 } from './sudo-parser';
 
@@ -155,6 +156,92 @@ another invalid line`;
       const result = parseSudoLogsFromString(logs);
       expect(result).toHaveLength(1);
       expect(result[0].command).toBe('/usr/bin/tee');
+    });
+  });
+
+  describe('parseSudoLogsFromString - sudo-rs format (via rsyslog)', () => {
+    it('should parse sudo-rs entries (no TTY field, double space after user)', () => {
+      const logs = `Nov  3 16:23:51 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/echo hello world
+Nov  3 16:23:51 : runner :  PWD=/ ; USER=nobody ; COMMAND=/usr/bin/true `;
+
+      const result = parseSudoLogsFromString(logs);
+      expect(result).toEqual([
+        {
+          timestamp: 'Nov  3 16:23:51',
+          user: 'runner',
+          targetUser: 'root',
+          command: '/usr/bin/echo',
+          args: 'hello world'
+        },
+        { timestamp: 'Nov  3 16:23:51', user: 'runner', targetUser: 'nobody', command: '/usr/bin/true', args: '' }
+      ]);
+    });
+  });
+
+  describe('parseSudoLogsFromString - wrapped classic sudo entries', () => {
+    it('should join continuation lines so arguments are not lost', () => {
+      const logs = `Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
+    /etc/resolv.conf
+Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/apt-get install
+    -y jq`;
+
+      const result = parseSudoLogsFromString(logs);
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({ command: '/usr/bin/cat', args: '/etc/resolv.conf' });
+      expect(result[1]).toMatchObject({ command: '/usr/bin/apt-get', args: 'install -y jq' });
+    });
+  });
+
+  describe('filterInternalSudoCommands', () => {
+    const cmd = (command: string, args: string): SudoCommand => ({
+      timestamp: 'Nov  3 16:23:51',
+      user: 'runner',
+      targetUser: 'root',
+      command,
+      args
+    });
+    const internal = ['cat /etc/resolv.conf', 'systemctl restart rsyslog'];
+
+    it('removes internal commands regardless of bin/sbin location', () => {
+      const result = filterInternalSudoCommands(
+        [
+          cmd('/usr/bin/cat', '/etc/resolv.conf'),
+          cmd('/bin/cat', '/etc/resolv.conf'),
+          cmd('/usr/bin/systemctl', 'restart rsyslog'),
+          cmd('/usr/sbin/systemctl', 'restart rsyslog')
+        ],
+        internal
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('keeps commands with different arguments', () => {
+      const result = filterInternalSudoCommands(
+        [cmd('/usr/bin/cat', '/etc/shadow'), cmd('/usr/bin/cat', '/etc/resolv.conf /etc/shadow')],
+        internal
+      );
+      expect(result).toHaveLength(2);
+    });
+
+    it('keeps refused attempts that mimic internal commands', () => {
+      const result = filterInternalSudoCommands(
+        [{ ...cmd('/usr/bin/cat', '/etc/resolv.conf'), denied: true }],
+        internal
+      );
+      expect(result).toHaveLength(1);
+    });
+
+    it('marks classic sudo refusals as denied', () => {
+      const result = parseSudoLogsFromString(`Nov  3 16:24:32 : runner : a password is required ; PWD=/ ; USER=root ;
+    COMMAND=/usr/bin/tee /tmp/runner-sudoers.tmp
+Nov  3 16:24:33 : runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id
+Nov  3 16:24:34 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/whoami`);
+      expect(result.map(c => c.denied)).toEqual([true, true, undefined]);
+    });
+
+    it('keeps same-named binaries outside system directories', () => {
+      const result = filterInternalSudoCommands([cmd('/tmp/cat', '/etc/resolv.conf')], internal);
+      expect(result).toHaveLength(1);
     });
   });
 

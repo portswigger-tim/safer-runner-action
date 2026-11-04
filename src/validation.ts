@@ -41,7 +41,17 @@ interface ValidationState {
 /**
  * Standard iptables chains to monitor for tampering
  */
-const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'] as const;
+export const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'] as const;
+
+/**
+ * Security configuration files monitored for tampering
+ * The sudo logging config file is appended at runtime (it depends on the sudo implementation)
+ */
+export const CRITICAL_FILES = [
+  '/etc/dnsmasq.conf',
+  '/etc/resolv.conf',
+  '/etc/systemd/resolved.conf.d/no-stub.conf'
+] as const;
 
 export class SystemValidator {
   private validationStateFile = '/tmp/safer-runner-validation-state.json';
@@ -49,11 +59,7 @@ export class SystemValidator {
 
   constructor(criticalFiles?: string[]) {
     // Allow injection of critical files for testing
-    this.criticalFiles = criticalFiles || [
-      '/etc/dnsmasq.conf',
-      '/etc/resolv.conf',
-      '/etc/systemd/resolved.conf.d/no-stub.conf'
-    ];
+    this.criticalFiles = criticalFiles || [...CRITICAL_FILES];
   }
 
   /**

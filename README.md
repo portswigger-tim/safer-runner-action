@@ -11,7 +11,7 @@ Multi-layer security for GitHub Actions runners with network filtering (DNS + ip
 - **Accept community contributions** and need supply chain attack protection
 - **Build open source software** with dependencies from npm, PyPI, or other package registries
 - **Need compliance evidence** showing network access controls and audit trails
-- **Use GitHub-hosted Ubuntu runners** (ubuntu-latest, ubuntu-22.04, ubuntu-20.04)
+- **Use GitHub-hosted Ubuntu runners** (ubuntu-latest, ubuntu-26.04, ubuntu-24.04, ubuntu-22.04)
 - **Want security observability** before committing to enforcement (analyze mode)
 
 ### ❌ This Action Is NOT For You If:
@@ -127,6 +127,8 @@ steps:
 
 **Note**: Only disable sudo/Docker if your workflow doesn't require them. These are advanced security features that prevent malicious code from bypassing security controls.
 
+**Ubuntu 26.04 / sudo-rs**: Ubuntu 25.10+ (including `ubuntu-26.04` and `ubuntu-latest`) uses [sudo-rs](https://github.com/trifectatechfoundation/sudo-rs) as the default `sudo`. The action detects it automatically. `sudo-config` is validated with the runner's own `visudo`, and sudo-rs supports only part of the sudoers syntax. A wildcard is allowed only as the whole argument list (`/usr/bin/apt-get *`), not inside other arguments (`/usr/bin/chmod * /tmp/x`), and many `Defaults` settings are not recognised. List each exact command, or allow the bare command path. sudo-rs does not log denied sudo attempts, so on sudo-rs the sudo report shows only commands that ran.
+
 ### Custom DNS Servers
 
 Configure alternative DNS providers while maintaining the same security guarantees:
@@ -165,6 +167,7 @@ steps:
 - **GitHub-hosted runners**: Only Ubuntu runners are supported. Windows and macOS runners are not supported.
 - **Self-hosted runners**: Only Ubuntu runners with sudo access and iptables support. Other Linux distributions (RHEL, Debian, etc.) and Windows/macOS runners are not supported.
 - **Containerized jobs**: Not supported when the job runs in a container due to sudo access requirements.
+- **sudo-rs (Ubuntu 25.10+)**: Sudo logging uses rsyslog to capture sudo-rs syslog output. Denied sudo attempts are not logged by sudo-rs.
 
 ### Security Limitations
 

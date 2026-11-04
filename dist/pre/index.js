@@ -93,6 +93,14 @@ user=${dnsUsername}
 
 `;
     }
+    // Listen only where resolv.conf points. The default wildcard bind fails with
+    // "Address already in use" if anything else holds port 53 on any local address
+    // (e.g. systemd-resolved on 127.0.0.53 or a resolver on 127.0.0.100 on some runner VMs)
+    config += `# Bind only to the loopback address used by /etc/resolv.conf
+bind-interfaces
+listen-address=127.0.0.1
+
+`;
     // Explicitly disable DHCP functionality (defense in depth)
     config += `# Disable DHCP - we only use DNS functionality
 # This prevents DHCP address conflict detection via ICMP
@@ -250,7 +258,13 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSudoLogLine = parseSudoLogLine;
 exports.deduplicateSudoCommands = deduplicateSudoCommands;
 exports.parseSudoLogsFromString = parseSudoLogsFromString;
+exports.filterInternalSudoCommands = filterInternalSudoCommands;
 exports.generateSudoersConfig = generateSudoersConfig;
+/**
+ * Classic sudo prefixes refused commands with a reason, e.g.
+ * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
+ */
+const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
 /**
  * Parse a single sudo log entry
  * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
@@ -271,7 +285,8 @@ function parseSudoLogLine(line) {
         user,
         targetUser,
         command,
-        args
+        args,
+        ...(DENIED_PATTERN.test(line) && { denied: true })
     };
 }
 /**
@@ -290,11 +305,30 @@ function deduplicateSudoCommands(commands) {
     return deduplicated;
 }
 /**
+ * Join wrapped log entries back into single lines
+ * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
+ * continuation lines, which can split a command from its arguments:
+ *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
+ *       /etc/resolv.conf
+ */
+function joinContinuationLines(content) {
+    const joined = [];
+    for (const line of content.split('\n')) {
+        if (/^\s+\S/.test(line) && joined.length > 0) {
+            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
+        }
+        else {
+            joined.push(line);
+        }
+    }
+    return joined;
+}
+/**
  * Parse sudo logs from string content
  * Handles both single-line and multi-line log formats
  */
 function parseSudoLogsFromString(content) {
-    const lines = content.split('\n');
+    const lines = joinContinuationLines(content);
     const commands = [];
     // First try single-line format (older sudo versions)
     for (const line of lines) {
@@ -361,6 +395,29 @@ function parseMultiLineSudoLogs(content) {
         }
     }
     return commands;
+}
+/**
+ * Remove the action's own (successful) sudo commands from parsed logs
+ *
+ * @param commands - Parsed sudo commands
+ * @param internalCommands - Internal commands as "<basename> <args>" (e.g. "cat /etc/resolv.conf")
+ * @returns Commands that were not run by the action itself
+ */
+function filterInternalSudoCommands(commands, internalCommands) {
+    const internal = new Set(internalCommands);
+    return commands.filter(cmd => {
+        // Refused attempts are always reported, even if they mimic an internal command
+        if (cmd.denied) {
+            return true;
+        }
+        // Only system binaries are treated as internal - a same-named binary elsewhere is still reported
+        const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+        if (!match) {
+            return true;
+        }
+        const key = cmd.args ? `${match[1]} ${cmd.args}` : match[1];
+        return !internal.has(key);
+    });
 }
 /**
  * Convert sudo commands to sudoers config format
@@ -445,7 +502,6 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const setup_1 = __nccwpck_require__(1413);
-const sudo_1 = __nccwpck_require__(1279);
 /**
  * Pre-action hook: Establish security in analyze mode
  *
@@ -482,11 +538,7 @@ async function run() {
         // Finalize with ANALYZE mode rules (log but allow all) with Pre- log prefix
         core.info('Finalizing analyze mode rules...');
         await (0, setup_1.finalizeFirewallRules)('analyze', 'Pre-');
-        // Apply default sudo config FIRST to set up exclusion rules
-        // This ensures removeSudoLogging() in main.ts won't be logged
-        core.info('Configuring default sudo access with validation exclusions...');
-        await (0, sudo_1.applyCustomSudoConfig)();
-        // Setup sudo logging AFTER exclusion rules are in place
+        // Setup sudo logging last so setup commands are not captured
         // This captures sudo usage by other actions' pre-hooks
         core.info('Configuring sudo logging for pre-hook monitoring...');
         await (0, setup_1.setupSudoLogging)('/var/log/safer-runner/pre-sudo.log');
@@ -555,6 +607,7 @@ exports.setupIptablesLogging = setupIptablesLogging;
 exports.setupFirewallRules = setupFirewallRules;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
+exports.startDnsmasq = startDnsmasq;
 exports.restartServices = restartServices;
 exports.finalizeFirewallRules = finalizeFirewallRules;
 const core = __importStar(__nccwpck_require__(7484));
@@ -886,10 +939,34 @@ async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsern
     await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
     return blockedSubdomains;
 }
+const DNSMASQ_START_ATTEMPTS = 2;
+/**
+ * (Re)start dnsmasq, retrying once if it fails
+ *
+ * dnsmasq occasionally fails to start on hosted runners right after systemd-resolved
+ * restarts. On failure the unit journal and port 53 listeners are printed so the cause
+ * is visible in the job log.
+ */
+async function startDnsmasq(retryDelayMs = 2000) {
+    for (let attempt = 1; attempt <= DNSMASQ_START_ATTEMPTS; attempt++) {
+        const exitCode = await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq'], { ignoreReturnCode: true });
+        if (exitCode === 0) {
+            return;
+        }
+        core.warning(`dnsmasq failed to start (attempt ${attempt}/${DNSMASQ_START_ATTEMPTS})`);
+        await exec.exec('sudo', ['journalctl', '-xeu', 'dnsmasq', '--no-pager', '-n', '30'], { ignoreReturnCode: true });
+        await exec.exec('sudo', ['ss', '-lntup', 'sport = :53'], { ignoreReturnCode: true });
+        if (attempt < DNSMASQ_START_ATTEMPTS) {
+            await exec.exec('sudo', ['systemctl', 'reset-failed', 'dnsmasq'], { ignoreReturnCode: true });
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        }
+    }
+    throw new Error('dnsmasq failed to start - see the journal output above');
+}
 async function restartServices(logFile) {
     // Restart systemd-resolved and start dnsmasq
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-    await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq']);
+    await startDnsmasq();
     // After dnsmasq starts and creates log files, make them readable by all
     if (logFile) {
         // Wait a moment for dnsmasq to create the log file
@@ -976,9 +1053,15 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DEFAULT_RUNNER_SUDO_CONFIG = exports.RUNNER_USERNAME = void 0;
+exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.DEFAULT_RUNNER_SUDO_CONFIG = exports.RUNNER_USERNAME = void 0;
+exports.parseSudoFlavour = parseSudoFlavour;
+exports.detectSudoFlavour = detectSudoFlavour;
+exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
+exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
 exports.setupSudoLogging = setupSudoLogging;
 exports.removeSudoLogging = removeSudoLogging;
+exports.getValidationSudoCommands = getValidationSudoCommands;
+exports.getRequiredSudoCommands = getRequiredSudoCommands;
 exports.applyCustomSudoConfig = applyCustomSudoConfig;
 exports.disableSudoForRunner = disableSudoForRunner;
 exports.parseSudoLogs = parseSudoLogs;
@@ -988,6 +1071,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
 const sudo_parser_1 = __nccwpck_require__(7516);
+const validation_1 = __nccwpck_require__(8449);
 // Constants
 exports.RUNNER_USERNAME = 'runner';
 /**
@@ -995,25 +1079,91 @@ exports.RUNNER_USERNAME = 'runner';
  * This is the standard unrestricted sudo access that exists by default
  */
 exports.DEFAULT_RUNNER_SUDO_CONFIG = `${exports.RUNNER_USERNAME} ALL=(ALL) NOPASSWD: ALL`;
+/** Classic sudo: sudoers drop-in enabling `Defaults logfile=` */
+exports.SUDO_LOGGING_SUDOERS_FILE = '/etc/sudoers.d/00-sudo-logging';
+/** sudo-rs: rsyslog rule copying sudo's syslog messages into the safer-runner log file */
+exports.SUDO_LOGGING_RSYSLOG_FILE = '/etc/rsyslog.d/10-sudo-safer-runner.conf';
+const SUDOERS_TEMP_FILE = `/tmp/${exports.RUNNER_USERNAME}-sudoers.tmp`;
+const SUDO_LOGGING_TEMP_FILE = '/tmp/safer-runner-sudo-logging.tmp';
+/**
+ * Determine the sudo implementation from `sudo --version` output
+ * sudo-rs prints "sudo-rs 0.2.13-0ubuntu1.2", classic sudo prints "Sudo version 1.9.15p5"
+ */
+function parseSudoFlavour(versionOutput) {
+    return /^\s*sudo-rs\b/im.test(versionOutput) ? 'sudo-rs' : 'sudo';
+}
+/**
+ * Detect which sudo implementation is active on the runner
+ */
+async function detectSudoFlavour() {
+    try {
+        const { stdout } = await exec.getExecOutput('sudo', ['--version'], { silent: true, ignoreReturnCode: true });
+        return parseSudoFlavour(stdout);
+    }
+    catch {
+        return 'sudo';
+    }
+}
+/**
+ * Path of the config file that enables sudo logging for the given sudo implementation
+ * This file is added to the integrity validation baseline
+ */
+function getSudoLoggingConfigFile(flavour) {
+    return flavour === 'sudo-rs' ? exports.SUDO_LOGGING_RSYSLOG_FILE : exports.SUDO_LOGGING_SUDOERS_FILE;
+}
+/**
+ * Build the rsyslog rule used on sudo-rs to capture sudo usage into a dedicated log file
+ *
+ * sudo-rs logs "runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/id" to syslog.
+ * The template prefixes it with an RFC3164 timestamp so the file matches the
+ * classic sudo logfile format understood by parsers/sudo-parser.ts.
+ */
+function buildSudoRsyslogConfig(logFile) {
+    return `template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")
+if $programname == 'sudo' and $msg contains 'COMMAND=' then {
+  action(type="omfile" file="${logFile}" template="SaferRunnerSudo")
+}
+`;
+}
 /**
  * Configure sudo logging to capture all sudo usage
  * Logs to specified file for visibility and auditability
  *
- * @param logFile - Path to sudo log file (e.g., /tmp/pre-sudo.log or /tmp/main-sudo.log)
+ * - Classic sudo: `Defaults logfile=<logFile>` sudoers drop-in
+ * - sudo-rs: rsyslog rule filtering sudo's syslog messages into <logFile>
+ *
+ * Must run while the runner still has unrestricted sudo (i.e. before
+ * disableSudoForRunner/applyCustomSudoConfig).
+ *
+ * @param logFile - Path to sudo log file (e.g., /var/log/safer-runner/main-sudo.log)
+ * @param flavour - Sudo implementation (detected if omitted)
  */
-async function setupSudoLogging(logFile) {
-    core.info(`Configuring sudo logging to ${logFile}...`);
-    // Create a sudoers.d file to enable logging
-    const logConfig = `Defaults logfile=${logFile}\n`;
-    await exec.exec('sudo', ['tee', '/etc/sudoers.d/00-sudo-logging'], {
-        input: Buffer.from(logConfig)
-    });
-    // Set appropriate permissions (must be 0440 or 0400 for sudoers files)
-    await exec.exec('sudo', ['chmod', '0440', '/etc/sudoers.d/00-sudo-logging']);
-    await exec.exec('sudo', ['chown', 'root:root', '/etc/sudoers.d/00-sudo-logging']);
+async function setupSudoLogging(logFile, flavour) {
+    const sudoFlavour = flavour !== null && flavour !== void 0 ? flavour : (await detectSudoFlavour());
+    core.info(`Configuring sudo logging to ${logFile} (${sudoFlavour})...`);
     // Create the log file and make it readable by the runner
     await exec.exec('sudo', ['touch', logFile]);
     await exec.exec('sudo', ['chmod', '0644', logFile]);
+    if (sudoFlavour === 'sudo-rs') {
+        // sudo-rs has no logfile setting - capture its syslog output with rsyslog instead
+        await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
+        await exec.exec('sudo', ['tee', exports.SUDO_LOGGING_RSYSLOG_FILE], {
+            input: Buffer.from(buildSudoRsyslogConfig(logFile)),
+            silent: true
+        });
+        await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+    }
+    else {
+        // Stage the drop-in and move it into place last, so logging starts with no
+        // further setup commands to capture (sudoers files must be 0440 root:root)
+        await exec.exec('sudo', ['tee', SUDO_LOGGING_TEMP_FILE], {
+            input: Buffer.from(`Defaults logfile=${logFile}\nDefaults loglinelen=0\n`),
+            silent: true
+        });
+        await exec.exec('sudo', ['chmod', '0440', SUDO_LOGGING_TEMP_FILE]);
+        await exec.exec('sudo', ['chown', 'root:root', SUDO_LOGGING_TEMP_FILE]);
+        await exec.exec('sudo', ['mv', SUDO_LOGGING_TEMP_FILE, exports.SUDO_LOGGING_SUDOERS_FILE]);
+    }
     core.info(`✅ Sudo logging configured to ${logFile}`);
 }
 /**
@@ -1022,56 +1172,61 @@ async function setupSudoLogging(logFile) {
  */
 async function removeSudoLogging() {
     core.info('Removing sudo logging configuration...');
-    await exec.exec('sudo', ['rm', '-f', '/etc/sudoers.d/00-sudo-logging']);
+    await exec.exec('sudo', ['rm', '-f', exports.SUDO_LOGGING_SUDOERS_FILE]);
+    if (fs.existsSync(exports.SUDO_LOGGING_RSYSLOG_FILE)) {
+        await exec.exec('sudo', ['rm', '-f', exports.SUDO_LOGGING_RSYSLOG_FILE]);
+        await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+    }
     core.info('✅ Sudo logging removed');
 }
 /**
- * Generate required sudo commands for validation and log parsing
- * These commands are needed by the post-action to:
- * - Read protected configuration files for integrity validation
- * - Query iptables rules for firewall validation
- * - Parse DNS and network logs for reporting
+ * Commands run by post-action integrity validation (see validation.ts)
+ * These are the only sudo commands the runner keeps after sudo is restricted.
+ */
+function getValidationSudoCommands() {
+    const files = [...validation_1.CRITICAL_FILES, exports.SUDO_LOGGING_SUDOERS_FILE, exports.SUDO_LOGGING_RSYSLOG_FILE];
+    return [
+        ...files.map(file => `/usr/bin/cat ${file}`),
+        ...validation_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables -L ${chain} -n --line-numbers`)
+    ];
+}
+/**
+ * Sudo commands run by the action itself while sudo logging is active
+ * Filtered out of sudo reports - they are internal operations, not workflow activity.
+ * Paths are matched by basename so /usr/sbin vs /usr/bin resolution doesn't matter.
+ */
+exports.INTERNAL_SUDO_COMMANDS = [
+    ...getValidationSudoCommands(),
+    // applyCustomSudoConfig()
+    `tee ${SUDOERS_TEMP_FILE}`,
+    `visudo -c -f ${SUDOERS_TEMP_FILE}`,
+    `chmod 0440 ${SUDOERS_TEMP_FILE}`,
+    `chown root:root ${SUDOERS_TEMP_FILE}`,
+    `mv ${SUDOERS_TEMP_FILE} /etc/sudoers.d/${exports.RUNNER_USERNAME}`,
+    `rm -f ${SUDOERS_TEMP_FILE}`,
+    // removeSudoLogging() / setupSudoLogging()
+    `rm -f ${exports.SUDO_LOGGING_SUDOERS_FILE}`,
+    `rm -f ${exports.SUDO_LOGGING_RSYSLOG_FILE}`,
+    'systemctl restart rsyslog'
+].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
+/**
+ * Generate the sudoers rules the action always needs for post-action validation
  *
- * Also includes commands used by applyCustomSudoConfig() to avoid logging
- * internal sudo configuration operations.
- *
- * Uses Cmnd_Alias and Defaults!<alias> !log_allowed to exclude these commands
- * from sudo logging (they're internal operations, not user workflow commands).
+ * Only exact read-only commands are allowed: no wildcards (embedded wildcards are
+ * unsupported by sudo-rs, and any wildcard matches arbitrary extra arguments), and nothing that can
+ * write files or modify sudo/syslog configuration.
  *
  * @param username - The username to generate rules for
  * @returns Sudoers configuration string with required commands
  */
-function getRequiredSudoCommands(username) {
+function getRequiredSudoCommands(username = exports.RUNNER_USERNAME) {
+    const commands = getValidationSudoCommands();
     return `
-# Required commands for post-action validation and reporting
+# Required commands for post-action validation
 # These are automatically added by safer-runner-action
+Cmnd_Alias SAFER_RUNNER_VALIDATION = ${commands.join(', \\\n    ')}
 
-# Define command alias for validation commands
-Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/dnsmasq.conf, \\
-                                      /usr/bin/cat /etc/resolv.conf, \\
-                                      /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
-                                      /usr/sbin/iptables -L * -n --line-numbers
-
-# Define command alias for sudo configuration commands (used by applyCustomSudoConfig, setupSudoLogging, and removeSudoLogging)
-Cmnd_Alias SAFER_RUNNER_CONFIG = /usr/bin/tee /tmp/${username}-sudoers.tmp, \\
-                                 /usr/bin/tee /etc/sudoers.d/00-sudo-logging, \\
-                                 /usr/bin/visudo -c -f /tmp/${username}-sudoers.tmp, \\
-                                 /usr/bin/chmod * /tmp/${username}-sudoers.tmp, \\
-                                 /usr/bin/chmod * /etc/sudoers.d/00-sudo-logging, \\
-                                 /usr/bin/chmod * /var/log/safer-runner/*.log, \\
-                                 /usr/bin/chown * /tmp/${username}-sudoers.tmp, \\
-                                 /usr/bin/chown * /etc/sudoers.d/00-sudo-logging, \\
-                                 /usr/bin/touch /var/log/safer-runner/*.log, \\
-                                 /usr/bin/mv /tmp/${username}-sudoers.tmp /etc/sudoers.d/${username}, \\
-                                 /usr/bin/rm -f /tmp/${username}-sudoers.tmp, \\
-                                 /usr/bin/rm -f /etc/sudoers.d/00-sudo-logging
-
-# Exclude validation and config commands from sudo logging
-Defaults!SAFER_RUNNER_VALIDATION !log_allowed
-Defaults!SAFER_RUNNER_CONFIG !log_allowed
-
-# Allow validation and config commands without password
-${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION, SAFER_RUNNER_CONFIG
+${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 `;
 }
 /**
@@ -1079,11 +1234,13 @@ ${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION, SAFER_RUNNER_CONFIG
  * This rewrites the /etc/sudoers.d/runner file with the specified configuration
  *
  * If no config is provided, defaults to the standard GitHub Actions runner config.
- * Always appends required commands for post-action validation and log parsing.
+ * Always appends required commands for post-action validation.
+ * The config is checked with the active visudo, so it must be valid for sudo-rs on Ubuntu 25.10+.
  *
  * @param sudoConfig - The custom sudoers configuration (defaults to unrestricted sudo)
+ * @param flavour - Sudo implementation (detected if omitted), used for error guidance
  */
-async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CONFIG) {
+async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CONFIG, flavour) {
     const isDefaultConfig = sudoConfig === exports.DEFAULT_RUNNER_SUDO_CONFIG;
     if (isDefaultConfig) {
         core.info(`Applying default sudo configuration for user: ${exports.RUNNER_USERNAME}`);
@@ -1091,58 +1248,57 @@ async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CO
     else {
         core.info(`Applying custom sudo configuration for user: ${exports.RUNNER_USERNAME}`);
     }
-    // Validate the sudo config using visudo
     const sudoersFile = `/etc/sudoers.d/${exports.RUNNER_USERNAME}`;
-    const tempFile = `/tmp/${exports.RUNNER_USERNAME}-sudoers.tmp`;
+    const tempFile = SUDOERS_TEMP_FILE;
     // Build complete config: user config + required validation commands
     const requiredCommands = getRequiredSudoCommands(exports.RUNNER_USERNAME);
     const fullConfig = sudoConfig + '\n' + requiredCommands;
-    try {
-        // Write custom config + required commands to temp file
-        await exec.exec('sudo', ['tee', tempFile], {
-            input: Buffer.from(fullConfig + '\n')
-        });
-        // Validate with visudo
-        await exec.exec('sudo', ['visudo', '-c', '-f', tempFile]);
-        // If validation passes, set permissions before moving
-        await exec.exec('sudo', ['chmod', '0440', tempFile]);
-        await exec.exec('sudo', ['chown', 'root:root', tempFile]);
-        await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
-        if (isDefaultConfig) {
-            core.info(`✅ Default sudo configuration rewritten to ${sudoersFile}`);
-            core.info('ℹ️  Required validation and log parsing commands automatically added');
-        }
-        else {
-            core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
-            core.info(`🔒 ${exports.RUNNER_USERNAME} user now has restricted sudo access`);
-            core.info('ℹ️  Required validation and log parsing commands automatically added');
-        }
-    }
-    catch (error) {
-        core.error(`Failed to apply custom sudo config: ${error}`);
-        core.error('Invalid sudoers syntax. Please check your sudo-config input.');
-        // Clean up temp file
+    // Write custom config + required commands to temp file
+    await exec.exec('sudo', ['tee', tempFile], {
+        input: Buffer.from(fullConfig + '\n')
+    });
+    // Validate with the active visudo (visudo-rs on sudo-rs systems)
+    const visudo = await exec.getExecOutput('sudo', ['visudo', '-c', '-f', tempFile], { ignoreReturnCode: true });
+    if (visudo.exitCode !== 0) {
+        const sudoFlavour = flavour !== null && flavour !== void 0 ? flavour : (await detectSudoFlavour());
         await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
-        throw new Error('Invalid sudoers configuration');
+        core.error('Invalid sudoers syntax. Please check your sudo-config input.');
+        if (sudoFlavour === 'sudo-rs') {
+            core.error('This runner uses sudo-rs (the default sudo on Ubuntu 25.10+ / 26.04), which supports a subset of sudoers: ' +
+                'a wildcard may only be the whole argument list (`/usr/bin/apt-get *`), not embedded among other arguments ' +
+                '(`/usr/bin/chmod * /tmp/x`), ' +
+                'and many Defaults settings are not recognised.');
+        }
+        throw new Error(`Invalid sudoers configuration: ${(visudo.stderr || visudo.stdout).trim()}`);
     }
+    // Set permissions before moving into place
+    await exec.exec('sudo', ['chmod', '0440', tempFile]);
+    await exec.exec('sudo', ['chown', 'root:root', tempFile]);
+    await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
+    if (isDefaultConfig) {
+        core.info(`✅ Default sudo configuration rewritten to ${sudoersFile}`);
+    }
+    else {
+        core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
+        core.info(`🔒 ${exports.RUNNER_USERNAME} user now has restricted sudo access`);
+    }
+    core.info('ℹ️  Required validation commands automatically added');
 }
 /**
  * Disable sudo access for the runner user
  * This prevents malicious code from using sudo to bypass security controls
  *
- * Replaces the sudoers file with only the commands needed for post-action operations:
- * - sudo cat <file> - to read protected configuration files for integrity checks
- * - sudo iptables -L <chain> -n --line-numbers - to verify firewall rules
- * - sudo grep -E <pattern> <file> - to parse DNS and network logs for reporting
+ * Replaces the sudoers file with only the read-only commands needed for
+ * post-action integrity validation (see getValidationSudoCommands()).
  */
-async function disableSudoForRunner() {
+async function disableSudoForRunner(flavour) {
     core.info('Restricting sudo access to validation commands only');
     // Rewrite with only a comment header - the required validation commands will be added
     const validationOnlyHeader = `# Safer Runner Action - Validation-only sudo access
-# This configuration allows only the commands needed for post-action integrity validation
-# and log parsing. All other sudo commands will be denied.
+# This configuration allows only the commands needed for post-action integrity validation.
+# All other sudo commands will be denied.
 `;
-    await applyCustomSudoConfig(validationOnlyHeader);
+    await applyCustomSudoConfig(validationOnlyHeader, flavour);
     core.info(`🔒 ${exports.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
 }
 /**
@@ -1155,7 +1311,7 @@ function parseSudoLogs(logFile) {
     try {
         if (fs.existsSync(logFile)) {
             const logContent = fs.readFileSync(logFile, 'utf-8');
-            return (0, sudo_parser_1.parseSudoLogsFromString)(logContent);
+            return (0, sudo_parser_1.filterInternalSudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(logContent), exports.INTERNAL_SUDO_COMMANDS);
         }
         return [];
     }
@@ -1219,6 +1375,359 @@ function generateSudoConfigAdvice(commands) {
     advice += `- ✅ Automatically includes required validation commands\n\n`;
     return advice;
 }
+
+
+/***/ }),
+
+/***/ 8449:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * System Integrity Validation for Safer Runner Action
+ *
+ * This module provides SHA256 checksum-based validation to ensure that critical
+ * security configurations (dnsmasq.conf, resolv.conf, iptables rules) are not
+ * tampered with between setup completion and action end.
+ *
+ * Validation Flow:
+ * 1. Setup completes (main.ts) → Capture post-setup baseline checksums
+ * 2. User workflow runs (potentially malicious code could run here)
+ * 3. Post-action (post.ts) → Verify current state matches baseline
+ *
+ * This detects tampering by external processes during the action run, ensuring
+ * that DNS filtering and firewall rules maintain their integrity.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SystemValidator = exports.CRITICAL_FILES = exports.IPTABLES_CHAINS = void 0;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const crypto = __importStar(__nccwpck_require__(6982));
+const fs_1 = __nccwpck_require__(9896);
+/**
+ * Standard iptables chains to monitor for tampering
+ */
+exports.IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'];
+/**
+ * Security configuration files monitored for tampering
+ * The sudo logging config file is appended at runtime (it depends on the sudo implementation)
+ */
+exports.CRITICAL_FILES = [
+    '/etc/dnsmasq.conf',
+    '/etc/resolv.conf',
+    '/etc/systemd/resolved.conf.d/no-stub.conf'
+];
+class SystemValidator {
+    constructor(criticalFiles) {
+        this.validationStateFile = '/tmp/safer-runner-validation-state.json';
+        // Allow injection of critical files for testing
+        this.criticalFiles = criticalFiles || [...exports.CRITICAL_FILES];
+    }
+    /**
+     * Capture post-setup baseline checksums after all configuration is complete
+     * This baseline will be verified in the post-action to detect tampering
+     */
+    async capturePostSetupBaseline() {
+        core.info('📋 Capturing post-setup security baseline...');
+        const state = {
+            files: [],
+            iptablesRules: [],
+            timestamp: new Date().toISOString()
+        };
+        // Capture file checksums
+        for (const filePath of this.criticalFiles) {
+            try {
+                const checksum = await this.calculateFileChecksum(filePath);
+                if (checksum) {
+                    state.files.push({
+                        path: filePath,
+                        checksum,
+                        timestamp: new Date().toISOString()
+                    });
+                    core.info(`✅ Captured baseline checksum for ${filePath}: ${checksum.substring(0, 16)}...`);
+                }
+                else {
+                    core.error(`❌ Expected file ${filePath} not found after setup - this indicates a setup failure`);
+                    throw new Error(`Critical file ${filePath} missing after setup completion`);
+                }
+            }
+            catch (error) {
+                core.error(`❌ Failed to capture baseline for ${filePath}: ${error}`);
+                throw error;
+            }
+        }
+        // Capture iptables state
+        await this.captureIptablesState(state);
+        // Save validation state
+        (0, fs_1.writeFileSync)(this.validationStateFile, JSON.stringify(state, null, 2));
+        core.info(`💾 Security baseline saved to ${this.validationStateFile}`);
+    }
+    /**
+     * Verify current state against post-setup baseline to detect tampering
+     */
+    async verifyAgainstBaseline() {
+        core.info('🔍 Verifying system integrity against baseline...');
+        if (!(0, fs_1.existsSync)(this.validationStateFile)) {
+            core.warning('⚠️  No baseline state file found - cannot verify integrity');
+            return false;
+        }
+        let baselineState;
+        try {
+            baselineState = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
+        }
+        catch (error) {
+            core.error(`❌ Failed to read baseline state: ${error}`);
+            return false;
+        }
+        let allValid = true;
+        // Verify file checksums against baseline
+        for (const fileState of baselineState.files) {
+            try {
+                const currentChecksum = await this.calculateFileChecksum(fileState.path);
+                if (!currentChecksum) {
+                    core.error(`❌ Critical file ${fileState.path} was deleted after setup!`);
+                    allValid = false;
+                    continue;
+                }
+                if (currentChecksum === fileState.checksum) {
+                    core.info(`✅ File ${fileState.path} integrity verified`);
+                }
+                else {
+                    core.error(`❌ File ${fileState.path} has been tampered with after setup!`);
+                    allValid = false;
+                }
+            }
+            catch (error) {
+                core.error(`❌ Failed to verify ${fileState.path}: ${error}`);
+                allValid = false;
+            }
+        }
+        // Verify iptables rules against baseline
+        const currentIptablesState = await this.getCurrentIptablesState();
+        for (const ruleState of baselineState.iptablesRules) {
+            const currentRule = currentIptablesState.find(r => r.chain === ruleState.chain);
+            if (!currentRule) {
+                core.error(`❌ iptables chain ${ruleState.chain} is missing!`);
+                allValid = false;
+                continue;
+            }
+            if (currentRule.checksum === ruleState.checksum) {
+                core.info(`✅ iptables chain ${ruleState.chain} integrity verified`);
+            }
+            else {
+                core.error(`❌ iptables chain ${ruleState.chain} has been tampered with after setup!`);
+                allValid = false;
+            }
+        }
+        if (allValid) {
+            core.info('✅ All validation checks passed - no tampering detected');
+        }
+        return allValid;
+    }
+    /**
+     * Calculate SHA256 checksum of a file
+     * Uses sudo to read files with restricted permissions (e.g., dnsmasq.conf with mode 600)
+     */
+    async calculateFileChecksum(filePath) {
+        try {
+            let fileContent = '';
+            const exitCode = await exec.exec('sudo', ['cat', filePath], {
+                silent: true,
+                listeners: {
+                    stdout: data => {
+                        fileContent += data.toString();
+                    }
+                },
+                ignoreReturnCode: true
+            });
+            // Exit code 1 typically means file not found
+            if (exitCode !== 0) {
+                return null;
+            }
+            return crypto.createHash('sha256').update(fileContent).digest('hex');
+        }
+        catch (error) {
+            if (error.code === 'ENOENT') {
+                return null; // File doesn't exist
+            }
+            throw error;
+        }
+    }
+    /**
+     * Calculate checksum of iptables rules content
+     */
+    calculateRulesChecksum(rules) {
+        return crypto.createHash('sha256').update(rules).digest('hex');
+    }
+    /**
+     * Get iptables rules output for a specific chain
+     * Extracted for testability - can be overridden in tests
+     */
+    async getIptablesChainOutput(chain) {
+        let rulesOutput = '';
+        await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+            silent: true,
+            listeners: {
+                stdout: data => {
+                    rulesOutput += data.toString();
+                }
+            },
+            ignoreReturnCode: true
+        });
+        return rulesOutput;
+    }
+    /**
+     * Capture current iptables state
+     */
+    async captureIptablesState(state) {
+        for (const chain of exports.IPTABLES_CHAINS) {
+            try {
+                const rulesOutput = await this.getIptablesChainOutput(chain);
+                const checksum = this.calculateRulesChecksum(rulesOutput);
+                state.iptablesRules.push({
+                    chain,
+                    rules: rulesOutput,
+                    checksum,
+                    timestamp: new Date().toISOString()
+                });
+                core.info(`✅ Captured iptables ${chain} chain: ${checksum.substring(0, 16)}...`);
+            }
+            catch (error) {
+                core.warning(`⚠️  Failed to capture iptables ${chain} chain: ${error}`);
+            }
+        }
+    }
+    /**
+     * Get current iptables state for comparison
+     */
+    async getCurrentIptablesState() {
+        const currentState = [];
+        for (const chain of exports.IPTABLES_CHAINS) {
+            try {
+                const rulesOutput = await this.getIptablesChainOutput(chain);
+                const checksum = this.calculateRulesChecksum(rulesOutput);
+                currentState.push({
+                    chain,
+                    rules: rulesOutput,
+                    checksum,
+                    timestamp: new Date().toISOString()
+                });
+            }
+            catch (error) {
+                core.warning(`⚠️  Failed to get current iptables ${chain} chain: ${error}`);
+            }
+        }
+        return currentState;
+    }
+    /**
+     * Generate detailed validation report
+     */
+    async generateValidationReport() {
+        if (!(0, fs_1.existsSync)(this.validationStateFile)) {
+            return '<details>\n<summary><h2>Config File Tamper Detection</h2></summary>\n\nNo validation data available.\n\n</details>\n\n';
+        }
+        // Check if tampering occurred to add warning emoji
+        let tamperingDetected = false;
+        let reportContent = '';
+        try {
+            const state = JSON.parse((0, fs_1.readFileSync)(this.validationStateFile, 'utf8'));
+            reportContent += `**Baseline:** ${state.timestamp}\n`;
+            reportContent += `**Verified:** ${new Date().toISOString()}\n\n`;
+            // File integrity report
+            reportContent += '### Configuration Files\n\n';
+            reportContent += '| File | Status | Checksum Comparison |\n';
+            reportContent += '|------|--------|--------------------|\n';
+            for (const file of state.files) {
+                const currentChecksum = await this.calculateFileChecksum(file.path);
+                let status = 'Unknown';
+                let displayChecksum = file.checksum.substring(0, 16);
+                if (!currentChecksum) {
+                    status = '🚨 DELETED';
+                    displayChecksum = `${displayChecksum} -> MISSING`;
+                    tamperingDetected = true;
+                }
+                else if (currentChecksum === file.checksum) {
+                    status = 'VERIFIED';
+                    displayChecksum = `${displayChecksum} (unchanged)`;
+                }
+                else {
+                    status = '⚠️ TAMPERED';
+                    displayChecksum = `${displayChecksum} -> ${currentChecksum.substring(0, 16)}`;
+                    tamperingDetected = true;
+                }
+                reportContent += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
+            }
+            // iptables integrity report
+            reportContent += '\n### Firewall Rules\n\n';
+            reportContent += '| Chain | Status | Checksum Comparison |\n';
+            reportContent += '|-------|--------|--------------|\n';
+            const currentIptablesState = await this.getCurrentIptablesState();
+            for (const rule of state.iptablesRules) {
+                const currentRule = currentIptablesState.find(r => r.chain === rule.chain);
+                let status = 'Unknown';
+                let displayChecksum = rule.checksum.substring(0, 16);
+                if (!currentRule) {
+                    status = '🚨 MISSING';
+                    displayChecksum = `${displayChecksum} -> MISSING`;
+                    tamperingDetected = true;
+                }
+                else if (currentRule.checksum === rule.checksum) {
+                    status = 'VERIFIED';
+                    displayChecksum = `${displayChecksum} (unchanged)`;
+                }
+                else {
+                    status = '⚠️ TAMPERED';
+                    displayChecksum = `${displayChecksum} -> ${currentRule.checksum.substring(0, 16)}`;
+                    tamperingDetected = true;
+                }
+                reportContent += `| ${rule.chain} | ${status} | ${displayChecksum} |\n`;
+            }
+            reportContent += '\n';
+        }
+        catch (error) {
+            reportContent += `Failed to generate report: ${error}\n`;
+            tamperingDetected = true;
+        }
+        // Wrap in collapsible section with warning emoji if tampering detected
+        const titleEmoji = tamperingDetected ? '⚠️ ' : '';
+        return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${reportContent}</details>\n\n`;
+    }
+}
+exports.SystemValidator = SystemValidator;
 
 
 /***/ }),

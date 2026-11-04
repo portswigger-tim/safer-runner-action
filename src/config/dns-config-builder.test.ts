@@ -275,6 +275,20 @@ describe('DNS Config Builder', () => {
     });
   });
 
+  describe('buildDnsConfig - listen address', () => {
+    it.each(['analyze', 'enforce'] as const)('binds only to 127.0.0.1 in %s mode', mode => {
+      const result = buildDnsConfig({
+        mode,
+        allowedDomains: '',
+        blockRiskySubdomains: false
+      });
+
+      expect(result.config).toMatch(/^bind-interfaces$/m);
+      expect(result.config.match(/^listen-address=.*$/gm)).toEqual(['listen-address=127.0.0.1']);
+      expect(result.config).not.toMatch(/^bind-dynamic$/m);
+    });
+  });
+
   describe('buildDnsConfig - DHCP disabling', () => {
     it('should explicitly disable DHCP functionality in analyze mode', () => {
       const result = buildDnsConfig({

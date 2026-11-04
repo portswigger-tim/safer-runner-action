@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { SystemValidator } from './validation';
+import { SystemValidator, CRITICAL_FILES } from './validation';
 import {
   type DnsUser,
   performInitialSetup,
@@ -10,7 +10,14 @@ import {
   finalizeFirewallRules,
   setupIptablesLogging
 } from './setup';
-import { removeSudoLogging, setupSudoLogging, disableSudoForRunner, applyCustomSudoConfig } from './sudo';
+import {
+  removeSudoLogging,
+  setupSudoLogging,
+  disableSudoForRunner,
+  applyCustomSudoConfig,
+  detectSudoFlavour,
+  getSudoLoggingConfigFile
+} from './sudo';
 import { disableDockerForRunner, stopDockerService } from './docker';
 
 async function run(): Promise<void> {
@@ -39,6 +46,10 @@ async function run(): Promise<void> {
 
     // Remove sudo logging config from pre-hook to stop capturing in pre-sudo.log
     await removeSudoLogging();
+
+    // Ubuntu 25.10+ ships sudo-rs as the default sudo, which needs a different logging setup
+    const sudoFlavour = await detectSudoFlavour();
+    core.info(`Detected sudo implementation: ${sudoFlavour}`);
 
     core.info(`🛡️ Starting Safer Runner Action in ${mode} mode`);
     if (mode === 'enforce' && blockRiskySubdomains) {
@@ -116,11 +127,6 @@ async function run(): Promise<void> {
     core.info('Finalizing firewall rules...');
     await finalizeFirewallRules(mode, 'Main-');
 
-    // Capture post-setup baseline for integrity monitoring
-    core.info('Capturing post-setup security baseline...');
-    const validator = new SystemValidator();
-    await validator.capturePostSetupBaseline();
-
     // Handle Docker configuration BEFORE disabling sudo (Docker operations require sudo)
     if (stopDocker) {
       core.info('Stopping Docker service completely...');
@@ -130,25 +136,25 @@ async function run(): Promise<void> {
       await disableDockerForRunner();
     }
 
-    // Apply sudo configuration AFTER Docker is disabled
-    // This must happen BEFORE setupSudoLogging() so that internal setup commands
-    // are excluded from logs via Defaults!SAFER_RUNNER_CONFIG !log_allowed
+    // Setup sudo logging BEFORE restricting sudo - once restricted, the runner can
+    // only run the read-only validation commands. The action's own commands from
+    // here on are filtered out of the sudo report by parseSudoLogs().
+    core.info('Configuring sudo logging for workflow monitoring...');
+    await setupSudoLogging('/var/log/safer-runner/main-sudo.log', sudoFlavour);
+
+    // Capture post-setup baseline for integrity monitoring (including sudo logging config)
+    core.info('Capturing post-setup security baseline...');
+    const validator = new SystemValidator([...CRITICAL_FILES, getSudoLoggingConfigFile(sudoFlavour)]);
+    await validator.capturePostSetupBaseline();
+
+    // Apply sudo restrictions last
     if (disableSudo) {
       core.info('Disabling sudo access for runner user...');
-      await disableSudoForRunner();
+      await disableSudoForRunner(sudoFlavour);
     } else if (sudoConfig) {
       core.info('Applying custom sudo configuration...');
-      await applyCustomSudoConfig(sudoConfig);
-    } else {
-      // No custom config - apply default config to set up exclusion rules
-      core.info('Configuring default sudo access with validation exclusions...');
-      await applyCustomSudoConfig();
+      await applyCustomSudoConfig(sudoConfig, sudoFlavour);
     }
-
-    // Setup sudo logging AFTER exclusion rules are in place
-    // This ensures internal setup commands are not logged
-    core.info('Configuring sudo logging for workflow monitoring...');
-    await setupSudoLogging('/var/log/safer-runner/main-sudo.log');
 
     core.info(`✅ Safer Runner Action configured successfully in ${mode} mode`);
   } catch (error) {

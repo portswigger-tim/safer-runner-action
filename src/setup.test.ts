@@ -1,9 +1,10 @@
 import * as exec from '@actions/exec';
-import { setupFirewallRules, finalizeFirewallRules, setupIptablesLogging } from './setup';
+import { setupFirewallRules, finalizeFirewallRules, setupIptablesLogging, startDnsmasq } from './setup';
 import { DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER } from './config/dns-config-builder';
 
 // Mock @actions/exec
 jest.mock('@actions/exec');
+jest.mock('@actions/core');
 
 describe('setup.ts - iptables configuration', () => {
   let execSpy: jest.SpyInstance;
@@ -633,6 +634,47 @@ describe('setup.ts - iptables configuration', () => {
       const lastRule = capturedCommands[capturedCommands.length - 1];
       expect(lastRule.args).toContain('ACCEPT');
       expect(lastRule.args).not.toContain('DROP');
+    });
+  });
+
+  describe('startDnsmasq', () => {
+    const restartCalls = () =>
+      capturedCommands.filter(cmd => cmd.args.join(' ') === 'systemctl restart dnsmasq').length;
+
+    it('restarts dnsmasq once when it starts cleanly', async () => {
+      await startDnsmasq(0);
+
+      expect(restartCalls()).toBe(1);
+      expect(capturedCommands.some(cmd => cmd.args[0] === 'journalctl')).toBe(false);
+    });
+
+    it('dumps diagnostics and retries once after a failed start', async () => {
+      let restarts = 0;
+      execSpy.mockImplementation(async (program, args) => {
+        capturedCommands.push({ program, args: args || [] });
+        if ((args || []).join(' ') === 'systemctl restart dnsmasq') {
+          restarts++;
+          return restarts === 1 ? 1 : 0;
+        }
+        return 0;
+      });
+
+      await startDnsmasq(0);
+
+      expect(restartCalls()).toBe(2);
+      const commands = capturedCommands.map(cmd => cmd.args.join(' '));
+      expect(commands).toContain('journalctl -xeu dnsmasq --no-pager -n 30');
+      expect(commands).toContain('systemctl reset-failed dnsmasq');
+    });
+
+    it('fails after the retry also fails', async () => {
+      execSpy.mockImplementation(async (program, args) => {
+        capturedCommands.push({ program, args: args || [] });
+        return (args || []).join(' ') === 'systemctl restart dnsmasq' ? 1 : 0;
+      });
+
+      await expect(startDnsmasq(0)).rejects.toThrow('dnsmasq failed to start');
+      expect(restartCalls()).toBe(2);
     });
   });
 });
