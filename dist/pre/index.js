@@ -201,8 +201,11 @@ function getGitHubRequiredDomains() {
         'pkg.actions.githubusercontent.com',
         'ghcr.io',
         'results-receiver.actions.githubusercontent.com',
-        // Add all the productionresultssa domains...
-        ...Array.from({ length: 20 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
+        // GitHub Actions results storage is spread across productionresultssa<N>.blob.core.windows.net
+        // accounts, and GitHub keeps adding them (sa32 observed Nov 2026). Enumerate a generous range
+        // rather than allowing *.blob.core.windows.net, which would permit exfiltration to any Azure
+        // blob account. Revisit this bound if GitHub scales past it.
+        ...Array.from({ length: 256 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
         'objects.githubusercontent.com',
         'objects-origin.githubusercontent.com',
         'github-releases.githubusercontent.com',

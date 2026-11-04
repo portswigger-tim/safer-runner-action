@@ -17,7 +17,7 @@ describe('GitHub Parser', () => {
 
     it('should include all productionresultssa domains', () => {
       const domains = getGitHubRequiredDomains();
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 256; i++) {
         expect(domains).toContain(`productionresultssa${i}.blob.core.windows.net`);
       }
     });
