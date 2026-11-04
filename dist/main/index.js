@@ -1337,7 +1337,7 @@ if $programname == 'sudo' and $msg contains 'COMMAND=' then {
  * @param flavour - Sudo implementation (detected if omitted)
  */
 async function setupSudoLogging(logFile, flavour) {
-    const sudoFlavour = flavour !== null && flavour !== void 0 ? flavour : (await detectSudoFlavour());
+    const sudoFlavour = flavour ?? (await detectSudoFlavour());
     core.info(`Configuring sudo logging to ${logFile} (${sudoFlavour})...`);
     // Create the log file and make it readable by the runner
     await exec.exec('sudo', ['touch', logFile]);
@@ -1458,7 +1458,7 @@ async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CO
     // Validate with the active visudo (visudo-rs on sudo-rs systems)
     const visudo = await exec.getExecOutput('sudo', ['visudo', '-c', '-f', tempFile], { ignoreReturnCode: true });
     if (visudo.exitCode !== 0) {
-        const sudoFlavour = flavour !== null && flavour !== void 0 ? flavour : (await detectSudoFlavour());
+        const sudoFlavour = flavour ?? (await detectSudoFlavour());
         await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
         core.error('Invalid sudoers syntax. Please check your sudo-config input.');
         if (sudoFlavour === 'sudo-rs') {
