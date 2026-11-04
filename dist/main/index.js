@@ -1650,8 +1650,9 @@ exports.CRITICAL_FILES = [
     '/etc/systemd/resolved.conf.d/no-stub.conf'
 ];
 class SystemValidator {
+    validationStateFile = '/tmp/safer-runner-validation-state.json';
+    criticalFiles;
     constructor(criticalFiles) {
-        this.validationStateFile = '/tmp/safer-runner-validation-state.json';
         // Allow injection of critical files for testing
         this.criticalFiles = criticalFiles || [...exports.CRITICAL_FILES];
     }
