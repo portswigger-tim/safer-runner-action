@@ -128,6 +128,7 @@ describe('sudo module', () => {
         '/usr/bin/cat /opt/safer-runner/proxy/policy_core.py',
         `/usr/bin/cat ${SUDO_LOGGING_SUDOERS_FILE}`,
         `/usr/bin/cat ${SUDO_LOGGING_RSYSLOG_FILE}`,
+        '/usr/bin/cat /etc/safer-runner/validation-state.json',
         '/usr/sbin/iptables -L INPUT -n --line-numbers',
         '/usr/sbin/iptables -L OUTPUT -n --line-numbers',
         '/usr/sbin/iptables -L FORWARD -n --line-numbers',

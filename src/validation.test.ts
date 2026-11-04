@@ -1,7 +1,10 @@
-import { SystemValidator } from './validation';
+import { BASELINE_WRITE_COMMANDS, SystemValidator } from './validation';
+import { INTERNAL_SUDO_COMMANDS } from './sudo';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
+
+const TEST_STATE_FILE = '/tmp/safer-runner-test-validation-state.json';
 
 // Mock SystemValidator that provides test iptables output and file reading without sudo
 class TestSystemValidator extends SystemValidator {
@@ -15,6 +18,15 @@ class TestSystemValidator extends SystemValidator {
   // Helper method to set mock iptables output for tests
   setMockIptablesOutput(chain: string, output: string): void {
     this.mockIptablesOutput.set(chain, output);
+  }
+
+  // Override to keep the baseline in a test file instead of the root-owned location
+  protected async writeBaseline(json: string): Promise<void> {
+    fs.writeFileSync(TEST_STATE_FILE, json);
+  }
+
+  protected async readBaseline(): Promise<string | null> {
+    return fs.existsSync(TEST_STATE_FILE) ? fs.readFileSync(TEST_STATE_FILE, 'utf8') : null;
   }
 
   // Override to read files without sudo for local testing
@@ -84,7 +96,7 @@ num  target     prot opt source               destination
     }
 
     // Cleanup validation state file
-    const stateFile = '/tmp/safer-runner-validation-state.json';
+    const stateFile = TEST_STATE_FILE;
     if (fs.existsSync(stateFile)) {
       fs.unlinkSync(stateFile);
     }
@@ -120,14 +132,14 @@ num  target     prot opt source               destination
 
     it('should create validation state file', async () => {
       await validator.capturePostSetupBaseline();
-      const stateFile = '/tmp/safer-runner-validation-state.json';
+      const stateFile = TEST_STATE_FILE;
 
       expect(fs.existsSync(stateFile)).toBe(true);
     });
 
     it('should capture checksums for all critical files', async () => {
       await validator.capturePostSetupBaseline();
-      const stateFile = '/tmp/safer-runner-validation-state.json';
+      const stateFile = TEST_STATE_FILE;
       const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
 
       expect(state.files).toHaveLength(testFiles.length);
@@ -278,6 +290,29 @@ num  target     prot opt source               destination
       // Generate report (should show tampering)
       const report = await validator.generateValidationReport();
       expect(report).toContain('TAMPERED');
+    });
+  });
+
+  describe('Baseline storage (M1)', () => {
+    it('is root-owned 0600 under /etc/safer-runner, never a runner-writable path', () => {
+      const targets = new Set(BASELINE_WRITE_COMMANDS.map(c => c[c.length - 1]));
+      expect(Array.from(targets)).toEqual(['/etc/safer-runner/validation-state.json']);
+      expect(BASELINE_WRITE_COMMANDS).toContainEqual(['chown', 'root:root', '/etc/safer-runner/validation-state.json']);
+      expect(BASELINE_WRITE_COMMANDS).toContainEqual(['chmod', '0600', '/etc/safer-runner/validation-state.json']);
+    });
+
+    it('restricts the mode before writing the content', () => {
+      const idx = (cmd: string) => BASELINE_WRITE_COMMANDS.findIndex(c => c[0] === cmd);
+      expect(idx('chmod')).toBeLessThan(idx('tee'));
+      expect(idx('chown')).toBeLessThan(idx('tee'));
+    });
+
+    it("keeps the action's own baseline writes out of the sudo report", () => {
+      for (const c of BASELINE_WRITE_COMMANDS) expect(INTERNAL_SUDO_COMMANDS).toContain(c.join(' '));
+    });
+
+    it('reports no integrity (fails closed) when the baseline cannot be read', async () => {
+      expect(await validator.verifyAgainstBaseline()).toBe(false);
     });
   });
 });

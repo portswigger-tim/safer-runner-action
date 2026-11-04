@@ -464,7 +464,7 @@ The action can disable Docker access via `docker.ts`:
 
 **Validation Failures**:
 - Check if monitored files exist: `/etc/dnsmasq.conf`, `/etc/resolv.conf`
-- Check baseline file: `cat /tmp/safer-runner-validation-state.json`
+- Check baseline file: `sudo cat /etc/safer-runner/validation-state.json` (root-owned 0600; v2 no longer keeps it in /tmp)
 - Check file permissions (must be readable by action)
 
 **Pre-hook Not Running**:

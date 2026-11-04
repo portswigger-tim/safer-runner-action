@@ -17,7 +17,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { VALIDATION_STATE_FILE } from './constants';
 
 interface FileChecksum {
   path: string;
@@ -70,8 +70,15 @@ export const CRITICAL_FILES = [
   '/opt/safer-runner/proxy/policy_core.py'
 ] as const;
 
+/** sudo commands that store the baseline (exact; also filtered from the sudo report). */
+export const BASELINE_WRITE_COMMANDS: string[][] = [
+  ['touch', VALIDATION_STATE_FILE],
+  ['chown', 'root:root', VALIDATION_STATE_FILE],
+  ['chmod', '0600', VALIDATION_STATE_FILE],
+  ['tee', VALIDATION_STATE_FILE]
+];
+
 export class SystemValidator {
-  private validationStateFile = '/tmp/safer-runner-validation-state.json';
   private criticalFiles: string[];
 
   constructor(criticalFiles?: string[]) {
@@ -117,8 +124,35 @@ export class SystemValidator {
     await this.captureIptablesState(state);
 
     // Save validation state
-    writeFileSync(this.validationStateFile, JSON.stringify(state, null, 2));
-    core.info(`💾 Security baseline saved to ${this.validationStateFile}`);
+    await this.writeBaseline(JSON.stringify(state, null, 2));
+    core.info(`💾 Security baseline saved to ${VALIDATION_STATE_FILE}`);
+  }
+
+  /**
+   * Store the baseline root-owned (0600) under /etc/safer-runner, never in a runner-writable
+   * location: the runner could otherwise rewrite it to match a tampered state (review M1).
+   * Runs during setup, before sudo is restricted.
+   */
+  protected async writeBaseline(json: string): Promise<void> {
+    // Each command is listed in INTERNAL_SUDO_COMMANDS (sudo logging is already on here).
+    // Mode and owner are set before the content goes in. ETC_DIR is root-owned (writePolicy).
+    for (const args of BASELINE_WRITE_COMMANDS) {
+      await exec.exec('sudo', args, args[0] === 'tee' ? { input: Buffer.from(json), silent: true } : {});
+    }
+  }
+
+  /**
+   * Read the baseline back with the same privilege path as the checked files (an exact
+   * `sudo cat` allowlist entry, see getValidationSudoCommands). Null if it is missing.
+   */
+  protected async readBaseline(): Promise<string | null> {
+    let out = '';
+    const rc = await exec.exec('sudo', ['-n', 'cat', VALIDATION_STATE_FILE], {
+      silent: true,
+      ignoreReturnCode: true,
+      listeners: { stdout: data => (out += data.toString()) }
+    });
+    return rc === 0 ? out : null;
   }
 
   /**
@@ -127,14 +161,15 @@ export class SystemValidator {
   async verifyAgainstBaseline(): Promise<boolean> {
     core.info('🔍 Verifying system integrity against baseline...');
 
-    if (!existsSync(this.validationStateFile)) {
+    const baseline = await this.readBaseline();
+    if (baseline === null) {
       core.warning('⚠️  No baseline state file found - cannot verify integrity');
       return false;
     }
 
     let baselineState: ValidationState;
     try {
-      baselineState = JSON.parse(readFileSync(this.validationStateFile, 'utf8'));
+      baselineState = JSON.parse(baseline);
     } catch (error) {
       core.error(`❌ Failed to read baseline state: ${error}`);
       return false;
@@ -299,7 +334,8 @@ export class SystemValidator {
    * Generate detailed validation report
    */
   async generateValidationReport(): Promise<string> {
-    if (!existsSync(this.validationStateFile)) {
+    const baseline = await this.readBaseline();
+    if (baseline === null) {
       return '<details>\n<summary><h2>Config File Tamper Detection</h2></summary>\n\nNo validation data available.\n\n</details>\n\n';
     }
 
@@ -308,7 +344,7 @@ export class SystemValidator {
     let reportContent = '';
 
     try {
-      const state: ValidationState = JSON.parse(readFileSync(this.validationStateFile, 'utf8'));
+      const state: ValidationState = JSON.parse(baseline);
 
       reportContent += `**Baseline:** ${state.timestamp}\n`;
       reportContent += `**Verified:** ${new Date().toISOString()}\n\n`;

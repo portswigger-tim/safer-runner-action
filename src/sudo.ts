@@ -7,8 +7,8 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import { parseSudoLogsFromString, filterInternalSudoCommands, type SudoCommand } from './parsers/sudo-parser';
-import { CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
-import { TEARDOWN_BIN } from './constants';
+import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
+import { TEARDOWN_BIN, VALIDATION_STATE_FILE } from './constants';
 
 // Re-export SudoCommand type for convenience
 export type { SudoCommand } from './parsers/sudo-parser';
@@ -147,7 +147,7 @@ export async function removeSudoLogging(): Promise<void> {
  * These are the only sudo commands the runner keeps after sudo is restricted.
  */
 export function getValidationSudoCommands(): string[] {
-  const files = [...CRITICAL_FILES, SUDO_LOGGING_SUDOERS_FILE, SUDO_LOGGING_RSYSLOG_FILE];
+  const files = [...CRITICAL_FILES, SUDO_LOGGING_SUDOERS_FILE, SUDO_LOGGING_RSYSLOG_FILE, VALIDATION_STATE_FILE];
   return [
     ...files.map(file => `/usr/bin/cat ${file}`),
     ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${iptablesListArgs(chain).join(' ')}`),
@@ -174,6 +174,8 @@ export const INTERNAL_SUDO_COMMANDS: string[] = [
   `rm -f ${SUDO_LOGGING_SUDOERS_FILE}`,
   `rm -f ${SUDO_LOGGING_RSYSLOG_FILE}`,
   'systemctl restart rsyslog',
+  // SystemValidator.writeBaseline()
+  ...BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
   TEARDOWN_BIN
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 
