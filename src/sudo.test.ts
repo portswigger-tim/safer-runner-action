@@ -123,11 +123,18 @@ describe('sudo module', () => {
         '/usr/bin/cat /etc/dnsmasq.conf',
         '/usr/bin/cat /etc/resolv.conf',
         '/usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf',
+        '/usr/bin/cat /etc/safer-runner/policy.json',
+        '/usr/bin/cat /opt/safer-runner/proxy/policy.py',
+        '/usr/bin/cat /opt/safer-runner/proxy/policy_core.py',
         `/usr/bin/cat ${SUDO_LOGGING_SUDOERS_FILE}`,
         `/usr/bin/cat ${SUDO_LOGGING_RSYSLOG_FILE}`,
         '/usr/sbin/iptables -L INPUT -n --line-numbers',
         '/usr/sbin/iptables -L OUTPUT -n --line-numbers',
-        '/usr/sbin/iptables -L FORWARD -n --line-numbers'
+        '/usr/sbin/iptables -L FORWARD -n --line-numbers',
+        '/usr/sbin/iptables -L SAFER_RUNNER_OUT -n --line-numbers',
+        '/usr/sbin/iptables -t nat -L OUTPUT -n --line-numbers',
+        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers',
+        '/opt/safer-runner/bin/teardown ""'
       ]);
     });
 

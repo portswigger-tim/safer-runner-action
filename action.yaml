@@ -1,5 +1,5 @@
 name: 'Safer Runner Action'
-description: 'Multi-layer security and reporting for GitHub Actions'
+description: 'L7 egress control for GitHub-hosted runners: hostname (SNI/Host) allowlisting through a TLS-terminating proxy'
 author: 'PortSwigger'
 branding:
   icon: 'shield'
@@ -7,45 +7,70 @@ branding:
 
 inputs:
   mode:
-    description: 'Operation mode: "analyze" to log traffic without blocking, "enforce" to block unauthorized domains'
+    description: >-
+      "analyze": all HTTP(S) goes through the proxy and is logged; nothing is blocked
+      (hosts that would be blocked are passed through by SNI and reported).
+      "enforce": only allowlisted hostnames are reachable; all other egress is rejected.
     required: false
     default: 'analyze'
   allowed-domains:
-    description: 'Space-separated list of additional domains to allow (beyond GitHub required domains)'
+    description: >-
+      Hostnames to allow in addition to GitHub's own (space/comma/newline separated).
+      `example.com` allows it and its subdomains; `*.example.com` subdomains only;
+      `a-*.example.com` matches within one label. Shared multi-tenant suffixes (e.g.
+      blob.core.windows.net) are refused.
     required: false
     default: ''
+  passthrough-domains:
+    description: >-
+      Hostnames whose TLS is NOT decrypted (SNI-only check, upstream still repointed by name).
+      Only for single-tenant hosts whose clients cannot trust the runtime CA (e.g. pinned
+      clients). hosted-compute-*.githubapp.com is always included (the runner's Go agent
+      cannot trust a CA added after boot).
+    required: false
+    default: 'hosted-compute-*.githubapp.com'
+  block-risky-github-subdomains:
+    description: 'Deny gist.github.com, gist.githubusercontent.com and raw.githubusercontent.com even though github.com is allowed.'
+    required: false
+    default: 'true'
   primary-dns-server:
-    description: 'Primary DNS server for allowed domains (defaults to Quad9: 9.9.9.9)'
+    description: 'Upstream DNS server dnsmasq forwards to (defaults to Quad9).'
     required: false
     default: '9.9.9.9'
   secondary-dns-server:
-    description: 'Secondary DNS server for redundancy (defaults to Quad9 secondary: 149.112.112.112)'
+    description: 'Secondary upstream DNS server ("" to disable).'
     required: false
     default: '149.112.112.112'
-  fail-on-tampering:
-    description: 'Whether to fail the workflow after job completion if security configuration tampering is detected'
-    required: false
-    default: 'false'
-  block-risky-github-subdomains:
-    description: 'Whether to block risky GitHub subdomains (gist.github.com, gist.githubusercontent.com, raw.githubusercontent.com) in enforce mode. Set to "false" if you need these domains.'
-    required: false
-    default: 'true'
   disable-sudo:
-    description: 'Whether to disable sudo access for the runner user after setup is complete. This prevents malicious code from using sudo to bypass security controls.'
+    description: >-
+      Remove sudo from the runner user after setup. Strongly recommended with enforce: with
+      sudo any step can remove the egress controls.
     required: false
     default: 'false'
   sudo-config:
-    description: 'Custom sudoers configuration for the runner user (only used when disable-sudo is false). Provide sudoers rules as a multi-line string.'
+    description: 'Custom sudoers rules for the runner user (ignored when disable-sudo is true).'
     required: false
     default: ''
   disable-docker:
-    description: 'Whether to remove runner user from docker group. This prevents container usage, blocking container escape attacks and docker socket abuse.'
+    description: 'Remove the runner user from the docker group (docker access is root-equivalent).'
     required: false
     default: 'false'
   stop-docker:
-    description: 'Whether to completely stop and disable the Docker service. This provides stronger protection than disable-docker by preventing all Docker usage system-wide.'
+    description: 'Stop and disable the Docker service entirely.'
     required: false
     default: 'false'
+  fail-on-tampering:
+    description: 'Fail the job in the post step if security configuration was changed during the job.'
+    required: false
+    default: 'false'
+  proxy-port:
+    description: '(advanced) Loopback port the proxy listens on.'
+    required: false
+    default: '8080'
+  proxy-stream-large-bodies:
+    description: '(advanced) Bodies larger than this are streamed instead of buffered (mitmproxy stream_large_bodies).'
+    required: false
+    default: '1m'
 
 runs:
   using: 'node24'

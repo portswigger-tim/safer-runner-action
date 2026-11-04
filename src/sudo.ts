@@ -7,7 +7,8 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import { parseSudoLogsFromString, filterInternalSudoCommands, type SudoCommand } from './parsers/sudo-parser';
-import { CRITICAL_FILES, IPTABLES_CHAINS } from './validation';
+import { CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
+import { TEARDOWN_BIN } from './constants';
 
 // Re-export SudoCommand type for convenience
 export type { SudoCommand } from './parsers/sudo-parser';
@@ -149,7 +150,9 @@ export function getValidationSudoCommands(): string[] {
   const files = [...CRITICAL_FILES, SUDO_LOGGING_SUDOERS_FILE, SUDO_LOGGING_RSYSLOG_FILE];
   return [
     ...files.map(file => `/usr/bin/cat ${file}`),
-    ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables -L ${chain} -n --line-numbers`)
+    ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${iptablesListArgs(chain).join(' ')}`),
+    // post-step teardown (destroys the CA key). `""` = no arguments allowed.
+    `${TEARDOWN_BIN} ""`
   ];
 }
 
@@ -170,7 +173,8 @@ export const INTERNAL_SUDO_COMMANDS: string[] = [
   // removeSudoLogging() / setupSudoLogging()
   `rm -f ${SUDO_LOGGING_SUDOERS_FILE}`,
   `rm -f ${SUDO_LOGGING_RSYSLOG_FILE}`,
-  'systemctl restart rsyslog'
+  'systemctl restart rsyslog',
+  TEARDOWN_BIN
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 
 /**

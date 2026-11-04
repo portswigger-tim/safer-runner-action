@@ -1,184 +1,79 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
+import * as fs from 'fs';
+import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
+import { SETUP_MARKER } from './egress';
+import { readFlowLog } from './flowlog';
+import { parseDnsLogs } from './parsers/dns-parser';
+import { buildReport, parseFirewallLog, summarizeFlows } from './report';
+import { generateSudoSummarySection, parseSudoLogs } from './sudo';
 import { SystemValidator } from './validation';
-import { parseNetworkLogs, parsePreHookNetworkLogs, NetworkConnection } from './parsers/network-parser';
-import { parseDnsLogs, DnsResolution } from './parsers/dns-parser';
-import { parseSudoLogs, generateSudoSummarySection, type SudoCommand } from './sudo';
-import {
-  generateNetworkConnectionDetails,
-  generateDnsTable,
-  generateDnsDetails,
-  generateConfigurationAdvice
-} from './formatters/report-formatter';
+import type { Mode } from './policy';
 
-async function run(): Promise<void> {
+function setupMode(): Mode | null {
   try {
-    core.info('🔍 Analyzing network access logs...');
-
-    // Wait for logs to be written
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Parse main action logs
-    const connections = await parseNetworkLogs();
-    const dnsResolutions = await parseDnsLogs('/var/log/safer-runner/main-dns.log');
-
-    // Parse main sudo logs (workflow commands only)
-    const sudoCommands = parseSudoLogs('/var/log/safer-runner/main-sudo.log');
-    if (sudoCommands.length > 0) {
-      core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
-    }
-
-    // Parse pre-hook logs if pre-action ran
-    let preHookConnections: NetworkConnection[] = [];
-    let preHookDnsResolutions: DnsResolution[] = [];
-    let preHookSudoCommands: SudoCommand[] = [];
-
-    // Check if pre-action ran by looking for DNS user state
-    const preUsername = core.getState('dns-user');
-    if (preUsername) {
-      core.info('📋 Parsing pre-hook logs...');
-
-      // Parse pre-hook network connections
-      preHookConnections = await parsePreHookNetworkLogs();
-      core.info(`✅ Found ${preHookConnections.length} pre-hook network connection(s)`);
-
-      // Parse pre-hook DNS logs from dedicated log file
-      try {
-        const fs = await import('fs');
-        if (fs.existsSync('/var/log/safer-runner/pre-dns.log')) {
-          preHookDnsResolutions = await parseDnsLogs('/var/log/safer-runner/pre-dns.log');
-          core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
-        }
-
-        // Parse pre-hook sudo logs (other actions' pre-hooks only)
-        // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
-        preHookSudoCommands = parseSudoLogs('/var/log/safer-runner/pre-sudo.log');
-        if (preHookSudoCommands.length > 0) {
-          core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
-        }
-      } catch (error) {
-        core.warning(`Could not parse pre-hook logs: ${error}`);
-      }
-    }
-
-    // Verify system integrity against post-setup baseline
-    const validator = new SystemValidator();
-    const integrityValid = await validator.verifyAgainstBaseline();
-    const validationReport = await validator.generateValidationReport();
-
-    // Check if we should fail on tampering (GitHub Actions converts boolean inputs to strings)
-    const failOnTampering = core.getBooleanInput('fail-on-tampering');
-
-    if (!integrityValid && failOnTampering) {
-      core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
-      return; // Exit early - the validation report will still be in the logs above
-    }
-
-    await generateJobSummary(
-      connections,
-      dnsResolutions,
-      sudoCommands,
-      preHookConnections,
-      preHookDnsResolutions,
-      preHookSudoCommands,
-      validationReport
-    );
-
-    core.info('✅ Network access summary generated');
-  } catch (error) {
-    core.warning(`Failed to generate network summary: ${error}`);
-    // Don't fail the entire action if log analysis fails
+    return (JSON.parse(fs.readFileSync(SETUP_MARKER, 'utf8')) as { mode: Mode }).mode;
+  } catch {
+    return null;
   }
 }
 
 /**
- * Generate simplified pre-hook analysis section with network connections, DNS, and sudo info
+ * Post step: destroy the CA private key, then report. The proxy and firewall stay up: the
+ * runner's own "Complete job" traffic still goes through them, and the VM is destroyed after.
  */
-function generatePreHookAnalysis(
-  preHookConnections: NetworkConnection[],
-  preHookDnsResolutions: DnsResolution[],
-  preHookSudoCommands: SudoCommand[]
-): string {
-  // If no pre-hook activity, don't show the section
-  if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0 && preHookSudoCommands.length === 0) {
-    return '';
+async function run(): Promise<void> {
+  const mode = setupMode();
+  if (!mode) {
+    core.warning('safer-runner setup did not complete - no report');
+    return;
   }
 
-  let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
+  // -n: never prompt; the helper is allowlisted even with disable-sudo
+  const rc = await exec.exec('sudo', ['-n', TEARDOWN_BIN], { ignoreReturnCode: true });
+  if (rc === 0) core.info('🔑 Ephemeral CA private key destroyed');
+  else core.warning(`Could not run ${TEARDOWN_BIN} (exit ${rc}); the CA key dies with the VM`);
 
-  report += `This section shows activity captured during pre-hook monitoring (other actions' pre-hooks), before your workflow steps executed.\n\n`;
-
-  // Network Connection Details
-  report += generateNetworkConnectionDetails(preHookConnections);
-
-  // DNS Information
-  report += generateDnsDetails(preHookDnsResolutions);
-
-  // Sudo Commands
-  report += generateSudoSummarySection(preHookSudoCommands, 'Sudo Commands');
-
-  report += `</details>\n\n`;
-  return report;
-}
-
-async function generateJobSummary(
-  connections: NetworkConnection[],
-  dnsResolutions: DnsResolution[],
-  sudoCommands: SudoCommand[],
-  preHookConnections: NetworkConnection[],
-  preHookDnsResolutions: DnsResolution[],
-  preHookSudoCommands: SudoCommand[],
-  validationReport: string
-): Promise<void> {
-  const mode = core.getInput('mode') || 'analyze';
-  const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
-  const jobName = process.env.GITHUB_JOB || 'unknown';
-
-  let summary = `# Safer Runner Security Report\n\n`;
-
-  const modeIcon = mode === 'enforce' ? '🔒' : '📊';
-  summary += `**Job:** ${jobName}\n`;
-  summary += `**Mode:** ${modeIcon} ${mode.toUpperCase()}\n`;
-
-  // Show blocked subdomains if in enforce mode
-  if (mode === 'enforce') {
-    const riskySubdomains = ['gist.github.com', 'gist.githubusercontent.com', 'raw.githubusercontent.com'];
-    if (blockRiskySubdomains) {
-      summary += `**Blocked Subdomains:** 🚫 ${riskySubdomains.join(', ')}\n`;
-    } else {
-      summary += `**Blocked Subdomains:** ⚠️ DISABLED (risky subdomains are allowed)\n`;
+  try {
+    await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
+    const hosts = summarizeFlows(readFlowLog(FLOW_LOG));
+    const firewall = fs.existsSync(FIREWALL_LOG) ? parseFirewallLog(fs.readFileSync(FIREWALL_LOG, 'utf8')) : [];
+    const dns = await parseDnsLogs(DNS_LOG);
+    const dnsRefused = Array.from(new Set(dns.filter(d => /NXDOMAIN|blocked/i.test(d.status)).map(d => d.domain)));
+    let selfTests = [];
+    try {
+      selfTests = JSON.parse(fs.readFileSync(SELFTEST_FILE, 'utf8'));
+    } catch {
+      selfTests = [];
     }
+
+    // Full lists in the job log, so nothing is ever silently dropped from the summary.
+    for (const h of hosts) {
+      core.info(`${h.verdict.padEnd(11)} ${h.name} conns=${h.connections} reqs=${h.requests} ${h.reasons.join(',')}`);
+    }
+
+    const validator = new SystemValidator();
+    const intact = await validator.verifyAgainstBaseline();
+    const validationReport = await validator.generateValidationReport();
+    const sudoSection = generateSudoSummarySection(parseSudoLogs(SUDO_LOG), 'Sudo usage');
+
+    const md = buildReport({
+      mode,
+      job: process.env.GITHUB_JOB || 'unknown',
+      hosts,
+      firewall,
+      dnsRefused,
+      selfTests,
+      extraSections: [sudoSection, validationReport]
+    });
+    await core.summary.addRaw(md).write();
+
+    if (!intact && core.getInput('fail-on-tampering') === 'true') {
+      core.setFailed('🚨 Security configuration was tampered with during the job');
+    }
+  } catch (error) {
+    core.warning(`Failed to generate the safer-runner report: ${error}`);
   }
-
-  summary += `**Generated:** ${new Date().toISOString()}\n\n`;
-  summary += `---\n\n`;
-
-  // 1. Network Connection Details
-  summary += generateNetworkConnectionDetails(connections);
-  summary += `---\n\n`;
-
-  // 2. DNS Information
-  summary += generateDnsDetails(dnsResolutions);
-  summary += `---\n\n`;
-
-  // 3. Pre-Hook Security Analysis (collapsible)
-  summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preHookSudoCommands);
-  if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0 || preHookSudoCommands.length > 0) {
-    summary += `---\n\n`;
-  }
-
-  // 4. Config File Tamper Detection
-  summary += `${validationReport}`;
-  summary += `---\n\n`;
-
-  // 5. Configuration Advice (for analyze mode only)
-  if (mode === 'analyze') {
-    summary += generateConfigurationAdvice(dnsResolutions, sudoCommands);
-    summary += `---\n\n`;
-  }
-
-  summary += `*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
-
-  await core.summary.addRaw(summary).write();
 }
 
 run();

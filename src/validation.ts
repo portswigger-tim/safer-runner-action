@@ -39,9 +39,23 @@ interface ValidationState {
 }
 
 /**
- * Standard iptables chains to monitor for tampering
+ * iptables chains to monitor for tampering: the built-in hooks plus the chains the v2
+ * action owns. `table:CHAIN` selects a non-filter table.
  */
-export const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'] as const;
+export const IPTABLES_CHAINS = [
+  'INPUT',
+  'OUTPUT',
+  'FORWARD',
+  'SAFER_RUNNER_OUT',
+  'nat:OUTPUT',
+  'nat:SAFER_RUNNER_NAT'
+] as const;
+
+/** `iptables` arguments that list one chain spec (`CHAIN` or `table:CHAIN`). */
+export function iptablesListArgs(spec: string): string[] {
+  const [table, chain] = spec.includes(':') ? spec.split(':') : ['filter', spec];
+  return [...(table === 'filter' ? [] : ['-t', table]), '-L', chain, '-n', '--line-numbers'];
+}
 
 /**
  * Security configuration files monitored for tampering
@@ -50,7 +64,10 @@ export const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'] as const;
 export const CRITICAL_FILES = [
   '/etc/dnsmasq.conf',
   '/etc/resolv.conf',
-  '/etc/systemd/resolved.conf.d/no-stub.conf'
+  '/etc/systemd/resolved.conf.d/no-stub.conf',
+  '/etc/safer-runner/policy.json',
+  '/opt/safer-runner/proxy/policy.py',
+  '/opt/safer-runner/proxy/policy_core.py'
 ] as const;
 
 export class SystemValidator {
@@ -218,7 +235,7 @@ export class SystemValidator {
    */
   protected async getIptablesChainOutput(chain: string): Promise<string> {
     let rulesOutput = '';
-    await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+    await exec.exec('sudo', ['iptables', ...iptablesListArgs(chain)], {
       silent: true,
       listeners: {
         stdout: data => {

@@ -1,354 +1,889 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 5601:
+/***/ 1877:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 /**
- * Report Formatter for Safer Runner Action
+ * DNS Configuration Builder for DNSmasq
  *
- * Generates markdown-formatted security reports from network connections and DNS resolutions.
- * All functions are pure (no I/O, no side effects) for maximum testability.
+ * Builds DNSmasq configuration strings based on mode (analyze/enforce),
+ * allowed domains, and security settings. This module contains pure functions
+ * for testability - it doesn't execute any commands or have side effects.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.generateNetworkConnectionTable = generateNetworkConnectionTable;
-exports.generateNetworkConnectionDetails = generateNetworkConnectionDetails;
-exports.generateDnsTable = generateDnsTable;
-exports.generateDnsDetails = generateDnsDetails;
-exports.generateConfigurationAdvice = generateConfigurationAdvice;
-exports.formatConnectionStatus = formatConnectionStatus;
-exports.formatDnsStatus = formatDnsStatus;
-exports.formatIpAddresses = formatIpAddresses;
-exports.formatCnameChain = formatCnameChain;
-exports.getStatusIcon = getStatusIcon;
-exports.getDnsStatusIcon = getDnsStatusIcon;
+exports.DEFAULT_CACHE_SIZE = exports.SECONDARY_DNS_SERVER = exports.DEFAULT_DNS_SERVER = exports.RISKY_GITHUB_SUBDOMAINS = void 0;
+exports.parseAllowedDomains = parseAllowedDomains;
+exports.buildDnsConfig = buildDnsConfig;
+exports.getRiskySubdomains = getRiskySubdomains;
 const github_parser_1 = __nccwpck_require__(9170);
-const sudo_parser_1 = __nccwpck_require__(7516);
+/**
+ * Risky GitHub subdomains that can be used for malicious payloads
+ * These are blocked in enforce mode when block-risky-github-subdomains is enabled
+ */
+exports.RISKY_GITHUB_SUBDOMAINS = [
+    'gist.github.com', // Gist web interface
+    'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
+    'raw.githubusercontent.com' // Common vector for serving malicious raw file content
+];
+/**
+ * Default DNS server (Quad9 primary - 98% malware blocking)
+ */
+exports.DEFAULT_DNS_SERVER = '9.9.9.9';
+/**
+ * Secondary DNS server (Quad9 secondary - failover redundancy)
+ */
+exports.SECONDARY_DNS_SERVER = '149.112.112.112';
+/**
+ * Default cache size for DNSMasq
+ * 1000 entries provides good performance for typical GitHub Actions workflows
+ * while using minimal memory (~100KB). DNSMasq default is only 150.
+ */
+exports.DEFAULT_CACHE_SIZE = 1000;
+/**
+ * Parse user-provided allowed domains from input string
+ * Supports both space-separated and newline-separated formats
+ *
+ * @param allowedDomains - Raw domain list string
+ * @returns Array of trimmed, non-empty domains
+ */
+function parseAllowedDomains(allowedDomains) {
+    if (!allowedDomains) {
+        return [];
+    }
+    // Split on spaces, newlines, commas, and filter empty strings
+    return allowedDomains
+        .split(/[\s\n,]+/)
+        .map(d => d.trim())
+        .filter(d => d.length > 0);
+}
+/**
+ * Build DNSmasq configuration string
+ *
+ * @param options - Configuration options
+ * @returns DNSmasq configuration and list of blocked subdomains
+ */
+function buildDnsConfig(options) {
+    const { mode, allowedDomains, blockRiskySubdomains, primaryDnsServer = exports.DEFAULT_DNS_SERVER, secondaryDnsServer = exports.SECONDARY_DNS_SERVER, dnsUsername, logFile, cacheSize = exports.DEFAULT_CACHE_SIZE, ipsets = true } = options;
+    let config = `# Enable query logging for summary generation
+log-queries=extra
+
+# Configure DNS cache for improved performance
+cache-size=${cacheSize}
+
+# Serve stale cache entries if upstream DNS fails (resilience for CI/CD)
+# Limited to 1 hour staleness for safety (balances freshness with resilience)
+use-stale-cache
+max-cache-ttl=3600
+
+`;
+    // Configure log facility if provided (separate log file)
+    if (logFile) {
+        config += `# Log to dedicated file for clear pre/main separation
+log-facility=${logFile}
+
+`;
+    }
+    // Configure user for privilege separation if provided
+    if (dnsUsername) {
+        config += `# Run as isolated user for privilege separation
+user=${dnsUsername}
+
+`;
+    }
+    // Listen only where resolv.conf points. The default wildcard bind fails with
+    // "Address already in use" if anything else holds port 53 on any local address
+    // (e.g. systemd-resolved on 127.0.0.53 or a resolver on 127.0.0.100 on some runner VMs)
+    config += `# Bind only to the loopback address used by /etc/resolv.conf
+bind-interfaces
+listen-address=127.0.0.1
+
+`;
+    // Explicitly disable DHCP functionality (defense in depth)
+    config += `# Disable DHCP - we only use DNS functionality
+# This prevents DHCP address conflict detection via ICMP
+no-dhcp-interface=*
+
+`;
+    // Enable all-servers for lower latency and better resilience
+    if (secondaryDnsServer) {
+        config += `# Query all upstream DNS servers simultaneously for best performance
+# Returns whichever server responds first (lower latency, better resilience)
+all-servers
+
+`;
+    }
+    // Configure DNS policy based on mode
+    if (mode === 'enforce') {
+        // NXDOMAIN all unlisted DNS (default deny)
+        config += 'server=\n';
+    }
+    else {
+        // Analyze mode: allow all DNS queries with primary and secondary servers for redundancy
+        config += `server=${primaryDnsServer}\n`;
+        if (secondaryDnsServer) {
+            config += `server=${secondaryDnsServer}\n`;
+        }
+    }
+    // Track which subdomains we actually blocked
+    const blockedSubdomains = [];
+    // Block risky GitHub subdomains in enforce mode (if enabled)
+    if (mode === 'enforce' && blockRiskySubdomains) {
+        for (const subdomain of exports.RISKY_GITHUB_SUBDOMAINS) {
+            // address directive without IP returns NXDOMAIN (blocks the domain)
+            // This MUST come BEFORE the parent domain server directive
+            config += `address=/${subdomain}/\n`;
+            blockedSubdomains.push(subdomain);
+        }
+    }
+    // Add GitHub required domains (runtime-resolved list if provided, else static)
+    const githubDomains = options.githubDomains ?? (0, github_parser_1.getGitHubRequiredDomains)();
+    for (const domain of githubDomains) {
+        // Skip domains that are in the risky subdomain blocklist
+        if (mode === 'enforce' && exports.RISKY_GITHUB_SUBDOMAINS.includes(domain)) {
+            continue;
+        }
+        config += `server=/${domain}/${primaryDnsServer}\n`;
+        if (secondaryDnsServer) {
+            config += `server=/${domain}/${secondaryDnsServer}\n`;
+        }
+        if (ipsets)
+            config += `ipset=/${domain}/github\n`;
+    }
+    // Add custom allowed domains if provided
+    const userDomains = parseAllowedDomains(allowedDomains);
+    for (const domain of userDomains) {
+        config += `server=/${domain}/${primaryDnsServer}\n`;
+        if (secondaryDnsServer) {
+            config += `server=/${domain}/${secondaryDnsServer}\n`;
+        }
+        if (ipsets)
+            config += `ipset=/${domain}/user\n`;
+    }
+    return { config, blockedSubdomains };
+}
+/**
+ * Get risky subdomain list (for logging/reporting)
+ */
+function getRiskySubdomains() {
+    return exports.RISKY_GITHUB_SUBDOMAINS;
+}
+
+
+/***/ }),
+
+/***/ 8729:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.CA_CERT_FILE = exports.POLICY_FILE = exports.ETC_DIR = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+/** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
+exports.MITMPROXY_VERSION = '12.3.1';
+exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
+/** sha256 of the tarball above (verified before anything is extracted). */
+exports.MITMPROXY_SHA256 = 'f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5';
+/** Dedicated system user the proxy runs as. Its UID is exempt from the REDIRECT. */
+exports.PROXY_USER = 'safer-runner-proxy';
+exports.PROXY_UNIT = 'safer-runner-proxy';
+exports.PROXY_LISTEN_HOST = '127.0.0.1';
+/** Root-owned install location: the runner user must not be able to change what the proxy loads. */
+exports.INSTALL_DIR = '/opt/safer-runner';
+exports.MITMDUMP_BIN = `${exports.INSTALL_DIR}/bin/mitmdump`;
+exports.ADDON_DIR = `${exports.INSTALL_DIR}/proxy`;
+exports.ADDON_FILES = ['policy.py', 'policy_core.py'];
+exports.TEARDOWN_BIN = `${exports.INSTALL_DIR}/bin/teardown`;
+/** Root-owned config. policy.json is read by the addon at (re)start. */
+exports.ETC_DIR = '/etc/safer-runner';
+exports.POLICY_FILE = `${exports.ETC_DIR}/policy.json`;
+/** Public CA certificate (world-readable) - what NODE_EXTRA_CA_CERTS points at. */
+exports.CA_CERT_FILE = `${exports.ETC_DIR}/ca.pem`;
+exports.SYSTEM_CA_FILE = '/usr/local/share/ca-certificates/safer-runner-ca.crt';
+/** Regenerated by update-ca-certificates: system roots + our CA. */
+exports.CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+/** Proxy confdir holding the CA private key: tmpfs, 0700, owned by the proxy user. */
+exports.PROXY_CONF_DIR = '/run/safer-runner/proxy';
+exports.PROXY_CA_KEY_FILE = `${exports.PROXY_CONF_DIR}/mitmproxy-ca.pem`;
+exports.LOG_DIR = '/var/log/safer-runner';
+exports.FLOW_LOG = `${exports.LOG_DIR}/proxy-flows.jsonl`;
+exports.DNS_LOG = `${exports.LOG_DIR}/dns.log`;
+exports.SUDO_LOG = `${exports.LOG_DIR}/sudo.log`;
+exports.FIREWALL_LOG = `${exports.LOG_DIR}/firewall.log`;
+exports.SELFTEST_FILE = `${exports.LOG_DIR}/selftest.json`;
+/** iptables chains we own (filter + nat), and the LOG prefixes they use. */
+exports.FILTER_CHAIN = 'SAFER_RUNNER_OUT';
+exports.NAT_CHAIN = 'SAFER_RUNNER_NAT';
+exports.LOG_PREFIX_DROP = 'SaferRunner-Drop: ';
+exports.LOG_PREFIX_ANALYZE = 'SaferRunner-Egress: ';
+/** Azure platform endpoints every hosted runner needs (scoped to the ports they use). */
+exports.AZURE_IMDS = '169.254.169.254';
+exports.AZURE_WIRESERVER = '168.63.129.16';
+/** Hostname used by the runtime self-test. `.invalid` never resolves (RFC 6761). */
+exports.SELFTEST_HOST = 'selftest.safer-runner.invalid';
+/** TEST-NET-1 (RFC 5737): never routed. Used to prove the proxy ignores the client's IP. */
+exports.SELFTEST_BOGUS_IP = '192.0.2.1';
+
+
+/***/ }),
+
+/***/ 2306:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Docker access control module
+ * Handles Docker group membership and container access restrictions
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.disableDockerForRunner = disableDockerForRunner;
+exports.stopDockerService = stopDockerService;
+exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+// Constants
+exports.RUNNER_USERNAME = 'runner';
+exports.DOCKER_GROUP = 'docker';
+/**
+ * Disable Docker access for the runner user
+ * This prevents container escape attacks, docker socket abuse, and privileged container execution
+ *
+ * Strategy:
+ * 1. Remove runner from docker group (prevents new sessions from getting access)
+ * 2. Change docker socket permissions to block current session
+ *
+ * Note: Simply removing group membership doesn't affect the current process's
+ * credential cache, so we must also restrict the docker socket directly.
+ */
+async function disableDockerForRunner() {
+    core.info('Disabling Docker access for runner user...');
+    try {
+        // Step 1: Remove runner from docker group (for future sessions)
+        await exec.exec('sudo', ['gpasswd', '-d', exports.RUNNER_USERNAME, exports.DOCKER_GROUP]);
+        core.info(`✅ Removed ${exports.RUNNER_USERNAME} from ${exports.DOCKER_GROUP} group`);
+        // Step 2: Restrict docker socket permissions to block current session
+        // Change ownership to root:root and set permissions to 600 (owner-only access)
+        core.info('Restricting docker socket permissions...');
+        await exec.exec('sudo', ['chown', 'root:root', '/var/run/docker.sock']);
+        await exec.exec('sudo', ['chmod', '600', '/var/run/docker.sock']);
+        core.info('✅ Docker socket access restricted to root only');
+        core.info('🔒 Docker commands will no longer be available to the runner user');
+        core.info('ℹ️  This prevents container escape attacks and docker socket abuse');
+    }
+    catch (error) {
+        core.warning(`Could not fully disable Docker access: ${error}`);
+    }
+}
+/**
+ * Stop and disable the Docker service completely
+ * This provides stronger protection than disableDockerForRunner by preventing
+ * all Docker usage system-wide, not just for the runner user.
+ *
+ * Strategy:
+ * 1. Stop the Docker service (kills all running containers)
+ * 2. Disable the Docker service (prevents automatic restart)
+ *
+ * Note: This affects the entire system and will terminate any running containers.
+ */
+async function stopDockerService() {
+    core.info('Stopping and disabling Docker service...');
+    try {
+        // Step 1: Stop the Docker service
+        core.info('Stopping Docker service...');
+        await exec.exec('sudo', ['systemctl', 'stop', 'docker.socket']);
+        await exec.exec('sudo', ['systemctl', 'stop', 'docker.service']);
+        core.info('✅ Docker service stopped');
+        // Step 2: Disable the Docker service (prevents restart)
+        core.info('Disabling Docker service...');
+        await exec.exec('sudo', ['systemctl', 'disable', 'docker.socket']);
+        await exec.exec('sudo', ['systemctl', 'disable', 'docker.service']);
+        core.info('✅ Docker service disabled');
+        core.info('🔒 Docker has been completely stopped and disabled');
+        core.info('ℹ️  This prevents all Docker usage system-wide');
+    }
+    catch (error) {
+        core.warning(`Could not stop Docker service: ${error}`);
+    }
+}
+/**
+ * Check if the runner user is a member of the docker group
+ * @returns Promise<boolean> - true if runner is in docker group
+ */
+async function isRunnerInDockerGroup() {
+    try {
+        let output = '';
+        await exec.exec('groups', [exports.RUNNER_USERNAME], {
+            listeners: {
+                stdout: (data) => {
+                    output += data.toString();
+                }
+            }
+        });
+        return output.includes(exports.DOCKER_GROUP);
+    }
+    catch (error) {
+        core.warning(`Could not check docker group membership: ${error}`);
+        return false;
+    }
+}
+
+
+/***/ }),
+
+/***/ 765:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 setup orchestration. Runs once per job - in the pre step (so the policy is enforced for
+ * every later action's pre-hook too, review H2), or in the main step if pre did not run.
+ *
+ * Order (each step depends on the previous):
+ *   allowlist (api.github.com/meta, before DNS changes) -> install (dnsmasq + pinned mitmdump,
+ *   in parallel) -> users -> addon + policy + CA -> start proxy (waits for the addon's own
+ *   self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS -> firewall (nat REDIRECT +
+ *   filter) -> kill pre-existing :443 -> live self-tests -> docker -> sudo logging ->
+ *   integrity baseline -> sudo restriction (last).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SETUP_MARKER = void 0;
+exports.setupCompleted = setupCompleted;
+exports.installDnsmasq = installDnsmasq;
+exports.runSetup = runSetup;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const constants_1 = __nccwpck_require__(8729);
+const firewall_1 = __nccwpck_require__(8094);
+const policy_1 = __nccwpck_require__(2224);
+const proxy_1 = __nccwpck_require__(3828);
+const selftest_1 = __nccwpck_require__(3180);
+const setup_1 = __nccwpck_require__(1413);
+const github_parser_1 = __nccwpck_require__(9170);
 const sudo_1 = __nccwpck_require__(1279);
+const docker_1 = __nccwpck_require__(2306);
+const trust_1 = __nccwpck_require__(7578);
+const validation_1 = __nccwpck_require__(8449);
+/** Root-owned marker written when setup completed; checked by main (pre may not have run). */
+exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
+function setupCompleted() {
+    return fs.existsSync(exports.SETUP_MARKER);
+}
+async function timed(label, fn) {
+    const t0 = Date.now();
+    try {
+        return await core.group(label, fn);
+    }
+    finally {
+        core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    }
+}
+/** Install dnsmasq, only refreshing the apt index if a plain install fails (saves ~10s). */
+async function installDnsmasq() {
+    const opts = { ignoreReturnCode: true };
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
+    const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'dnsmasq'];
+    if ((await exec.exec('sudo', ['-E', ...install], { ...opts, env })) === 0)
+        return;
+    await exec.exec('sudo', ['apt-get', 'update', '-qq']);
+    await exec.exec('sudo', ['-E', ...install], { env });
+}
+async function runSetup(inputs) {
+    const { mode } = inputs;
+    core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
+    if (inputs.disableSudo && inputs.sudoConfig) {
+        core.warning('Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
+    }
+    if (inputs.stopDocker && inputs.disableDocker) {
+        core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
+    }
+    if (mode === 'enforce' && !inputs.disableSudo) {
+        core.warning('enforce mode without disable-sudo: any step can use sudo to remove the egress controls. ' +
+            'Set disable-sudo: true (and disable-docker or stop-docker) to make enforce a real boundary.');
+    }
+    const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
+    core.info(`sudo implementation: ${sudoFlavour}`);
+    // 1. Allowlist - fetched while normal DNS and direct egress still work
+    const { domains: githubDomains, source } = await (0, github_parser_1.resolveGitHubDomains)();
+    core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
+    const { config: policy, warnings } = (0, policy_1.buildPolicyConfig)({
+        mode,
+        githubDomains,
+        allowedDomains: inputs.allowedDomains,
+        passthroughDomains: inputs.passthroughDomains,
+        blockRiskySubdomains: inputs.blockRiskySubdomains
+    });
+    for (const w of warnings)
+        core.warning(w);
+    core.info(`Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`);
+    // 2. Install (parallel - both are network-bound)
+    await timed('Install dnsmasq + mitmproxy', () => Promise.all([installDnsmasq(), (0, proxy_1.installMitmproxy)()]));
+    // 3. Users, addon, policy, CA
+    await (0, setup_1.createLogDirectory)();
+    const dnsUser = await (0, setup_1.createRandomDNSUser)();
+    const proxyUid = await (0, proxy_1.createProxyUser)();
+    core.info(`dnsmasq user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
+    await (0, proxy_1.installAddon)();
+    await (0, proxy_1.writePolicy)(policy);
+    await (0, proxy_1.generateCa)();
+    await (0, proxy_1.installTeardownHelper)();
+    // 4. Proxy
+    const proxyOpts = { port: inputs.proxyPort, streamLargeBodies: inputs.streamLargeBodies };
+    await timed('Start proxy', () => (0, proxy_1.startProxy)(proxyOpts));
+    // 5. Trust - before any traffic is forced through the proxy
+    await timed('Install CA trust', async () => {
+        await (0, trust_1.installSystemTrust)();
+        (0, trust_1.exportTrustEnv)();
+        await (0, trust_1.installJavaTrust)();
+    });
+    // 6. DNS
+    await timed('Configure DNS', async () => {
+        await (0, setup_1.setupDNSConfig)();
+        await (0, setup_1.setupDNSMasq)(mode, '', inputs.blockRiskySubdomains, dnsUser.username, constants_1.DNS_LOG, inputs.primaryDnsServer, inputs.secondaryDnsServer, (0, policy_1.dnsDomainsFor)([...policy.allow, ...policy.passthrough]));
+        await (0, setup_1.restartServices)(constants_1.DNS_LOG);
+    });
+    // 7. Firewall
+    await timed('Configure firewall', async () => {
+        await (0, setup_1.setupIptablesLogging)(constants_1.FIREWALL_LOG, [constants_1.LOG_PREFIX_DROP.trim(), constants_1.LOG_PREFIX_ANALYZE.trim()], 'v2');
+        await (0, firewall_1.detectEgressInterface)();
+        await (0, firewall_1.applyFirewall)({
+            mode,
+            proxyUid,
+            dnsUid: dnsUser.uid,
+            proxyPort: inputs.proxyPort,
+            dnsServers: [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean)
+        });
+        await (0, firewall_1.killPreexistingConnections)();
+        await (0, firewall_1.logFirewall)();
+    });
+    // 8. Prove it on this runner
+    const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode));
+    await exec.exec('sudo', ['tee', constants_1.SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
+    await exec.exec('sudo', ['chmod', '0644', constants_1.SELFTEST_FILE]);
+    const failed = results.filter(r => !r.ok);
+    if (failed.length > 0) {
+        const msg = `self-test failed: ${failed.map(f => `${f.name} (${f.detail})`).join('; ')}`;
+        if (mode === 'enforce')
+            throw new Error(msg);
+        core.warning(msg);
+    }
+    await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
+        input: Buffer.from(JSON.stringify({ mode, at: new Date().toISOString() }) + '\n'),
+        silent: true
+    });
+    // 9. Privilege layer (carried from v1). Docker first: it needs sudo.
+    if (inputs.stopDocker) {
+        await (0, docker_1.stopDockerService)();
+    }
+    else if (inputs.disableDocker) {
+        await (0, docker_1.disableDockerForRunner)();
+    }
+    await (0, sudo_1.setupSudoLogging)(constants_1.SUDO_LOG, sudoFlavour);
+    const validator = new validation_1.SystemValidator([...validation_1.CRITICAL_FILES, (0, sudo_1.getSudoLoggingConfigFile)(sudoFlavour)]);
+    await validator.capturePostSetupBaseline();
+    if (inputs.disableSudo) {
+        await (0, sudo_1.disableSudoForRunner)(sudoFlavour);
+    }
+    else if (inputs.sudoConfig) {
+        await (0, sudo_1.applyCustomSudoConfig)(inputs.sudoConfig, sudoFlavour);
+    }
+    core.info(`✅ safer-runner v2 active in ${mode} mode`);
+}
+
+
+/***/ }),
+
+/***/ 8094:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
 /**
- * Generate network connection table (without heading)
+ * v2 iptables: force 80/443 through the proxy, force all DNS through dnsmasq, and (enforce)
+ * deny everything else. Rulesets are generated as iptables-restore text (pure functions,
+ * unit-tested) and applied atomically with `iptables-restore --noflush` into chains we own,
+ * jumped to from position 1 of OUTPUT, so the image's own rules are left alone.
  *
- * @param connections - List of network connections
- * @returns Markdown-formatted network connection table with statistics
+ * Rules are interface-agnostic ("allow lo + the proxy path, deny the rest") rather than
+ * `-o eth0`-scoped, so a renamed or extra NIC fails closed instead of open (review M3).
  */
-function generateNetworkConnectionTable(connections) {
-    if (connections.length === 0) {
-        return `No network connections recorded.\n\n`;
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
     }
-    let table = '';
-    // Separate GitHub and non-GitHub connections
-    const githubConnections = connections.filter(c => c.source === 'GitHub Required');
-    const userConnections = connections.filter(c => c.source === 'User Defined');
-    const deniedConnections = connections.filter(c => c.status === 'DENIED');
-    const analyzedConnections = connections.filter(c => c.status === 'ANALYZED');
-    // Show user-defined and denied connections first (most important)
-    if (userConnections.length > 0 || deniedConnections.length > 0 || analyzedConnections.length > 0) {
-        const importantConnections = [...userConnections, ...deniedConnections, ...analyzedConnections];
-        // Remove duplicates
-        const uniqueImportant = Array.from(new Map(importantConnections.map(c => [`${c.ip}:${c.port}`, c])).values());
-        table += `| IP Address | Port | Protocol | Status | Source |\n`;
-        table += `|------------|------|----------|--------|--------|\n`;
-        for (const conn of uniqueImportant) {
-            const statusDisplay = formatConnectionStatus(conn.status);
-            table += `| ${conn.ip} | ${conn.port} | ${conn.protocol} | ${statusDisplay} | ${conn.source} |\n`;
-        }
-        table += `\n`;
-    }
-    // Show GitHub connections in collapsed section
-    if (githubConnections.length > 0) {
-        table += `<details>\n<summary>📋 GitHub Infrastructure Connections (${githubConnections.length}) - Click to expand</summary>\n\n`;
-        table += `| IP Address | Port | Protocol | Status | Source |\n`;
-        table += `|------------|------|----------|--------|--------|\n`;
-        for (const conn of githubConnections) {
-            const statusDisplay = formatConnectionStatus(conn.status);
-            table += `| ${conn.ip} | ${conn.port} | ${conn.protocol} | ${statusDisplay} | ${conn.source} |\n`;
-        }
-        table += `\n</details>\n\n`;
-    }
-    const deniedCount = connections.filter(c => c.status === 'DENIED').length;
-    table += `**Total connections:** ${connections.length}`;
-    if (deniedCount > 0) {
-        table += ` (🛡️ ${deniedCount} blocked)`;
-    }
-    table += `\n\n`;
-    return table;
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.buildNatRules = buildNatRules;
+exports.buildFilterRules = buildFilterRules;
+exports.buildIp6FilterRules = buildIp6FilterRules;
+exports.parseDefaultRouteInterfaces = parseDefaultRouteInterfaces;
+exports.detectEgressInterface = detectEgressInterface;
+exports.removeFirewall = removeFirewall;
+exports.applyFirewall = applyFirewall;
+exports.killPreexistingConnections = killPreexistingConnections;
+exports.logFirewall = logFirewall;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const constants_1 = __nccwpck_require__(8729);
+/** Local bridges (docker0, user-defined networks). Container egress itself (FORWARD) is P2. */
+const LOCAL_BRIDGES = ['docker0', 'br-+'];
+/**
+ * nat OUTPUT: send DNS to dnsmasq and 80/443 to the proxy. Exempt: the proxy and dnsmasq
+ * uids (their own upstream connections), loopback, local bridges and the Azure platform IPs.
+ */
+function buildNatRules(o) {
+    const c = constants_1.NAT_CHAIN;
+    const lines = [
+        '*nat',
+        `:${c} - [0:0]`,
+        `-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`,
+        `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`,
+        // Every resolver, whatever address it is aimed at (8.8.8.8, 168.63.129.16, GitHub's
+        // 127.0.0.100 egress resolver...), is answered by our dnsmasq (fixes C1/M4).
+        `-A ${c} -p udp --dport 53 -j REDIRECT --to-ports 53`,
+        `-A ${c} -p tcp --dport 53 -j REDIRECT --to-ports 53`,
+        `-A ${c} -d 127.0.0.0/8 -j RETURN`,
+        `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -j RETURN`,
+        `-A ${c} -d ${constants_1.AZURE_WIRESERVER}/32 -j RETURN`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        `-A ${c} -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports ${o.proxyPort}`,
+        `-I OUTPUT 1 -j ${c}`,
+        'COMMIT',
+        ''
+    ];
+    return lines.join('\n');
+}
+function commonFilterAllows(c) {
+    return [
+        `-A ${c} -o lo -j RETURN`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        // Azure platform: IMDS and wireserver (WALinuxAgent, health) only on the ports they use.
+        // 168.63.129.16:53 is NOT allowed - it is an open recursive resolver (C1).
+        `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -p tcp --dport 80 -j RETURN`,
+        `-A ${c} -d ${constants_1.AZURE_WIRESERVER}/32 -p tcp -m multiport --dports 80,32526 -j RETURN`
+    ];
 }
 /**
- * Generate network connection section with heading
- *
- * @param connections - List of network connections
- * @returns Markdown-formatted network connection section with heading and table
+ * filter OUTPUT.
+ * - enforce: allow lo, the proxy uid on 80/443, dnsmasq's uid to its upstream servers on 53,
+ *   the Azure platform; reject everything else. A hole in the REDIRECT therefore still
+ *   fails closed, and so does any non-80/443 egress.
+ * - analyze: allow everything, but reject QUIC (UDP/443) so HTTP/3 clients fall back to TCP
+ *   through the proxy, and log new non-proxied connections for the report.
  */
-function generateNetworkConnectionDetails(connections) {
-    let details = `## Network Connection Details\n\n`;
-    details += generateNetworkConnectionTable(connections);
-    return details;
-}
-/**
- * Generate DNS resolution table (without heading)
- *
- * @param dnsResolutions - List of DNS resolutions
- * @returns Markdown-formatted DNS table with statistics
- */
-function generateDnsTable(dnsResolutions) {
-    if (dnsResolutions.length === 0) {
-        return `No DNS resolutions recorded.\n\n`;
-    }
-    let table = '';
-    // Separate GitHub and non-GitHub DNS resolutions
-    const githubDns = dnsResolutions.filter(d => (0, github_parser_1.isGitHubRelated)(d.domain));
-    const userDns = dnsResolutions.filter(d => !(0, github_parser_1.isGitHubRelated)(d.domain));
-    const blockedDns = dnsResolutions.filter(d => d.status === 'BLOCKED');
-    // Show user-defined and blocked DNS first (most important)
-    if (userDns.length > 0 || blockedDns.length > 0) {
-        const importantDns = [...userDns, ...blockedDns];
-        // Remove duplicates
-        const uniqueImportant = Array.from(new Map(importantDns.map(d => [d.domain, d])).values());
-        table += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
-        table += `|--------|----------|----------------|--------|\n`;
-        for (const dns of uniqueImportant) {
-            const status = formatDnsStatus(dns.status);
-            const formattedIps = formatIpAddresses(dns.ip);
-            const formattedCnames = formatCnameChain(dns.cnames);
-            table += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
-        }
-        table += `\n`;
-    }
-    // Show GitHub DNS in collapsed section
-    if (githubDns.length > 0) {
-        table += `<details>\n<summary>📋 GitHub Infrastructure DNS (${githubDns.length} domains) - Click to expand</summary>\n\n`;
-        table += `| Domain | CNAME(s) | IP Address(es) | Status |\n`;
-        table += `|--------|----------|----------------|--------|\n`;
-        for (const dns of githubDns) {
-            const status = formatDnsStatus(dns.status);
-            const formattedIps = formatIpAddresses(dns.ip);
-            const formattedCnames = formatCnameChain(dns.cnames);
-            table += `| ${dns.domain} | ${formattedCnames} | ${formattedIps} | ${status} |\n`;
-        }
-        table += `\n</details>\n\n`;
-    }
-    const blockedCount = dnsResolutions.filter(d => d.status === 'BLOCKED').length;
-    table += `**Total domains:** ${dnsResolutions.length}`;
-    if (blockedCount > 0) {
-        table += ` (🛡️ ${blockedCount} filtered)`;
-    }
-    table += `\n\n`;
-    return table;
-}
-/**
- * Generate DNS resolution section with heading
- *
- * @param dnsResolutions - List of DNS resolutions
- * @returns Markdown-formatted DNS section with heading and table
- */
-function generateDnsDetails(dnsResolutions) {
-    let details = `## DNS Information\n\n`;
-    details += generateDnsTable(dnsResolutions);
-    return details;
-}
-/**
- * Extract allowed domains from DNS resolutions (excludes GitHub-related domains)
- *
- * @param dnsResolutions - List of DNS resolutions
- * @returns Array of non-GitHub domains that should be allowlisted
- */
-function extractAllowedDomains(dnsResolutions) {
-    const allowedDomains = new Set();
-    for (const dns of dnsResolutions) {
-        // Include resolved domains (both IPv4 and CNAME) that are not GitHub-related
-        if (dns.status === 'RESOLVED' && !(0, github_parser_1.isGitHubRelated)(dns.domain)) {
-            allowedDomains.add(dns.domain);
-        }
-    }
-    return Array.from(allowedDomains).sort();
-}
-/**
- * Generate configuration advice for analyze mode
- *
- * @param dnsResolutions - List of DNS resolutions to analyze
- * @param sudoCommands - List of sudo commands executed (optional)
- * @returns Markdown-formatted configuration advice
- */
-function generateConfigurationAdvice(dnsResolutions, sudoCommands) {
-    const suggestedDomains = extractAllowedDomains(dnsResolutions);
-    let advice = `## Configuration Advice\n\n`;
-    // Determine if we have any configuration to suggest
-    const hasDomains = suggestedDomains.length > 0;
-    const hasSudoCommands = sudoCommands && sudoCommands.length > 0;
-    const noSudoCommands = sudoCommands && sudoCommands.length === 0;
-    // If no domains and no sudo usage, keep it minimal
-    if (!hasDomains && !hasSudoCommands && !noSudoCommands) {
-        advice += `No additional domains detected for allowlist configuration.\n\n`;
-        return advice;
-    }
-    // Single unified configuration example
-    if (hasSudoCommands) {
-        advice += `Your workflow used **${sudoCommands.length}** sudo command${sudoCommands.length === 1 ? '' : 's'}`;
-        if (hasDomains) {
-            advice += ` and accessed **${suggestedDomains.length}** external domain${suggestedDomains.length === 1 ? '' : 's'}`;
-        }
-        advice += `. To run in enforce mode:\n\n`;
-    }
-    else if (noSudoCommands && hasDomains) {
-        advice += `Your workflow accessed **${suggestedDomains.length}** external domain${suggestedDomains.length === 1 ? '' : 's'}`;
-        advice += ` and did not use sudo. To run in enforce mode:\n\n`;
-    }
-    else if (noSudoCommands && !hasDomains) {
-        advice += `No external domains or sudo commands were used. To run in enforce mode with sudo disabled:\n\n`;
-    }
-    else if (hasDomains && !sudoCommands) {
-        advice += `To run in enforce mode with the domains accessed in this workflow:\n\n`;
-    }
-    // Generate unified configuration
-    advice += '```yaml\n';
-    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-    advice += `  with:\n`;
-    advice += `    mode: enforce\n`;
-    // Add allowed-domains if we have them
-    if (hasDomains) {
-        advice += `    allowed-domains: |\n`;
-        for (const domain of suggestedDomains) {
-            advice += `      ${domain}\n`;
-        }
-    }
-    // Add sudo configuration if we have commands
-    if (hasSudoCommands) {
-        advice += `    sudo-config: |\n`;
-        // Use the sudo-parser's generateSudoersConfig function
-        const sudoersConfig = (0, sudo_parser_1.generateSudoersConfig)(sudoCommands, sudo_1.RUNNER_USERNAME);
-        const lines = sudoersConfig.split('\n');
-        for (const line of lines) {
-            if (line.trim()) {
-                advice += `      ${line}\n`;
+function buildFilterRules(o) {
+    const c = constants_1.FILTER_CHAIN;
+    const lines = ['*filter', `:${c} - [0:0]`, ...commonFilterAllows(c)];
+    if (o.mode === 'enforce') {
+        lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -p tcp -m multiport --dports 80,443 -j RETURN`);
+        for (const server of o.dnsServers) {
+            for (const proto of ['udp', 'tcp']) {
+                lines.push(`-A ${c} -m owner --uid-owner ${o.dnsUid} -d ${server}/32 -p ${proto} --dport 53 -j RETURN`);
             }
         }
+        lines.push(`-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`, `-A ${c} -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_DROP}" --log-uid`, `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp-port-unreachable`);
     }
-    else if (noSudoCommands) {
-        // Suggest disabling sudo if not used
-        advice += `    disable-sudo: true\n`;
+    else {
+        lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`, `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable`, `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_ANALYZE}" --log-uid`);
     }
-    advice += '```\n\n';
-    // Add security note if we have actual restrictions
-    if (hasDomains || hasSudoCommands || noSudoCommands) {
-        advice += `> **Security Note**: This configuration follows the principle of least privilege`;
-        if (hasDomains && hasSudoCommands) {
-            advice += ` by restricting network access to specific domains and suggesting a tighter sudo policy.\n\n`;
+    lines.push(`-I OUTPUT 1 -j ${c}`, 'COMMIT', '');
+    return lines.join('\n');
+}
+/**
+ * ip6tables: there is no IPv6 path through the proxy. enforce rejects all non-loopback IPv6
+ * egress (except neighbour discovery); analyze rejects 80/443 (+QUIC) so clients fall back
+ * to IPv4 and through the proxy.
+ */
+function buildIp6FilterRules(o) {
+    const c = constants_1.FILTER_CHAIN;
+    const lines = ['*filter', `:${c} - [0:0]`, `-A ${c} -o lo -j RETURN`];
+    if (o.mode === 'enforce') {
+        lines.push(...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`));
+        for (const t of ['router-solicitation', 'neighbour-solicitation', 'neighbour-advertisement']) {
+            lines.push(`-A ${c} -p ipv6-icmp --icmpv6-type ${t} -j RETURN`);
         }
-        else if (hasDomains && noSudoCommands) {
-            advice += ` by restricting network access to specific domains and disabling sudo access.\n\n`;
+        lines.push(`-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp6-port-unreachable`);
+    }
+    else {
+        lines.push(`-A ${c} -p tcp -m multiport --dports 80,443 -j REJECT --reject-with tcp-reset`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp6-port-unreachable`);
+    }
+    lines.push(`-I OUTPUT 1 -j ${c}`, 'COMMIT', '');
+    return lines.join('\n');
+}
+/** Parse `ip -4 route show default` output into the interface names carrying the default route. */
+function parseDefaultRouteInterfaces(output) {
+    const out = [];
+    for (const line of output.split('\n')) {
+        const m = line.match(/^default\b.*\bdev\s+(\S+)/);
+        if (m)
+            out.push(m[1]);
+    }
+    return Array.from(new Set(out));
+}
+/**
+ * Report where egress actually goes. Our rules are interface-agnostic so they fail closed
+ * whatever the NIC is called; this is a loud diagnostic for the unexpected cases.
+ */
+async function detectEgressInterface() {
+    const { stdout } = await exec.getExecOutput('ip', ['-4', 'route', 'show', 'default'], {
+        silent: true,
+        ignoreReturnCode: true
+    });
+    const ifaces = parseDefaultRouteInterfaces(stdout);
+    if (ifaces.length === 0) {
+        core.warning('No IPv4 default route found - egress rules are interface-agnostic and still apply.');
+    }
+    else if (ifaces.length > 1 || ifaces[0] !== 'eth0') {
+        core.warning(`Default route via ${ifaces.join(', ')} (expected eth0). Egress rules are interface-agnostic ` +
+            '(allow loopback + proxy path, reject the rest), so they still fail closed.');
+    }
+    else {
+        core.info('Default route via eth0');
+    }
+    return ifaces;
+}
+async function restore(binary, rules) {
+    await exec.exec('sudo', [binary, '--noflush'], { input: Buffer.from(rules) });
+}
+/** Remove our chains and jumps if present (idempotency for a re-run in the main step). */
+async function removeFirewall() {
+    const opts = { ignoreReturnCode: true, silent: true };
+    for (const [bin, table, chain] of [
+        ['iptables', 'nat', constants_1.NAT_CHAIN],
+        ['iptables', 'filter', constants_1.FILTER_CHAIN],
+        ['ip6tables', 'filter', constants_1.FILTER_CHAIN]
+    ]) {
+        // -D removes one jump per call; loop until none remain.
+        for (let i = 0; i < 5; i++) {
+            if ((await exec.exec('sudo', [bin, '-t', table, '-D', 'OUTPUT', '-j', chain], opts)) !== 0)
+                break;
         }
-        else if (hasSudoCommands) {
-            advice += ` by suggesting a tighter sudo policy.\n\n`;
+        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
+        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
+    }
+}
+/**
+ * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
+ * table; IPv6 last. The proxy must already be listening.
+ */
+async function applyFirewall(o) {
+    await removeFirewall();
+    // REDIRECT to 127.0.0.1 of packets that were routed to another interface
+    await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
+    await restore('iptables-restore', buildNatRules(o) + buildFilterRules(o));
+    const v6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
+        input: Buffer.from(buildIp6FilterRules(o)),
+        ignoreReturnCode: true
+    });
+    if (v6 !== 0) {
+        const msg = 'ip6tables rules could not be applied';
+        if (o.mode === 'enforce')
+            throw new Error(msg);
+        core.warning(msg);
+    }
+}
+/**
+ * Kill established :80/:443 connections that predate the REDIRECT (runner long-polls etc.),
+ * so the cutover is immediate: they reconnect through the proxy instead of being rejected
+ * mid-stream later.
+ */
+async function killPreexistingConnections() {
+    const rc = await exec.exec('sudo', ['ss', '-K', 'state', 'established', '( dport = :443 or dport = :80 )'], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    if (rc !== 0)
+        core.warning('ss -K failed: pre-existing connections will be cut off by the firewall instead');
+}
+/** Human-readable dump of what we installed (job log). */
+async function logFirewall() {
+    const opts = { ignoreReturnCode: true };
+    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.NAT_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-S', constants_1.FILTER_CHAIN], opts);
+    await exec.exec('sudo', ['ip6tables', '-S', constants_1.FILTER_CHAIN], opts);
+}
+
+
+/***/ }),
+
+/***/ 5422:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Reader for the proxy's JSONL flow log (written by proxy/policy.py).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseFlowLog = parseFlowLog;
+exports.readFlowLog = readFlowLog;
+exports.flowLogSize = flowLogSize;
+exports.ipOf = ipOf;
+const fs = __importStar(__nccwpck_require__(9896));
+function parseFlowLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        if (!line.trim())
+            continue;
+        try {
+            out.push(JSON.parse(line));
         }
-        else if (noSudoCommands) {
-            advice += ` by disabling sudo access.\n\n`;
-        }
-        else {
-            advice += `.\n\n`;
+        catch {
+            // a partially written last line
         }
     }
-    // Honest caveat for the generated sudo policy: it is a reviewed-before-use starting point,
-    // not a guarantee - see the WARNING lines and the least-privilege guidance.
-    if (hasSudoCommands) {
-        advice += `> ⚠️ **Review the \`sudo-config\` before using it.** It is generated from observed usage. `;
-        advice += `Lines starting with \`#\` are commands that can usually be escalated to full root `;
-        advice += `(shells, interpreters, file-writers, package/service managers, docker) and are left commented out. `;
-        advice += `Each active rule pins the exact arguments observed and runs as the observed user. `;
-        advice += `If you don't need sudo at all, use \`disable-sudo: true\`.\n\n`;
-    }
-    return advice;
+    return out;
 }
-/**
- * Format connection status with appropriate emoji
- *
- * @param status - Connection status
- * @returns Formatted status string with emoji
- */
-function formatConnectionStatus(status) {
-    if (status === 'DENIED') {
-        return `🚫 ${status}`;
-    }
-    return status;
+function readFlowLog(file, fromByte = 0) {
+    if (!fs.existsSync(file))
+        return [];
+    const buf = fs.readFileSync(file);
+    return parseFlowLog(buf.subarray(Math.min(fromByte, buf.length)).toString('utf8'));
 }
-/**
- * Format DNS status with appropriate emoji
- *
- * @param status - DNS resolution status
- * @returns Formatted status string with emoji
- */
-function formatDnsStatus(status) {
-    if (status === 'BLOCKED') {
-        return `🚫 BLOCKED`;
-    }
-    return status;
+function flowLogSize(file) {
+    return fs.existsSync(file) ? fs.statSync(file).size : 0;
 }
-/**
- * Format IP addresses for markdown display
- * Converts comma-separated IPs to line-break separated for readability
- * Deduplicates and sorts IP addresses
- *
- * @param ipString - IP address string (may be comma-separated)
- * @returns Formatted IP address string with HTML line breaks
- */
-function formatIpAddresses(ipString) {
-    if (ipString.includes(', ')) {
-        // Split, deduplicate, sort, and join with line breaks
-        const ips = ipString.split(', ').map(ip => ip.trim());
-        const uniqueIps = [...new Set(ips)].sort();
-        return uniqueIps.join('<br/>');
-    }
-    return ipString;
-}
-/**
- * Format CNAME chain for markdown display
- * Converts CNAME array to line-break separated list
- *
- * @param cnames - Optional array of CNAME domains
- * @returns Formatted CNAME chain with HTML line breaks, or '-' if no CNAMEs
- */
-function formatCnameChain(cnames) {
-    if (!cnames || cnames.length === 0) {
-        return '-';
-    }
-    return cnames.join('<br/>');
-}
-/**
- * Get status icon for network connections
- *
- * @param status - Connection status
- * @returns Emoji icon for status
- */
-function getStatusIcon(status) {
-    switch (status) {
-        case 'ALLOWED':
-            return '✅';
-        case 'DENIED':
-            return '❌';
-        case 'ANALYZED':
-            return '📊';
-        default:
-            return '❓';
-    }
-}
-/**
- * Get status icon for DNS resolutions
- *
- * @param status - DNS resolution status
- * @returns Emoji icon for status
- */
-function getDnsStatusIcon(status) {
-    switch (status) {
-        case 'RESOLVED':
-            return '✅';
-        case 'BLOCKED':
-            return '🚫';
-        case 'QUERIED':
-            return '❓';
-        default:
-            return '❓';
-    }
+/** The IP part of an `ip:port` string. */
+function ipOf(hostport) {
+    if (!hostport)
+        return '';
+    const i = hostport.lastIndexOf(':');
+    return i > 0 ? hostport.slice(0, i) : hostport;
 }
 
 
@@ -597,6 +1132,7 @@ function deduplicateDnsResolutions(resolutions) {
  * This prevents legitimate GitHub domains from appearing in user configuration advice.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DANGEROUS_BROAD_DOMAINS = void 0;
 exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
 exports.normalizeMetaDomain = normalizeMetaDomain;
 exports.fetchGitHubActionsDomains = fetchGitHubActionsDomains;
@@ -643,7 +1179,7 @@ const GITHUB_CORE_DOMAINS = [
  * under them (e.g. productionresultssa100.blob.core.windows.net) are fine; the bare
  * suffix is not.
  */
-const DANGEROUS_BROAD_DOMAINS = new Set([
+exports.DANGEROUS_BROAD_DOMAINS = new Set([
     'windows.net',
     'core.windows.net',
     'blob.core.windows.net',
@@ -700,7 +1236,7 @@ function normalizeMetaDomain(raw) {
     const d = raw.trim().toLowerCase().replace(/^\*\./, '');
     if (!d || d.includes('*'))
         return null;
-    if (DANGEROUS_BROAD_DOMAINS.has(d))
+    if (exports.DANGEROUS_BROAD_DOMAINS.has(d))
         return null;
     return d;
 }
@@ -789,173 +1325,6 @@ function isGitHubDomain(domain, githubDomains) {
 function isGitHubRelated(domain) {
     const githubDomains = getGitHubRequiredDomains();
     return isGitHubDomain(domain, githubDomains);
-}
-
-
-/***/ }),
-
-/***/ 8089:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * Network Log Parser
- *
- * Parses iptables logs from dedicated log files to extract network connection attempts.
- * Identifies connections by status (ALLOWED, DENIED, ANALYZED) and source
- * (GitHub Required, User Defined, Firewall Drop, Monitor Only).
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseNetworkLogs = parseNetworkLogs;
-exports.parsePreHookNetworkLogs = parsePreHookNetworkLogs;
-exports.parseNetworkLogsFromString = parseNetworkLogsFromString;
-exports.parseLogLine = parseLogLine;
-exports.deduplicateConnections = deduplicateConnections;
-const core = __importStar(__nccwpck_require__(7484));
-const fs = __importStar(__nccwpck_require__(9896));
-/**
- * Parse network logs from dedicated log file to extract connection attempts
- */
-async function parseNetworkLogs(logFile = '/var/log/safer-runner/main-iptables.log') {
-    try {
-        // Read log file content (no sudo required - file is world-readable)
-        if (!fs.existsSync(logFile)) {
-            core.warning(`Network log file not found: ${logFile}`);
-            return [];
-        }
-        const logContent = fs.readFileSync(logFile, 'utf8');
-        return parseNetworkLogsFromString(logContent);
-    }
-    catch (error) {
-        core.warning(`Failed to parse network logs from ${logFile}: ${error}`);
-        return [];
-    }
-}
-/**
- * Parse pre-hook network logs from dedicated log file to extract connection attempts
- */
-async function parsePreHookNetworkLogs(logFile = '/var/log/safer-runner/pre-iptables.log') {
-    try {
-        // Read log file content (no sudo required - file is world-readable)
-        if (!fs.existsSync(logFile)) {
-            core.warning(`Pre-hook network log file not found: ${logFile}`);
-            return [];
-        }
-        const logContent = fs.readFileSync(logFile, 'utf8');
-        return parseNetworkLogsFromString(logContent);
-    }
-    catch (error) {
-        core.warning(`Failed to parse pre-hook network logs from ${logFile}: ${error}`);
-        return [];
-    }
-}
-/**
- * Parse network logs from a string (for testing)
- */
-function parseNetworkLogsFromString(logContent) {
-    const connections = [];
-    const lines = logContent.split('\n').filter(line => line.trim());
-    for (const line of lines) {
-        const connection = parseLogLine(line);
-        if (connection) {
-            connections.push(connection);
-        }
-    }
-    // Remove duplicates and limit results
-    return deduplicateConnections(connections).slice(0, 1000);
-}
-/**
- * Parse a single iptables log line to extract connection details
- */
-function parseLogLine(line) {
-    // Parse iptables log format
-    const ipMatch = line.match(/DST=([0-9.]+)/);
-    const portMatch = line.match(/DPT=([0-9]+)/);
-    const protocolMatch = line.match(/PROTO=(\w+)/);
-    if (!ipMatch)
-        return null;
-    const ip = ipMatch[1];
-    const port = portMatch ? portMatch[1] : '443';
-    const protocol = protocolMatch ? protocolMatch[1] : 'TCP';
-    let status = 'UNKNOWN';
-    let source = 'Unknown';
-    // Check for Pre- prefixed logs (from pre-hook monitoring)
-    if (line.includes('Pre-GitHub-Allow: ')) {
-        status = 'ALLOWED';
-        source = 'GitHub Required';
-    }
-    else if (line.includes('Pre-User-Allow: ')) {
-        status = 'ALLOWED';
-        source = 'User Defined';
-    }
-    else if (line.includes('Pre-Allow-Analyze: ')) {
-        status = 'ANALYZED';
-        source = 'Monitor Only';
-    }
-    else if (line.includes('Main-GitHub-Allow: ')) {
-        status = 'ALLOWED';
-        source = 'GitHub Required';
-    }
-    else if (line.includes('Main-User-Allow: ')) {
-        status = 'ALLOWED';
-        source = 'User Defined';
-    }
-    else if (line.includes('Main-Drop-Enforce: ')) {
-        status = 'DENIED';
-        source = 'Firewall Drop';
-    }
-    else if (line.includes('Main-Allow-Analyze: ')) {
-        status = 'ANALYZED';
-        source = 'Monitor Only';
-    }
-    return { ip, port, protocol, status, source };
-}
-/**
- * Remove duplicate connections (same IP:port combination)
- */
-function deduplicateConnections(connections) {
-    const seen = new Map();
-    for (const conn of connections) {
-        const key = `${conn.ip}:${conn.port}`;
-        if (!seen.has(key)) {
-            seen.set(key, conn);
-        }
-    }
-    return Array.from(seen.values());
 }
 
 
@@ -1300,6 +1669,169 @@ function generateSudoersConfig(commands, username = 'runner') {
 
 /***/ }),
 
+/***/ 2224:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * v2 hostname policy: builds the policy.json the proxy addon enforces, and mirrors the
+ * addon's pattern matching (proxy/policy_core.py) for the report and DNS config.
+ *
+ * Pattern semantics (identical in Python; both are checked against proxy/test-vectors.json):
+ *  - `example.com`     -> example.com and any subdomain
+ *  - `*.example.com`   -> any subdomain of example.com (not the apex)
+ *  - `a-*.example.com` -> `*` matches within ONE label; the rest must match exactly
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MANDATORY_PASSTHROUGH = void 0;
+exports.normHost = normHost;
+exports.isIpLiteral = isIpLiteral;
+exports.validatePattern = validatePattern;
+exports.compilePattern = compilePattern;
+exports.matchesAny = matchesAny;
+exports.isDangerouslyBroad = isDangerouslyBroad;
+exports.buildPolicyConfig = buildPolicyConfig;
+exports.dnsDomainsFor = dnsDomainsFor;
+const github_parser_1 = __nccwpck_require__(9170);
+const dns_config_builder_1 = __nccwpck_require__(1877);
+const constants_1 = __nccwpck_require__(8729);
+/**
+ * Hosts that MUST be passed through (SNI-only, never decrypted). Empirical (P0 spike): the
+ * Go hosted-compute agent loads system roots at boot and can never trust a CA added later,
+ * and it runs as the same uid as job steps, so it cannot be exempted by uid instead.
+ */
+exports.MANDATORY_PASSTHROUGH = ['hosted-compute-*.githubapp.com'];
+const LABEL = /^[a-z0-9_*]([a-z0-9_*-]*[a-z0-9_*])?$/;
+function normHost(host) {
+    if (!host)
+        return '';
+    let h = String(host).trim().toLowerCase();
+    if (h.startsWith('[')) {
+        const end = h.indexOf(']');
+        return end > 0 ? h.slice(1, end) : h;
+    }
+    if ((h.match(/:/g) || []).length === 1)
+        h = h.slice(0, h.lastIndexOf(':'));
+    return h.replace(/\.+$/, '');
+}
+function isIpLiteral(host) {
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
+}
+/** Return the normalised pattern, or throw with a reason. */
+function validatePattern(pattern) {
+    const p = normHost(pattern);
+    if (!p || !p.includes('.'))
+        throw new Error(`not a domain pattern: '${pattern}'`);
+    if (isIpLiteral(p))
+        throw new Error(`IP literals are not allowed in patterns: '${pattern}'`);
+    const labels = p.split('.');
+    if (!labels.every(l => LABEL.test(l)))
+        throw new Error(`invalid domain pattern: '${pattern}'`);
+    if (labels.slice(-2).some(l => l.includes('*'))) {
+        throw new Error(`wildcard too broad (in the registrable part): '${pattern}'`);
+    }
+    if (p.startsWith('*.') && p.slice(2).includes('*')) {
+        throw new Error(`only one wildcard form per pattern: '${pattern}'`);
+    }
+    return p;
+}
+function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function compilePattern(pattern) {
+    const p = validatePattern(pattern);
+    let body;
+    if (p.startsWith('*.')) {
+        body = '(?:[a-z0-9_-]+\\.)+' + escapeRegex(p.slice(2));
+    }
+    else if (p.includes('*')) {
+        body = p.split('*').map(escapeRegex).join('[a-z0-9_-]*');
+    }
+    else {
+        body = '(?:[a-z0-9_-]+\\.)*' + escapeRegex(p);
+    }
+    return new RegExp('^' + body + '$');
+}
+function matchesAny(host, compiled) {
+    const h = normHost(host);
+    return h !== '' && compiled.some(c => c.test(h));
+}
+/** A pattern that would allow a whole shared namespace (anyone can register a sibling name). */
+function isDangerouslyBroad(pattern) {
+    const base = pattern.startsWith('*.') ? pattern.slice(2) : pattern;
+    return github_parser_1.DANGEROUS_BROAD_DOMAINS.has(base);
+}
+function uniq(xs) {
+    return Array.from(new Set(xs));
+}
+/** Validate user patterns, dropping (and reporting) anything invalid or dangerously broad. */
+function cleanUserPatterns(raw, inputName, warnings) {
+    const out = [];
+    for (const entry of (0, dns_config_builder_1.parseAllowedDomains)(raw)) {
+        try {
+            const p = validatePattern(entry);
+            if (isDangerouslyBroad(p)) {
+                warnings.push(`${inputName}: '${entry}' is a shared multi-tenant namespace and was ignored`);
+                continue;
+            }
+            out.push(p);
+        }
+        catch (e) {
+            warnings.push(`${inputName}: ${e.message} - ignored`);
+        }
+    }
+    return out;
+}
+function buildPolicyConfig(opts) {
+    const warnings = [];
+    const github = [];
+    for (const d of opts.githubDomains) {
+        try {
+            github.push(validatePattern(d));
+        }
+        catch {
+            // the meta/static lists are normalised already; skip anything odd rather than fail
+        }
+    }
+    const user = cleanUserPatterns(opts.allowedDomains, 'allowed-domains', warnings);
+    const passthrough = uniq([
+        ...exports.MANDATORY_PASSTHROUGH,
+        ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
+    ]);
+    const deny = opts.blockRiskySubdomains ? [...dns_config_builder_1.RISKY_GITHUB_SUBDOMAINS] : [];
+    return {
+        config: {
+            version: 1,
+            mode: opts.mode,
+            allow: uniq([...github, ...user]),
+            passthrough,
+            deny,
+            flow_log: constants_1.FLOW_LOG
+        },
+        warnings
+    };
+}
+/**
+ * Domains dnsmasq must forward for a set of patterns. dnsmasq's server=/d/ matches d and
+ * all subdomains and has no mid-label wildcard, so a pattern maps to the suffix after its
+ * last wildcard label (the proxy, not DNS, enforces the exact pattern).
+ */
+function dnsDomainsFor(patterns) {
+    const out = [];
+    for (const p of patterns) {
+        const labels = p.split('.');
+        let i = labels.length;
+        while (i > 0 && !labels[i - 1].includes('*'))
+            i--;
+        out.push(labels.slice(i).join('.'));
+    }
+    return uniq(out);
+}
+
+
+/***/ }),
+
 /***/ 5960:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -1340,133 +1872,914 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
-const validation_1 = __nccwpck_require__(8449);
-const network_parser_1 = __nccwpck_require__(8089);
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const constants_1 = __nccwpck_require__(8729);
+const egress_1 = __nccwpck_require__(765);
+const flowlog_1 = __nccwpck_require__(5422);
 const dns_parser_1 = __nccwpck_require__(1106);
+const report_1 = __nccwpck_require__(5444);
 const sudo_1 = __nccwpck_require__(1279);
-const report_formatter_1 = __nccwpck_require__(5601);
-async function run() {
+const validation_1 = __nccwpck_require__(8449);
+function setupMode() {
     try {
-        core.info('🔍 Analyzing network access logs...');
-        // Wait for logs to be written
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        // Parse main action logs
-        const connections = await (0, network_parser_1.parseNetworkLogs)();
-        const dnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/var/log/safer-runner/main-dns.log');
-        // Parse main sudo logs (workflow commands only)
-        const sudoCommands = (0, sudo_1.parseSudoLogs)('/var/log/safer-runner/main-sudo.log');
-        if (sudoCommands.length > 0) {
-            core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
-        }
-        // Parse pre-hook logs if pre-action ran
-        let preHookConnections = [];
-        let preHookDnsResolutions = [];
-        let preHookSudoCommands = [];
-        // Check if pre-action ran by looking for DNS user state
-        const preUsername = core.getState('dns-user');
-        if (preUsername) {
-            core.info('📋 Parsing pre-hook logs...');
-            // Parse pre-hook network connections
-            preHookConnections = await (0, network_parser_1.parsePreHookNetworkLogs)();
-            core.info(`✅ Found ${preHookConnections.length} pre-hook network connection(s)`);
-            // Parse pre-hook DNS logs from dedicated log file
-            try {
-                const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(9896)));
-                if (fs.existsSync('/var/log/safer-runner/pre-dns.log')) {
-                    preHookDnsResolutions = await (0, dns_parser_1.parseDnsLogs)('/var/log/safer-runner/pre-dns.log');
-                    core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
-                }
-                // Parse pre-hook sudo logs (other actions' pre-hooks only)
-                // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
-                preHookSudoCommands = (0, sudo_1.parseSudoLogs)('/var/log/safer-runner/pre-sudo.log');
-                if (preHookSudoCommands.length > 0) {
-                    core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
-                }
-            }
-            catch (error) {
-                core.warning(`Could not parse pre-hook logs: ${error}`);
-            }
-        }
-        // Verify system integrity against post-setup baseline
-        const validator = new validation_1.SystemValidator();
-        const integrityValid = await validator.verifyAgainstBaseline();
-        const validationReport = await validator.generateValidationReport();
-        // Check if we should fail on tampering (GitHub Actions converts boolean inputs to strings)
-        const failOnTampering = core.getBooleanInput('fail-on-tampering');
-        if (!integrityValid && failOnTampering) {
-            core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
-            return; // Exit early - the validation report will still be in the logs above
-        }
-        await generateJobSummary(connections, dnsResolutions, sudoCommands, preHookConnections, preHookDnsResolutions, preHookSudoCommands, validationReport);
-        core.info('✅ Network access summary generated');
+        return JSON.parse(fs.readFileSync(egress_1.SETUP_MARKER, 'utf8')).mode;
     }
-    catch (error) {
-        core.warning(`Failed to generate network summary: ${error}`);
-        // Don't fail the entire action if log analysis fails
+    catch {
+        return null;
     }
 }
 /**
- * Generate simplified pre-hook analysis section with network connections, DNS, and sudo info
+ * Post step: destroy the CA private key, then report. The proxy and firewall stay up: the
+ * runner's own "Complete job" traffic still goes through them, and the VM is destroyed after.
  */
-function generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preHookSudoCommands) {
-    // If no pre-hook activity, don't show the section
-    if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0 && preHookSudoCommands.length === 0) {
-        return '';
+async function run() {
+    const mode = setupMode();
+    if (!mode) {
+        core.warning('safer-runner setup did not complete - no report');
+        return;
     }
-    let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
-    report += `This section shows activity captured during pre-hook monitoring (other actions' pre-hooks), before your workflow steps executed.\n\n`;
-    // Network Connection Details
-    report += (0, report_formatter_1.generateNetworkConnectionDetails)(preHookConnections);
-    // DNS Information
-    report += (0, report_formatter_1.generateDnsDetails)(preHookDnsResolutions);
-    // Sudo Commands
-    report += (0, sudo_1.generateSudoSummarySection)(preHookSudoCommands, 'Sudo Commands');
-    report += `</details>\n\n`;
-    return report;
-}
-async function generateJobSummary(connections, dnsResolutions, sudoCommands, preHookConnections, preHookDnsResolutions, preHookSudoCommands, validationReport) {
-    const mode = core.getInput('mode') || 'analyze';
-    const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
-    const jobName = process.env.GITHUB_JOB || 'unknown';
-    let summary = `# Safer Runner Security Report\n\n`;
-    const modeIcon = mode === 'enforce' ? '🔒' : '📊';
-    summary += `**Job:** ${jobName}\n`;
-    summary += `**Mode:** ${modeIcon} ${mode.toUpperCase()}\n`;
-    // Show blocked subdomains if in enforce mode
-    if (mode === 'enforce') {
-        const riskySubdomains = ['gist.github.com', 'gist.githubusercontent.com', 'raw.githubusercontent.com'];
-        if (blockRiskySubdomains) {
-            summary += `**Blocked Subdomains:** 🚫 ${riskySubdomains.join(', ')}\n`;
+    // -n: never prompt; the helper is allowlisted even with disable-sudo
+    const rc = await exec.exec('sudo', ['-n', constants_1.TEARDOWN_BIN], { ignoreReturnCode: true });
+    if (rc === 0)
+        core.info('🔑 Ephemeral CA private key destroyed');
+    else
+        core.warning(`Could not run ${constants_1.TEARDOWN_BIN} (exit ${rc}); the CA key dies with the VM`);
+    try {
+        await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
+        const hosts = (0, report_1.summarizeFlows)((0, flowlog_1.readFlowLog)(constants_1.FLOW_LOG));
+        const firewall = fs.existsSync(constants_1.FIREWALL_LOG) ? (0, report_1.parseFirewallLog)(fs.readFileSync(constants_1.FIREWALL_LOG, 'utf8')) : [];
+        const dns = await (0, dns_parser_1.parseDnsLogs)(constants_1.DNS_LOG);
+        const dnsRefused = Array.from(new Set(dns.filter(d => /NXDOMAIN|blocked/i.test(d.status)).map(d => d.domain)));
+        let selfTests = [];
+        try {
+            selfTests = JSON.parse(fs.readFileSync(constants_1.SELFTEST_FILE, 'utf8'));
         }
-        else {
-            summary += `**Blocked Subdomains:** ⚠️ DISABLED (risky subdomains are allowed)\n`;
+        catch {
+            selfTests = [];
+        }
+        // Full lists in the job log, so nothing is ever silently dropped from the summary.
+        for (const h of hosts) {
+            core.info(`${h.verdict.padEnd(11)} ${h.name} conns=${h.connections} reqs=${h.requests} ${h.reasons.join(',')}`);
+        }
+        const validator = new validation_1.SystemValidator();
+        const intact = await validator.verifyAgainstBaseline();
+        const validationReport = await validator.generateValidationReport();
+        const sudoSection = (0, sudo_1.generateSudoSummarySection)((0, sudo_1.parseSudoLogs)(constants_1.SUDO_LOG), 'Sudo usage');
+        const md = (0, report_1.buildReport)({
+            mode,
+            job: process.env.GITHUB_JOB || 'unknown',
+            hosts,
+            firewall,
+            dnsRefused,
+            selfTests,
+            extraSections: [sudoSection, validationReport]
+        });
+        await core.summary.addRaw(md).write();
+        if (!intact && core.getInput('fail-on-tampering') === 'true') {
+            core.setFailed('🚨 Security configuration was tampered with during the job');
         }
     }
-    summary += `**Generated:** ${new Date().toISOString()}\n\n`;
-    summary += `---\n\n`;
-    // 1. Network Connection Details
-    summary += (0, report_formatter_1.generateNetworkConnectionDetails)(connections);
-    summary += `---\n\n`;
-    // 2. DNS Information
-    summary += (0, report_formatter_1.generateDnsDetails)(dnsResolutions);
-    summary += `---\n\n`;
-    // 3. Pre-Hook Security Analysis (collapsible)
-    summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preHookSudoCommands);
-    if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0 || preHookSudoCommands.length > 0) {
-        summary += `---\n\n`;
+    catch (error) {
+        core.warning(`Failed to generate the safer-runner report: ${error}`);
     }
-    // 4. Config File Tamper Detection
-    summary += `${validationReport}`;
-    summary += `---\n\n`;
-    // 5. Configuration Advice (for analyze mode only)
-    if (mode === 'analyze') {
-        summary += (0, report_formatter_1.generateConfigurationAdvice)(dnsResolutions, sudoCommands);
-        summary += `---\n\n`;
-    }
-    summary += `*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
-    await core.summary.addRaw(summary).write();
 }
 run();
+
+
+/***/ }),
+
+/***/ 3828:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 proxy lifecycle: install the pinned mitmdump, create the proxy user and its ephemeral
+ * CA, write the policy, and run mitmdump under systemd outside the runner's process tree.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.actionRoot = actionRoot;
+exports.installMitmproxy = installMitmproxy;
+exports.createProxyUser = createProxyUser;
+exports.installAddon = installAddon;
+exports.writePolicy = writePolicy;
+exports.generateCa = generateCa;
+exports.installTeardownHelper = installTeardownHelper;
+exports.mitmdumpArgs = mitmdumpArgs;
+exports.systemdRunArgs = systemdRunArgs;
+exports.findStartRecord = findStartRecord;
+exports.dumpProxyDiagnostics = dumpProxyDiagnostics;
+exports.startProxy = startProxy;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const crypto = __importStar(__nccwpck_require__(6982));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const constants_1 = __nccwpck_require__(8729);
+/**
+ * Root of the checked-out action (where proxy/policy.py lives). Derived from the running
+ * script (<action>/dist/<entry>/index.js) rather than __dirname so the bundler can't
+ * rewrite or relocate it.
+ */
+function actionRoot() {
+    const script = process.argv[1] || '';
+    return path.resolve(path.dirname(script), '..', '..');
+}
+async function sudo(args, opts = {}) {
+    return exec.exec('sudo', args, opts);
+}
+async function sudoWrite(file, content, mode, owner = 'root:root') {
+    await sudo(['tee', file], { input: Buffer.from(content), silent: true });
+    await sudo(['chown', owner, file]);
+    await sudo(['chmod', mode, file]);
+}
+async function timed(label, fn) {
+    const t0 = Date.now();
+    try {
+        return await fn();
+    }
+    finally {
+        core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    }
+}
+/** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
+async function installMitmproxy() {
+    if (fs.existsSync(constants_1.MITMDUMP_BIN)) {
+        core.info(`mitmdump already installed at ${constants_1.MITMDUMP_BIN}`);
+        return;
+    }
+    const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
+    const tarball = path.join(tmp, 'mitmproxy.tar.gz');
+    await timed('download mitmproxy', async () => {
+        let lastError;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                const res = await fetch(constants_1.MITMPROXY_URL);
+                if (!res.ok)
+                    throw new Error(`HTTP ${res.status}`);
+                const buf = Buffer.from(await res.arrayBuffer());
+                const digest = crypto.createHash('sha256').update(buf).digest('hex');
+                if (digest !== constants_1.MITMPROXY_SHA256) {
+                    throw new Error(`sha256 mismatch for ${constants_1.MITMPROXY_URL}: got ${digest}, want ${constants_1.MITMPROXY_SHA256}`);
+                }
+                fs.writeFileSync(tarball, buf);
+                return;
+            }
+            catch (e) {
+                lastError = e;
+                if (String(e).includes('sha256 mismatch'))
+                    break;
+                core.warning(`mitmproxy download attempt ${attempt} failed: ${e}`);
+            }
+        }
+        throw new Error(`could not download mitmproxy: ${lastError}`);
+    });
+    await timed('extract mitmdump', async () => {
+        await exec.exec('tar', ['-xzf', tarball, '-C', tmp, 'mitmdump']);
+        await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', `${constants_1.INSTALL_DIR}/bin`]);
+        await sudo(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, 'mitmdump'), constants_1.MITMDUMP_BIN]);
+    });
+    fs.rmSync(tmp, { recursive: true, force: true });
+}
+/** Create the proxy system user (idempotent). Returns its uid. */
+async function createProxyUser() {
+    const exists = await exec.exec('id', ['-u', constants_1.PROXY_USER], { ignoreReturnCode: true, silent: true });
+    if (exists !== 0) {
+        await sudo(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', constants_1.PROXY_USER]);
+    }
+    const { stdout } = await exec.getExecOutput('id', ['-u', constants_1.PROXY_USER], { silent: true });
+    return parseInt(stdout.trim(), 10);
+}
+/** Copy the addon out of the (runner-writable) action checkout into a root-owned directory. */
+async function installAddon() {
+    const src = path.join(actionRoot(), 'proxy');
+    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ADDON_DIR]);
+    for (const f of constants_1.ADDON_FILES) {
+        await sudo(['install', '-m', '0644', '-o', 'root', '-g', 'root', path.join(src, f), path.join(constants_1.ADDON_DIR, f)]);
+    }
+}
+async function writePolicy(config) {
+    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
+    await sudoWrite(constants_1.POLICY_FILE, JSON.stringify(config, null, 2) + '\n', '0644');
+    // The flow log is written by the proxy user and read (without sudo) by the post step.
+    await sudo(['touch', constants_1.FLOW_LOG]);
+    await sudo(['chown', `${constants_1.PROXY_USER}:${constants_1.PROXY_USER}`, constants_1.FLOW_LOG]);
+    await sudo(['chmod', '0644', constants_1.FLOW_LOG]);
+}
+/**
+ * Generate the per-run CA: RSA-2048 (broadest client compatibility), 3-day validity, key
+ * only ever on tmpfs, 0600, owned by the proxy user. mitmproxy mints leaf certs from it.
+ * Publishes the public certificate to CA_CERT_FILE.
+ */
+async function generateCa() {
+    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(constants_1.PROXY_CONF_DIR)]);
+    await sudo(['install', '-d', '-m', '0700', '-o', constants_1.PROXY_USER, '-g', constants_1.PROXY_USER, constants_1.PROXY_CONF_DIR]);
+    const key = `${constants_1.PROXY_CONF_DIR}/ca-key.pem`;
+    const cert = `${constants_1.PROXY_CONF_DIR}/ca-cert.pem`;
+    const subject = `/O=safer-runner/CN=safer-runner ephemeral CA ${process.env.GITHUB_RUN_ID || ''}`.trim();
+    await sudo([
+        '-u',
+        constants_1.PROXY_USER,
+        'sh',
+        '-c',
+        'umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 ' +
+            `-keyout "$1" -out "$2" -subj "$3" ` +
+            '-addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign ' +
+            `&& cat "$1" "$2" > "$4" && rm -f "$1"`,
+        'sh',
+        key,
+        cert,
+        subject,
+        constants_1.PROXY_CA_KEY_FILE
+    ]);
+    // mitmproxy looks for <confdir>/mitmproxy-ca.pem (key + cert)
+    await sudo(['install', '-m', '0644', '-o', 'root', '-g', 'root', cert, constants_1.CA_CERT_FILE]);
+}
+/**
+ * Root-owned teardown helper. The only privileged command the post step needs, so with
+ * disable-sudo it is the single extra sudoers entry (exact path, no arguments).
+ * Deleting the key on disk is all it does: the running proxy keeps the CA in memory so the
+ * runner can still finish the job through it; the VM is destroyed afterwards.
+ */
+async function installTeardownHelper() {
+    const script = `#!/bin/sh
+# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
+rm -f ${constants_1.PROXY_CA_KEY_FILE} ${constants_1.PROXY_CONF_DIR}/ca-key.pem ${constants_1.PROXY_CONF_DIR}/mitmproxy-ca.p12
+`;
+    await sudoWrite(constants_1.TEARDOWN_BIN, script, '0755');
+}
+function mitmdumpArgs(o) {
+    return [
+        constants_1.MITMDUMP_BIN,
+        '--mode',
+        'transparent',
+        '--listen-host',
+        constants_1.PROXY_LISTEN_HOST,
+        '--listen-port',
+        String(o.port),
+        '--set',
+        `confdir=${constants_1.PROXY_CONF_DIR}`,
+        '--set',
+        'connection_strategy=lazy',
+        '--set',
+        `stream_large_bodies=${o.streamLargeBodies}`,
+        '--set',
+        'block_global=false',
+        '--set',
+        'flow_detail=0',
+        '--set',
+        'termlog_verbosity=warn',
+        '-s',
+        `${constants_1.ADDON_DIR}/policy.py`
+    ];
+}
+/**
+ * systemd-run: a transient service OUTSIDE the runner's process tree (the runner's orphan
+ * cleanup would otherwise kill it before "Complete job", which itself goes through the
+ * proxy), restarted on any exit, sandboxed to what it needs.
+ */
+function systemdRunArgs(o) {
+    return [
+        'systemd-run',
+        `--unit=${constants_1.PROXY_UNIT}`,
+        '--description=safer-runner egress proxy',
+        `--uid=${constants_1.PROXY_USER}`,
+        `--gid=${constants_1.PROXY_USER}`,
+        '-p',
+        'Restart=always',
+        '-p',
+        'RestartSec=1',
+        '-p',
+        'UMask=0077',
+        '-p',
+        'NoNewPrivileges=yes',
+        '-p',
+        'PrivateTmp=yes',
+        '-p',
+        'ProtectHome=yes',
+        '-p',
+        'ProtectSystem=strict',
+        '-p',
+        `ReadWritePaths=${constants_1.PROXY_CONF_DIR} ${constants_1.FLOW_LOG}`,
+        '-p',
+        'LimitNOFILE=65536',
+        `--setenv=HOME=${constants_1.PROXY_CONF_DIR}`,
+        `--setenv=SAFER_RUNNER_POLICY=${constants_1.POLICY_FILE}`,
+        ...mitmdumpArgs(o)
+    ];
+}
+/** Find the addon's startup record (written only after its own self-test passed). */
+function findStartRecord(flowLog) {
+    let found = null;
+    for (const line of flowLog.split('\n')) {
+        if (!line.includes('"ev": "start"'))
+            continue;
+        try {
+            const rec = JSON.parse(line);
+            if (rec.ev === 'start' && rec.ok === true)
+                found = rec;
+        }
+        catch {
+            // partial line
+        }
+    }
+    return found;
+}
+async function isListening(port) {
+    const { stdout } = await exec.getExecOutput('ss', ['-Hltn', `sport = :${port}`], {
+        silent: true,
+        ignoreReturnCode: true
+    });
+    return stdout.includes(`${constants_1.PROXY_LISTEN_HOST}:${port}`);
+}
+async function dumpProxyDiagnostics() {
+    const opts = { ignoreReturnCode: true };
+    await sudo(['systemctl', 'status', constants_1.PROXY_UNIT, '--no-pager', '-l'], opts);
+    await sudo(['journalctl', '-u', constants_1.PROXY_UNIT, '--no-pager', '-n', '50'], opts);
+}
+/** Start the proxy unit and wait until it listens and the policy addon reported a good start. */
+async function startProxy(o, timeoutMs = 90000) {
+    await sudo(['systemctl', 'stop', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
+    await sudo(['systemctl', 'reset-failed', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
+    await sudo(systemdRunArgs(o));
+    const deadline = Date.now() + timeoutMs;
+    await timed('proxy start', async () => {
+        while (Date.now() < deadline) {
+            const log = fs.existsSync(constants_1.FLOW_LOG) ? fs.readFileSync(constants_1.FLOW_LOG, 'utf8') : '';
+            const start = findStartRecord(log);
+            if (start && (await isListening(o.port))) {
+                core.info(`✅ Proxy up (pid ${start.pid}, ${start.mode} policy loaded and self-tested)`);
+                return;
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+        await dumpProxyDiagnostics();
+        throw new Error(`proxy did not become ready within ${timeoutMs / 1000}s`);
+    });
+}
+
+
+/***/ }),
+
+/***/ 5444:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * v2 job-summary report built from the proxy flow log (+ firewall and DNS logs).
+ * DENIED first and in full; anything that has to be cut is said so explicitly (review M6).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.summarizeFlows = summarizeFlows;
+exports.parseFirewallLog = parseFirewallLog;
+exports.humanBytes = humanBytes;
+exports.suggestedAllowlist = suggestedAllowlist;
+exports.buildReport = buildReport;
+const RANK = { BLOCK: 4, WOULD_BLOCK: 3, PASSTHROUGH: 2, INTERCEPT: 1, ALLOW: 1 };
+const MAX_ROWS = 300;
+const MAX_LIST = 5;
+function nameOf(r) {
+    return (r.ev === 'tls' ? r.sni : r.host || r.sni) || `(no name) ${r.dst ?? ''}`.trim();
+}
+function addUnique(list, v) {
+    if (v && !list.includes(v))
+        list.push(v);
+}
+function summarizeFlows(records) {
+    const byName = new Map();
+    for (const r of records) {
+        if (!['tls', 'http', 'https'].includes(r.ev) || !r.verdict)
+            continue;
+        const name = nameOf(r);
+        let h = byName.get(name);
+        if (!h) {
+            h = {
+                name,
+                verdict: r.verdict,
+                reasons: [],
+                layers: [],
+                kinds: [],
+                connections: 0,
+                requests: 0,
+                reqBytes: 0,
+                respBytes: 0,
+                statuses: {},
+                dsts: []
+            };
+            byName.set(name, h);
+        }
+        if ((RANK[r.verdict] ?? 0) > (RANK[h.verdict] ?? 0))
+            h.verdict = r.verdict;
+        if (r.verdict === 'BLOCK' || r.verdict === 'WOULD_BLOCK') {
+            addUnique(h.reasons, r.reason);
+            addUnique(h.layers, r.layer);
+        }
+        if (r.ev === 'tls') {
+            h.connections++;
+            addUnique(h.kinds, r.passthrough ? 'passthrough' : r.verdict === 'BLOCK' ? 'tls' : 'intercept');
+        }
+        else {
+            h.requests++;
+            h.reqBytes += r.req_bytes ?? 0;
+            h.respBytes += r.resp_bytes ?? 0;
+            if (r.status !== undefined)
+                h.statuses[String(r.status)] = (h.statuses[String(r.status)] ?? 0) + 1;
+            if (r.ev === 'http')
+                addUnique(h.kinds, 'http');
+        }
+        if (h.dsts.length < MAX_LIST && r.dst)
+            addUnique(h.dsts, r.dst.replace(/:\d+$/, ''));
+    }
+    return Array.from(byName.values()).sort((a, b) => (RANK[b.verdict] ?? 0) - (RANK[a.verdict] ?? 0) || a.name.localeCompare(b.name));
+}
+/** Parse kernel LOG lines written by our filter chain (see firewall.ts). */
+function parseFirewallLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        const m = line.match(/(SaferRunner-\w+):/);
+        if (!m)
+            continue;
+        const field = (k) => line.match(new RegExp(`\\b${k}=(\\S*)`))?.[1] ?? '';
+        out.push({ prefix: m[1], proto: field('PROTO'), dst: field('DST'), dport: field('DPT'), uid: field('UID') });
+    }
+    return out;
+}
+function humanBytes(n) {
+    if (n < 1024)
+        return `${n} B`;
+    const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+    let v = n / 1024;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i++;
+    }
+    return `${v.toFixed(1)} ${units[i]}`;
+}
+function esc(s) {
+    return s.replace(/\|/g, '\\|').replace(/</g, '&lt;');
+}
+function table(header, rows) {
+    return [
+        `| ${header.join(' | ')} |`,
+        `|${header.map(() => '---').join('|')}|`,
+        ...rows.map(r => `| ${r.map(esc).join(' | ')} |`)
+    ].join('\n');
+}
+function capped(rows) {
+    if (rows.length <= MAX_ROWS)
+        return { shown: rows, note: '' };
+    return {
+        shown: rows.slice(0, MAX_ROWS),
+        note: `\n\n**+${rows.length - MAX_ROWS} more not shown here** - the full list is in the post step's job log.\n`
+    };
+}
+function statusText(s) {
+    return Object.entries(s)
+        .sort()
+        .map(([k, v]) => (v > 1 ? `${k}×${v}` : k))
+        .join(' ');
+}
+function suggestedAllowlist(hosts) {
+    return hosts
+        .filter(h => h.verdict === 'WOULD_BLOCK' && !h.name.startsWith('(no name)') && !h.name.endsWith('.invalid'))
+        .map(h => h.name);
+}
+function buildReport(input) {
+    const { mode, hosts } = input;
+    const denied = hosts.filter(h => h.verdict === 'BLOCK' || h.verdict === 'WOULD_BLOCK');
+    const allowed = hosts.filter(h => !denied.includes(h));
+    const deniedWord = mode === 'enforce' ? 'Blocked' : 'Would be blocked';
+    const icon = mode === 'enforce' ? '🔒' : '📊';
+    let md = `# Safer Runner v2 egress report\n\n`;
+    md += `**Job:** ${input.job} · **Mode:** ${icon} ${mode.toUpperCase()} · **Generated:** ${new Date().toISOString()}\n\n`;
+    const totalReq = hosts.reduce((a, h) => a + h.requests, 0);
+    const totalBytes = hosts.reduce((a, h) => a + h.reqBytes + h.respBytes, 0);
+    md += `${allowed.length} host(s) allowed · **${denied.length} host(s) ${deniedWord.toLowerCase()}** · `;
+    md += `${totalReq} HTTP request(s) · ${humanBytes(totalBytes)} through the proxy\n\n`;
+    if (input.selfTests.length) {
+        md +=
+            input.selfTests.map(t => `${t.ok ? '✅' : '❌'} self-test **${t.name}**: ${esc(t.detail)}`).join('  \n') + '\n\n';
+    }
+    md += `## ${mode === 'enforce' ? '❌' : '⚠️'} ${deniedWord} (${denied.length})\n\n`;
+    if (denied.length === 0) {
+        md += `None.\n\n`;
+    }
+    else {
+        const { shown, note } = capped(denied);
+        md += table(['Host (SNI / Host)', 'Reason', 'Layer', 'Connections', 'Requests', 'Dialled IP(s)'], shown.map(h => [
+            h.name,
+            h.reasons.join(', '),
+            h.layers.join(', '),
+            String(h.connections),
+            String(h.requests),
+            h.dsts.join(', ')
+        ]));
+        md += note + '\n\n';
+    }
+    md += `## ✅ Allowed (${allowed.length})\n\n`;
+    if (allowed.length === 0) {
+        md += `None.\n\n`;
+    }
+    else {
+        const { shown, note } = capped(allowed);
+        md += table(['Host', 'How', 'Connections', 'Requests', 'Sent', 'Received', 'Status codes'], shown.map(h => [
+            h.name,
+            h.kinds.join(', '),
+            String(h.connections),
+            String(h.requests),
+            humanBytes(h.reqBytes),
+            humanBytes(h.respBytes),
+            statusText(h.statuses)
+        ]));
+        md += note + '\n\n';
+        md += `<sub>intercept = TLS terminated and every request's Host checked · passthrough = SNI-only, not decrypted (byte counts not available) · http = plain HTTP</sub>\n\n`;
+    }
+    const nonHttp = input.firewall;
+    md += `## Non-HTTP(S) egress (${nonHttp.length})\n\n`;
+    if (nonHttp.length === 0) {
+        md += `None logged.\n\n`;
+    }
+    else {
+        const seen = new Map();
+        for (const e of nonHttp) {
+            const k = `${e.proto} ${e.dst}:${e.dport} uid ${e.uid}`;
+            seen.set(k, { e, n: (seen.get(k)?.n ?? 0) + 1 });
+        }
+        const rows = Array.from(seen.values()).map(({ e, n }) => [
+            e.prefix === 'SaferRunner-Drop' ? '❌ rejected' : '⚠️ allowed (not proxied)',
+            e.proto,
+            `${e.dst}:${e.dport}`,
+            e.uid,
+            String(n)
+        ]);
+        const { shown, note } = capped(rows);
+        md += table(['Result', 'Proto', 'Destination', 'UID', 'Packets logged'], shown) + note + '\n\n';
+        md += `<sub>Only TCP 80/443 is proxied. Logging is rate-limited (60/min).</sub>\n\n`;
+    }
+    if (input.dnsRefused.length) {
+        const { shown, note } = capped(input.dnsRefused);
+        md += `## DNS queries refused (${input.dnsRefused.length})\n\n`;
+        md += shown.map(d => `\`${d}\``).join(', ') + note + '\n\n';
+    }
+    if (mode === 'analyze') {
+        const suggest = suggestedAllowlist(hosts);
+        md += `## Suggested configuration\n\n`;
+        if (suggest.length === 0) {
+            md += `Everything seen is already allowed - this job should run unchanged with \`mode: enforce\`.\n\n`;
+        }
+        else {
+            md += 'To run this job in enforce mode, allow these hosts (review each one first):\n\n';
+            md +=
+                '```yaml\n- uses: portswigger-tim/safer-runner-action@v2\n  with:\n    mode: enforce\n    allowed-domains: |\n';
+            md += suggest.map(s => `      ${s}`).join('\n') + '\n```\n\n';
+        }
+    }
+    for (const s of input.extraSections)
+        md += s + '\n\n';
+    md += `*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2*\n`;
+    return md;
+}
+
+
+/***/ }),
+
+/***/ 3180:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Runtime self-tests, run on every job right after the firewall is in place. They prove on
+ * the live runner that (1) the SNI-level check actually fires (not just the Host check -
+ * the P0 spike once had SNI enforcement silently off for a whole run) and (2) the proxy
+ * repoints: it ignores the IP the client dialled and connects to the name instead.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.sniBlockSelfTest = sniBlockSelfTest;
+exports.repointSelfTest = repointSelfTest;
+exports.runSelfTests = runSelfTests;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const constants_1 = __nccwpck_require__(8729);
+const flowlog_1 = __nccwpck_require__(5422);
+const REPOINT_HOST = 'github.com';
+async function curl(args) {
+    const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    return { code: r.exitCode, out: (r.stdout + r.stderr).trim() };
+}
+async function waitFor(from, pred, ms = 5000) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+        const hit = (0, flowlog_1.readFlowLog)(constants_1.FLOW_LOG, from).find(pred);
+        if (hit)
+            return hit;
+        await new Promise(r => setTimeout(r, 200));
+    }
+    return null;
+}
+async function sniBlockSelfTest(mode) {
+    const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
+    const want = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
+    const r = await curl(['--resolve', `${constants_1.SELFTEST_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`, `https://${constants_1.SELFTEST_HOST}/`]);
+    const rec = await waitFor(from, x => x.ev === 'tls' && x.sni === constants_1.SELFTEST_HOST && x.layer === 'sni');
+    const ok = rec !== null && rec.verdict === want && (mode === 'analyze' || r.code !== 0);
+    return {
+        name: 'sni-block',
+        ok,
+        detail: rec
+            ? `SNI ${constants_1.SELFTEST_HOST} -> ${rec.verdict} (${rec.reason}); curl exit ${r.code}`
+            : `no SNI-layer record (curl: ${r.out})`
+    };
+}
+async function repointSelfTest() {
+    const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
+    const r = await curl(['--resolve', `${REPOINT_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`, `https://${REPOINT_HOST}/robots.txt`]);
+    const rec = await waitFor(from, x => (x.ev === 'https' || x.ev === 'http') && x.host === REPOINT_HOST && (0, flowlog_1.ipOf)(x.dst) === constants_1.SELFTEST_BOGUS_IP);
+    const upstream = (0, flowlog_1.ipOf)(rec?.upstream);
+    const ok = r.out === '200' && rec !== null && upstream !== '' && upstream !== constants_1.SELFTEST_BOGUS_IP;
+    return {
+        name: 'repoint',
+        ok,
+        detail: rec
+            ? `client dialled ${constants_1.SELFTEST_BOGUS_IP}, proxy connected to ${rec.upstream} (HTTP ${r.out})`
+            : `no flow record for the repoint probe (curl: ${r.out})`
+    };
+}
+async function runSelfTests(mode) {
+    const results = [await sniBlockSelfTest(mode), await repointSelfTest()];
+    for (const t of results) {
+        (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
+    }
+    return results;
+}
+
+
+/***/ }),
+
+/***/ 1413:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * DNS (dnsmasq) and logging helpers carried over from v1. In v2 DNS is a supporting layer:
+ * the proxy is the egress control; dnsmasq resolves for it, logs, and (enforce) refuses to
+ * resolve names outside the allowlist so DNS can't be used as a tunnel.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createLogDirectory = createLogDirectory;
+exports.createRandomDNSUser = createRandomDNSUser;
+exports.setupIptablesLogging = setupIptablesLogging;
+exports.setupDNSConfig = setupDNSConfig;
+exports.setupDNSMasq = setupDNSMasq;
+exports.startDnsmasq = startDnsmasq;
+exports.restartServices = restartServices;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const crypto = __importStar(__nccwpck_require__(6982));
+const dns_config_builder_1 = __nccwpck_require__(1877);
+/**
+ * Create /var/log/safer-runner directory with proper permissions
+ * This directory will contain all safer-runner log files (DNS, iptables, sudo)
+ */
+async function createLogDirectory() {
+    const logDir = '/var/log/safer-runner';
+    // Create directory
+    await exec.exec('sudo', ['mkdir', '-p', logDir]);
+    // Set ownership to syslog:adm (rsyslog runs as syslog, runner is in adm group)
+    await exec.exec('sudo', ['chown', 'syslog:adm', logDir]);
+    // Make directory readable by all (so runner can read logs without sudo)
+    await exec.exec('sudo', ['chmod', '755', logDir]);
+}
+async function createRandomDNSUser() {
+    // Generate random username with 16 hex characters
+    const randomHex = crypto.randomBytes(8).toString('hex');
+    const username = `dns-${randomHex}`;
+    // Generate random UID in safe range (60000-65000 to avoid conflicts)
+    const uid = 60000 + Math.floor(Math.random() * 5000);
+    // Create system user with no login, no home directory
+    await exec.exec('sudo', [
+        'useradd',
+        '--system',
+        '--no-create-home',
+        '--shell',
+        '/usr/sbin/nologin',
+        '--uid',
+        uid.toString(),
+        username
+    ]);
+    return { username, uid };
+}
+/**
+ * Setup rsyslog to filter iptables logs to dedicated files
+ * This allows reading logs without sudo and provides clean separation
+ * between pre-hook and main action logs
+ *
+ * Creates separate config files for pre-hook and main action to avoid
+ * overwriting each other's configurations
+ */
+async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
+    // Build rsyslog configuration to filter iptables logs
+    // Filter by programname=kernel to only capture actual iptables log messages
+    // (not sudo commands that set up the logging rules)
+    const prefixArray = "['" + logPrefixes.join("', '") + "']";
+    const rsyslogConfig = `if $programname == 'kernel' and $msg contains ${prefixArray} then ${logFile}
+`;
+    // Use different config file names for pre-hook and main action
+    const configFile = configSuffix
+        ? `/etc/rsyslog.d/10-iptables-safer-runner-${configSuffix}.conf`
+        : '/etc/rsyslog.d/10-iptables-safer-runner.conf';
+    // Write rsyslog configuration
+    await exec.exec('sudo', ['tee', configFile], {
+        input: Buffer.from(rsyslogConfig)
+    });
+    // Create log file and set ownership to syslog user (rsyslog runs as syslog:adm)
+    // This allows rsyslog to write to the file
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
+    await exec.exec('sudo', ['chmod', '644', logFile]);
+    // Restart rsyslog to apply configuration
+    await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+}
+async function setupDNSConfig() {
+    // Configure systemd-resolved to use our DNS server
+    await exec.exec('sudo', ['mkdir', '-p', '/etc/systemd/resolved.conf.d']);
+    const resolvedConfig = `[Resolve]
+DNS=127.0.0.1
+DNSSEC=yes
+DNSStubListener=no`;
+    await exec.exec('sudo', ['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'], {
+        input: Buffer.from(resolvedConfig)
+    });
+    // Update resolv.conf to use localhost
+    await exec.exec('sudo', ['unlink', '/etc/resolv.conf']);
+    await exec.exec('sudo', ['tee', '/etc/resolv.conf'], {
+        input: Buffer.from('nameserver 127.0.0.1\n')
+    });
+}
+async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsername, logFile, primaryDnsServer, secondaryDnsServer, githubDomains) {
+    // Build DNS configuration using the config builder module
+    const { config: dnsmasqConfig, blockedSubdomains } = (0, dns_config_builder_1.buildDnsConfig)({
+        mode: mode,
+        allowedDomains,
+        blockRiskySubdomains,
+        dnsUsername,
+        logFile,
+        primaryDnsServer,
+        secondaryDnsServer,
+        githubDomains,
+        ipsets: false
+    });
+    // Write configuration to file
+    await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
+        input: Buffer.from(dnsmasqConfig)
+    });
+    // Restrict permissions - only root should read the DNS username
+    await exec.exec('sudo', ['chmod', '600', '/etc/dnsmasq.conf']);
+    await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
+    return blockedSubdomains;
+}
+const DNSMASQ_START_ATTEMPTS = 2;
+/**
+ * (Re)start dnsmasq, retrying once if it fails
+ *
+ * dnsmasq occasionally fails to start on hosted runners right after systemd-resolved
+ * restarts. On failure the unit journal and port 53 listeners are printed so the cause
+ * is visible in the job log.
+ */
+async function startDnsmasq(retryDelayMs = 2000) {
+    for (let attempt = 1; attempt <= DNSMASQ_START_ATTEMPTS; attempt++) {
+        const exitCode = await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq'], { ignoreReturnCode: true });
+        if (exitCode === 0) {
+            return;
+        }
+        core.warning(`dnsmasq failed to start (attempt ${attempt}/${DNSMASQ_START_ATTEMPTS})`);
+        await exec.exec('sudo', ['journalctl', '-xeu', 'dnsmasq', '--no-pager', '-n', '30'], { ignoreReturnCode: true });
+        await exec.exec('sudo', ['ss', '-lntup', 'sport = :53'], { ignoreReturnCode: true });
+        if (attempt < DNSMASQ_START_ATTEMPTS) {
+            await exec.exec('sudo', ['systemctl', 'reset-failed', 'dnsmasq'], { ignoreReturnCode: true });
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        }
+    }
+    throw new Error('dnsmasq failed to start - see the journal output above');
+}
+async function restartServices(logFile) {
+    // Restart systemd-resolved and start dnsmasq
+    await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
+    await startDnsmasq();
+    // After dnsmasq starts and creates log files, make them readable by all
+    if (logFile) {
+        // Wait a moment for dnsmasq to create the log file
+        await new Promise(resolve => setTimeout(resolve, 500));
+        // Make log file world-readable (dnsmasq creates it as 660)
+        await exec.exec('sudo', ['chmod', '0644', logFile]);
+    }
+}
 
 
 /***/ }),
@@ -1532,6 +2845,7 @@ const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
 const sudo_parser_1 = __nccwpck_require__(7516);
 const validation_1 = __nccwpck_require__(8449);
+const constants_1 = __nccwpck_require__(8729);
 // Constants
 exports.RUNNER_USERNAME = 'runner';
 /**
@@ -1647,7 +2961,9 @@ function getValidationSudoCommands() {
     const files = [...validation_1.CRITICAL_FILES, exports.SUDO_LOGGING_SUDOERS_FILE, exports.SUDO_LOGGING_RSYSLOG_FILE];
     return [
         ...files.map(file => `/usr/bin/cat ${file}`),
-        ...validation_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables -L ${chain} -n --line-numbers`)
+        ...validation_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, validation_1.iptablesListArgs)(chain).join(' ')}`),
+        // post-step teardown (destroys the CA key). `""` = no arguments allowed.
+        `${constants_1.TEARDOWN_BIN} ""`
     ];
 }
 /**
@@ -1667,7 +2983,8 @@ exports.INTERNAL_SUDO_COMMANDS = [
     // removeSudoLogging() / setupSudoLogging()
     `rm -f ${exports.SUDO_LOGGING_SUDOERS_FILE}`,
     `rm -f ${exports.SUDO_LOGGING_RSYSLOG_FILE}`,
-    'systemctl restart rsyslog'
+    'systemctl restart rsyslog',
+    constants_1.TEARDOWN_BIN
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 /**
  * Generate the sudoers rules the action always needs for post-action validation
@@ -1808,6 +3125,155 @@ function generateSudoSummarySection(commands, title) {
 
 /***/ }),
 
+/***/ 7578:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 CA trust injection (docs/DESIGN-v2.md section 5). Trust is not one store: the system
+ * bundle covers OpenSSL/GnuTLS consumers (curl, git, python ssl, .NET), Node and several
+ * language ecosystems need environment variables, and Java has its own keystores.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.trustEnv = trustEnv;
+exports.installSystemTrust = installSystemTrust;
+exports.exportTrustEnv = exportTrustEnv;
+exports.javaHomes = javaHomes;
+exports.cacertsPath = cacertsPath;
+exports.installJavaTrust = installJavaTrust;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const constants_1 = __nccwpck_require__(8729);
+const JAVA_ALIAS = 'safer-runner-ca';
+/**
+ * Environment exported to every later step via GITHUB_ENV. Set unconditionally whenever the
+ * proxy is active: they are a compatibility mechanism, not a security control.
+ */
+function trustEnv() {
+    return {
+        NODE_EXTRA_CA_CERTS: constants_1.CA_CERT_FILE,
+        NODE_USE_SYSTEM_CA: '1',
+        REQUESTS_CA_BUNDLE: constants_1.CA_BUNDLE,
+        PIP_CERT: constants_1.CA_BUNDLE,
+        SSL_CERT_FILE: constants_1.CA_BUNDLE,
+        GIT_SSL_CAINFO: constants_1.CA_BUNDLE,
+        AWS_CA_BUNDLE: constants_1.CA_BUNDLE,
+        CURL_CA_BUNDLE: constants_1.CA_BUNDLE
+    };
+}
+async function installSystemTrust() {
+    await exec.exec('sudo', ['install', '-m', '0644', '-o', 'root', '-g', 'root', constants_1.CA_CERT_FILE, constants_1.SYSTEM_CA_FILE]);
+    await exec.exec('sudo', ['update-ca-certificates'], { silent: true });
+    const bundle = fs.readFileSync(constants_1.CA_BUNDLE, 'utf8');
+    const ca = fs.readFileSync(constants_1.CA_CERT_FILE, 'utf8').trim();
+    if (!bundle.includes(ca.split('\n').slice(1, 3).join('\n'))) {
+        throw new Error(`update-ca-certificates did not add the CA to ${constants_1.CA_BUNDLE}`);
+    }
+}
+function exportTrustEnv() {
+    for (const [k, v] of Object.entries(trustEnv())) {
+        core.exportVariable(k, v);
+    }
+}
+/** JDK homes on the runner: JAVA_HOME plus every JAVA_HOME_<n>_<arch> the image sets. */
+function javaHomes(env = process.env) {
+    const homes = Object.entries(env)
+        .filter(([k, v]) => v && (k === 'JAVA_HOME' || /^JAVA_HOME_\d+_[A-Z0-9]+$/.test(k)))
+        .map(([, v]) => v);
+    return Array.from(new Set(homes));
+}
+/** The cacerts keystore of a JDK home (JDK 9+ layout, then JDK 8's jre/ layout). */
+function cacertsPath(home) {
+    for (const rel of ['lib/security/cacerts', 'jre/lib/security/cacerts']) {
+        const p = path.join(home, rel);
+        if (fs.existsSync(p))
+            return p;
+    }
+    return null;
+}
+/**
+ * Import the CA into the cacerts of every JDK present now. JDKs installed later (e.g. by
+ * actions/setup-java) are not covered - a documented gap.
+ */
+async function installJavaTrust() {
+    const done = new Set();
+    for (const home of javaHomes()) {
+        const store = cacertsPath(home);
+        const keytool = path.join(home, 'bin', 'keytool');
+        if (!store || !fs.existsSync(keytool))
+            continue;
+        const real = fs.realpathSync(store);
+        if (done.has(real))
+            continue;
+        done.add(real);
+        // -delete first so a re-run doesn't fail on an existing alias
+        await exec.exec('sudo', [keytool, '-delete', '-noprompt', '-keystore', real, '-storepass', 'changeit', '-alias', JAVA_ALIAS], {
+            ignoreReturnCode: true,
+            silent: true
+        });
+        const rc = await exec.exec('sudo', [
+            keytool,
+            '-importcert',
+            '-noprompt',
+            '-keystore',
+            real,
+            '-storepass',
+            'changeit',
+            '-alias',
+            JAVA_ALIAS,
+            '-file',
+            constants_1.CA_CERT_FILE
+        ], { ignoreReturnCode: true, silent: true });
+        if (rc === 0) {
+            core.info(`Java: CA imported into ${real}`);
+        }
+        else {
+            core.warning(`Java: could not import the CA into ${real} (exit ${rc})`);
+            done.delete(real);
+        }
+    }
+    return Array.from(done);
+}
+
+
+/***/ }),
+
 /***/ 8449:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -1863,14 +3329,28 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SystemValidator = exports.CRITICAL_FILES = exports.IPTABLES_CHAINS = void 0;
+exports.iptablesListArgs = iptablesListArgs;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs_1 = __nccwpck_require__(9896);
 /**
- * Standard iptables chains to monitor for tampering
+ * iptables chains to monitor for tampering: the built-in hooks plus the chains the v2
+ * action owns. `table:CHAIN` selects a non-filter table.
  */
-exports.IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'];
+exports.IPTABLES_CHAINS = [
+    'INPUT',
+    'OUTPUT',
+    'FORWARD',
+    'SAFER_RUNNER_OUT',
+    'nat:OUTPUT',
+    'nat:SAFER_RUNNER_NAT'
+];
+/** `iptables` arguments that list one chain spec (`CHAIN` or `table:CHAIN`). */
+function iptablesListArgs(spec) {
+    const [table, chain] = spec.includes(':') ? spec.split(':') : ['filter', spec];
+    return [...(table === 'filter' ? [] : ['-t', table]), '-L', chain, '-n', '--line-numbers'];
+}
 /**
  * Security configuration files monitored for tampering
  * The sudo logging config file is appended at runtime (it depends on the sudo implementation)
@@ -1878,7 +3358,10 @@ exports.IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'];
 exports.CRITICAL_FILES = [
     '/etc/dnsmasq.conf',
     '/etc/resolv.conf',
-    '/etc/systemd/resolved.conf.d/no-stub.conf'
+    '/etc/systemd/resolved.conf.d/no-stub.conf',
+    '/etc/safer-runner/policy.json',
+    '/opt/safer-runner/proxy/policy.py',
+    '/opt/safer-runner/proxy/policy_core.py'
 ];
 class SystemValidator {
     validationStateFile = '/tmp/safer-runner-validation-state.json';
@@ -2029,7 +3512,7 @@ class SystemValidator {
      */
     async getIptablesChainOutput(chain) {
         let rulesOutput = '';
-        await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+        await exec.exec('sudo', ['iptables', ...iptablesListArgs(chain)], {
             silent: true,
             listeners: {
                 stdout: data => {

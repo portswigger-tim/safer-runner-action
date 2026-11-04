@@ -50,6 +50,8 @@ export interface DnsConfigOptions {
    * api.github.com/meta) via resolveGitHubDomains() so the config stays current.
    */
   githubDomains?: string[];
+  /** Emit v1's ipset= lines (the v2 proxy enforces on names, so it passes false). */
+  ipsets?: boolean;
 }
 
 export interface DnsConfigResult {
@@ -91,7 +93,8 @@ export function buildDnsConfig(options: DnsConfigOptions): DnsConfigResult {
     secondaryDnsServer = SECONDARY_DNS_SERVER,
     dnsUsername,
     logFile,
-    cacheSize = DEFAULT_CACHE_SIZE
+    cacheSize = DEFAULT_CACHE_SIZE,
+    ipsets = true
   } = options;
 
   let config = `# Enable query logging for summary generation
@@ -184,7 +187,7 @@ all-servers
     if (secondaryDnsServer) {
       config += `server=/${domain}/${secondaryDnsServer}\n`;
     }
-    config += `ipset=/${domain}/github\n`;
+    if (ipsets) config += `ipset=/${domain}/github\n`;
   }
 
   // Add custom allowed domains if provided
@@ -194,7 +197,7 @@ all-servers
     if (secondaryDnsServer) {
       config += `server=/${domain}/${secondaryDnsServer}\n`;
     }
-    config += `ipset=/${domain}/user\n`;
+    if (ipsets) config += `ipset=/${domain}/user\n`;
   }
 
   return { config, blockedSubdomains };
