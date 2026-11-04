@@ -420,15 +420,16 @@ describe('setup.ts - iptables configuration', () => {
       }
     });
 
-    it('exempts dnsmasq own uid (no loop) and our own 127.0.0.1 resolver', async () => {
+    it('exempts dnsmasq own uid (no loop) and uses a single -d match', async () => {
       await setupDnsInterception(61472);
       for (const cmd of redirectInserts()) {
         // ! --uid-owner 61472  (dnsmasq upstream is not redirected back into itself)
         const u = cmd.args.indexOf('--uid-owner');
         expect(cmd.args[u - 1]).toBe('!');
         expect(cmd.args[u + 1]).toBe('61472');
-        // ! -d 127.0.0.1  (do not redirect traffic already going to our dnsmasq)
-        expect(cmd.args).toEqual(expect.arrayContaining(['!', '-d', '127.0.0.1']));
+        // exactly one -d match: iptables rejects two -d in one rule
+        expect(cmd.args.filter(a => a === '-d')).toHaveLength(1);
+        expect(cmd.args).toEqual(expect.arrayContaining(['-d', '127.0.0.0/8']));
       }
     });
 

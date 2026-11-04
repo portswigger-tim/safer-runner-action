@@ -1277,6 +1277,11 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
 async function setupDnsInterception(dnsUid) {
     const uid = dnsUid.toString();
     for (const proto of ['udp', 'tcp']) {
+        // Match all loopback destinations (127.0.0.0/8). We do NOT add a second,
+        // negated `-d 127.0.0.1` match - iptables rejects two -d matches in one rule,
+        // and redirecting our own dnsmasq's 127.0.0.1:53 to 127.0.0.1:53 is a harmless
+        // no-op. dnsmasq's upstream queries go to the (non-loopback) DNS servers, so the
+        // uid exemption keeps them out of this rule for defence in depth.
         const rule = [
             '-p',
             proto,
@@ -1289,9 +1294,6 @@ async function setupDnsInterception(dnsUid) {
             uid,
             '-d',
             '127.0.0.0/8',
-            '!',
-            '-d',
-            '127.0.0.1',
             '-j',
             'REDIRECT',
             '--to-ports',
