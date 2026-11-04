@@ -153,9 +153,41 @@ is only a real boundary alongside `disable-sudo` (§12), same as the exempt prox
 | Go (hosted-compute agent) | loads roots once at boot | **cannot** trust a later CA → **passthrough** |
 | Java / pip / Docker-in-container | varies | P1: keystore, `REQUESTS_CA_BUNDLE`, container CA mount |
 
-v2 installs the CA into the system store **and** exports the env vars via `GITHUB_ENV` so
-later steps inherit them. Long-running processes started *before* the action (Go) will never
-trust it — another reason the passthrough set is minimal.
+### 5.1 Trust-injection sequence
+
+1. Generate the ephemeral CA (or take mitmproxy's), write it to a root/proxy-user `0600`
+   confdir (tmpfs).
+2. **System store:** copy the CA (PEM) to `/usr/local/share/ca-certificates/safer-runner.crt`
+   and run `update-ca-certificates` → regenerates `/etc/ssl/certs/ca-certificates.crt`. Covers
+   curl/wget/git/python-ssl/ruby/php/.NET.
+3. **Env-var exports via `core.exportVariable` (`GITHUB_ENV`)** so every *subsequent* step
+   inherits them:
+
+   | Variable | Value | Covers |
+   |---|---|---|
+   | `NODE_EXTRA_CA_CERTS` | CA path | Node / all JS actions (checkout, upload-artifact, cache) |
+   | `NODE_USE_SYSTEM_CA` | `1` | Node (belt-and-braces with the above) |
+   | `REQUESTS_CA_BUNDLE` | bundle path | Python `requests` / certifi |
+   | `PIP_CERT` | bundle path | pip |
+   | `SSL_CERT_FILE` | bundle path | OpenSSL-env consumers that don't read the default path |
+   | `GIT_SSL_CAINFO` | bundle path | git (when not using system certs) |
+   | `AWS_CA_BUNDLE` | bundle path | AWS CLI/SDKs |
+   | `CURL_CA_BUNDLE` | bundle path | curl (explicit) |
+   | (Java) | `keytool -importcert` into `cacerts` | JVM clients (P1) |
+
+   `bundle path` = the regenerated `/etc/ssl/certs/ca-certificates.crt` (CA + system roots),
+   so clients that read a single bundle still trust the public web too.
+
+**Decision: set these unconditionally whenever the proxy is active** (both analyze and
+enforce). Rationale: maximum compatibility with the fewest surprises; it is a *compatibility*
+mechanism, not a security control (the containment is the force-through + proxy + privilege
+layer), so there is no security downside to exporting them, and honest tools Just Work. The
+exports must happen **early** — the action is designed to run first, and the pre-hook also
+exports to `GITHUB_ENV` — so the vars reach the steps that need them.
+
+**Cannot be retrofitted:** processes started *before* the action (notably the Go
+hosted-compute agent, loaded at boot) will never trust a later CA. That's not solvable via
+`GITHUB_ENV` and is another reason the passthrough set is minimal (§4.3).
 
 ---
 
