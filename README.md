@@ -1,217 +1,105 @@
-# Safer Runner Action
+# Safer Runner Action — v2 (beta)
 
-Multi-layer security for GitHub Actions runners with network filtering (DNS + iptables), privilege control (sudo management), and integrity validation (tampering detection). Implements default-deny policy with comprehensive security reporting.
+> **This is the `v2` branch: a beta of the next major version.** v1 (`@v1`, branch `main`)
+> is unchanged and still supported. The v2 design is in [docs/DESIGN-v2.md](docs/DESIGN-v2.md);
+> implementation decisions in [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
 
-## Who This Is For
+Egress control for GitHub-hosted Ubuntu runners, enforced on **hostnames** rather than IP
+addresses. All HTTP and HTTPS from the job is forced through a TLS-terminating proxy
+(mitmproxy). The proxy checks the TLS SNI and every request's `Host` against an allowlist and
+connects to the name itself, never to the IP the client chose.
 
-### ✅ Use This Action If You:
-
-- **Run untrusted code** in GitHub Actions (open source projects accepting PRs from external contributors)
-- **Use third-party actions** and want visibility into their network activity
-- **Accept community contributions** and need supply chain attack protection
-- **Build open source software** with dependencies from npm, PyPI, or other package registries
-- **Need compliance evidence** showing network access controls and audit trails
-- **Use GitHub-hosted Ubuntu runners** (ubuntu-latest, ubuntu-26.04, ubuntu-24.04, ubuntu-22.04)
-- **Want security observability** before committing to enforcement (analyze mode)
-
-### ❌ This Action Is NOT For You If:
-
-- **You only run trusted, first-party code** with no external dependencies
-- **You use Windows or macOS runners** (Linux/Ubuntu only)
-- **Your jobs run in containers** (`container:` in workflow - sudo access conflicts)
-- **You use self-hosted non-Ubuntu runners** (RHEL, Debian, etc. - not currently supported)
-- **Your workflow requires unrestricted network access** to arbitrary domains
-- **You need sub-second performance** (adds ~2-5s overhead for security setup)
-- **You want protection against sophisticated attackers** using allowed domain abuse (this is first-line defense only)
-
-### 💡 Common Use Cases
-
-**Open Source Maintainers**: Protect against malicious PRs that install compromised dependencies attempting to exfiltrate repository secrets or tokens.
-
-**Enterprise CI/CD**: Add network observability and control to GitHub Actions workflows handling sensitive data or credentials.
-
-**Security Compliance**: Generate audit trails showing network access controls were enforced during builds and deployments.
-
-**Dependency Analysis**: Use analyze mode to understand what external services your build dependencies are contacting.
-
-## Features
-
-- **Dual modes**: `analyze` (monitoring) or `enforce` (blocking)
-- **DNS filtering**: DNSMasq with Quad9 upstream resolver
-- **Firewall rules**: iptables prevents DNS bypass via direct IP connections
-- **Sudo logging**: All sudo usage logged to `/var/log/safer-runner/main-sudo.log`
-- **Sudo disabling**: Optionally disable sudo access after setup (prevents privilege escalation)
-- **Docker disabling**: Optionally disable Docker access (prevents container escape attacks)
-- **Custom domains**: Add trusted domains via input parameter
-- **Automatic reporting**: Network access provenance in job summaries
-- **Risky subdomain blocking**: Blocks gist.github.com and raw.githubusercontent.com by default in enforce mode
+v1 allowlisted IP addresses. That admits every tenant of a shared CDN or cloud range, so
+`curl --resolve attacker.example:443:<allowed-ip>` reached an attacker-controlled site with a
+valid certificate. v2 closes that.
 
 ## Usage
 
-⚠️ **Important**: Always place this action as the **first step** in your workflow to maximize security coverage.
-
-ℹ️ **How it works**: This action uses a `pre` hook to establish security monitoring in analyze mode before any workflow steps run, then the main action applies your desired configuration (analyze or enforce mode).
-
-### Analyze mode (default)
+Put it **first** in the job. Its `pre` step applies the policy before any other step runs,
+including other actions' `pre` steps.
 
 ```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@e789901764904a41ebe739eced5b82a6e061822e # v1.4.2
-  - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-  - run: |
-      curl https://example.com  # Logged but not blocked
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: portswigger-tim/safer-runner-action@v2
+        with:
+          mode: enforce
+          allowed-domains: |
+            registry.npmjs.org
+            pypi.org
+            files.pythonhosted.org
+          disable-sudo: true      # strongly recommended with enforce (see "Limitations")
+          disable-docker: true
+      - uses: actions/checkout@v5
+      - run: npm ci
 ```
 
-### Enforce mode
+To work out what a job needs, start with `mode: analyze` (the default). Nothing is blocked.
+The job summary lists every host the job contacted, marks the ones enforce mode would block,
+and suggests an `allowed-domains` block.
 
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@e789901764904a41ebe739eced5b82a6e061822e # v1.4.2
-    with:
-      mode: 'enforce'
-      allowed-domains: |
-        example.com
-        api.trusted-service.com
-  - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-  - run: |
-      curl https://api.trusted-service.com  # ✅ Allowed
-      curl https://malicious.com  # ❌ Blocked
-```
+GitHub's own endpoints come from `api.github.com/meta` at runtime (with a static fallback),
+so the runner, `actions/checkout`, artifacts and caches work without configuration.
+
+## What enforce mode does
+
+| Traffic | Result |
+|---|---|
+| HTTPS to an allowlisted name | TLS terminated with a per-run CA; each request's `Host` must equal the SNI |
+| HTTPS to any other name, no SNI, or an IP literal | Closed at the ClientHello. No upstream connection is opened |
+| `--resolve allowed.name:443:<any IP>` | The proxy connects to the real `allowed.name`; the client's IP is ignored |
+| Domain fronting (`Host` ≠ SNI) | HTTP 403 |
+| Plain HTTP | Decided by `Host`; the upstream is the `Host` name, never the client's IP |
+| DNS to any server (`@8.8.8.8`, `@168.63.129.16`, ...) | Answered by the local dnsmasq. Only allowlisted names resolve |
+| Any other TCP/UDP port, ICMP, IPv6 | Rejected |
+| A hole in the redirect (proxy bypassed) | Still rejected by the filter (fail closed) |
+
+Every job verifies two things on the live runner before any other step runs: an SNI-level
+block actually fires, and the proxy ignores the client's chosen IP. In enforce mode the job
+fails if either check fails.
 
 ## Inputs
 
-| Input | Description | Default |
-|-------|-------------|---------|
-| `mode` | `analyze` (log only) or `enforce` (block) | `analyze` |
-| `allowed-domains` | Additional domains to allow | `''` |
-| `primary-dns-server` | Primary DNS server for allowed domains | `9.9.9.9` (Quad9) |
-| `secondary-dns-server` | Secondary DNS server for redundancy | `149.112.112.112` (Quad9) |
-| `fail-on-tampering` | Fail workflow if security config is tampered | `false` |
-| `block-risky-github-subdomains` | Block gist.github.com and raw.githubusercontent.com in enforce mode | `true` |
-| `disable-sudo` | Disable sudo access for runner user after setup | `false` |
-| `sudo-config` | Custom sudoers configuration for runner user (multi-line string) | `''` |
-| `disable-docker` | Remove runner user from docker group (prevents container usage) | `false` |
+| Input | Default | |
+|---|---|---|
+| `mode` | `analyze` | `analyze` or `enforce` |
+| `allowed-domains` | | `example.com` = it and its subdomains; `*.example.com` = subdomains only; `a-*.example.com` = wildcard within one label. Shared namespaces such as `blob.core.windows.net` are refused |
+| `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted). Use only for single-tenant hosts whose clients can't trust the CA. The default is always included |
+| `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
+| `primary-dns-server` / `secondary-dns-server` | Quad9 | Upstream resolvers for dnsmasq |
+| `disable-sudo` / `sudo-config` | `false` / | Remove or restrict the runner's sudo after setup |
+| `disable-docker` / `stop-docker` | `false` | Remove docker group membership or stop Docker |
+| `fail-on-tampering` | `false` | Fail the job if the configuration changed during the job |
+| `proxy-port` | `8080` | Loopback port of the proxy (advanced) |
+| `proxy-stream-large-bodies` | `1m` | Stream rather than buffer bodies above this size (advanced) |
 
-## Network Access Reports
+## CA trust
 
-Job summaries include a Network Access Provenance table showing:
+The per-run CA is added to the system store, so curl, wget, git, Python's `ssl`, .NET (the
+runner itself) and Docker pulls trust it. The action also exports `NODE_EXTRA_CA_CERTS`,
+`NODE_USE_SYSTEM_CA`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+`AWS_CA_BUNDLE` and `CURL_CA_BUNDLE` to later steps, and imports the CA into every JDK on the
+image. The private key exists only on tmpfs, readable only by the proxy user, and the post
+step deletes it.
 
-- Domain/IP addresses accessed
-- Ports used
-- Status (✅ Allowed, ❌ Denied, 📊 Analyzed)
-- Source (GitHub Required, User Defined)
+## Limitations (read these)
 
-In analyze mode, the report suggests an `allowed-domains` configuration based on non-GitHub domains accessed, making it easy to transition to enforce mode.
-
-## Security Model
-
-This action implements multi-layer security with DNS filtering, firewall rules, and privilege control. GitHub Actions required domains are automatically allowed. Sudo usage is always logged for auditability.
-
-### Privilege Control (Optional)
-
-Control sudo and Docker access to prevent privilege escalation and container escape attacks:
-
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@e789901764904a41ebe739eced5b82a6e061822e # v1.4.2
-    with:
-      mode: 'enforce'
-      disable-sudo: 'true'    # Prevents sudo usage after setup
-      disable-docker: 'true'  # Prevents Docker/container usage
-      allowed-domains: |
-        registry.npmjs.org
-  - run: npm ci && npm test   # ✅ Works without elevated privileges
-  - run: sudo apt install x   # ❌ Fails (sudo disabled)
-  - run: docker build .       # ❌ Fails (Docker disabled)
-```
-
-**Note**: Only disable sudo/Docker if your workflow doesn't require them. These are advanced security features that prevent malicious code from bypassing security controls.
-
-**Ubuntu 26.04 / sudo-rs**: Ubuntu 25.10+ (including `ubuntu-26.04` and `ubuntu-latest`) uses [sudo-rs](https://github.com/trifectatechfoundation/sudo-rs) as the default `sudo`. The action detects it automatically. `sudo-config` is validated with the runner's own `visudo`, and sudo-rs supports only part of the sudoers syntax. A wildcard is allowed only as the whole argument list (`/usr/bin/apt-get *`), not inside other arguments (`/usr/bin/chmod * /tmp/x`), and many `Defaults` settings are not recognised. List each exact command, or allow the bare command path. sudo-rs does not log denied sudo attempts, so on sudo-rs the sudo report shows only commands that ran.
-
-### Custom DNS Servers
-
-Configure alternative DNS providers while maintaining the same security guarantees:
-
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@e789901764904a41ebe739eced5b82a6e061822e # v1.4.2
-    with:
-      mode: 'enforce'
-      allowed-domains: 'npmjs.org pypi.org'
-      primary-dns-server: '1.1.1.1'      # Cloudflare DNS
-      secondary-dns-server: '1.0.0.1'    # Cloudflare secondary
-  - run: npm install  # DNS queries use Cloudflare instead of Quad9
-```
-
-**Default DNS**: Quad9 (`9.9.9.9` / `149.112.112.112`) with 98% malware blocking
-
-**Disable secondary DNS** by passing an empty string (single DNS server only):
-
-```yaml
-steps:
-  - uses: portswigger-tim/safer-runner-action@e789901764904a41ebe739eced5b82a6e061822e # v1.4.2
-    with:
-      mode: 'enforce'
-      allowed-domains: 'example.com'
-      primary-dns-server: '8.8.8.8'
-      secondary-dns-server: ''  # Disable secondary DNS
-```
-
-**Note**: Both DNS servers must be explicitly allowed in firewall rules. The action automatically configures iptables to allow DNS traffic only from the dnsmasq process to the configured servers.
-
-## Limitations
-
-### Platform Support
-
-- **GitHub-hosted runners**: Only Ubuntu runners are supported. Windows and macOS runners are not supported.
-- **Self-hosted runners**: Only Ubuntu runners with sudo access and iptables support. Other Linux distributions (RHEL, Debian, etc.) and Windows/macOS runners are not supported.
-- **Containerized jobs**: Not supported when the job runs in a container due to sudo access requirements.
-- **sudo-rs (Ubuntu 25.10+)**: Sudo logging uses rsyslog to capture sudo-rs syslog output. Denied sudo attempts are not logged by sudo-rs.
-
-### Security Limitations
-
-Network filtering provides a first line of defense but has limitations:
-
-#### Timing Window
-- **Pre-hook ordering**: This action's `pre:` hook establishes analyze mode monitoring before the main action step runs, providing early visibility
-- **Other actions' pre-hooks**: Actions that appear later in the workflow will have their `pre:` hooks run after this action's pre-hook, so they are monitored
-- **Actions before this one**: Any actions placed before this action in the workflow will have their `pre:` hooks run before monitoring is established
-- **Mitigation**: Place this action as the first step in your workflow and carefully vet all actions used
-
-#### Attack Vectors
-- **Data exfiltration via allowed domains**: Abuse GitHub/npm/PyPI to upload secrets
-- **Local file system attacks**: Stage data for later exfiltration
-- **Process/system call abuse**: Container escapes, privilege escalation
-
-### Defense in Depth
-
-Combine with additional security layers:
-
-- **Runtime security**: Falco, Tracee
-- **Container security**: Distroless images, read-only filesystems, non-root users
-- **Secrets management**: GitHub secrets, secure credential handling
-- **Dependency scanning**: Snyk, Dependabot, GitHub native scanning
-- **Action security**: Pin to commits, use trusted publishers
-
-## Debugging
-
-View DNS and firewall logs:
-
-```bash
-# DNS logs (no sudo required)
-cat /var/log/safer-runner/pre-dns.log      # Pre-hook DNS activity
-cat /var/log/safer-runner/main-dns.log     # Main action DNS activity
-
-# Network logs (no sudo required)
-cat /var/log/safer-runner/pre-iptables.log  # Pre-hook network activity
-cat /var/log/safer-runner/main-iptables.log # Main action network activity
-
-# Sudo logs (no sudo required)
-cat /var/log/safer-runner/pre-sudo.log      # Pre-hook sudo commands
-cat /var/log/safer-runner/main-sudo.log     # Main action sudo commands
-```
-
-## License
-
-This action is provided as-is for defensive security purposes.
+- **Without `disable-sudo`, enforce is advisory.** Any step with root can remove the proxy and
+  firewall. The same goes for docker group membership.
+- **Allowlisted hosts are full-capability channels.** If `github.com` is allowed, a malicious
+  step can push data to a repository it controls. v2 narrows egress to names; it can't judge
+  what a request does.
+- **Only TCP 80/443 is proxied.** In enforce, other ports are rejected, including SSH
+  (`git@github.com`).
+- **Containers are not filtered yet.** Traffic from containers goes through `FORWARD`, as in v1.
+  Planned for v2 P2.
+- **Clients that pin certificates, or that ignore both the system store and the variables
+  above, fail** on allowlisted hosts. Fix: add the host to `passthrough-domains`, but only if it
+  is single-tenant.
+- **JDKs installed after this action** (for example by `actions/setup-java`) don't get the CA
+  imported.
+- **Throughput:** about 140–160 MiB/s per job through TLS interception, because the proxy is
+  single-core.
+- Linux (Ubuntu 24.04 / 26.04) GitHub-hosted runners only.

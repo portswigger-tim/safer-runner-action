@@ -72,6 +72,30 @@ choice open. Each one is a default, not a final answer; revisit in P2/P3.
     (most workflows use sudo); enforce without it logs a warning that the controls are
     advisory.
 
+17. **Allow `-d 127.0.0.0/8` in the filter chain.** Found on the first real-runner run: after a
+    nat OUTPUT `REDIRECT`, filter OUTPUT still sees the *original* output interface (`OUT=eth0`,
+    `DST=127.0.0.1`), so `-o lo` never matches proxied packets. A default-deny chain then
+    rejects everything going through the proxy, including the runner agent's own traffic (the
+    job hangs and can't be cancelled). The spike didn't hit this because it only dropped
+    dport 80/443.
+18. **The enforce reject log records new connections only.** Packets from connections that
+    predate the cutover, and ownerless RST/FIN from sockets closed by `ss -K`, are still rejected
+    but no longer fill the report.
+
+## Measured on GitHub-hosted runners (P1)
+
+- Setup in `pre`: about 20 s. The dnsmasq apt install is about 10 s and runs in parallel with
+  the mitmdump download (about 2 s) and extract (0.3 s). Proxy start is about 1 s. CA trust,
+  including Java, is about 2.5 s. DNS and firewall together take under 2 s, and the live
+  self-tests take 0.2 s.
+- Interception throughput: about 142 MiB/s for a single 300 MiB stream.
+- Proxy `SIGKILL`: systemd restarts it with the same CA from tmpfs, and traffic recovers in
+  about 2 s.
+- dockerd started at boot does trust the CA added later. `docker pull` works through the
+  interception when the registry and blob hosts are allowlisted.
+- Java: the keytool import covers the image's Temurin JDKs. On 26.04 `cacerts` resolves to
+  `/etc/ssl/certs/adoptium/cacerts`.
+
 ## Deferred (P2/P3)
 
 - Container egress (C2): PREROUTING DNAT + CA into images.
