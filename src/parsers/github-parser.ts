@@ -46,7 +46,7 @@ const GITHUB_CORE_DOMAINS: string[] = [
  * under them (e.g. productionresultssa100.blob.core.windows.net) are fine; the bare
  * suffix is not.
  */
-const DANGEROUS_BROAD_DOMAINS: ReadonlySet<string> = new Set([
+export const DANGEROUS_BROAD_DOMAINS: ReadonlySet<string> = new Set([
   'windows.net',
   'core.windows.net',
   'blob.core.windows.net',
