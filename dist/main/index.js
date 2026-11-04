@@ -360,7 +360,10 @@ async function run() {
         const mode = core.getInput('mode') || 'analyze';
         const allowedDomains = core.getInput('allowed-domains') || '';
         const primaryDnsServer = core.getInput('primary-dns-server') || '9.9.9.9';
-        const secondaryDnsServer = core.getInput('secondary-dns-server') || '149.112.112.112';
+        // Honour an explicit empty secondary ("" disables it). action.yaml supplies the
+        // Quad9 default when the input is unset, so we must NOT re-default here or the
+        // documented "set secondary-dns-server: '' to disable" never works.
+        const secondaryDnsServer = core.getInput('secondary-dns-server');
         const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
         const disableSudo = core.getBooleanInput('disable-sudo');
         const sudoConfig = core.getInput('sudo-config') || '';
@@ -414,7 +417,10 @@ async function run() {
         }
         // Configure iptables rules with Main- log prefix
         core.info('Configuring iptables rules...');
-        await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Main-');
+        // Pass the configured DNS servers so the firewall allows exactly what dnsmasq
+        // forwards to. Omitting them made enforce mode allow only Quad9 while dnsmasq
+        // used the custom server, so every lookup was dropped (M1).
+        await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Main-', primaryDnsServer, secondaryDnsServer);
         // Force loopback-destined DNS (e.g. GitHub's egress resolver) through our dnsmasq
         await (0, setup_1.setupDnsInterception)(dnsUser.uid);
         // Configure DNS filtering
@@ -1290,27 +1296,31 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
         '-j',
         'ACCEPT'
     ]);
-    // Allow DNS traffic to our upstream servers - only from the random DNS user UID
+    // Allow DNS traffic to our upstream servers - only from the random DNS user UID.
+    // Both UDP and TCP/53: TCP is needed for truncated (TC) responses, large TXT/CNAME
+    // chains and DNSSEC, which otherwise fail silently.
     // Primary DNS server (configurable, defaults to Quad9 primary: 9.9.9.9)
-    await exec.exec('sudo', [
-        'iptables',
-        '-A',
-        'OUTPUT',
-        '-o',
-        'eth0',
-        '-d',
-        primaryDnsServer,
-        '-p',
-        'udp',
-        '--dport',
-        '53',
-        '-m',
-        'owner',
-        '--uid-owner',
-        dnsUid.toString(),
-        '-j',
-        'ACCEPT'
-    ]);
+    for (const proto of ['udp', 'tcp']) {
+        await exec.exec('sudo', [
+            'iptables',
+            '-A',
+            'OUTPUT',
+            '-o',
+            'eth0',
+            '-d',
+            primaryDnsServer,
+            '-p',
+            proto,
+            '--dport',
+            '53',
+            '-m',
+            'owner',
+            '--uid-owner',
+            dnsUid.toString(),
+            '-j',
+            'ACCEPT'
+        ]);
+    }
     // Drop ICMP destination-unreachable to primary DNS server without logging
     // These are kernel-generated responses to DNS queries, not security-relevant
     await exec.exec('sudo', [
@@ -1329,27 +1339,29 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
         'DROP'
     ]);
     // Secondary DNS server (configurable, defaults to Quad9 secondary: 149.112.112.112)
-    // Only add rule if secondary DNS server is provided
+    // Only add rule if secondary DNS server is provided (empty string disables it)
     if (secondaryDnsServer) {
-        await exec.exec('sudo', [
-            'iptables',
-            '-A',
-            'OUTPUT',
-            '-o',
-            'eth0',
-            '-d',
-            secondaryDnsServer,
-            '-p',
-            'udp',
-            '--dport',
-            '53',
-            '-m',
-            'owner',
-            '--uid-owner',
-            dnsUid.toString(),
-            '-j',
-            'ACCEPT'
-        ]);
+        for (const proto of ['udp', 'tcp']) {
+            await exec.exec('sudo', [
+                'iptables',
+                '-A',
+                'OUTPUT',
+                '-o',
+                'eth0',
+                '-d',
+                secondaryDnsServer,
+                '-p',
+                proto,
+                '--dport',
+                '53',
+                '-m',
+                'owner',
+                '--uid-owner',
+                dnsUid.toString(),
+                '-j',
+                'ACCEPT'
+            ]);
+        }
         // Drop ICMP destination-unreachable to secondary DNS server without logging
         // These are kernel-generated responses to DNS queries, not security-relevant
         await exec.exec('sudo', [

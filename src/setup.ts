@@ -254,27 +254,31 @@ export async function setupFirewallRules(
     'ACCEPT'
   ]);
 
-  // Allow DNS traffic to our upstream servers - only from the random DNS user UID
+  // Allow DNS traffic to our upstream servers - only from the random DNS user UID.
+  // Both UDP and TCP/53: TCP is needed for truncated (TC) responses, large TXT/CNAME
+  // chains and DNSSEC, which otherwise fail silently.
   // Primary DNS server (configurable, defaults to Quad9 primary: 9.9.9.9)
-  await exec.exec('sudo', [
-    'iptables',
-    '-A',
-    'OUTPUT',
-    '-o',
-    'eth0',
-    '-d',
-    primaryDnsServer,
-    '-p',
-    'udp',
-    '--dport',
-    '53',
-    '-m',
-    'owner',
-    '--uid-owner',
-    dnsUid.toString(),
-    '-j',
-    'ACCEPT'
-  ]);
+  for (const proto of ['udp', 'tcp']) {
+    await exec.exec('sudo', [
+      'iptables',
+      '-A',
+      'OUTPUT',
+      '-o',
+      'eth0',
+      '-d',
+      primaryDnsServer,
+      '-p',
+      proto,
+      '--dport',
+      '53',
+      '-m',
+      'owner',
+      '--uid-owner',
+      dnsUid.toString(),
+      '-j',
+      'ACCEPT'
+    ]);
+  }
 
   // Drop ICMP destination-unreachable to primary DNS server without logging
   // These are kernel-generated responses to DNS queries, not security-relevant
@@ -295,27 +299,29 @@ export async function setupFirewallRules(
   ]);
 
   // Secondary DNS server (configurable, defaults to Quad9 secondary: 149.112.112.112)
-  // Only add rule if secondary DNS server is provided
+  // Only add rule if secondary DNS server is provided (empty string disables it)
   if (secondaryDnsServer) {
-    await exec.exec('sudo', [
-      'iptables',
-      '-A',
-      'OUTPUT',
-      '-o',
-      'eth0',
-      '-d',
-      secondaryDnsServer,
-      '-p',
-      'udp',
-      '--dport',
-      '53',
-      '-m',
-      'owner',
-      '--uid-owner',
-      dnsUid.toString(),
-      '-j',
-      'ACCEPT'
-    ]);
+    for (const proto of ['udp', 'tcp']) {
+      await exec.exec('sudo', [
+        'iptables',
+        '-A',
+        'OUTPUT',
+        '-o',
+        'eth0',
+        '-d',
+        secondaryDnsServer,
+        '-p',
+        proto,
+        '--dport',
+        '53',
+        '-m',
+        'owner',
+        '--uid-owner',
+        dnsUid.toString(),
+        '-j',
+        'ACCEPT'
+      ]);
+    }
 
     // Drop ICMP destination-unreachable to secondary DNS server without logging
     // These are kernel-generated responses to DNS queries, not security-relevant

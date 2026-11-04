@@ -284,6 +284,39 @@ describe('setup.ts - iptables configuration', () => {
       expect(secondaryCommand).toBeDefined();
     });
 
+    it('allows BOTH udp and tcp :53 to each DNS server (M1: TCP fallback)', async () => {
+      await setupFirewallRules(1001, 'Test-', '8.8.8.8', '8.8.4.4');
+      const dnsAccept = (server: string, proto: string) =>
+        capturedCommands.find(
+          cmd =>
+            cmd.args.includes('ACCEPT') &&
+            cmd.args.includes(server) &&
+            cmd.args.includes('--dport') &&
+            cmd.args.includes('53') &&
+            cmd.args.includes(proto) &&
+            cmd.args.includes('--uid-owner')
+        );
+      for (const server of ['8.8.8.8', '8.8.4.4']) {
+        expect(dnsAccept(server, 'udp')).toBeDefined();
+        expect(dnsAccept(server, 'tcp')).toBeDefined();
+      }
+    });
+
+    it('adds no secondary DNS ACCEPT rule when secondary is empty (M1: honour "" )', async () => {
+      await setupFirewallRules(1001, 'Test-', '1.1.1.1', '');
+      // primary allowed on udp+tcp
+      expect(
+        capturedCommands.filter(
+          c => c.args.includes('ACCEPT') && c.args.includes('1.1.1.1') && c.args.includes('--dport')
+        ).length
+      ).toBe(2);
+      // no DNS ACCEPT rule for the default secondary
+      const secondaryAccepts = capturedCommands.filter(
+        c => c.args.includes('ACCEPT') && c.args.includes('149.112.112.112') && c.args.includes('--dport')
+      );
+      expect(secondaryAccepts).toHaveLength(0);
+    });
+
     it('should drop ICMP destination-unreachable to primary DNS server', async () => {
       await setupFirewallRules(1001, 'Test-', DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER);
 

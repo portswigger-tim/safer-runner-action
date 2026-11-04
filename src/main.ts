@@ -27,7 +27,10 @@ async function run(): Promise<void> {
     const mode = core.getInput('mode') || 'analyze';
     const allowedDomains = core.getInput('allowed-domains') || '';
     const primaryDnsServer = core.getInput('primary-dns-server') || '9.9.9.9';
-    const secondaryDnsServer = core.getInput('secondary-dns-server') || '149.112.112.112';
+    // Honour an explicit empty secondary ("" disables it). action.yaml supplies the
+    // Quad9 default when the input is unset, so we must NOT re-default here or the
+    // documented "set secondary-dns-server: '' to disable" never works.
+    const secondaryDnsServer = core.getInput('secondary-dns-server');
     const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
     const disableSudo = core.getBooleanInput('disable-sudo');
     const sudoConfig = core.getInput('sudo-config') || '';
@@ -102,7 +105,10 @@ async function run(): Promise<void> {
 
     // Configure iptables rules with Main- log prefix
     core.info('Configuring iptables rules...');
-    await setupFirewallRules(dnsUser.uid, 'Main-');
+    // Pass the configured DNS servers so the firewall allows exactly what dnsmasq
+    // forwards to. Omitting them made enforce mode allow only Quad9 while dnsmasq
+    // used the custom server, so every lookup was dropped (M1).
+    await setupFirewallRules(dnsUser.uid, 'Main-', primaryDnsServer, secondaryDnsServer);
 
     // Force loopback-destined DNS (e.g. GitHub's egress resolver) through our dnsmasq
     await setupDnsInterception(dnsUser.uid);
