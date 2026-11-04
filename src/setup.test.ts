@@ -1,5 +1,11 @@
 import * as exec from '@actions/exec';
-import { setupFirewallRules, finalizeFirewallRules, setupIptablesLogging, startDnsmasq } from './setup';
+import {
+  setupFirewallRules,
+  setupDnsInterception,
+  finalizeFirewallRules,
+  setupIptablesLogging,
+  startDnsmasq
+} from './setup';
 import { DEFAULT_DNS_SERVER, SECONDARY_DNS_SERVER } from './config/dns-config-builder';
 
 // Mock @actions/exec
@@ -391,6 +397,47 @@ describe('setup.ts - iptables configuration', () => {
 
       expect(establishedIndex).toBeGreaterThan(0);
       expect(useGithubIndex).toBeGreaterThan(establishedIndex);
+    });
+  });
+
+  describe('setupDnsInterception', () => {
+    const redirectInserts = () =>
+      capturedCommands.filter(
+        cmd => cmd.args.includes('nat') && cmd.args.includes('-I') && cmd.args.includes('REDIRECT')
+      );
+
+    it('redirects loopback-destined udp and tcp :53 to our dnsmasq', async () => {
+      await setupDnsInterception(61472);
+      const inserts = redirectInserts();
+      expect(inserts).toHaveLength(2); // udp + tcp
+      const protos = inserts.map(c => c.args[c.args.indexOf('-p') + 1]).sort();
+      expect(protos).toEqual(['tcp', 'udp']);
+      for (const cmd of inserts) {
+        expect(cmd.args).toEqual(expect.arrayContaining(['-t', 'nat', '-I', 'OUTPUT', '1']));
+        expect(cmd.args).toEqual(expect.arrayContaining(['--dport', '53']));
+        expect(cmd.args).toEqual(expect.arrayContaining(['-d', '127.0.0.0/8']));
+        expect(cmd.args).toEqual(expect.arrayContaining(['--to-ports', '53']));
+      }
+    });
+
+    it('exempts dnsmasq own uid (no loop) and our own 127.0.0.1 resolver', async () => {
+      await setupDnsInterception(61472);
+      for (const cmd of redirectInserts()) {
+        // ! --uid-owner 61472  (dnsmasq upstream is not redirected back into itself)
+        const u = cmd.args.indexOf('--uid-owner');
+        expect(cmd.args[u - 1]).toBe('!');
+        expect(cmd.args[u + 1]).toBe('61472');
+        // ! -d 127.0.0.1  (do not redirect traffic already going to our dnsmasq)
+        expect(cmd.args).toEqual(expect.arrayContaining(['!', '-d', '127.0.0.1']));
+      }
+    });
+
+    it('deletes any prior copy before inserting (idempotent across pre/main)', async () => {
+      await setupDnsInterception(61472);
+      const deletes = capturedCommands.filter(
+        cmd => cmd.args.includes('nat') && cmd.args.includes('-D') && cmd.args.includes('REDIRECT')
+      );
+      expect(deletes).toHaveLength(2); // udp + tcp delete-before-insert
     });
   });
 

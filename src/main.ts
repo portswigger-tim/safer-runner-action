@@ -4,6 +4,7 @@ import {
   type DnsUser,
   performInitialSetup,
   setupFirewallRules,
+  setupDnsInterception,
   setupDNSConfig,
   setupDNSMasq,
   restartServices,
@@ -102,6 +103,9 @@ async function run(): Promise<void> {
     // Configure iptables rules with Main- log prefix
     core.info('Configuring iptables rules...');
     await setupFirewallRules(dnsUser.uid, 'Main-');
+
+    // Force loopback-destined DNS (e.g. GitHub's egress resolver) through our dnsmasq
+    await setupDnsInterception(dnsUser.uid);
 
     // Configure DNS filtering
     core.info('Configuring DNS filtering...');
