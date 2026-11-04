@@ -1591,7 +1591,6 @@ exports.applyCustomSudoConfig = applyCustomSudoConfig;
 exports.disableSudoForRunner = disableSudoForRunner;
 exports.parseSudoLogs = parseSudoLogs;
 exports.generateSudoSummarySection = generateSudoSummarySection;
-exports.generateSudoConfigAdvice = generateSudoConfigAdvice;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
@@ -1868,44 +1867,6 @@ function generateSudoSummarySection(commands, title) {
     }
     report += `\n`;
     return report;
-}
-/**
- * Generate sudoers configuration advice from captured sudo commands
- *
- * @param commands - Array of sudo commands to analyze
- * @returns Markdown string with sudoers configuration advice
- */
-function generateSudoConfigAdvice(commands) {
-    if (commands.length === 0) {
-        return '';
-    }
-    const sudoersConfig = (0, sudo_parser_1.generateSudoersConfig)(commands, exports.RUNNER_USERNAME);
-    let advice = `### Sudo Configuration\n\n`;
-    advice += `Your workflow used sudo. Below is a **starting point** for restricting it via the \`sudo-config\` `;
-    advice += `input, generated from the exact commands observed. **Review it before use** — it is derived from `;
-    advice += `observed usage, not a guarantee of safety.\n\n`;
-    advice += `\`\`\`yaml\n`;
-    advice += `- uses: portswigger-tim/safer-runner-action@v1\n`;
-    advice += `  with:\n`;
-    advice += `    sudo-config: |\n`;
-    // Indent each line of the sudoers config (keep comment lines - they carry the warnings)
-    const lines = sudoersConfig.split('\n');
-    for (const line of lines) {
-        if (line.length > 0) {
-            advice += `      ${line}\n`;
-        }
-    }
-    advice += `\`\`\`\n\n`;
-    advice += `Before you apply this:\n`;
-    advice += `- ⚠️ Lines starting with \`#\` are commands that can usually be escalated to full root `;
-    advice += `(shells, interpreters, file-writers like tee/dd/cp, package/service managers, docker). They are `;
-    advice += `**commented out** — uncomment one only if you are certain that exact invocation is safe.\n`;
-    advice += `- Each rule pins the **exact arguments** observed and runs as the observed user, not \`(ALL)\`. `;
-    advice += `A command with no argument restriction would allow *any* arguments, so avoid broadening these.\n`;
-    advice += `- Keep only what your workflow strictly needs; remove the rest.\n`;
-    advice += `- If you don't actually need sudo, set \`disable-sudo: true\` instead.\n`;
-    advice += `- The action's own required validation commands are added automatically — you don't need to list them.\n\n`;
-    return advice;
 }
 
 
