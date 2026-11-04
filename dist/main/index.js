@@ -93,6 +93,14 @@ user=${dnsUsername}
 
 `;
     }
+    // Listen only where resolv.conf points. The default wildcard bind fails with
+    // "Address already in use" if anything else holds port 53 on any local address
+    // (e.g. systemd-resolved on 127.0.0.53 or a resolver on 127.0.0.100 on some runner VMs)
+    config += `# Bind only to the loopback address used by /etc/resolv.conf
+bind-interfaces
+listen-address=127.0.0.1
+
+`;
     // Explicitly disable DHCP functionality (defense in depth)
     config += `# Disable DHCP - we only use DNS functionality
 # This prevents DHCP address conflict detection via ICMP
