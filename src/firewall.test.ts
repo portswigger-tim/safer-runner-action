@@ -64,6 +64,13 @@ describe('buildFilterRules (enforce)', () => {
     expect(rules.filter(r => r.includes('168.63.129.16'))).toHaveLength(1);
   });
 
+  it('allows REDIRECTed (post-NAT 127/8) traffic before any reject - `-o lo` does not match it', () => {
+    const allow = rules.indexOf('-A SAFER_RUNNER_OUT -d 127.0.0.0/8 -j RETURN');
+    const firstReject = rules.findIndex(r => r.includes('REJECT') || r.includes('LOG'));
+    expect(allow).toBeGreaterThan(0);
+    expect(allow).toBeLessThan(firstReject);
+  });
+
   it('ends with log + reject (fail closed)', () => {
     const body = rules.filter(r => r.startsWith('-A'));
     expect(body.slice(-3)[0]).toMatch(/-j LOG --log-prefix "SaferRunner-Drop: "/);

@@ -658,6 +658,10 @@ function buildNatRules(o) {
 function commonFilterAllows(c) {
     return [
         `-A ${c} -o lo -j RETURN`,
+        // REDIRECTed packets (to the proxy / dnsmasq): after nat OUTPUT the destination is
+        // 127.0.0.1, but `-o` still reports the ORIGINAL route (e.g. eth0), so `-o lo` alone
+        // never matches them. A 127/8 destination cannot leave the host.
+        `-A ${c} -d 127.0.0.0/8 -j RETURN`,
         ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
         // Azure platform: IMDS and wireserver (WALinuxAgent, health) only on the ports they use.
         // 168.63.129.16:53 is NOT allowed - it is an open recursive resolver (C1).
@@ -698,7 +702,7 @@ function buildFilterRules(o) {
  */
 function buildIp6FilterRules(o) {
     const c = constants_1.FILTER_CHAIN;
-    const lines = ['*filter', `:${c} - [0:0]`, `-A ${c} -o lo -j RETURN`];
+    const lines = ['*filter', `:${c} - [0:0]`, `-A ${c} -o lo -j RETURN`, `-A ${c} -d ::1/128 -j RETURN`];
     if (o.mode === 'enforce') {
         lines.push(...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`));
         for (const t of ['router-solicitation', 'neighbour-solicitation', 'neighbour-advertisement']) {

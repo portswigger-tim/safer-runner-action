@@ -1,0 +1,81 @@
+# v2 P1 implementation notes
+
+Decisions taken while building P1 where [DESIGN-v2.md](DESIGN-v2.md) was silent or left a
+choice open. Each one is a default, not a final answer; revisit in P2/P3.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `proxy/policy_core.py` | Pure hostname policy (no mitmproxy import): pattern matching, TLS and HTTP decisions, startup self-test. Unit-tested with plain Python. |
+| `proxy/policy.py` | mitmproxy addon wiring the core in. Pinned to mitmproxy 12.3.1. |
+| `proxy/test-vectors.json` | Matching vectors checked by **both** the Python and the jest tests. |
+| `src/egress.ts` | Setup orchestration (runs in `pre`; `main` only if `pre` didn't complete). |
+| `src/policy.ts` | Builds `policy.json`; TS mirror of the matcher for the report and dnsmasq. |
+| `src/proxy.ts` | mitmdump install (sha256-pinned), proxy user, ephemeral CA, systemd unit. |
+| `src/trust.ts` | System store, `GITHUB_ENV` CA variables, Java keystores. |
+| `src/firewall.ts` | iptables / ip6tables rulesets (pure generators + atomic apply). |
+| `src/selftest.ts` | Live self-tests on every job (SNI-layer block fired; repoint). |
+| `src/report.ts`, `src/post.ts` | L7 job summary; CA key teardown. |
+
+## Decisions
+
+1. **The addon owns layer selection completely.** Instead of calling the built-in
+   `NextLayer._next_layer()` (the spike's private-API approach), the addon neutralises the
+   built-in hook at load and decides every layer itself: TLS (by ClientHello) or HTTP, and
+   only HTTP inside intercepted TLS. An undecided connection (split ClientHello) waits for
+   more data; nothing else can decide for it. A startup check refuses to run if the built-in
+   is still active, `connection_strategy` isn't `lazy`, or the mitmproxy version differs.
+2. **Fail closed in the addon.** Every hook catches exceptions and blocks. Startup errors make
+   mitmdump exit (mitmproxy's ErrorCheck), so a broken policy never runs as an open proxy;
+   systemd restarts it, the REDIRECT then hits a closed port.
+3. **Repoint in `requestheaders`** by setting `request.host` to the SNI (HTTPS) or Host (HTTP):
+   mitmproxy picks the upstream from `(request.host, request.port)` after that hook. The
+   port is always the one the client dialled (80/443).
+4. **Analyze mode = enforce for allowlisted hosts, SNI passthrough for the rest.** Allowlisted
+   hosts are intercepted exactly as in enforce (so analyze surfaces CA-trust problems you'd hit
+   in enforce); anything enforce would block is logged `WOULD_BLOCK` and passed through by SNI
+   (repointed), so analyze never breaks a client that doesn't trust our CA. (Design open
+   question 5.)
+5. **Own CA instead of mitmproxy's default:** RSA-2048, 3-day validity, `CN=safer-runner
+   ephemeral CA <run id>`, generated as the proxy user with umask 077 on tmpfs
+   (`/run/safer-runner/proxy`).
+6. **CA teardown keeps the proxy running.** `post` deletes the key from disk through a
+   root-owned helper (`/opt/safer-runner/bin/teardown`, the only extra sudoers entry with
+   `disable-sudo`). The proxy keeps the CA in memory: the runner's own "Complete job" traffic
+   still has to go through it, and the VM is destroyed afterwards. Consequence: a proxy crash
+   *after* post would come back with a new CA (fail closed, not open).
+7. **The addon is copied to a root-owned directory** (`/opt/safer-runner/proxy`) because the
+   action checkout is writable by the runner user, and `Restart=always` re-reads the script.
+8. **Only TCP 80/443 is proxied.** In enforce every other port (incl. SSH git, DoT, custom
+   ports) is rejected; in analyze it's allowed and logged. QUIC (UDP/443) is rejected in both
+   modes so HTTP/3 clients fall back to TCP through the proxy.
+9. **All DNS (any destination) is REDIRECTed to dnsmasq**, generalising v1.4.0's loopback rule:
+   `dig @8.8.8.8` / `@168.63.129.16` / `@127.0.0.100` are answered by our dnsmasq (filtered in
+   enforce, logged in both). The wireserver allow is scoped to tcp/80,32526.
+10. **Firewall is interface-agnostic** (allow lo, local docker bridges, the proxy uid on 80/443,
+    dnsmasq's uid to its upstreams, the two Azure endpoints; reject the rest). Rejects (RST /
+    port-unreachable) rather than silent drops so tools fail fast. The default-route interface
+    is detected and warned on, but correctness doesn't depend on it.
+11. **Host→docker bridge traffic is not redirected/blocked** (service containers keep working);
+    container egress via FORWARD is still unfiltered — C2 is P2, unchanged from v1.
+12. **`passthrough-domains` is additive.** The mandatory `hosted-compute-*.githubapp.com` is
+    always included even if the input is overridden (removing it breaks the job).
+13. **No query strings in logs.** The flow log and report record the path only: query strings
+    carry SAS tokens (artifact/cache URLs) and the job summary is visible to repo readers.
+14. **Proxy port stays 8080 (design default) but is an input.** 127.0.0.1:8080 collides with a
+    job that binds 0.0.0.0:8080 — consider a less common default before GA.
+15. **mitmproxy "vendoring" = sha256-pinned download** of the official tarball (only `mitmdump`
+    is extracted), done in parallel with the dnsmasq install. See timings in the P1 report;
+    an Actions-cache layer can be added if the CDN is slow.
+16. **Strict privilege defaults are documented, not forced.** `disable-sudo` stays opt-in
+    (most workflows use sudo); enforce without it logs a warning that the controls are
+    advisory.
+
+## Deferred (P2/P3)
+
+- Container egress (C2): PREROUTING DNAT + CA into images.
+- N proxy workers for throughput (MITM is single-core bound, ~160 MiB/s).
+- Byte counts for passthrough connections.
+- JDKs installed after the action (e.g. `actions/setup-java`) don't trust the CA.
+- Proxy crash/restart mid-job, long jobs, OIDC, service containers, IPv6 runners, larger runners.
