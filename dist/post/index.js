@@ -644,7 +644,11 @@ function getGitHubRequiredDomains() {
         'pkg-containers.githubusercontent.com',
         'github-cloud.githubusercontent.com',
         'github-cloud.s3.amazonaws.com',
-        'dependabot-actions.githubapp.com',
+        // githubapp.com is GitHub-owned at the DNS level (unlike the shared blob.core.windows.net
+        // namespace), so wildcarding it + subdomains is safe - this matches GitHub's own
+        // api.github.com/meta .domains.actions list (which wildcards *.githubapp.com). Covers
+        // dependabot, artifact-attestation (fulcio/timestamp), and hosted-compute orchestrators.
+        'githubapp.com',
         'release-assets.githubusercontent.com',
         'api.snapcraft.io'
     ];
