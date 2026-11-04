@@ -687,7 +687,10 @@ function buildFilterRules(o) {
                 lines.push(`-A ${c} -m owner --uid-owner ${o.dnsUid} -d ${server}/32 -p ${proto} --dport 53 -j RETURN`);
             }
         }
-        lines.push(`-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`, `-A ${c} -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_DROP}" --log-uid`, `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp-port-unreachable`);
+        lines.push(`-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`, 
+        // log new connections only: packets of flows that predate the cutover (and ownerless
+        // RST/FIN of sockets ss -K closed) are rejected too, but are just noise in the report
+        `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_DROP}" --log-uid`, `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp-port-unreachable`);
     }
     else {
         lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`, `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable`, `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_ANALYZE}" --log-uid`);

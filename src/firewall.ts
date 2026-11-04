@@ -94,7 +94,9 @@ export function buildFilterRules(o: FirewallOptions): string {
     }
     lines.push(
       `-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`,
-      `-A ${c} -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${LOG_PREFIX_DROP}" --log-uid`,
+      // log new connections only: packets of flows that predate the cutover (and ownerless
+      // RST/FIN of sockets ss -K closed) are rejected too, but are just noise in the report
+      `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${LOG_PREFIX_DROP}" --log-uid`,
       `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`,
       `-A ${c} -j REJECT --reject-with icmp-port-unreachable`
     );

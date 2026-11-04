@@ -227,7 +227,7 @@ export function buildReport(input: ReportInput): string {
   }
 
   const nonHttp = input.firewall;
-  md += `## Non-HTTP(S) egress (${nonHttp.length})\n\n`;
+  md += `## Other egress - not through the proxy (${nonHttp.length})\n\n`;
   if (nonHttp.length === 0) {
     md += `None logged.\n\n`;
   } else {
@@ -245,7 +245,7 @@ export function buildReport(input: ReportInput): string {
     ]);
     const { shown, note } = capped(rows);
     md += table(['Result', 'Proto', 'Destination', 'UID', 'Packets logged'], shown) + note + '\n\n';
-    md += `<sub>Only TCP 80/443 is proxied. Logging is rate-limited (60/min).</sub>\n\n`;
+    md += `<sub>New connections only; only TCP 80/443 is proxied. Logging is rate-limited (60/min).</sub>\n\n`;
   }
 
   if (input.dnsRefused.length) {

@@ -687,7 +687,10 @@ function buildFilterRules(o) {
                 lines.push(`-A ${c} -m owner --uid-owner ${o.dnsUid} -d ${server}/32 -p ${proto} --dport 53 -j RETURN`);
             }
         }
-        lines.push(`-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`, `-A ${c} -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_DROP}" --log-uid`, `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp-port-unreachable`);
+        lines.push(`-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`, 
+        // log new connections only: packets of flows that predate the cutover (and ownerless
+        // RST/FIN of sockets ss -K closed) are rejected too, but are just noise in the report
+        `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_DROP}" --log-uid`, `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp-port-unreachable`);
     }
     else {
         lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`, `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable`, `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_ANALYZE}" --log-uid`);
@@ -2445,7 +2448,7 @@ function buildReport(input) {
         md += `<sub>intercept = TLS terminated and every request's Host checked · passthrough = SNI-only, not decrypted (byte counts not available) · http = plain HTTP</sub>\n\n`;
     }
     const nonHttp = input.firewall;
-    md += `## Non-HTTP(S) egress (${nonHttp.length})\n\n`;
+    md += `## Other egress - not through the proxy (${nonHttp.length})\n\n`;
     if (nonHttp.length === 0) {
         md += `None logged.\n\n`;
     }
@@ -2464,7 +2467,7 @@ function buildReport(input) {
         ]);
         const { shown, note } = capped(rows);
         md += table(['Result', 'Proto', 'Destination', 'UID', 'Packets logged'], shown) + note + '\n\n';
-        md += `<sub>Only TCP 80/443 is proxied. Logging is rate-limited (60/min).</sub>\n\n`;
+        md += `<sub>New connections only; only TCP 80/443 is proxied. Logging is rate-limited (60/min).</sub>\n\n`;
     }
     if (input.dnsRefused.length) {
         const { shown, note } = capped(input.dnsRefused);
