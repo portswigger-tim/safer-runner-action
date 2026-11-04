@@ -481,6 +481,25 @@ exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
 exports.isGitHubDomain = isGitHubDomain;
 exports.isGitHubRelated = isGitHubRelated;
 /**
+ * The exact GitHub Actions results-storage accounts in use, from
+ * https://api.github.com/meta (.domains.actions) on 2026-11-04.
+ *
+ * Expressed as the exact contiguous blocks GitHub registers. The gaps between
+ * blocks are deliberate and must be preserved - see the SECURITY note in
+ * getGitHubRequiredDomains(). Only list numbers GitHub actually owns.
+ */
+function productionResultsStorageDomains() {
+    const inUse = [];
+    const addRange = (from, to) => {
+        for (let i = from; i <= to; i++)
+            inUse.push(i);
+    };
+    addRange(0, 19);
+    addRange(30, 49);
+    addRange(100, 199);
+    return inUse.map(i => `productionresultssa${i}.blob.core.windows.net`);
+}
+/**
  * Get the list of GitHub required domains that are always allowed.
  * These must match the list in main.ts to ensure consistency.
  */
@@ -494,11 +513,18 @@ function getGitHubRequiredDomains() {
         'pkg.actions.githubusercontent.com',
         'ghcr.io',
         'results-receiver.actions.githubusercontent.com',
-        // GitHub Actions results storage is spread across productionresultssa<N>.blob.core.windows.net
-        // accounts, and GitHub keeps adding them (sa32 observed Nov 2026). Enumerate a generous range
-        // rather than allowing *.blob.core.windows.net, which would permit exfiltration to any Azure
-        // blob account. Revisit this bound if GitHub scales past it.
-        ...Array.from({ length: 256 }, (_, i) => `productionresultssa${i}.blob.core.windows.net`),
+        // GitHub Actions results storage lives in productionresultssa<N>.blob.core.windows.net
+        // accounts. These are an EXPLICIT allowlist of the accounts GitHub actually registers,
+        // taken from https://api.github.com/meta (.domains.actions) on 2026-11-04.
+        //
+        // SECURITY: do NOT pad this range or fill the gaps (e.g. sa20-29, sa50-99, sa200+ are
+        // currently unused). Azure storage account names are a single global, first-come
+        // namespace, so any name GitHub has not registered can be claimed by anyone - allowing
+        // an unused name here would turn enforce mode into an exfiltration channel to an
+        // attacker-controlled bucket. A stale list fails safe (a new GitHub account is blocked
+        // until we add it); a padded list does not. v1.4.0 fetches this from api.github.com/meta
+        // at runtime so it always matches exactly the in-use set.
+        ...productionResultsStorageDomains(),
         'objects.githubusercontent.com',
         'objects-origin.githubusercontent.com',
         'github-releases.githubusercontent.com',

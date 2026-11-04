@@ -15,10 +15,20 @@ describe('GitHub Parser', () => {
       expect(domains).toContain('api.github.com');
     });
 
-    it('should include all productionresultssa domains', () => {
+    it('should include the in-use productionresultssa accounts (sa0-19, 30-49, 100-199)', () => {
       const domains = getGitHubRequiredDomains();
-      for (let i = 0; i < 256; i++) {
+      for (const i of [0, 19, 30, 49, 100, 150, 199]) {
         expect(domains).toContain(`productionresultssa${i}.blob.core.windows.net`);
+      }
+    });
+
+    it('should NOT list unregistered productionresultssa accounts (gaps or padding)', () => {
+      // SECURITY: Azure storage account names are a global, first-come namespace.
+      // Listing a name GitHub has not registered (a gap or beyond the in-use range)
+      // would let anyone claim it and receive exfiltrated data through enforce mode.
+      const domains = getGitHubRequiredDomains();
+      for (const i of [20, 29, 50, 99, 200, 255, 500]) {
+        expect(domains).not.toContain(`productionresultssa${i}.blob.core.windows.net`);
       }
     });
   });
