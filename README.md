@@ -56,7 +56,7 @@ Multi-layer security for GitHub Actions runners with network filtering (DNS + ip
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@9995e06487e889e52290e8c9ee3c7abda1c1d754 # v1.2.3
+  - uses: portswigger-tim/safer-runner-action@060f741a0d18c3603c8d91263f9577588a37c3f4 # v1.3.0
   - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
   - run: |
       curl https://example.com  # Logged but not blocked
@@ -66,7 +66,7 @@ steps:
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@9995e06487e889e52290e8c9ee3c7abda1c1d754 # v1.2.3
+  - uses: portswigger-tim/safer-runner-action@060f741a0d18c3603c8d91263f9577588a37c3f4 # v1.3.0
     with:
       mode: 'enforce'
       allowed-domains: |
@@ -113,7 +113,7 @@ Control sudo and Docker access to prevent privilege escalation and container esc
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@9995e06487e889e52290e8c9ee3c7abda1c1d754 # v1.2.3
+  - uses: portswigger-tim/safer-runner-action@060f741a0d18c3603c8d91263f9577588a37c3f4 # v1.3.0
     with:
       mode: 'enforce'
       disable-sudo: 'true'    # Prevents sudo usage after setup
@@ -135,7 +135,7 @@ Configure alternative DNS providers while maintaining the same security guarante
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@9995e06487e889e52290e8c9ee3c7abda1c1d754 # v1.2.3
+  - uses: portswigger-tim/safer-runner-action@060f741a0d18c3603c8d91263f9577588a37c3f4 # v1.3.0
     with:
       mode: 'enforce'
       allowed-domains: 'npmjs.org pypi.org'
@@ -150,7 +150,7 @@ steps:
 
 ```yaml
 steps:
-  - uses: portswigger-tim/safer-runner-action@9995e06487e889e52290e8c9ee3c7abda1c1d754 # v1.2.3
+  - uses: portswigger-tim/safer-runner-action@060f741a0d18c3603c8d91263f9577588a37c3f4 # v1.3.0
     with:
       mode: 'enforce'
       allowed-domains: 'example.com'
