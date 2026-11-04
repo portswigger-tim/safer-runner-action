@@ -50,15 +50,23 @@ const log = [
 describe('summarizeFlows', () => {
   const hosts = summarizeFlows(parseFlowLog(log + '\n{"partial'));
 
-  it('lists denied hosts first, worst verdict wins per host', () => {
+  it('lists denied rows first', () => {
     expect(hosts[0].verdict).toBe('BLOCK');
-    const api = hosts.find(h => h.name === 'api.github.com')!;
-    // the fronting attempt (Host api.github.com inside SNI github.com) marks the Host as blocked
-    expect(api.verdict).toBe('BLOCK');
-    expect(api.reasons).toEqual(['host-sni-mismatch']);
-    expect(api.requests).toBe(3);
-    expect(api.respBytes).toBe(3072);
-    expect(api.statuses).toEqual({ '200': 2, '403': 1 });
+    expect(hosts[hosts.length - 1].verdict).not.toBe('BLOCK');
+  });
+
+  it('keeps refused attempts and allowed traffic for the same name in separate rows', () => {
+    const api = hosts.filter(h => h.name === 'api.github.com');
+    expect(api).toHaveLength(2);
+    const blocked = api.find(h => h.verdict === 'BLOCK')!;
+    const allowed = api.find(h => h.verdict !== 'BLOCK')!;
+    // the fronting attempt (Host api.github.com inside SNI github.com)
+    expect(blocked.reasons).toEqual(['host-sni-mismatch']);
+    expect(blocked.requests).toBe(1);
+    expect(allowed.requests).toBe(2);
+    expect(allowed.connections).toBe(1);
+    expect(allowed.respBytes).toBe(3072);
+    expect(allowed.statuses).toEqual({ '200': 2 });
   });
 
   it('names no-SNI connections by the dialled address', () => {
@@ -73,7 +81,7 @@ describe('summarizeFlows', () => {
 
   it('ignores non-decision records', () => {
     expect(hosts.find(h => h.name.includes('server-connect'))).toBeUndefined();
-    expect(hosts).toHaveLength(4);
+    expect(hosts).toHaveLength(5);
   });
 });
 
@@ -118,7 +126,8 @@ describe('buildReport', () => {
             layer: 'sni',
             sni: 'selftest.safer-runner.invalid'
           },
-          { ev: 'tls', verdict: 'WOULD_BLOCK', reason: 'no-sni', layer: 'sni', sni: null, dst: '1.1.1.1:443' }
+          { ev: 'tls', verdict: 'WOULD_BLOCK', reason: 'no-sni', layer: 'sni', sni: null, dst: '1.1.1.1:443' },
+          { ev: 'https', verdict: 'WOULD_BLOCK', reason: 'host-sni-mismatch', layer: 'http', host: 'api.github.com' }
         ]
           .map(r => JSON.stringify(r))
           .join('\n')
@@ -134,7 +143,7 @@ describe('buildReport', () => {
       selfTests: [],
       extraSections: []
     });
-    expect(md).toContain('Would be blocked (3)');
+    expect(md).toContain('Would be blocked (4)');
     expect(md).toContain('      registry.npmjs.org');
   });
 

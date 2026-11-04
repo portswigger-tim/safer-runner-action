@@ -33,12 +33,20 @@ function addUnique(list: string[], v: string | undefined | null): void {
   if (v && !list.includes(v)) list.push(v);
 }
 
+const DENIED = new Set(['BLOCK', 'WOULD_BLOCK']);
+
+/**
+ * One row per (name, denied?): a host can have both refused attempts (e.g. a fronting try
+ * with its name in the Host header) and allowed traffic; neither should hide the other.
+ */
 export function summarizeFlows(records: FlowRecord[]): HostSummary[] {
-  const byName = new Map<string, HostSummary>();
+  const byKey = new Map<string, HostSummary>();
   for (const r of records) {
     if (!['tls', 'http', 'https'].includes(r.ev) || !r.verdict) continue;
     const name = nameOf(r);
-    let h = byName.get(name);
+    const denied = DENIED.has(r.verdict);
+    const key = `${denied ? 'D' : 'A'} ${name}`;
+    let h = byKey.get(key);
     if (!h) {
       h = {
         name,
@@ -53,16 +61,16 @@ export function summarizeFlows(records: FlowRecord[]): HostSummary[] {
         statuses: {},
         dsts: []
       };
-      byName.set(name, h);
+      byKey.set(key, h);
     }
     if ((RANK[r.verdict] ?? 0) > (RANK[h.verdict] ?? 0)) h.verdict = r.verdict;
-    if (r.verdict === 'BLOCK' || r.verdict === 'WOULD_BLOCK') {
+    if (denied) {
       addUnique(h.reasons, r.reason);
       addUnique(h.layers, r.layer);
     }
     if (r.ev === 'tls') {
       h.connections++;
-      addUnique(h.kinds, r.passthrough ? 'passthrough' : r.verdict === 'BLOCK' ? 'tls' : 'intercept');
+      addUnique(h.kinds, r.passthrough ? 'passthrough' : denied ? 'tls' : 'intercept');
     } else {
       h.requests++;
       h.reqBytes += r.req_bytes ?? 0;
@@ -72,7 +80,7 @@ export function summarizeFlows(records: FlowRecord[]): HostSummary[] {
     }
     if (h.dsts.length < MAX_LIST && r.dst) addUnique(h.dsts, r.dst.replace(/:\d+$/, ''));
   }
-  return Array.from(byName.values()).sort(
+  return Array.from(byKey.values()).sort(
     (a, b) => (RANK[b.verdict] ?? 0) - (RANK[a.verdict] ?? 0) || a.name.localeCompare(b.name)
   );
 }
@@ -146,15 +154,22 @@ export interface ReportInput {
   extraSections: string[];
 }
 
+/** Names that were refused only because they're not on the allowlist (not fronting, IPs, ...). */
 export function suggestedAllowlist(hosts: HostSummary[]): string[] {
-  return hosts
-    .filter(h => h.verdict === 'WOULD_BLOCK' && !h.name.startsWith('(no name)') && !h.name.endsWith('.invalid'))
-    .map(h => h.name);
+  const notListed = new Set(['sni-not-allowed', 'host-not-allowed']);
+  return Array.from(
+    new Set(
+      hosts
+        .filter(h => h.verdict === 'WOULD_BLOCK' && h.reasons.some(r => notListed.has(r)))
+        .filter(h => !h.name.startsWith('(no name)') && !h.name.endsWith('.invalid'))
+        .map(h => h.name)
+    )
+  );
 }
 
 export function buildReport(input: ReportInput): string {
   const { mode, hosts } = input;
-  const denied = hosts.filter(h => h.verdict === 'BLOCK' || h.verdict === 'WOULD_BLOCK');
+  const denied = hosts.filter(h => DENIED.has(h.verdict));
   const allowed = hosts.filter(h => !denied.includes(h));
   const deniedWord = mode === 'enforce' ? 'Blocked' : 'Would be blocked';
   const icon = mode === 'enforce' ? '🔒' : '📊';
