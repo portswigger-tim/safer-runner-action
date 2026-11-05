@@ -16,9 +16,9 @@ import {
   buildSudoRsyslogConfig,
   setupSudoLogging,
   removeSudoLogging,
-  applyCustomSudoConfig,
   disableSudoForRunner,
   parseSudoLogs,
+  readSudoUsage,
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_SUDOERS_FILE,
   SUDO_LOGGING_RSYSLOG_FILE
@@ -120,20 +120,32 @@ describe('sudo module', () => {
         'runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION'
       ]);
       expect(getValidationSudoCommands()).toEqual([
-        '/usr/bin/cat /etc/dnsmasq.conf',
+        '/usr/bin/cat /etc/safer-runner/Corefile',
         '/usr/bin/cat /etc/resolv.conf',
         '/usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf',
+        '/usr/bin/cat /etc/safer-runner/policy.json',
+        '/usr/bin/cat /opt/safer-runner/proxy/policy.py',
+        '/usr/bin/cat /opt/safer-runner/proxy/policy_core.py',
+        '/usr/bin/cat /etc/docker/daemon.json',
         `/usr/bin/cat ${SUDO_LOGGING_SUDOERS_FILE}`,
         `/usr/bin/cat ${SUDO_LOGGING_RSYSLOG_FILE}`,
+        '/usr/bin/cat /etc/safer-runner/validation-state.json',
         '/usr/sbin/iptables -L INPUT -n --line-numbers',
         '/usr/sbin/iptables -L OUTPUT -n --line-numbers',
-        '/usr/sbin/iptables -L FORWARD -n --line-numbers'
+        '/usr/sbin/iptables -L FORWARD -n --line-numbers',
+        '/usr/sbin/iptables -L SAFER_RUNNER_OUT -n --line-numbers',
+        '/usr/sbin/iptables -t nat -L OUTPUT -n --line-numbers',
+        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers',
+        '/usr/sbin/iptables -L DOCKER-USER -n --line-numbers',
+        '/usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers',
+        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers',
+        '/opt/safer-runner/bin/teardown ""'
       ]);
     });
 
     it('allows every command post-action validation runs', () => {
       for (const file of [
-        '/etc/dnsmasq.conf',
+        '/etc/safer-runner/Corefile',
         '/etc/resolv.conf',
         '/etc/systemd/resolved.conf.d/no-stub.conf',
         SUDO_LOGGING_SUDOERS_FILE,
@@ -242,36 +254,13 @@ describe('sudo module', () => {
     });
   });
 
-  describe('applyCustomSudoConfig', () => {
-    it('appends the validation allowlist to the user config', async () => {
-      visudoResult(0);
-      await applyCustomSudoConfig('runner ALL=(root) NOPASSWD: /usr/bin/apt-get', 'sudo-rs');
-
-      const written = teeInput('/tmp/runner-sudoers.tmp');
-      expect(written.startsWith('runner ALL=(root) NOPASSWD: /usr/bin/apt-get\n')).toBe(true);
-      expect(written).toContain('SAFER_RUNNER_VALIDATION');
-    });
-
-    it('sudo-rs: fails with guidance naming sudo-rs when visudo rejects the config', async () => {
-      visudoResult(1, '/tmp/runner-sudoers.tmp:1:28: syntax error: wildcards are not allowed in command arguments');
-
-      await expect(
-        applyCustomSudoConfig('runner ALL=(root) NOPASSWD: /usr/bin/ls /home/*/x', 'sudo-rs')
-      ).rejects.toThrow(/wildcards are not allowed/);
-
-      expect(core.error).toHaveBeenCalledWith(expect.stringContaining('sudo-rs'));
-      expect(core.error).toHaveBeenCalledWith(expect.stringContaining('whole argument list'));
-      expect(sudoCalls()).toContain('rm -f /tmp/runner-sudoers.tmp');
-      expect(sudoCalls()).not.toContain('mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner');
-    });
-
-    it('classic sudo: fails without sudo-rs guidance', async () => {
+  describe('disableSudoForRunner: visudo rejection', () => {
+    it('removes the temp file and never installs a rejected sudoers file', async () => {
       visudoResult(1, 'syntax error');
 
-      await expect(applyCustomSudoConfig('runner ALL=(root) NOPASSWD: bogus', 'sudo')).rejects.toThrow(
-        'Invalid sudoers configuration'
-      );
-      expect(core.error).not.toHaveBeenCalledWith(expect.stringContaining('sudo-rs'));
+      await expect(disableSudoForRunner('sudo-rs')).rejects.toThrow(/rejected by visudo \(sudo-rs\): syntax error/);
+      expect(sudoCalls()).toContain('rm -f /tmp/runner-sudoers.tmp');
+      expect(sudoCalls()).not.toContain('mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner');
     });
   });
 
@@ -348,6 +337,59 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
 
     it('returns empty array for missing file', () => {
       expect(parseSudoLogs(path.join(dir, 'missing.log'))).toEqual([]);
+    });
+  });
+
+  describe('readSudoUsage (report attribution)', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'safer-runner-sudo-'));
+    });
+    afterEach(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    // Real enforce job (v2.0.0-beta.2 suite, ubuntu-latest): the summary said "Workflow executed 4
+    // sudo commands". Teardown is the action's own post step; the other three were the
+    // workflow's attempts, all refused because enforce removed sudo.
+    it('attributes the post-step teardown to the action and refused attempts to the workflow', () => {
+      const log = path.join(dir, 'sudo.log');
+      const pwd = 'PWD=/home/runner/work/x/x';
+      fs.writeFileSync(
+        log,
+        [
+          `Nov  4 19:17:12 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/cat /etc/safer-runner/Corefile`,
+          `Nov  4 19:17:13 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner`,
+          `Nov  4 19:17:35 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/true`,
+          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/journalctl -u safer-runner-proxy --no-pager`,
+          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/sbin/iptables-save`,
+          `Nov  4 19:20:30 : runner : ${pwd} ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown`
+        ].join('\n') + '\n'
+      );
+      const u = readSudoUsage(log);
+      expect(u.ran).toEqual([]);
+      expect(u.refused.map(c => c.command)).toEqual([
+        '/usr/bin/true',
+        '/usr/bin/journalctl',
+        '/usr/sbin/iptables-save'
+      ]);
+      expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv', '/opt/safer-runner/bin/teardown']);
+      // and the legacy filter no longer reports teardown as workflow usage
+      expect(parseSudoLogs(log).map(c => c.command)).not.toContain('/opt/safer-runner/bin/teardown');
+    });
+
+    it('only matches the teardown helper by its exact root-owned path', () => {
+      const log = path.join(dir, 'sudo.log');
+      fs.writeFileSync(
+        log,
+        'Nov  4 19:20:30 : runner : PWD=/ ; USER=root ; COMMAND=/home/runner/opt/safer-runner/bin/teardown\n' +
+          'Nov  4 19:20:31 : runner : PWD=/ ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown --evil\n'
+      );
+      expect(readSudoUsage(log).ran).toHaveLength(2);
+    });
+
+    it('is empty for a missing file', () => {
+      expect(readSudoUsage(path.join(dir, 'missing.log'))).toEqual({ ran: [], refused: [], internal: [] });
     });
   });
 

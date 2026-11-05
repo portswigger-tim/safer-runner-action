@@ -1,5 +1,5 @@
 name: 'Safer Runner Action'
-description: 'Multi-layer security and reporting for GitHub Actions'
+description: 'L7 egress control for GitHub-hosted runners: hostname (SNI/Host) allowlisting through a TLS-terminating proxy'
 author: 'PortSwigger'
 branding:
   icon: 'shield'
@@ -7,45 +7,64 @@ branding:
 
 inputs:
   mode:
-    description: 'Operation mode: "analyze" to log traffic without blocking, "enforce" to block unauthorized domains'
+    description: >-
+      "analyze": all HTTP(S) goes through the proxy and is logged; nothing is blocked
+      (hosts that would be blocked are passed through by SNI and reported).
+      "enforce": only allowlisted hostnames are reachable; all other egress is rejected.
     required: false
     default: 'analyze'
   allowed-domains:
-    description: 'Space-separated list of additional domains to allow (beyond GitHub required domains)'
+    description: >-
+      Hostnames to allow in addition to GitHub's own (space/comma/newline separated), for both
+      the proxy and DNS. `example.com` allows exactly that name (NOT its subdomains - changed in
+      v2.0.0-beta.5); `*.example.com` its subdomains only; `.example.com` both;
+      `a-*.example.com` matches within one label. Shared multi-tenant suffixes (e.g.
+      blob.core.windows.net) are refused.
     required: false
     default: ''
-  primary-dns-server:
-    description: 'Primary DNS server for allowed domains (defaults to Quad9: 9.9.9.9)'
+  passthrough-domains:
+    description: >-
+      Hostnames whose TLS is NOT decrypted (SNI-only check, upstream still repointed by name).
+      Only for single-tenant hosts whose clients cannot trust the runtime CA (e.g. pinned
+      clients). hosted-compute-*.githubapp.com is always included (the runner's Go agent
+      cannot trust a CA added after boot).
     required: false
-    default: '9.9.9.9'
-  secondary-dns-server:
-    description: 'Secondary DNS server for redundancy (defaults to Quad9 secondary: 149.112.112.112)'
-    required: false
-    default: '149.112.112.112'
-  fail-on-tampering:
-    description: 'Whether to fail the workflow after job completion if security configuration tampering is detected'
-    required: false
-    default: 'false'
+    default: 'hosted-compute-*.githubapp.com'
   block-risky-github-subdomains:
-    description: 'Whether to block risky GitHub subdomains (gist.github.com, gist.githubusercontent.com, raw.githubusercontent.com) in enforce mode. Set to "false" if you need these domains.'
+    description: 'Deny gist.github.com, gist.githubusercontent.com and raw.githubusercontent.com even though *.github.com is allowed.'
     required: false
     default: 'true'
+  dns-servers:
+    description: >-
+      Upstream DNS servers the resolver (CoreDNS) forwards allowlisted names to: IP addresses,
+      space/comma/newline separated. The first is the primary; the rest are tried in order after
+      it. Empty falls back to the default (Quad9).
+    required: false
+    default: '9.9.9.9 149.112.112.112'
   disable-sudo:
-    description: 'Whether to disable sudo access for the runner user after setup is complete. This prevents malicious code from using sudo to bypass security controls.'
+    description: >-
+      Override whether sudo is removed from the runner user after setup. `enforce` removes it
+      (with sudo any step could remove the egress controls); `analyze` keeps it. Set `true` to
+      force removal or `false` to keep sudo; keeping sudo in `enforce` makes the job
+      "enforce (ADVISORY)" - the controls are applied but are not an enforced boundary. Leave
+      unset to follow the mode (unset and `false` are not the same).
     required: false
-    default: 'false'
-  sudo-config:
-    description: 'Custom sudoers configuration for the runner user (only used when disable-sudo is false). Provide sudoers rules as a multi-line string.'
+  docker:
+    description: >-
+      Override docker access for the runner user (docker is root-equivalent: a step can use it to
+      remove the egress controls). "keep": leave docker as it is. "remove-group": remove the
+      runner user from the docker group and lock the socket to root. "stop": stop and disable the
+      docker daemon. `enforce` removes docker access ("remove-group"); `analyze` keeps it
+      ("keep"). In enforce, "keep" makes the job "enforce (ADVISORY)", and a removal that does not
+      take effect (verified on the runner) fails the job. Leave unset to follow the mode (unset
+      differs from an explicit value).
     required: false
-    default: ''
-  disable-docker:
-    description: 'Whether to remove runner user from docker group. This prevents container usage, blocking container escape attacks and docker socket abuse.'
+  fail-on-tampering:
+    description: >-
+      Override whether the post step fails the job when the security configuration changed during
+      the job. `enforce` fails it (a subverted control should fail the job); `analyze` never
+      breaks a build. Leave unset to follow the mode (unset and `false` are not the same).
     required: false
-    default: 'false'
-  stop-docker:
-    description: 'Whether to completely stop and disable the Docker service. This provides stronger protection than disable-docker by preventing all Docker usage system-wide.'
-    required: false
-    default: 'false'
 
 runs:
   using: 'node24'

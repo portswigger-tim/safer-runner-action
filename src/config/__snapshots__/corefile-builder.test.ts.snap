@@ -1,0 +1,30 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`buildCorefile matches the Corefile snapshot 1`] = `
+"# safer-runner CoreDNS resolver (enforce). Generated - do not edit.
+# Blocks are tried in order: the first whose view matches answers the query.
+.:53 {
+  bind 127.0.0.1
+  view allow {
+    expr (name() in ['github.com.'] || name() endsWith '.github.com.') && !(name() in ['gist.github.com.'])
+  }
+  metadata
+  log . "{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}"
+  errors
+  cache 3600 {
+    serve_stale 1h
+  }
+  forward . 9.9.9.9 149.112.112.112 {
+    policy sequential
+  }
+}
+.:53 {
+  bind 127.0.0.1
+  log . "{remote} BLOCK {type} {name} {rcode}"
+  errors
+  template ANY ANY {
+    rcode NXDOMAIN
+  }
+}
+"
+`;

@@ -1,42 +1,38 @@
 /**
- * GitHub Domain Parser
- *
- * Identifies GitHub infrastructure domains and filters them from configuration suggestions.
- * This prevents legitimate GitHub domains from appearing in user configuration advice.
+ * The GitHub allowlist: api.github.com/meta .domains.actions (live, else the generated
+ * snapshot) + a tiny hand-curated GITHUB_EXTRAS, with the guards that keep meta from ever
+ * widening it into a shared namespace.
  */
 
+import { GITHUB_ACTIONS_DOMAINS } from './github-domains.generated';
+
 /**
- * Stable GitHub-owned core domains that are always allowed.
+ * Hosts the runner needs that api.github.com/meta .domains.actions does not list. Hand-curated
+ * and kept tiny: everything GitHub states it needs comes from meta (live at runtime, else the
+ * generated snapshot in github-domains.generated.ts - `npm run gen:domains`).
  *
- * These are either GitHub-controlled domains (safe to match with subdomains) or
- * specific GitHub-registered names. They do NOT include the dynamic results-storage
- * (productionresultssa*) accounts, which live in getProductionResultsStorageDomains()
- * and are preferably sourced from api.github.com/meta at runtime.
+ * Patterns are v2 allowlist syntax: a bare name is EXACT and `*.name` covers every subdomain.
+ * NO wildcards here: a wildcard is a DNS channel to that zone. The only wildcards are the ones
+ * meta itself lists (*.github.com, *.githubapp.com, *.actions.githubusercontent.com). A new
+ * entry needs observed real-runner traffic and a one-line reason. Not even an apex "because it
+ * costs nothing": meta lists github.com's apex but not actions.githubusercontent.com's or
+ * githubapp.com's, so those aren't contacted.
  */
-const GITHUB_CORE_DOMAINS: string[] = [
-  'github.com',
-  'actions.githubusercontent.com',
-  'api.github.com',
-  'codeload.github.com',
-  'pkg.actions.githubusercontent.com',
-  'ghcr.io',
-  'results-receiver.actions.githubusercontent.com',
-  'objects.githubusercontent.com',
-  'objects-origin.githubusercontent.com',
-  'github-releases.githubusercontent.com',
-  'github-registry-files.githubusercontent.com',
-  'pkg.github.com',
-  'pkg-containers.githubusercontent.com',
-  'github-cloud.githubusercontent.com',
-  'github-cloud.s3.amazonaws.com',
-  // githubapp.com is GitHub-owned at the DNS level (unlike the shared blob.core.windows.net
-  // namespace), so matching it + subdomains is safe - this mirrors GitHub's own
-  // api.github.com/meta .domains.actions list (which wildcards *.githubapp.com). Covers
-  // dependabot, artifact-attestation (fulcio/timestamp), and hosted-compute orchestrators.
-  'githubapp.com',
-  'release-assets.githubusercontent.com',
-  'api.snapcraft.io'
+export const GITHUB_EXTRAS: readonly string[] = [
+  // ghcr.io (in meta) answers blob/layer GETs with a 307 to this host: every ghcr pull
+  'pkg-containers.githubusercontent.com'
 ];
+
+/**
+ * Risky GitHub subdomains that serve arbitrary user content (malicious payloads), refused in
+ * enforce mode when block-risky-github-subdomains is on: a deny override, so `*.github.com`
+ * does not let them through.
+ */
+export const RISKY_GITHUB_SUBDOMAINS = [
+  'gist.github.com', // Gist web interface
+  'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
+  'raw.githubusercontent.com' // Common vector for serving malicious raw file content
+] as const;
 
 /**
  * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
@@ -46,7 +42,7 @@ const GITHUB_CORE_DOMAINS: string[] = [
  * under them (e.g. productionresultssa100.blob.core.windows.net) are fine; the bare
  * suffix is not.
  */
-const DANGEROUS_BROAD_DOMAINS: ReadonlySet<string> = new Set([
+export const DANGEROUS_BROAD_DOMAINS: ReadonlySet<string> = new Set([
   'windows.net',
   'core.windows.net',
   'blob.core.windows.net',
@@ -57,61 +53,56 @@ const DANGEROUS_BROAD_DOMAINS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The static fallback list of GitHub Actions results-storage accounts in use, from
- * https://api.github.com/meta (.domains.actions) on 2026-11-04.
+ * The offline GitHub allowlist: the generated meta snapshot plus GITHUB_EXTRAS. Used when the
+ * live api.github.com/meta list cannot be fetched (see resolveGitHubDomains()).
  *
- * Expressed as the exact contiguous blocks GitHub registers. The gaps between blocks
- * are deliberate and must be preserved.
- *
- * SECURITY: do NOT pad this range or fill the gaps (e.g. sa20-29, sa50-99, sa200+ are
- * currently unused). Azure storage account names are a single global, first-come
- * namespace, so any name GitHub has not registered can be claimed by anyone - allowing
- * an unused name here would turn enforce mode into an exfiltration channel to an
- * attacker-controlled bucket. A stale list fails safe (a new GitHub account is blocked
- * until we add it); a padded list does not. At runtime resolveGitHubDomains() prefers
- * the live meta list over this snapshot.
- */
-function getProductionResultsStorageDomains(): string[] {
-  const inUse: number[] = [];
-  const addRange = (from: number, to: number) => {
-    for (let i = from; i <= to; i++) inUse.push(i);
-  };
-  addRange(0, 19);
-  addRange(30, 49);
-  addRange(100, 199);
-  return inUse.map(i => `productionresultssa${i}.blob.core.windows.net`);
-}
-
-/**
- * Get the static list of GitHub required domains that are always allowed.
- *
- * This is the offline fallback used when the live api.github.com/meta list cannot be
- * fetched (see resolveGitHubDomains()).
+ * SECURITY: the snapshot enumerates the productionresultssa* storage accounts exactly as meta
+ * lists them; never pad or range-fill them. Azure storage account names are a global,
+ * first-come namespace, so an unregistered name would be an exfil channel. A stale snapshot
+ * fails safe (a new account is blocked until regenerated).
  */
 export function getGitHubRequiredDomains(): string[] {
-  return [...GITHUB_CORE_DOMAINS, ...getProductionResultsStorageDomains()];
+  const snapshot = GITHUB_ACTIONS_DOMAINS.map(normalizeMetaDomain).filter((d): d is string => d !== null);
+  return Array.from(new Set([...snapshot, ...GITHUB_EXTRAS]));
 }
 
 /**
- * Normalise a domain from api.github.com/meta into a dnsmasq-usable base domain,
- * or return null if it must be dropped.
+ * Normalise a domain from api.github.com/meta into an allowlist pattern, or return null if
+ * it must be dropped.
  *
- * - Leading "*." is stripped: dnsmasq's server=/domain/ rule already matches the
- *   domain and all of its subdomains.
- * - Entries that are still wildcards, empty, or an over-broad shared suffix
- *   (DANGEROUS_BROAD_DOMAINS) are dropped.
+ * - A leading "*." is KEPT: meta's `*.github.com` means "subdomains of github.com", which is
+ *   exactly what the v2 pattern `*.github.com` means (meta lists the apex separately).
+ * - Any other wildcard, an empty entry, or an over-broad shared suffix
+ *   (DANGEROUS_BROAD_DOMAINS, checked on the part after "*.") is dropped.
  */
 export function normalizeMetaDomain(raw: string): string | null {
-  const d = raw.trim().toLowerCase().replace(/^\*\./, '');
-  if (!d || d.includes('*')) return null;
-  if (DANGEROUS_BROAD_DOMAINS.has(d)) return null;
+  const d = raw.trim().toLowerCase();
+  const base = d.startsWith('*.') ? d.slice(2) : d;
+  if (!base || base.includes('*')) return null;
+  if (DANGEROUS_BROAD_DOMAINS.has(base)) return null;
   return d;
+}
+
+/**
+ * The meta groups the GitHub list is built from, raw (no normalisation): `.domains.actions`
+ * (required) + `.domains.artifact_attestations` (GitHub's Sigstore for actions/attest-*; an
+ * array, or an object with a `services` array). Null when `.domains.actions` is missing/empty.
+ * Shared by the live fetch and `npm run gen:domains` so the snapshot matches the live path.
+ */
+export function metaDomainGroups(data: unknown): unknown[] | null {
+  const domains = (data as { domains?: { actions?: unknown; artifact_attestations?: unknown } })?.domains;
+  const actions = domains?.actions;
+  if (!Array.isArray(actions) || actions.length === 0) return null;
+  const att = domains?.artifact_attestations;
+  const services = Array.isArray(att) ? att : (att as { services?: unknown })?.services;
+  return [...actions, ...(Array.isArray(services) ? services : [])];
 }
 
 /**
  * Fetch the GitHub Actions domain allowlist from api.github.com/meta.
  *
- * Uses the `.domains.actions` section - GitHub's recommended middle tier, which
+ * Uses the `.domains.actions` section (+ artifact attestations, see metaDomainGroups) -
+ * GitHub's recommended middle tier, which
  * wildcards GitHub-owned domains but enumerates shared-namespace ones (e.g. the
  * productionresultssa* storage accounts) specifically. We deliberately do NOT use
  * `.domains.actions_inbound.wildcard_domains`, which contains *.core.windows.net and
@@ -136,9 +127,8 @@ export async function fetchGitHubActionsDomains(timeoutMs = 10000): Promise<stri
       clearTimeout(timer);
     }
     if (!res.ok) return null;
-    const data = (await res.json()) as { domains?: { actions?: unknown } };
-    const actions = data?.domains?.actions;
-    if (!Array.isArray(actions) || actions.length === 0) return null;
+    const actions = metaDomainGroups(await res.json());
+    if (!actions) return null;
 
     const normalized = actions
       .filter((d): d is string => typeof d === 'string')
@@ -152,46 +142,15 @@ export async function fetchGitHubActionsDomains(timeoutMs = 10000): Promise<stri
 }
 
 /**
- * Resolve the GitHub allowlist, preferring the live api.github.com/meta list and
- * falling back to the static snapshot if the fetch fails.
- *
- * On success the GitHub-owned core domains are unioned with the live meta list, so
- * the dynamic results-storage (productionresultssa*) accounts always match exactly
- * what GitHub currently registers - no stale entries, no padding. On failure we use
- * the static list, which fails safe (a newly-added GitHub account is blocked until
- * we ship an update, rather than anything extra being allowed).
+ * Resolve the GitHub allowlist, preferring the live api.github.com/meta list and falling back
+ * to the generated snapshot if the fetch fails. GITHUB_EXTRAS are added either way. On
+ * success the snapshot is NOT merged in, so the storage accounts match exactly what GitHub
+ * registers today.
  */
 export async function resolveGitHubDomains(): Promise<{ domains: string[]; source: 'meta' | 'static' }> {
   const fetched = await fetchGitHubActionsDomains();
   if (fetched && fetched.length > 0) {
-    return { domains: Array.from(new Set([...GITHUB_CORE_DOMAINS, ...fetched])), source: 'meta' };
+    return { domains: Array.from(new Set([...fetched, ...GITHUB_EXTRAS])), source: 'meta' };
   }
   return { domains: getGitHubRequiredDomains(), source: 'static' };
-}
-
-/**
- * Check if a domain is a GitHub domain (exact match or subdomain).
- * Examples:
- * - 'actions.githubusercontent.com' matches 'actions.githubusercontent.com'
- * - 'run-actions-3-azure-eastus.actions.githubusercontent.com' is a subdomain of 'actions.githubusercontent.com'
- *
- * @param domain - The domain to check
- * @param githubDomains - List of GitHub required domains
- * @returns true if domain is an exact match or subdomain of any GitHub domain
- */
-export function isGitHubDomain(domain: string, githubDomains: string[]): boolean {
-  // Check exact match or if domain is a subdomain of any GitHub domain
-  return githubDomains.some(ghDomain => domain === ghDomain || domain.endsWith('.' + ghDomain));
-}
-
-/**
- * Check if a domain should be excluded from configuration suggestions.
- * A domain is excluded if it's in the explicit GitHub domain list or is a subdomain.
- *
- * @param domain - The domain to check
- * @returns true if domain should be excluded from suggestions
- */
-export function isGitHubRelated(domain: string): boolean {
-  const githubDomains = getGitHubRequiredDomains();
-  return isGitHubDomain(domain, githubDomains);
 }

@@ -133,3 +133,7 @@ lib/
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+__pycache__/
+
+# Test fixtures are data, not runtime logs - keep them tracked
+!src/**/__fixtures__/*.log

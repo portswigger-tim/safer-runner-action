@@ -2,7 +2,7 @@
  * System Integrity Validation for Safer Runner Action
  *
  * This module provides SHA256 checksum-based validation to ensure that critical
- * security configurations (dnsmasq.conf, resolv.conf, iptables rules) are not
+ * security configurations (Corefile, resolv.conf, iptables rules) are not
  * tampered with between setup completion and action end.
  *
  * Validation Flow:
@@ -17,7 +17,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { VALIDATION_STATE_FILE } from './constants';
 
 interface FileChecksum {
   path: string;
@@ -39,22 +39,50 @@ interface ValidationState {
 }
 
 /**
- * Standard iptables chains to monitor for tampering
+ * iptables chains to monitor for tampering: the built-in hooks plus the chains the v2
+ * action owns. `table:CHAIN` selects a non-filter table.
  */
-export const IPTABLES_CHAINS = ['INPUT', 'OUTPUT', 'FORWARD'] as const;
+export const IPTABLES_CHAINS = [
+  'INPUT',
+  'OUTPUT',
+  'FORWARD',
+  'SAFER_RUNNER_OUT',
+  'nat:OUTPUT',
+  'nat:SAFER_RUNNER_NAT',
+  // container egress (P2); absent when Docker isn't running (capture skips missing chains)
+  'DOCKER-USER',
+  'SAFER_RUNNER_CFWD',
+  'nat:SAFER_RUNNER_CNAT'
+] as const;
+
+/** `iptables` arguments that list one chain spec (`CHAIN` or `table:CHAIN`). */
+export function iptablesListArgs(spec: string): string[] {
+  const [table, chain] = spec.includes(':') ? spec.split(':') : ['filter', spec];
+  return [...(table === 'filter' ? [] : ['-t', table]), '-L', chain, '-n', '--line-numbers'];
+}
 
 /**
  * Security configuration files monitored for tampering
  * The sudo logging config file is appended at runtime (it depends on the sudo implementation)
  */
 export const CRITICAL_FILES = [
-  '/etc/dnsmasq.conf',
+  '/etc/safer-runner/Corefile',
   '/etc/resolv.conf',
-  '/etc/systemd/resolved.conf.d/no-stub.conf'
+  '/etc/systemd/resolved.conf.d/no-stub.conf',
+  '/etc/safer-runner/policy.json',
+  '/opt/safer-runner/proxy/policy.py',
+  '/opt/safer-runner/proxy/policy_core.py'
 ] as const;
 
+/** sudo commands that store the baseline (exact; also filtered from the sudo report). */
+export const BASELINE_WRITE_COMMANDS: string[][] = [
+  ['touch', VALIDATION_STATE_FILE],
+  ['chown', 'root:root', VALIDATION_STATE_FILE],
+  ['chmod', '0600', VALIDATION_STATE_FILE],
+  ['tee', VALIDATION_STATE_FILE]
+];
+
 export class SystemValidator {
-  private validationStateFile = '/tmp/safer-runner-validation-state.json';
   private criticalFiles: string[];
 
   constructor(criticalFiles?: string[]) {
@@ -100,8 +128,35 @@ export class SystemValidator {
     await this.captureIptablesState(state);
 
     // Save validation state
-    writeFileSync(this.validationStateFile, JSON.stringify(state, null, 2));
-    core.info(`💾 Security baseline saved to ${this.validationStateFile}`);
+    await this.writeBaseline(JSON.stringify(state, null, 2));
+    core.info(`💾 Security baseline saved to ${VALIDATION_STATE_FILE}`);
+  }
+
+  /**
+   * Store the baseline root-owned (0600) under /etc/safer-runner, never in a runner-writable
+   * location: the runner could otherwise rewrite it to match a tampered state (review M1).
+   * Runs during setup, before sudo is restricted.
+   */
+  protected async writeBaseline(json: string): Promise<void> {
+    // Each command is listed in INTERNAL_SUDO_COMMANDS (sudo logging is already on here).
+    // Mode and owner are set before the content goes in. ETC_DIR is root-owned (writePolicy).
+    for (const args of BASELINE_WRITE_COMMANDS) {
+      await exec.exec('sudo', args, args[0] === 'tee' ? { input: Buffer.from(json), silent: true } : {});
+    }
+  }
+
+  /**
+   * Read the baseline back with the same privilege path as the checked files (an exact
+   * `sudo cat` allowlist entry, see getValidationSudoCommands). Null if it is missing.
+   */
+  protected async readBaseline(): Promise<string | null> {
+    let out = '';
+    const rc = await exec.exec('sudo', ['-n', 'cat', VALIDATION_STATE_FILE], {
+      silent: true,
+      ignoreReturnCode: true,
+      listeners: { stdout: data => (out += data.toString()) }
+    });
+    return rc === 0 ? out : null;
   }
 
   /**
@@ -110,14 +165,15 @@ export class SystemValidator {
   async verifyAgainstBaseline(): Promise<boolean> {
     core.info('🔍 Verifying system integrity against baseline...');
 
-    if (!existsSync(this.validationStateFile)) {
+    const baseline = await this.readBaseline();
+    if (baseline === null) {
       core.warning('⚠️  No baseline state file found - cannot verify integrity');
       return false;
     }
 
     let baselineState: ValidationState;
     try {
-      baselineState = JSON.parse(readFileSync(this.validationStateFile, 'utf8'));
+      baselineState = JSON.parse(baseline);
     } catch (error) {
       core.error(`❌ Failed to read baseline state: ${error}`);
       return false;
@@ -176,7 +232,7 @@ export class SystemValidator {
 
   /**
    * Calculate SHA256 checksum of a file
-   * Uses sudo to read files with restricted permissions (e.g., dnsmasq.conf with mode 600)
+   * Uses sudo to read files with restricted permissions (e.g. 0600 root-owned config)
    */
   protected async calculateFileChecksum(filePath: string): Promise<string | null> {
     try {
@@ -218,7 +274,7 @@ export class SystemValidator {
    */
   protected async getIptablesChainOutput(chain: string): Promise<string> {
     let rulesOutput = '';
-    await exec.exec('sudo', ['iptables', '-L', chain, '-n', '--line-numbers'], {
+    await exec.exec('sudo', ['iptables', ...iptablesListArgs(chain)], {
       silent: true,
       listeners: {
         stdout: data => {
@@ -282,8 +338,17 @@ export class SystemValidator {
    * Generate detailed validation report
    */
   async generateValidationReport(): Promise<string> {
-    if (!existsSync(this.validationStateFile)) {
-      return '<details>\n<summary><h2>Config File Tamper Detection</h2></summary>\n\nNo validation data available.\n\n</details>\n\n';
+    const { status, body } = await this.generateValidationDetails();
+    // Wrap in collapsible section with warning emoji if tampering detected
+    const titleEmoji = status === 'tampered' ? '⚠️ ' : '';
+    return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${body}</details>\n\n`;
+  }
+
+  /** The checksum tables and an overall result, for embedding in the job summary. */
+  async generateValidationDetails(): Promise<{ status: 'verified' | 'tampered' | 'unavailable'; body: string }> {
+    const baseline = await this.readBaseline();
+    if (baseline === null) {
+      return { status: 'unavailable', body: 'No validation data available.\n\n' };
     }
 
     // Check if tampering occurred to add warning emoji
@@ -291,13 +356,13 @@ export class SystemValidator {
     let reportContent = '';
 
     try {
-      const state: ValidationState = JSON.parse(readFileSync(this.validationStateFile, 'utf8'));
+      const state: ValidationState = JSON.parse(baseline);
 
       reportContent += `**Baseline:** ${state.timestamp}\n`;
       reportContent += `**Verified:** ${new Date().toISOString()}\n\n`;
 
       // File integrity report
-      reportContent += '### Configuration Files\n\n';
+      reportContent += '**Configuration Files**\n\n';
       reportContent += '| File | Status | Checksum Comparison |\n';
       reportContent += '|------|--------|--------------------|\n';
 
@@ -323,7 +388,7 @@ export class SystemValidator {
       }
 
       // iptables integrity report
-      reportContent += '\n### Firewall Rules\n\n';
+      reportContent += '\n**Firewall Rules**\n\n';
       reportContent += '| Chain | Status | Checksum Comparison |\n';
       reportContent += '|-------|--------|--------------|\n';
 
@@ -355,8 +420,6 @@ export class SystemValidator {
       tamperingDetected = true;
     }
 
-    // Wrap in collapsible section with warning emoji if tampering detected
-    const titleEmoji = tamperingDetected ? '⚠️ ' : '';
-    return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${reportContent}</details>\n\n`;
+    return { status: tamperingDetected ? 'tampered' : 'verified', body: reportContent };
   }
 }

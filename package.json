@@ -1,7 +1,7 @@
 {
   "name": "safer-runner",
-  "version": "1.0.0",
-  "description": "Network security layer for GitHub Actions with DNS filtering and log analysis",
+  "version": "2.0.0-beta.1",
+  "description": "L7 egress control for GitHub Actions runners: hostname allowlisting through a TLS-terminating proxy",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc && ncc build lib/main.js -o dist/main --license licenses.txt",
@@ -11,14 +11,17 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "package": "npm run clean && npm run format && npm test && npm run build && npm run build:pre && npm run build:post",
-    "test": "jest",
-    "all": "npm run package"
+    "test": "jest && npm run test:py",
+    "all": "npm run package",
+    "gen:domains": "tsc && node lib/scripts/gen-github-domains.js && prettier --write src/parsers/github-domains.generated.ts",
+    "test:py": "python3 -m unittest discover -s proxy -p '*_test.py'"
   },
   "keywords": [
     "security",
     "github-actions",
-    "dns",
-    "firewall"
+    "egress",
+    "proxy",
+    "mitmproxy"
   ],
   "author": "PortSwigger",
   "license": "MIT",

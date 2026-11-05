@@ -1,154 +1,147 @@
+import { compilePattern, matchesAny } from '../policy';
+import { GITHUB_ACTIONS_DOMAINS } from './github-domains.generated';
 import {
+  DANGEROUS_BROAD_DOMAINS,
+  GITHUB_EXTRAS,
   getGitHubRequiredDomains,
-  isGitHubDomain,
-  isGitHubRelated,
+  metaDomainGroups,
   normalizeMetaDomain,
   fetchGitHubActionsDomains,
   resolveGitHubDomains
 } from './github-parser';
 
 describe('GitHub Parser', () => {
-  describe('getGitHubRequiredDomains', () => {
-    it('should return array of GitHub domains', () => {
-      const domains = getGitHubRequiredDomains();
-      expect(domains).toBeInstanceOf(Array);
-      expect(domains.length).toBeGreaterThan(0);
+  describe('getGitHubRequiredDomains (generated meta snapshot + extras)', () => {
+    const domains = getGitHubRequiredDomains();
+
+    it('is the generated snapshot (normalised like the live list) plus the extras, de-duplicated', () => {
+      const snapshot = GITHUB_ACTIONS_DOMAINS.map(normalizeMetaDomain).filter(d => d !== null);
+      expect(domains).toEqual(expect.arrayContaining([...snapshot, ...GITHUB_EXTRAS]));
+      expect(new Set(domains).size).toBe(domains.length);
     });
 
-    it('should include core GitHub domains', () => {
-      const domains = getGitHubRequiredDomains();
-      expect(domains).toContain('github.com');
-      expect(domains).toContain('actions.githubusercontent.com');
-      expect(domains).toContain('api.github.com');
+    it('the only wildcards are the three meta itself lists', () => {
+      expect(domains.filter(d => d.includes('*')).sort()).toEqual([
+        '*.actions.githubusercontent.com',
+        '*.github.com',
+        '*.githubapp.com'
+      ]);
     });
 
-    it('should include the in-use productionresultssa accounts (sa0-19, 30-49, 100-199)', () => {
-      const domains = getGitHubRequiredDomains();
-      for (const i of [0, 19, 30, 49, 100, 150, 199]) {
-        expect(domains).toContain(`productionresultssa${i}.blob.core.windows.net`);
+    it('extras are exact names', () => {
+      expect(GITHUB_EXTRAS.filter(d => d.includes('*'))).toEqual([]);
+    });
+
+    it('never contains an over-broad shared namespace', () => {
+      for (const d of domains) {
+        expect(DANGEROUS_BROAD_DOMAINS.has(d.replace(/^\*\./, ''))).toBe(false);
       }
     });
 
-    it('should NOT list unregistered productionresultssa accounts (gaps or padding)', () => {
-      // SECURITY: Azure storage account names are a global, first-come namespace.
-      // Listing a name GitHub has not registered (a gap or beyond the in-use range)
-      // would let anyone claim it and receive exfiltrated data through enforce mode.
-      const domains = getGitHubRequiredDomains();
-      for (const i of [20, 29, 50, 99, 200, 255, 500]) {
-        expect(domains).not.toContain(`productionresultssa${i}.blob.core.windows.net`);
-      }
+    it('enumerates storage accounts exactly (no account-name globs)', () => {
+      const sa = domains.filter(d => d.startsWith('productionresultssa'));
+      expect(sa.length).toBeGreaterThan(0);
+      for (const d of sa) expect(d).toMatch(/^productionresultssa\d+\.blob\.core\.windows\.net$/);
     });
   });
 
-  describe('isGitHubDomain', () => {
-    const githubDomains = getGitHubRequiredDomains();
+  describe('exact-by-default coverage (the static list compiled with the proxy matcher)', () => {
+    const compiled = getGitHubRequiredDomains().map(compilePattern);
 
-    it('should match exact GitHub domains', () => {
-      expect(isGitHubDomain('github.com', githubDomains)).toBe(true);
-      expect(isGitHubDomain('actions.githubusercontent.com', githubDomains)).toBe(true);
-      expect(isGitHubDomain('api.github.com', githubDomains)).toBe(true);
+    // Hosts real runners and first-party actions use (flow logs from the v2 suite on
+    // ubuntu-latest/24.04/26.04 + api.github.com/meta). A miss here breaks every job.
+    it.each([
+      'github.com',
+      'api.github.com',
+      'codeload.github.com',
+      'uploads.github.com',
+      'npm.pkg.github.com',
+      'maven.pkg.github.com',
+      'tuf-repo.github.com',
+      'pipelines.actions.githubusercontent.com',
+      'pipelinesghubeus7.actions.githubusercontent.com',
+      'runnerghubeus1.actions.githubusercontent.com',
+      'broker.actions.githubusercontent.com',
+      'token.actions.githubusercontent.com',
+      'vstoken.actions.githubusercontent.com',
+      'results-receiver.actions.githubusercontent.com',
+      'run-actions-3-azure-eastus.actions.githubusercontent.com',
+      'hosted-compute-watchdog-prod-iad-01.githubapp.com',
+      'fulcio.githubapp.com',
+      'timestamp.githubapp.com',
+      'ghcr.io',
+      'pkg-containers.githubusercontent.com',
+      'objects.githubusercontent.com',
+      'release-assets.githubusercontent.com',
+      'productionresultssa31.blob.core.windows.net',
+      // artifact attestations (actions/attest-build-provenance): GitHub's Sigstore
+      'tuf-repo.github.com',
+      'fulcio.githubapp.com',
+      'timestamp.githubapp.com'
+    ])('allows %s', host => {
+      expect(matchesAny(host, compiled)).toBe(true);
     });
 
-    it('should match subdomains of GitHub domains', () => {
-      expect(isGitHubDomain('run-actions-3-azure-eastus.actions.githubusercontent.com', githubDomains)).toBe(true);
-      expect(isGitHubDomain('subdomain.github.com', githubDomains)).toBe(true);
-      expect(isGitHubDomain('api.subdomain.github.com', githubDomains)).toBe(true);
+    // SECURITY: subdomains of exact entries are not GitHub's to vouch for (or are a
+    // different, registrable tenant), so they must not ride on the GitHub allowlist.
+    it.each([
+      'x.objects.githubusercontent.com',
+      's3cr3t.release-assets.githubusercontent.com',
+      'attacker.github-cloud.s3.amazonaws.com',
+      'x.api.snapcraft.io',
+      'raw.githubusercontent.com',
+      'gist.githubusercontent.com',
+      'user-content.githubusercontent.com',
+      'githubusercontent.com',
+      'actions.githubusercontent.com', // meta lists only *.actions...
+      'githubapp.com',
+      'attacker.blob.core.windows.net',
+      'x.productionresultssa31.blob.core.windows.net',
+      'evilgithub.com',
+      'github.com.evil.net'
+    ])('does not allow %s', host => {
+      expect(matchesAny(host, compiled)).toBe(false);
     });
 
-    it('should NOT match non-GitHub domains', () => {
-      expect(isGitHubDomain('example.com', githubDomains)).toBe(false);
-      expect(isGitHubDomain('npmjs.com', githubDomains)).toBe(false);
-      expect(isGitHubDomain('google.com', githubDomains)).toBe(false);
-    });
-
-    it('should NOT match domains that merely contain github.com', () => {
-      // Important: 'notgithub.com' should NOT match even though it contains 'github.com'
-      expect(isGitHubDomain('notgithub.com', githubDomains)).toBe(false);
-      expect(isGitHubDomain('github.com.evil.com', githubDomains)).toBe(false);
-    });
-
-    it('should NOT match risky githubusercontent.com subdomains', () => {
-      // These should NOT be in the githubDomains list
-      expect(isGitHubDomain('raw.githubusercontent.com', githubDomains)).toBe(false);
-      expect(isGitHubDomain('gist.githubusercontent.com', githubDomains)).toBe(false);
-    });
-  });
-
-  describe('isGitHubRelated', () => {
-    it('should identify exact GitHub domains as related', () => {
-      expect(isGitHubRelated('github.com')).toBe(true);
-      expect(isGitHubRelated('actions.githubusercontent.com')).toBe(true);
-    });
-
-    it('should identify GitHub subdomains as related', () => {
-      expect(isGitHubRelated('run-actions-3-azure-eastus.actions.githubusercontent.com')).toBe(true);
-      expect(isGitHubRelated('subdomain.github.com')).toBe(true);
-    });
-
-    it('should identify explicit productionresultssa domains as related', () => {
-      // These are in the explicit list
-      expect(isGitHubRelated('productionresultssa0.blob.core.windows.net')).toBe(true);
-      expect(isGitHubRelated('productionresultssa15.blob.core.windows.net')).toBe(true);
-    });
-
-    it('should NOT identify broad infrastructure patterns as related', () => {
-      // Broad patterns are no longer matched - only explicit list or evidence-based discovery
-      expect(isGitHubRelated('something.blob.core.windows.net')).toBe(false);
-      expect(isGitHubRelated('something.trafficmanager.net')).toBe(false);
-    });
-
-    it('should NOT identify non-GitHub domains as related', () => {
-      expect(isGitHubRelated('npmjs.com')).toBe(false);
-      expect(isGitHubRelated('registry.npmjs.org')).toBe(false);
-      expect(isGitHubRelated('pypi.org')).toBe(false);
-    });
-
-    it('should NOT identify risky GitHub subdomains as related', () => {
-      // These should NOT be automatically excluded
-      expect(isGitHubRelated('raw.githubusercontent.com')).toBe(false);
-      expect(isGitHubRelated('gist.githubusercontent.com')).toBe(false);
-    });
-
-    it('should handle edge cases correctly', () => {
-      expect(isGitHubRelated('')).toBe(false);
-      expect(isGitHubRelated('github')).toBe(false);
-      expect(isGitHubRelated('.com')).toBe(false);
+    it('every entry is a valid pattern', () => {
+      expect(compiled.length).toBe(getGitHubRequiredDomains().length);
     });
   });
 
-  describe('Security considerations', () => {
-    it('should exclude risky subdomains that could be used maliciously', () => {
-      // These domains allow arbitrary code execution and should NOT be auto-allowed
-      const riskyDomains = [
-        'raw.githubusercontent.com',
-        'gist.githubusercontent.com',
-        'user-content.githubusercontent.com'
-      ];
-
-      for (const domain of riskyDomains) {
-        expect(isGitHubRelated(domain)).toBe(false);
-      }
+  describe('metaDomainGroups', () => {
+    it('unions .domains.actions with the artifact-attestation services', () => {
+      expect(
+        metaDomainGroups({
+          domains: {
+            actions: ['github.com', '*.github.com'],
+            artifact_attestations: { trust_domain: '', services: ['tuf-repo.github.com', 'fulcio.githubapp.com'] }
+          }
+        })
+      ).toEqual(['github.com', '*.github.com', 'tuf-repo.github.com', 'fulcio.githubapp.com']);
+      expect(metaDomainGroups({ domains: { actions: ['a.com'], artifact_attestations: ['b.com'] } })).toEqual([
+        'a.com',
+        'b.com'
+      ]);
     });
 
-    it('should include safe GitHub infrastructure domains', () => {
-      // These are legitimate GitHub Actions infrastructure
-      const safeDomains = [
-        'actions.githubusercontent.com',
-        'objects.githubusercontent.com',
-        'github-releases.githubusercontent.com',
-        'run-actions-3-azure-eastus.actions.githubusercontent.com'
-      ];
+    it('needs .domains.actions; attestations alone are not enough', () => {
+      expect(metaDomainGroups({ domains: { artifact_attestations: { services: ['x.com'] } } })).toBeNull();
+      expect(metaDomainGroups({ domains: { actions: [] } })).toBeNull();
+      expect(metaDomainGroups(null)).toBeNull();
+    });
 
-      for (const domain of safeDomains) {
-        expect(isGitHubRelated(domain)).toBe(true);
-      }
+    it('the generated snapshot carries the attestation hosts', () => {
+      expect(GITHUB_ACTIONS_DOMAINS).toEqual(
+        expect.arrayContaining(['tuf-repo.github.com', 'fulcio.githubapp.com', 'timestamp.githubapp.com'])
+      );
     });
   });
 
   describe('normalizeMetaDomain', () => {
-    it('strips a leading wildcard (dnsmasq matches subdomains)', () => {
-      expect(normalizeMetaDomain('*.githubapp.com')).toBe('githubapp.com');
-      expect(normalizeMetaDomain('*.actions.githubusercontent.com')).toBe('actions.githubusercontent.com');
+    it('keeps a leading wildcard (meta *.x maps directly onto the v2 *.x pattern)', () => {
+      expect(normalizeMetaDomain('*.githubapp.com')).toBe('*.githubapp.com');
+      expect(normalizeMetaDomain('*.actions.githubusercontent.com')).toBe('*.actions.githubusercontent.com');
+      expect(normalizeMetaDomain('github.com')).toBe('github.com');
     });
 
     it('keeps specific domains as-is (lowercased, trimmed)', () => {
@@ -169,6 +162,8 @@ describe('GitHub Parser', () => {
     it('drops empty or still-wildcarded entries', () => {
       expect(normalizeMetaDomain('')).toBeNull();
       expect(normalizeMetaDomain('foo.*.bar.com')).toBeNull();
+      expect(normalizeMetaDomain('*.')).toBeNull();
+      expect(normalizeMetaDomain('*.*.github.com')).toBeNull();
     });
   });
 
@@ -195,8 +190,9 @@ describe('GitHub Parser', () => {
       }) as unknown as typeof fetch;
 
       const result = await fetchGitHubActionsDomains();
-      expect(result).toContain('github.com');
-      expect(result).toContain('githubapp.com');
+      expect(result).toContain('*.github.com');
+      expect(result).toContain('*.githubapp.com');
+      expect(result).not.toContain('githubapp.com');
       expect(result).toContain('productionresultssa200.blob.core.windows.net');
       expect(result).not.toContain('core.windows.net');
       expect(result).not.toContain('*.core.windows.net');
@@ -235,8 +231,8 @@ describe('GitHub Parser', () => {
 
       const { domains, source } = await resolveGitHubDomains();
       expect(source).toBe('meta');
-      // core domain always present
-      expect(domains).toContain('github.com');
+      // the hand-curated extras always ride along
+      for (const d of GITHUB_EXTRAS) expect(domains).toContain(d);
       // live account present even though it is NOT in the static snapshot
       expect(domains).toContain('productionresultssa200.blob.core.windows.net');
       // static snapshot accounts not re-added from the stale list when meta succeeds

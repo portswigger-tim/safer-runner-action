@@ -1,0 +1,81 @@
+name: Update GitHub domains
+
+# Regenerates src/parsers/github-domains.generated.ts (the offline fallback GitHub allowlist)
+# from api.github.com/meta .domains.actions and, if it changed, opens a PR. Never merges: the
+# PR diff is the human review gate (a new wildcard or storage account widens enforce mode).
+#
+# Notes:
+# - `schedule` only fires for workflows on the repository's DEFAULT branch; until this file is
+#   there, run it with workflow_dispatch.
+# - Needs "Allow GitHub Actions to create and approve pull requests" (Settings > Actions).
+# - PRs opened with GITHUB_TOKEN don't trigger other workflows: close and reopen the PR to run CI.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-github-domains
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    env:
+      BASE: v2
+      BRANCH: chore/update-github-domains
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BASE }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Regenerate from api.github.com/meta
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run gen:domains
+
+      # Only the date in the header changed: nothing to review.
+      - name: Detect a real change
+        id: diff
+        run: |
+          if git diff -U0 -- src/parsers/github-domains.generated.ts | grep -E '^[+-]  ' >/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- src/parsers/github-domains.generated.ts
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No change in .domains.actions."
+          fi
+
+      - name: Rebuild dist and open a PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm run package
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -C "$BRANCH"
+          git add src/parsers/github-domains.generated.ts dist
+          git commit -m "v2: regenerate GitHub domains from api.github.com/meta"
+          git push --force origin "$BRANCH"
+          if [ -z "$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json number -q '.[].number')" ]; then
+            gh pr create --base "$BASE" --head "$BRANCH" \
+              --title "v2: regenerate GitHub domains from api.github.com/meta" \
+              --body "Automated refresh of the offline GitHub allowlist (src/parsers/github-domains.generated.ts) from \`api.github.com/meta\` \`.domains.actions\`.
+
+          **Review before merging:** every added entry becomes allowed in enforce mode when the live meta fetch fails. Check new wildcards (\`*.x\` = a DNS channel to that zone) and new \`productionresultssa*\` accounts.
+
+          Close and reopen this PR to run CI (PRs opened by GITHUB_TOKEN don't trigger workflows)."
+          fi

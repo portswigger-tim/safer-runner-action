@@ -1,0 +1,120 @@
+name: Release
+
+# Runs when a v* tag is pushed. It never creates, moves or deletes tags itself.
+#
+#   verify  - the tagged commit is on a release branch (main or v<N>), the full test suite
+#             passes, and a clean rebuild of dist/ from source is byte-identical to the
+#             committed dist/. GitHub runs the committed dist/, so this is what proves the
+#             shipped code is the reviewed source.
+#   attest  - build provenance (SLSA, Sigstore-signed) for the files the runner executes:
+#             action.yaml, dist/**, and the proxy addon. Only runs if verify passed, so a tag
+#             without an attestation is a tag that failed (or skipped) these checks.
+#   release - a DRAFT GitHub Release for the tag; a maintainer edits the notes and publishes.
+#
+# Each job gets only the permissions it needs: no job that installs npm dependencies can
+# mint an OIDC token or write to the repo. No dependency caches (a release must not restore
+# state written by other workflow runs).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A tag on an unreviewed commit (a side branch, a fork's commit pushed by mistake) fails here.
+      - name: Tagged commit is on a release branch
+        run: |
+          for b in $(git branch -r --format='%(refname:short)' | grep -E '^origin/(main|v[0-9]+)$'); do
+            if git merge-base --is-ancestor "$GITHUB_SHA" "$b"; then
+              echo "$GITHUB_REF_NAME ($GITHUB_SHA) is on $b"
+              exit 0
+            fi
+          done
+          echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main or a v<N> release branch."
+          exit 1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      # python3 for the proxy-policy tests (npm test -> test:py).
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.x'
+
+      # No dependency of this project needs an install script.
+      - run: npm ci --ignore-scripts
+
+      # Clean + Prettier + jest + python tests + rebuild all three ncc bundles.
+      - name: Test and rebuild dist/ from source (npm run package)
+        run: npm run package
+
+      - name: Rebuilt dist/ is identical to the committed dist/
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::The committed dist/ (or formatting) does not match a clean build of the tagged source. Do not use this tag."
+            git status --porcelain
+            git --no-pager diff --stat
+            exit 1
+          fi
+          echo "Clean rebuild matches the committed tree."
+          sha256sum action.yaml dist/*/* proxy/policy.py proxy/policy_core.py
+
+  attest:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The committed files (proven equal to a clean build by verify), not a fresh build.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            action.yaml
+            dist/**
+            proxy/policy.py
+            proxy/policy_core.py
+
+  release:
+    needs: attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Draft only, so the notes can be written by hand before anything is public. Skipped if a
+      # release for this tag already exists.
+      - name: Create a draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "A release for $TAG already exists; leaving it alone."
+            exit 0
+          fi
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --verify-tag --draft "${prerelease[@]}" --title "$TAG" \
+            --notes "Build provenance: \`gh attestation verify dist/main/index.js --repo $GH_REPO --signer-workflow $GH_REPO/.github/workflows/release.yml --source-ref refs/tags/$TAG\`"

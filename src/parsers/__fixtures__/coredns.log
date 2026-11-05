@@ -1,0 +1,13 @@
+maxprocs: Leaving GOMAXPROCS=4: CPU quota undefined
+.:53 on 127.0.0.1
+CoreDNS-1.15.0
+linux/amd64, go1.27.3, a6fde3f
+[INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.008608542s
+[INFO] 127.0.0.1:41452 ALLOW AAAA github.com. NOERROR upstream=149.112.112.112:53 0.009s
+[INFO] 127.0.0.1:39637 BLOCK A s3cr3t-aGVsbG8.objects.githubusercontent.com. NXDOMAIN
+[INFO] 127.0.0.1:39637 BLOCK TXT S3CR3T-aGVsbG8.objects.githubusercontent.com. NXDOMAIN
+[INFO] 172.17.0.2:51924 BLOCK A example.org. NXDOMAIN
+[INFO] 127.0.0.1:44427 ALLOW A no-such-name.nip.io. NXDOMAIN upstream=9.9.9.9:53 0.02s
+[INFO] 127.0.0.1:44428 ALLOW A github.com. NOERROR upstream=- 0.00004s
+[ERROR] plugin/errors: 2 example.com. A: read udp 127.0.0.1:1->9.9.9.9:53: i/o timeout
+[INFO] 127.0.0.1:44429 WOULD_BLOCK A www.example.com. NOERROR upstream=9.9.9.9:53 0.01s

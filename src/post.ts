@@ -1,184 +1,135 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
+import * as fs from 'fs';
+import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
+import { SETUP_MARKER } from './egress';
+import { parseFlowLogWithOffsets } from './flowlog';
+import { readRefusedNames } from './parsers/dns-parser';
+import { blockedName, buildReport, parseFirewallLog, summarizeContainers, summarizeFlows } from './report';
+import { containerAddresses } from './docker';
+import { type SelfTestWindow, withoutSelfTests } from './selftest';
+import { readSudoUsage } from './sudo';
 import { SystemValidator } from './validation';
-import { parseNetworkLogs, parsePreHookNetworkLogs, NetworkConnection } from './parsers/network-parser';
-import { parseDnsLogs, DnsResolution } from './parsers/dns-parser';
-import { parseSudoLogs, generateSudoSummarySection, type SudoCommand } from './sudo';
-import {
-  generateNetworkConnectionDetails,
-  generateDnsTable,
-  generateDnsDetails,
-  generateConfigurationAdvice
-} from './formatters/report-formatter';
+import { parseAllowedDomains, type Mode } from './policy';
+import { effectiveFailOnTampering } from './inputs';
 
-async function run(): Promise<void> {
+interface SetupMarker {
+  mode: Mode;
+  sudoRetained?: boolean;
+  dockerRetained?: boolean;
+  /** the docker input and the verified access (G4) */
+  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
+  /** resolved fail-on-tampering (mode-aware); kept in the root-owned marker, not re-read from inputs */
+  failOnTampering?: boolean;
+  /** flow-log byte range the setup self-tests wrote */
+  selfTestWindow?: SelfTestWindow;
+  /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
+  dnsSelfTestName?: string;
+}
+
+/** allow + passthrough from the root-owned policy the proxy and the resolver were built from. */
+function readPolicyPatterns(): string[] | undefined {
   try {
-    core.info('🔍 Analyzing network access logs...');
+    const p = JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8')) as { allow?: string[]; passthrough?: string[] };
+    return [...(p.allow ?? []), ...(p.passthrough ?? [])];
+  } catch {
+    return undefined;
+  }
+}
 
-    // Wait for logs to be written
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Parse main action logs
-    const connections = await parseNetworkLogs();
-    const dnsResolutions = await parseDnsLogs('/var/log/safer-runner/main-dns.log');
-
-    // Parse main sudo logs (workflow commands only)
-    const sudoCommands = parseSudoLogs('/var/log/safer-runner/main-sudo.log');
-    if (sudoCommands.length > 0) {
-      core.info(`✅ Found ${sudoCommands.length} workflow sudo command(s)`);
-    }
-
-    // Parse pre-hook logs if pre-action ran
-    let preHookConnections: NetworkConnection[] = [];
-    let preHookDnsResolutions: DnsResolution[] = [];
-    let preHookSudoCommands: SudoCommand[] = [];
-
-    // Check if pre-action ran by looking for DNS user state
-    const preUsername = core.getState('dns-user');
-    if (preUsername) {
-      core.info('📋 Parsing pre-hook logs...');
-
-      // Parse pre-hook network connections
-      preHookConnections = await parsePreHookNetworkLogs();
-      core.info(`✅ Found ${preHookConnections.length} pre-hook network connection(s)`);
-
-      // Parse pre-hook DNS logs from dedicated log file
-      try {
-        const fs = await import('fs');
-        if (fs.existsSync('/var/log/safer-runner/pre-dns.log')) {
-          preHookDnsResolutions = await parseDnsLogs('/var/log/safer-runner/pre-dns.log');
-          core.info(`✅ Found ${preHookDnsResolutions.length} pre-hook DNS resolution(s)`);
-        }
-
-        // Parse pre-hook sudo logs (other actions' pre-hooks only)
-        // Sudo logging is removed at start of main.ts, so this captures pre-hook activity only
-        preHookSudoCommands = parseSudoLogs('/var/log/safer-runner/pre-sudo.log');
-        if (preHookSudoCommands.length > 0) {
-          core.info(`✅ Found ${preHookSudoCommands.length} pre-hook sudo command(s)`);
-        }
-      } catch (error) {
-        core.warning(`Could not parse pre-hook logs: ${error}`);
-      }
-    }
-
-    // Verify system integrity against post-setup baseline
-    const validator = new SystemValidator();
-    const integrityValid = await validator.verifyAgainstBaseline();
-    const validationReport = await validator.generateValidationReport();
-
-    // Check if we should fail on tampering (GitHub Actions converts boolean inputs to strings)
-    const failOnTampering = core.getBooleanInput('fail-on-tampering');
-
-    if (!integrityValid && failOnTampering) {
-      core.setFailed('🚨 Workflow failed due to security configuration tampering detection!');
-      return; // Exit early - the validation report will still be in the logs above
-    }
-
-    await generateJobSummary(
-      connections,
-      dnsResolutions,
-      sudoCommands,
-      preHookConnections,
-      preHookDnsResolutions,
-      preHookSudoCommands,
-      validationReport
-    );
-
-    core.info('✅ Network access summary generated');
-  } catch (error) {
-    core.warning(`Failed to generate network summary: ${error}`);
-    // Don't fail the entire action if log analysis fails
+function readSetupMarker(): SetupMarker | null {
+  try {
+    return JSON.parse(fs.readFileSync(SETUP_MARKER, 'utf8')) as SetupMarker;
+  } catch {
+    return null;
   }
 }
 
 /**
- * Generate simplified pre-hook analysis section with network connections, DNS, and sudo info
+ * Post step: destroy the CA private key, then report. The proxy and firewall stay up: the
+ * runner's own "Complete job" traffic still goes through them, and the VM is destroyed after.
  */
-function generatePreHookAnalysis(
-  preHookConnections: NetworkConnection[],
-  preHookDnsResolutions: DnsResolution[],
-  preHookSudoCommands: SudoCommand[]
-): string {
-  // If no pre-hook activity, don't show the section
-  if (preHookConnections.length === 0 && preHookDnsResolutions.length === 0 && preHookSudoCommands.length === 0) {
-    return '';
+async function run(): Promise<void> {
+  const marker = readSetupMarker();
+  const mode = marker?.mode;
+  if (!marker || !mode) {
+    core.warning('safer-runner setup did not complete - no report');
+    return;
   }
 
-  let report = `<details>\n<summary><h2>Pre-Hook Security Analysis</h2></summary>\n\n`;
+  // -n: never prompt; the helper is allowlisted even with disable-sudo
+  const rc = await exec.exec('sudo', ['-n', TEARDOWN_BIN], { ignoreReturnCode: true });
+  if (rc === 0) core.info('🔑 Ephemeral CA private key destroyed');
+  else core.warning(`Could not run ${TEARDOWN_BIN} (exit ${rc}); the CA key dies with the VM`);
 
-  report += `This section shows activity captured during pre-hook monitoring (other actions' pre-hooks), before your workflow steps executed.\n\n`;
+  // integrity first, outside the report: a report failure must never skip fail-on-tampering
+  const validator = new SystemValidator();
+  let intact = false;
+  try {
+    intact = await validator.verifyAgainstBaseline();
+  } catch (error) {
+    core.warning(`Integrity check failed: ${error}`);
+  }
 
-  // Network Connection Details
-  report += generateNetworkConnectionDetails(preHookConnections);
-
-  // DNS Information
-  report += generateDnsDetails(preHookDnsResolutions);
-
-  // Sudo Commands
-  report += generateSudoSummarySection(preHookSudoCommands, 'Sudo Commands');
-
-  report += `</details>\n\n`;
-  return report;
-}
-
-async function generateJobSummary(
-  connections: NetworkConnection[],
-  dnsResolutions: DnsResolution[],
-  sudoCommands: SudoCommand[],
-  preHookConnections: NetworkConnection[],
-  preHookDnsResolutions: DnsResolution[],
-  preHookSudoCommands: SudoCommand[],
-  validationReport: string
-): Promise<void> {
-  const mode = core.getInput('mode') || 'analyze';
-  const blockRiskySubdomains = core.getBooleanInput('block-risky-github-subdomains');
-  const jobName = process.env.GITHUB_JOB || 'unknown';
-
-  let summary = `# Safer Runner Security Report\n\n`;
-
-  const modeIcon = mode === 'enforce' ? '🔒' : '📊';
-  summary += `**Job:** ${jobName}\n`;
-  summary += `**Mode:** ${modeIcon} ${mode.toUpperCase()}\n`;
-
-  // Show blocked subdomains if in enforce mode
-  if (mode === 'enforce') {
-    const riskySubdomains = ['gist.github.com', 'gist.githubusercontent.com', 'raw.githubusercontent.com'];
-    if (blockRiskySubdomains) {
-      summary += `**Blocked Subdomains:** 🚫 ${riskySubdomains.join(', ')}\n`;
-    } else {
-      summary += `**Blocked Subdomains:** ⚠️ DISABLED (risky subdomains are allowed)\n`;
+  try {
+    await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
+    const flows = fs.existsSync(FLOW_LOG)
+      ? parseFlowLogWithOffsets(fs.readFileSync(FLOW_LOG, 'utf8'))
+      : { records: [], offsets: [] };
+    const records = withoutSelfTests(flows.records, flows.offsets, marker.selfTestWindow);
+    const hosts = summarizeFlows(records);
+    const firewall = fs.existsSync(FIREWALL_LOG) ? parseFirewallLog(fs.readFileSync(FIREWALL_LOG, 'utf8')) : [];
+    const containers = summarizeContainers(records, firewall, await containerAddresses());
+    const dnsRefused = readRefusedNames(DNS_LOG).filter(n => n !== marker.dnsSelfTestName);
+    let selfTests = [];
+    try {
+      selfTests = JSON.parse(fs.readFileSync(SELFTEST_FILE, 'utf8'));
+    } catch {
+      selfTests = [];
     }
+
+    // Full lists in the job log, so nothing is ever silently dropped from the summary (names
+    // redacted like the summary: the job log is just as public).
+    for (const h of hosts) {
+      core.info(
+        `${h.verdict.padEnd(11)} ${blockedName(h.name)} conns=${h.connections} reqs=${h.requests} tries=${h.tries} ${h.reasons.join(',')}`
+      );
+    }
+
+    const integrity = await validator.generateValidationDetails();
+    const sudo = readSudoUsage(SUDO_LOG);
+    for (const c of sudo.ran) core.info(`sudo (workflow) ${c.command} ${c.args}`);
+    for (const c of sudo.refused) core.info(`sudo REFUSED ${c.command} ${c.args}`);
+
+    const md = buildReport({
+      mode,
+      sudoRetained: marker.sudoRetained === true,
+      dockerRetained: marker.dockerRetained === true,
+      docker: marker.docker,
+      sudo,
+      job: process.env.GITHUB_JOB || 'unknown',
+      actionRef: process.env.GITHUB_ACTION_REF,
+      hosts,
+      firewall,
+      dnsRefused,
+      allowPatterns: readPolicyPatterns(),
+      // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
+      userDomains: [
+        ...parseAllowedDomains(core.getInput('allowed-domains')),
+        ...parseAllowedDomains(core.getInput('passthrough-domains'))
+      ],
+      selfTests,
+      integrity,
+      containers
+    });
+    await core.summary.addRaw(md).write();
+  } catch (error) {
+    core.warning(`Failed to generate the safer-runner report: ${error}`);
   }
 
-  summary += `**Generated:** ${new Date().toISOString()}\n\n`;
-  summary += `---\n\n`;
-
-  // 1. Network Connection Details
-  summary += generateNetworkConnectionDetails(connections);
-  summary += `---\n\n`;
-
-  // 2. DNS Information
-  summary += generateDnsDetails(dnsResolutions);
-  summary += `---\n\n`;
-
-  // 3. Pre-Hook Security Analysis (collapsible)
-  summary += generatePreHookAnalysis(preHookConnections, preHookDnsResolutions, preHookSudoCommands);
-  if (preHookConnections.length > 0 || preHookDnsResolutions.length > 0 || preHookSudoCommands.length > 0) {
-    summary += `---\n\n`;
+  if (!intact && effectiveFailOnTampering(marker.failOnTampering, core.getInput('fail-on-tampering'), mode)) {
+    core.setFailed('🚨 Security configuration was tampered with (or could not be verified) during the job');
   }
-
-  // 4. Config File Tamper Detection
-  summary += `${validationReport}`;
-  summary += `---\n\n`;
-
-  // 5. Configuration Advice (for analyze mode only)
-  if (mode === 'analyze') {
-    summary += generateConfigurationAdvice(dnsResolutions, sudoCommands);
-    summary += `---\n\n`;
-  }
-
-  summary += `*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action)*\n`;
-
-  await core.summary.addRaw(summary).write();
 }
 
 run();

@@ -1,25 +1,26 @@
 /**
  * Sudo logging and configuration module
- * Handles sudo logging setup, custom sudo configuration, and permission management
+ * Handles sudo logging setup and removing the runner user's sudo (disable-sudo)
  */
 
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { parseSudoLogsFromString, filterInternalSudoCommands, type SudoCommand } from './parsers/sudo-parser';
-import { CRITICAL_FILES, IPTABLES_CHAINS } from './validation';
+import {
+  parseSudoLogsFromString,
+  filterInternalSudoCommands,
+  classifySudoCommands,
+  type SudoCommand,
+  type SudoUsage
+} from './parsers/sudo-parser';
+import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
+import { DOCKER_DAEMON_JSON, TEARDOWN_BIN, VALIDATION_STATE_FILE } from './constants';
 
 // Re-export SudoCommand type for convenience
-export type { SudoCommand } from './parsers/sudo-parser';
+export type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
 
 // Constants
 export const RUNNER_USERNAME = 'runner';
-
-/**
- * Default sudoers configuration for GitHub Actions runner user
- * This is the standard unrestricted sudo access that exists by default
- */
-export const DEFAULT_RUNNER_SUDO_CONFIG = `${RUNNER_USERNAME} ALL=(ALL) NOPASSWD: ALL`;
 
 /**
  * Sudo implementation in use on the runner
@@ -90,7 +91,7 @@ if $programname == 'sudo' and $msg contains 'COMMAND=' then {
  * - sudo-rs: rsyslog rule filtering sudo's syslog messages into <logFile>
  *
  * Must run while the runner still has unrestricted sudo (i.e. before
- * disableSudoForRunner/applyCustomSudoConfig).
+ * disableSudoForRunner).
  *
  * @param logFile - Path to sudo log file (e.g., /var/log/safer-runner/main-sudo.log)
  * @param flavour - Sudo implementation (detected if omitted)
@@ -146,10 +147,18 @@ export async function removeSudoLogging(): Promise<void> {
  * These are the only sudo commands the runner keeps after sudo is restricted.
  */
 export function getValidationSudoCommands(): string[] {
-  const files = [...CRITICAL_FILES, SUDO_LOGGING_SUDOERS_FILE, SUDO_LOGGING_RSYSLOG_FILE];
+  const files = [
+    ...CRITICAL_FILES,
+    DOCKER_DAEMON_JSON,
+    SUDO_LOGGING_SUDOERS_FILE,
+    SUDO_LOGGING_RSYSLOG_FILE,
+    VALIDATION_STATE_FILE
+  ];
   return [
     ...files.map(file => `/usr/bin/cat ${file}`),
-    ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables -L ${chain} -n --line-numbers`)
+    ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${iptablesListArgs(chain).join(' ')}`),
+    // post-step teardown (destroys the CA key). `""` = no arguments allowed.
+    `${TEARDOWN_BIN} ""`
   ];
 }
 
@@ -160,7 +169,7 @@ export function getValidationSudoCommands(): string[] {
  */
 export const INTERNAL_SUDO_COMMANDS: string[] = [
   ...getValidationSudoCommands(),
-  // applyCustomSudoConfig()
+  // disableSudoForRunner()
   `tee ${SUDOERS_TEMP_FILE}`,
   `visudo -c -f ${SUDOERS_TEMP_FILE}`,
   `chmod 0440 ${SUDOERS_TEMP_FILE}`,
@@ -170,7 +179,10 @@ export const INTERNAL_SUDO_COMMANDS: string[] = [
   // removeSudoLogging() / setupSudoLogging()
   `rm -f ${SUDO_LOGGING_SUDOERS_FILE}`,
   `rm -f ${SUDO_LOGGING_RSYSLOG_FILE}`,
-  'systemctl restart rsyslog'
+  'systemctl restart rsyslog',
+  // SystemValidator.writeBaseline()
+  ...BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
+  TEARDOWN_BIN
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 
 /**
@@ -195,88 +207,38 @@ ${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 }
 
 /**
- * Apply custom sudoers configuration for the runner user
- * This rewrites the /etc/sudoers.d/runner file with the specified configuration
+ * Disable sudo access for the runner user
+ * This prevents malicious code from using sudo to bypass security controls
  *
- * If no config is provided, defaults to the standard GitHub Actions runner config.
- * Always appends required commands for post-action validation.
- * The config is checked with the active visudo, so it must be valid for sudo-rs on Ubuntu 25.10+.
- *
- * @param sudoConfig - The custom sudoers configuration (defaults to unrestricted sudo)
- * @param flavour - Sudo implementation (detected if omitted), used for error guidance
+ * Replaces the sudoers file with only the read-only commands needed for
+ * post-action integrity validation (see getValidationSudoCommands()). The file is checked
+ * with the active visudo (visudo-rs on sudo-rs systems) before it is moved into place.
  */
-export async function applyCustomSudoConfig(
-  sudoConfig: string = DEFAULT_RUNNER_SUDO_CONFIG,
-  flavour?: SudoFlavour
-): Promise<void> {
-  const isDefaultConfig = sudoConfig === DEFAULT_RUNNER_SUDO_CONFIG;
-
-  if (isDefaultConfig) {
-    core.info(`Applying default sudo configuration for user: ${RUNNER_USERNAME}`);
-  } else {
-    core.info(`Applying custom sudo configuration for user: ${RUNNER_USERNAME}`);
-  }
+export async function disableSudoForRunner(flavour?: SudoFlavour): Promise<void> {
+  core.info('Restricting sudo access to validation commands only');
 
   const sudoersFile = `/etc/sudoers.d/${RUNNER_USERNAME}`;
   const tempFile = SUDOERS_TEMP_FILE;
+  const config = `# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation.
+# All other sudo commands will be denied.
+${getRequiredSudoCommands(RUNNER_USERNAME)}`;
 
-  // Build complete config: user config + required validation commands
-  const requiredCommands = getRequiredSudoCommands(RUNNER_USERNAME);
-  const fullConfig = sudoConfig + '\n' + requiredCommands;
+  await exec.exec('sudo', ['tee', tempFile], { input: Buffer.from(config + '\n') });
 
-  // Write custom config + required commands to temp file
-  await exec.exec('sudo', ['tee', tempFile], {
-    input: Buffer.from(fullConfig + '\n')
-  });
-
-  // Validate with the active visudo (visudo-rs on sudo-rs systems)
   const visudo = await exec.getExecOutput('sudo', ['visudo', '-c', '-f', tempFile], { ignoreReturnCode: true });
   if (visudo.exitCode !== 0) {
-    const sudoFlavour = flavour ?? (await detectSudoFlavour());
     await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
-    core.error('Invalid sudoers syntax. Please check your sudo-config input.');
-    if (sudoFlavour === 'sudo-rs') {
-      core.error(
-        'This runner uses sudo-rs (the default sudo on Ubuntu 25.10+ / 26.04), which supports a subset of sudoers: ' +
-          'a wildcard may only be the whole argument list (`/usr/bin/apt-get *`), not embedded among other arguments ' +
-          '(`/usr/bin/chmod * /tmp/x`), ' +
-          'and many Defaults settings are not recognised.'
-      );
-    }
-    throw new Error(`Invalid sudoers configuration: ${(visudo.stderr || visudo.stdout).trim()}`);
+    const sudoFlavour = flavour ?? (await detectSudoFlavour());
+    throw new Error(
+      `Generated sudoers rejected by visudo (${sudoFlavour}): ${(visudo.stderr || visudo.stdout).trim()}`
+    );
   }
 
   // Set permissions before moving into place
   await exec.exec('sudo', ['chmod', '0440', tempFile]);
   await exec.exec('sudo', ['chown', 'root:root', tempFile]);
   await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
-
-  if (isDefaultConfig) {
-    core.info(`✅ Default sudo configuration rewritten to ${sudoersFile}`);
-  } else {
-    core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
-    core.info(`🔒 ${RUNNER_USERNAME} user now has restricted sudo access`);
-  }
-  core.info('ℹ️  Required validation commands automatically added');
-}
-
-/**
- * Disable sudo access for the runner user
- * This prevents malicious code from using sudo to bypass security controls
- *
- * Replaces the sudoers file with only the read-only commands needed for
- * post-action integrity validation (see getValidationSudoCommands()).
- */
-export async function disableSudoForRunner(flavour?: SudoFlavour): Promise<void> {
-  core.info('Restricting sudo access to validation commands only');
-
-  // Rewrite with only a comment header - the required validation commands will be added
-  const validationOnlyHeader = `# Safer Runner Action - Validation-only sudo access
-# This configuration allows only the commands needed for post-action integrity validation.
-# All other sudo commands will be denied.
-`;
-
-  await applyCustomSudoConfig(validationOnlyHeader, flavour);
 
   core.info(`🔒 ${RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
 }
@@ -298,6 +260,21 @@ export function parseSudoLogs(logFile: string): SudoCommand[] {
     core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
     return [];
   }
+}
+
+/**
+ * Read the sudo log and split it into the workflow's own commands, refused attempts and the
+ * action's own commands (so the report never counts the action's sudo as the workflow's).
+ */
+export function readSudoUsage(logFile: string): SudoUsage {
+  try {
+    if (fs.existsSync(logFile)) {
+      return classifySudoCommands(parseSudoLogsFromString(fs.readFileSync(logFile, 'utf-8')), INTERNAL_SUDO_COMMANDS);
+    }
+  } catch (error) {
+    core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+  }
+  return { ran: [], refused: [], internal: [] };
 }
 
 /**
