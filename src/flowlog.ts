@@ -23,6 +23,8 @@ export interface FlowRecord {
   repointed?: boolean;
   passthrough?: boolean;
   error?: string;
+  /** which proxy listener the connection arrived on (P2); absent in older logs = host */
+  source?: 'host' | 'container';
   [key: string]: unknown;
 }
 

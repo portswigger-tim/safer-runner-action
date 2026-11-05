@@ -1,16 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseFlowLog, parseFlowLogWithOffsets } from './flowlog';
+import { parseFlowLog, parseFlowLogWithOffsets, type FlowRecord } from './flowlog';
 import { withoutSelfTests } from './selftest';
 import {
   addressClass,
   buildReport,
+  containerSection,
   humanBytes,
   modeLabel,
   parseDnsRebind,
   parseFirewallLog,
   suggestedAllowlist,
-  summarizeFlows
+  summarizeContainers,
+  summarizeFlows,
+  type FirewallEvent
 } from './report';
 
 const log = [
@@ -103,7 +106,9 @@ describe('parseFirewallLog', () => {
       'Nov  4 18:00:00 vm kernel: [1.2] SaferRunner-Drop: IN= OUT=eth0 SRC=10.1.0.4 DST=1.1.1.1 LEN=60 PROTO=TCP SPT=4 DPT=853 UID=1001 GID=1001\n' +
         'Nov  4 18:00:01 vm kernel: unrelated\n'
     );
-    expect(ev).toEqual([{ prefix: 'SaferRunner-Drop', proto: 'TCP', dst: '1.1.1.1', dport: '853', uid: '1001' }]);
+    expect(ev).toEqual([
+      { prefix: 'SaferRunner-Drop', proto: 'TCP', src: '10.1.0.4', dst: '1.1.1.1', dport: '853', uid: '1001' }
+    ]);
   });
 });
 
@@ -234,7 +239,9 @@ describe('Option R layout', () => {
     dockerRetained: true,
     job: 'enforce',
     hosts,
-    firewall: [{ prefix: 'SaferRunner-Drop', proto: 'TCP', dst: '1.1.1.1', dport: '853', uid: '1001' }],
+    firewall: [
+      { prefix: 'SaferRunner-Drop', proto: 'TCP', src: '10.1.0.4', dst: '1.1.1.1', dport: '853', uid: '1001' }
+    ],
     dnsRefused: ['example.org'],
     dnsRebind: parseDnsRebind(dnsLog),
     userDomains,
@@ -704,5 +711,95 @@ describe('self-test probes are not the job traffic', () => {
     );
     const names = summarizeFlows(withoutSelfTests(real.records, real.offsets)).map(h => h.name);
     expect(names).not.toContain('selftest.safer-runner.invalid');
+  });
+});
+
+describe('container egress (P2)', () => {
+  const rec = (r: Partial<FlowRecord>): FlowRecord => ({ ts: 1, ev: 'tls', ...r }) as FlowRecord;
+  const records: FlowRecord[] = [
+    rec({
+      verdict: 'PASSTHROUGH',
+      reason: 'container-sni-only',
+      sni: 'github.com',
+      client: '172.18.0.2:4000',
+      source: 'container',
+      passthrough: true
+    }),
+    rec({
+      verdict: 'BLOCK',
+      reason: 'sni-not-allowed',
+      sni: 'example.org',
+      client: '172.18.0.2:4001',
+      source: 'container'
+    }),
+    rec({
+      ev: 'http',
+      verdict: 'BLOCK',
+      reason: 'host-not-allowed',
+      host: 'evil.test',
+      client: '172.17.0.3:5000',
+      source: 'container'
+    }),
+    rec({
+      verdict: 'INTERCEPT',
+      reason: 'container-front-door',
+      sni: 'productionresultssa1.blob.core.windows.net',
+      client: '172.17.0.3:5001',
+      source: 'container'
+    }),
+    rec({
+      ev: 'tls-client-fail',
+      sni: 'productionresultssa1.blob.core.windows.net',
+      client: '172.17.0.3:5001',
+      source: 'container'
+    }),
+    // host traffic never shows up in the container section (its client is the VM's private eth0 address)
+    rec({ verdict: 'INTERCEPT', reason: 'allowed', sni: 'api.github.com', client: '10.1.0.4:6000', source: 'host' }),
+    rec({ verdict: 'INTERCEPT', reason: 'allowed', sni: 'api.github.com', client: '10.1.0.4:6001' })
+  ];
+  const firewall: FirewallEvent[] = [
+    { prefix: 'SaferRunner-CDrop', proto: 'TCP', src: '172.18.0.2', dst: '1.1.1.1', dport: '853', uid: '' },
+    { prefix: 'SaferRunner-CDrop', proto: 'TCP', src: '172.18.0.2', dst: '1.1.1.1', dport: '853', uid: '' },
+    { prefix: 'SaferRunner-Drop', proto: 'TCP', src: '10.1.0.4', dst: '8.8.8.8', dport: '853', uid: '1001' }
+  ];
+
+  it('groups container records and firewall events by container address', () => {
+    const c = summarizeContainers(records, firewall, new Map([['172.18.0.2', 'redis']]));
+    expect(c.map(x => x.ip)).toEqual(['172.17.0.3', '172.18.0.2']);
+    const [svc, redis] = [c[0], c[1]];
+    expect(redis).toMatchObject({
+      name: 'redis',
+      allowed: ['github.com'],
+      sniOnly: ['github.com'],
+      denied: ['example.org'],
+      firewall: [{ dst: '1.1.1.1:853', proto: 'TCP', n: 2, rejected: true }]
+    });
+    expect(svc.untrusted).toEqual(['productionresultssa1.blob.core.windows.net']);
+    expect(svc.denied).toEqual(['evil.test']);
+  });
+
+  it('renders a section with the CA hint, and nothing when there were no containers', () => {
+    const md = containerSection(summarizeContainers(records, firewall), 'enforce');
+    expect(md).toContain('🐳 <b>Container egress</b> — 2 containers');
+    expect(md).toContain('did not trust the CA');
+    expect(md).toContain('🔀 `github.com`');
+    expect(md).toContain('❌ `1.1.1.1:853` TCP ×2');
+    expect(md).toContain('<details open>');
+    expect(containerSection([], 'enforce')).toBe('');
+  });
+
+  it('keeps container firewall events out of the host "outside the proxy" counts', () => {
+    const md = buildReport({
+      mode: 'enforce',
+      job: 'j',
+      hosts: summarizeFlows(records),
+      firewall,
+      dnsRefused: [],
+      selfTests: [],
+      containers: summarizeContainers(records, firewall)
+    });
+    expect(md).toContain('1 rejected');
+    expect(md).not.toContain('allowed, not proxied');
+    expect(md).toContain('Container egress');
   });
 });

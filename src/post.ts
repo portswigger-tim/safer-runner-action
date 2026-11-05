@@ -6,7 +6,8 @@ import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
 import { parseAllowedDomains } from './config/dns-config-builder';
 import { parseDnsLogs } from './parsers/dns-parser';
-import { buildReport, parseDnsRebind, parseFirewallLog, summarizeFlows } from './report';
+import { buildReport, parseDnsRebind, parseFirewallLog, summarizeContainers, summarizeFlows } from './report';
+import { containerAddresses } from './docker';
 import { type SelfTestWindow, withoutSelfTests } from './selftest';
 import { readSudoUsage } from './sudo';
 import { SystemValidator } from './validation';
@@ -50,8 +51,10 @@ async function run(): Promise<void> {
     const flows = fs.existsSync(FLOW_LOG)
       ? parseFlowLogWithOffsets(fs.readFileSync(FLOW_LOG, 'utf8'))
       : { records: [], offsets: [] };
-    const hosts = summarizeFlows(withoutSelfTests(flows.records, flows.offsets, marker.selfTestWindow));
+    const records = withoutSelfTests(flows.records, flows.offsets, marker.selfTestWindow);
+    const hosts = summarizeFlows(records);
     const firewall = fs.existsSync(FIREWALL_LOG) ? parseFirewallLog(fs.readFileSync(FIREWALL_LOG, 'utf8')) : [];
+    const containers = summarizeContainers(records, firewall, await containerAddresses());
     const dns = await parseDnsLogs(DNS_LOG);
     const dnsRefused = Array.from(new Set(dns.filter(d => /NXDOMAIN|blocked/i.test(d.status)).map(d => d.domain)));
     const dnsRebind = fs.existsSync(DNS_LOG) ? parseDnsRebind(fs.readFileSync(DNS_LOG, 'utf8')) : [];
@@ -92,7 +95,8 @@ async function run(): Promise<void> {
         ...parseAllowedDomains(core.getInput('passthrough-domains'))
       ],
       selfTests,
-      integrity
+      integrity,
+      containers
     });
     await core.summary.addRaw(md).write();
 
