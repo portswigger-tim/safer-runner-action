@@ -123,9 +123,14 @@ class SaferRunnerPolicy:
         self.container_port = self.cfg.get("container_port")
 
     def source(self, client):
-        """host | container: which listener the client connection arrived on."""
-        sock = client.sockname if client is not None else None
-        if self.container_port and sock and len(sock) > 1 and sock[1] == self.container_port:
+        """host | container: which listener the client connection arrived on.
+
+        From the client's proxy mode (``transparent@127.0.0.1:<port>``), NOT client.sockname:
+        in transparent mode sockname is the connection's original destination.
+        """
+        mode = getattr(client, "proxy_mode", None) if client is not None else None
+        port = getattr(mode, "custom_listen_port", None)
+        if self.container_port and port == self.container_port:
             return pc.SOURCE_CONTAINER
         return pc.SOURCE_HOST
 
@@ -138,6 +143,12 @@ class SaferRunnerPolicy:
             return
         if ctx.master.addons.get("nextlayer").next_layer is not _no_decision:
             logger.error("safer-runner: built-in layer selection is still active")
+            return
+        if self.container_port and not any(
+            str(m).endswith(f":{self.container_port}") for m in ctx.options.mode
+        ):
+            # container traffic would be classified as host (intercepted, no CA): say so
+            logger.error(f"safer-runner: no proxy listener on the container port {self.container_port}")
             return
         self.emit(
             ev="start",
