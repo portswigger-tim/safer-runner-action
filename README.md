@@ -23,7 +23,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: portswigger-tim/safer-runner-action@v2
+      - uses: portswigger-tim/safer-runner-action@v2.0.0-beta.5 # pin an exact version or SHA — v2 has no moving @v2 tag
         with:
           mode: enforce
           allowed-domains: |

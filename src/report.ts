@@ -563,6 +563,8 @@ export interface ReportInput {
   /** per-container egress (P2); empty / undefined: no container traffic */
   containers?: ContainerSummary[];
   extraSections?: string[];
+  /** the ref the workflow used in `uses:` (GITHUB_ACTION_REF); echoed in the enforce suggestion so the paste matches the user's pin. v2 has no moving @v2 tag. */
+  actionRef?: string;
   now?: Date;
 }
 
@@ -798,8 +800,9 @@ export function buildReport(input: ReportInput): string {
     md += '> [!IMPORTANT]\n';
     if (suggest.length) {
       md += `> **Enforce would block ${plural(suggest.length, 'host')} this job used.** Add ${suggest.length === 1 ? 'it' : 'them'} to run this job under \`mode: enforce\` (review each one first):\n>\n`;
+      const ref = input.actionRef?.trim() || 'v2.0.0';
       const yaml =
-        '- uses: portswigger-tim/safer-runner-action@v2\n  with:\n    mode: enforce\n    allowed-domains: |\n' +
+        `- uses: portswigger-tim/safer-runner-action@${ref} # pin an exact version or commit SHA\n  with:\n    mode: enforce\n    allowed-domains: |\n` +
         suggest.map(s => `      ${s}`).join('\n');
       md +=
         codeBlock('yaml', yaml)

@@ -95,6 +95,7 @@ async function run(): Promise<void> {
       dockerRetained: marker.dockerRetained === true,
       sudo,
       job: process.env.GITHUB_JOB || 'unknown',
+      actionRef: process.env.GITHUB_ACTION_REF,
       hosts,
       firewall,
       dnsRefused,

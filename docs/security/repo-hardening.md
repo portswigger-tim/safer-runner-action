@@ -49,11 +49,16 @@ UI: Settings → General → Releases → **Enable release immutability**.
 Two rulesets, because they need different bypass lists:
 
 - **Release tags (`v*.*.*`, including `-beta.N`) can never be moved or deleted**, by anyone.
-- **Only an admin can create or move any `v*` tag**, which keeps moving `v1` / `v2` possible
-  for you and impossible for a workflow token, a bot, or another collaborator.
+- **Only an admin can create or move any `v*` tag**, which keeps moving `v1` possible for you
+  and impossible for a workflow token, a bot, or another collaborator.
 
-Rules from both apply, so an admin can create `v2.0.0` and move `v2`, but can't move
-`v2.0.0` afterwards (except by disabling the ruleset, which is logged).
+**Tag policy:** `v1` keeps its conventional moving major tag (`@v1`), which existing users
+depend on. **v2 deliberately has no moving tag** — there is no `@v2` tag, and one must never be
+created; v2 consumers pin an exact version (`@v2.0.0`, `@v2.0.0-beta.N`) or a commit SHA. So the
+admin bypass above is only ever used to move `v1`, never to create or move a floating `v2`.
+
+Rules from both apply, so an admin can move `v1` and create an immutable `v2.0.0`, but can't
+move `v2.0.0` afterwards (except by disabling the ruleset, which is logged).
 
 ```bash
 gh api -X POST repos/$R/rulesets --input - <<'EOF'
