@@ -5,9 +5,11 @@
  * Order (each step depends on the previous):
  *   allowlist (api.github.com/meta, before DNS changes) -> install (dnsmasq + pinned mitmdump,
  *   in parallel) -> users -> addon + policy + CA -> start proxy (waits for the addon's own
- *   self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS -> firewall (nat REDIRECT +
- *   filter) -> kill pre-existing :443 -> live self-tests -> docker -> sudo logging ->
- *   integrity baseline -> sudo restriction (last).
+ *   self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS -> dockerd restart so it
+ *   trusts the CA (F1) -> firewall (nat REDIRECT + filter, plus the container DNAT /
+ *   DOCKER-USER rules when docker runs) -> kill pre-existing :443 and container flows ->
+ *   live self-tests -> docker access -> sudo logging -> integrity baseline -> sudo
+ *   restriction (last).
  */
 
 import * as core from '@actions/core';
@@ -17,16 +19,26 @@ import {
   DNS_LOG,
   FIREWALL_LOG,
   FLOW_LOG,
+  DOCKER_DAEMON_JSON,
   LOG_PREFIX_ANALYZE,
+  LOG_PREFIX_CDROP,
+  LOG_PREFIX_CEGRESS,
   LOG_PREFIX_DROP,
   SELFTEST_FILE,
   SUDO_LOG
 } from './constants';
 import { flowLogSize } from './flowlog';
-import { applyFirewall, detectEgressInterface, killPreexistingConnections, logFirewall } from './firewall';
+import {
+  applyFirewall,
+  detectEgressInterface,
+  flushContainerConntrack,
+  killPreexistingConnections,
+  logFirewall
+} from './firewall';
 import type { Inputs } from './inputs';
 import { buildPolicyConfig, dnsDomainsFor } from './policy';
 import {
+  allocateProxyPorts,
   createProxyUser,
   generateCa,
   installAddon,
@@ -52,7 +64,13 @@ import {
   getSudoLoggingConfigFile,
   setupSudoLogging
 } from './sudo';
-import { disableDockerForRunner, stopDockerService } from './docker';
+import {
+  disableDockerForRunner,
+  isDockerActive,
+  restartDockerForCaTrust,
+  runningContainers,
+  stopDockerService
+} from './docker';
 import { exportTrustEnv, installJavaTrust, installSystemTrust } from './trust';
 import { CRITICAL_FILES, SystemValidator } from './validation';
 
@@ -76,15 +94,38 @@ async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
 export async function installDnsmasq(): Promise<void> {
   const opts = { ignoreReturnCode: true };
   const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } as { [key: string]: string };
-  const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'dnsmasq'];
+  // conntrack: flushes container flows that predate the container rules (not on the image)
+  const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'dnsmasq', 'conntrack'];
   if ((await exec.exec('sudo', ['-E', ...install], { ...opts, env })) === 0) return;
   await exec.exec('sudo', ['apt-get', 'update', '-qq']);
   await exec.exec('sudo', ['-E', ...install], { env });
 }
 
+/**
+ * F3: with a job `container:`, JS actions run INSIDE that container (as root, no sudo, no
+ * access to the host's iptables), so the action cannot apply anything to the runner VM.
+ */
+export function inJobContainer(exists: (p: string) => boolean = fs.existsSync): boolean {
+  return exists('/.dockerenv') || exists('/run/.containerenv');
+}
+
+export const JOB_CONTAINER_MESSAGE =
+  'safer-runner cannot protect a job that runs in a job `container:` - the action runs inside the ' +
+  'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
+  '`services:` and `docker run` steps instead (their egress is controlled).';
+
 export async function runSetup(inputs: Inputs): Promise<void> {
   const { mode } = inputs;
   core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
+
+  if (inJobContainer()) {
+    if (mode === 'enforce') throw new Error(JOB_CONTAINER_MESSAGE);
+    core.warning(`${JOB_CONTAINER_MESSAGE} Analyze mode: nothing is monitored in this job.`, {
+      title: 'safer-runner: job container not supported'
+    });
+    return;
+  }
+  if (inputs.containerTlsWarning) core.warning(inputs.containerTlsWarning);
 
   if (inputs.disableSudo && inputs.sudoConfig) {
     core.warning('Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
@@ -119,6 +160,9 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   const sudoFlavour = await detectSudoFlavour();
   core.info(`sudo implementation: ${sudoFlavour}`);
 
+  const ports = await allocateProxyPorts(inputs.proxyPort);
+  core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
+
   // 1. Allowlist - fetched while normal DNS and direct egress still work
   const { domains: githubDomains, source } = await resolveGitHubDomains();
   core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
@@ -127,7 +171,9 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     githubDomains,
     allowedDomains: inputs.allowedDomains,
     passthroughDomains: inputs.passthroughDomains,
-    blockRiskySubdomains: inputs.blockRiskySubdomains
+    blockRiskySubdomains: inputs.blockRiskySubdomains,
+    containerTls: inputs.containerTls,
+    containerPort: ports.containerPort
   });
   for (const w of warnings) core.warning(w);
   core.info(
@@ -148,7 +194,11 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   await installTeardownHelper();
 
   // 4. Proxy
-  const proxyOpts = { port: inputs.proxyPort, streamLargeBodies: inputs.streamLargeBodies };
+  const proxyOpts = {
+    port: ports.port,
+    containerPort: ports.containerPort,
+    streamLargeBodies: inputs.streamLargeBodies
+  };
   await timed('Start proxy', () => startProxy(proxyOpts));
 
   // 5. Trust - before any traffic is forced through the proxy
@@ -174,22 +224,37 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     await restartServices(DNS_LOG);
   });
 
-  // 7. Firewall
+  // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
+  // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
+  const dockerActive = !inputs.stopDocker && (await isDockerActive());
+  let dockerConfigWritten = false;
+  if (dockerActive) {
+    const services = await runningContainers();
+    if (dockerRetained || services.length > 0) {
+      dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => restartDockerForCaTrust());
+    }
+  }
+
+  // 8. Firewall
   await timed('Configure firewall', async () => {
-    await setupIptablesLogging(FIREWALL_LOG, [LOG_PREFIX_DROP.trim(), LOG_PREFIX_ANALYZE.trim()], 'v2');
+    const prefixes = [LOG_PREFIX_DROP, LOG_PREFIX_ANALYZE, LOG_PREFIX_CDROP, LOG_PREFIX_CEGRESS].map(p => p.trim());
+    await setupIptablesLogging(FIREWALL_LOG, prefixes, 'v2');
     await detectEgressInterface();
     await applyFirewall({
       mode,
       proxyUid,
       dnsUid: dnsUser.uid,
-      proxyPort: inputs.proxyPort,
+      proxyPort: ports.port,
+      containerProxyPort: ports.containerPort,
+      containers: dockerActive,
       dnsServers: [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean)
     });
     await killPreexistingConnections();
+    if (dockerActive) await flushContainerConntrack();
     await logFirewall();
   });
 
-  // 8. Prove it on this runner
+  // 9. Prove it on this runner
   const selfTestFrom = flowLogSize(FLOW_LOG);
   const results = await timed('Self-tests', () => runSelfTests(mode));
   await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
@@ -205,19 +270,32 @@ export async function runSetup(inputs: Inputs): Promise<void> {
 
   await exec.exec('sudo', ['tee', SETUP_MARKER], {
     input: Buffer.from(
-      JSON.stringify({ mode, sudoRetained, dockerRetained, selfTestWindow, at: new Date().toISOString() }) + '\n'
+      JSON.stringify({
+        mode,
+        sudoRetained,
+        dockerRetained,
+        containerTls: inputs.containerTls,
+        containerRules: dockerActive,
+        proxyPorts: [ports.port, ports.containerPort],
+        selfTestWindow,
+        at: new Date().toISOString()
+      }) + '\n'
     ),
     silent: true
   });
 
-  // 9. Privilege layer (carried from v1). Docker first: it needs sudo.
+  // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
   if (inputs.stopDocker) {
     await stopDockerService();
   } else if (inputs.disableDocker) {
     await disableDockerForRunner();
   }
   await setupSudoLogging(SUDO_LOG, sudoFlavour);
-  const validator = new SystemValidator([...CRITICAL_FILES, getSudoLoggingConfigFile(sudoFlavour)]);
+  const validator = new SystemValidator([
+    ...CRITICAL_FILES,
+    getSudoLoggingConfigFile(sudoFlavour),
+    ...(dockerConfigWritten ? [DOCKER_DAEMON_JSON] : [])
+  ]);
   await validator.capturePostSetupBaseline();
   if (inputs.disableSudo) {
     await disableSudoForRunner(sudoFlavour);
