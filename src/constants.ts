@@ -51,6 +51,18 @@ export const FILTER_CHAIN = 'SAFER_RUNNER_OUT';
 export const NAT_CHAIN = 'SAFER_RUNNER_NAT';
 export const LOG_PREFIX_DROP = 'SaferRunner-Drop: ';
 export const LOG_PREFIX_ANALYZE = 'SaferRunner-Egress: ';
+/** Container egress (P2): nat PREROUTING DNAT + a filter chain jumped to from DOCKER-USER. */
+export const CONTAINER_NAT_CHAIN = 'SAFER_RUNNER_CNAT';
+export const CONTAINER_FWD_CHAIN = 'SAFER_RUNNER_CFWD';
+export const LOG_PREFIX_CDROP = 'SaferRunner-CDrop: ';
+export const LOG_PREFIX_CEGRESS = 'SaferRunner-CEgress: ';
+/** Chain Docker creates and promises never to touch (it re-inserts its own FORWARD jumps on restart). */
+export const DOCKER_USER_CHAIN = 'DOCKER-USER';
+/**
+ * dockerd config: setup merges live-restore into it (F1), and it is where a runtime or proxy
+ * override would be planted, so it joins the integrity baseline when setup wrote it.
+ */
+export const DOCKER_DAEMON_JSON = '/etc/docker/daemon.json';
 
 /** Azure platform endpoints every hosted runner needs (scoped to the ports they use). */
 export const AZURE_IMDS = '169.254.169.254';

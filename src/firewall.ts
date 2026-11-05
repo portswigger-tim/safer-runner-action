@@ -13,8 +13,13 @@ import * as exec from '@actions/exec';
 import {
   AZURE_IMDS,
   AZURE_WIRESERVER,
+  CONTAINER_FWD_CHAIN,
+  CONTAINER_NAT_CHAIN,
+  DOCKER_USER_CHAIN,
   FILTER_CHAIN,
   LOG_PREFIX_ANALYZE,
+  LOG_PREFIX_CDROP,
+  LOG_PREFIX_CEGRESS,
   LOG_PREFIX_DROP,
   NAT_CHAIN
 } from './constants';
@@ -27,10 +32,17 @@ export interface FirewallOptions {
   proxyPort: number;
   /** Upstream DNS servers dnsmasq forwards to (the only :53 egress allowed). */
   dnsServers: string[];
+  /** Proxy listener for container traffic (DNATed from the bridges); the addon classifies by it. */
+  containerProxyPort: number;
+  /** Docker is running: add the container rules (nat PREROUTING + DOCKER-USER). */
+  containers: boolean;
 }
 
-/** Local bridges (docker0, user-defined networks). Container egress itself (FORWARD) is P2. */
+/** Local bridges (docker0, user-defined networks). */
 const LOCAL_BRIDGES = ['docker0', 'br-+'];
+
+/** Private destinations a container may reach on its own bridge (container <-> container). */
+const RFC1918 = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
 
 /**
  * nat OUTPUT: send DNS to dnsmasq and 80/443 to the proxy. Exempt: the proxy and dnsmasq
@@ -139,6 +151,90 @@ export function buildIp6FilterRules(o: FirewallOptions): string {
   return lines.join('\n');
 }
 
+/**
+ * nat PREROUTING for traffic containers send off their bridge (docker0, user networks): DNS
+ * to dnsmasq and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
+ * route_localnet). Container -> host services and container <-> container (bridged traffic
+ * traverses PREROUTING once Docker loads br_netfilter) are left alone; anything they don't
+ * cover falls through to the DOCKER-USER chain below.
+ */
+export function buildContainerNatRules(o: FirewallOptions): string {
+  const c = CONTAINER_NAT_CHAIN;
+  return [
+    '*nat',
+    `:${c} - [0:0]`,
+    `-A ${c} -m addrtype --dst-type LOCAL -j RETURN`,
+    `-A ${c} -d ${RFC1918} -j RETURN`,
+    `-A ${c} -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
+    `-A ${c} -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
+    `-A ${c} -p tcp -m multiport --dports 80,443 -j DNAT --to-destination 127.0.0.1:${o.containerProxyPort}`,
+    ...LOCAL_BRIDGES.map(b => `-I PREROUTING 1 -i ${b} -j ${c}`),
+    'COMMIT',
+    ''
+  ].join('\n');
+}
+
+function containerForwardTail(c: string, o: FirewallOptions, icmpReject: string): string[] {
+  if (o.mode === 'enforce') {
+    return [
+      `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${LOG_PREFIX_CDROP}"`,
+      `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`,
+      `-A ${c} -j REJECT --reject-with ${icmpReject}`
+    ];
+  }
+  return [
+    // QUIC: make HTTP/3 clients fall back to TCP, through the proxy (as on the host)
+    `-A ${c} -p udp --dport 443 -j REJECT --reject-with ${icmpReject}`,
+    `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${LOG_PREFIX_CEGRESS}"`
+  ];
+}
+
+/**
+ * filter DOCKER-USER: everything a container forwards off-host that the DNAT did not send to
+ * the proxy or dnsmasq. enforce rejects it (so a hole in the DNAT still fails closed), analyze
+ * logs it. DOCKER-USER, not FORWARD: Docker re-inserts its FORWARD jumps ahead of ours on
+ * every restart, but never touches DOCKER-USER.
+ */
+export function buildContainerForwardRules(o: FirewallOptions): string {
+  const c = CONTAINER_FWD_CHAIN;
+  return [
+    '*filter',
+    `:${c} - [0:0]`,
+    ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+    `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
+    ...containerForwardTail(c, o, 'icmp-port-unreachable'),
+    ...LOCAL_BRIDGES.map(b => `-I ${DOCKER_USER_CHAIN} 1 -i ${b} -j ${c}`),
+    'COMMIT',
+    ''
+  ].join('\n');
+}
+
+/**
+ * ip6tables counterpart: there is no IPv6 path through the proxy, so an IPv6-enabled container
+ * network fails closed (enforce) or is pushed back to IPv4 for 80/443 (analyze). `hook` is
+ * DOCKER-USER when Docker manages ip6tables, otherwise FORWARD.
+ */
+export function buildIp6ContainerForwardRules(o: FirewallOptions, hook: string = DOCKER_USER_CHAIN): string {
+  const c = CONTAINER_FWD_CHAIN;
+  const tail =
+    o.mode === 'enforce'
+      ? containerForwardTail(c, o, 'icmp6-port-unreachable')
+      : [
+          `-A ${c} -p tcp -m multiport --dports 80,443 -j REJECT --reject-with tcp-reset`,
+          ...containerForwardTail(c, o, 'icmp6-port-unreachable')
+        ];
+  return [
+    '*filter',
+    `:${c} - [0:0]`,
+    ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+    `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
+    ...tail,
+    ...LOCAL_BRIDGES.map(b => `-I ${hook} 1 -i ${b} -j ${c}`),
+    'COMMIT',
+    ''
+  ].join('\n');
+}
+
 /** Parse `ip -4 route show default` output into the interface names carrying the default route. */
 export function parseDefaultRouteInterfaces(output: string): string[] {
   const out: string[] = [];
@@ -191,6 +287,36 @@ export async function removeFirewall(): Promise<void> {
     await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
     await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
   }
+  const jumps: [string, string, string, string][] = [
+    ['iptables', 'nat', 'PREROUTING', CONTAINER_NAT_CHAIN],
+    ['iptables', 'filter', DOCKER_USER_CHAIN, CONTAINER_FWD_CHAIN],
+    ['ip6tables', 'filter', DOCKER_USER_CHAIN, CONTAINER_FWD_CHAIN],
+    ['ip6tables', 'filter', 'FORWARD', CONTAINER_FWD_CHAIN]
+  ];
+  for (const [bin, table, from, chain] of jumps) {
+    for (const b of LOCAL_BRIDGES) {
+      for (let i = 0; i < 5; i++) {
+        if ((await exec.exec('sudo', [bin, '-t', table, '-D', from, '-i', b, '-j', chain], opts)) !== 0) break;
+      }
+    }
+  }
+  for (const [bin, table, chain] of [
+    ['iptables', 'nat', CONTAINER_NAT_CHAIN],
+    ['iptables', 'filter', CONTAINER_FWD_CHAIN],
+    ['ip6tables', 'filter', CONTAINER_FWD_CHAIN]
+  ]) {
+    await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
+    await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
+  }
+}
+
+/** True if `chain` exists in the filter table of `bin`. */
+async function chainExists(bin: 'iptables' | 'ip6tables', chain: string): Promise<boolean> {
+  const rc = await exec.exec('sudo', [bin, '-t', 'filter', '-n', '-L', chain], {
+    ignoreReturnCode: true,
+    silent: true
+  });
+  return rc === 0;
 }
 
 /**
@@ -201,16 +327,70 @@ export async function applyFirewall(o: FirewallOptions): Promise<void> {
   await removeFirewall();
   // REDIRECT to 127.0.0.1 of packets that were routed to another interface
   await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
-  await restore('iptables-restore', buildNatRules(o) + buildFilterRules(o));
-  const v6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
-    input: Buffer.from(buildIp6FilterRules(o)),
+  let v4 = buildNatRules(o) + buildFilterRules(o);
+  let v6 = buildIp6FilterRules(o);
+  if (o.containers) {
+    if (!(await chainExists('iptables', DOCKER_USER_CHAIN))) {
+      // Docker is running but has not set up its chains (iptables: false?): nothing forwards
+      // through DOCKER-USER, so there is nothing to hook. Say so rather than fail open silently.
+      core.warning('Docker is running but the DOCKER-USER chain is missing: container egress rules not applied');
+    } else {
+      v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
+      const hook = (await chainExists('ip6tables', DOCKER_USER_CHAIN)) ? DOCKER_USER_CHAIN : 'FORWARD';
+      v6 += buildIp6ContainerForwardRules(o, hook);
+    }
+  }
+  await restore('iptables-restore', v4);
+  const rc6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
+    input: Buffer.from(v6),
     ignoreReturnCode: true
   });
-  if (v6 !== 0) {
+  if (rc6 !== 0) {
     const msg = 'ip6tables rules could not be applied';
     if (o.mode === 'enforce') throw new Error(msg);
     core.warning(msg);
   }
+}
+
+/** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
+export function parseDockerSubnets(json: string): string[] {
+  const out: string[] = [];
+  try {
+    const nets = JSON.parse(json) as { Driver?: string; IPAM?: { Config?: { Subnet?: string }[] } }[];
+    for (const n of nets) {
+      if (n.Driver !== 'bridge') continue;
+      for (const cfg of n.IPAM?.Config || []) if (cfg.Subnet) out.push(cfg.Subnet);
+    }
+  } catch {
+    // not JSON (docker error): no subnets
+  }
+  return Array.from(new Set(out));
+}
+
+/**
+ * Drop conntrack entries of flows sourced from the container networks. Without this, a
+ * service container's connections that predate the rules keep going via ESTABLISHED (the
+ * forwarded-traffic counterpart of killPreexistingConnections).
+ */
+export async function flushContainerConntrack(): Promise<void> {
+  const opts = { ignoreReturnCode: true, silent: true };
+  const ids = await exec.getExecOutput('sudo', ['docker', 'network', 'ls', '-q', '--filter', 'driver=bridge'], opts);
+  const netIds = ids.stdout.split('\n').filter(Boolean);
+  let subnets = ['172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8'];
+  if (netIds.length > 0) {
+    const inspect = await exec.getExecOutput('sudo', ['docker', 'network', 'inspect', ...netIds], opts);
+    const found = parseDockerSubnets(inspect.stdout);
+    if (found.length > 0) subnets = found;
+  }
+  if ((await exec.exec('sh', ['-c', 'command -v conntrack'], opts)) !== 0) {
+    core.warning('conntrack not installed: container connections that predate the rules may continue');
+    return;
+  }
+  for (const s of subnets) {
+    // exit 1 = nothing matched
+    await exec.exec('sudo', ['conntrack', '-D', '-f', s.includes(':') ? 'ipv6' : 'ipv4', '-s', s], opts);
+  }
+  core.info(`Flushed container conntrack entries for ${subnets.join(', ')}`);
 }
 
 /**
@@ -232,4 +412,7 @@ export async function logFirewall(): Promise<void> {
   await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', NAT_CHAIN], opts);
   await exec.exec('sudo', ['iptables', '-S', FILTER_CHAIN], opts);
   await exec.exec('sudo', ['ip6tables', '-S', FILTER_CHAIN], opts);
+  await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', CONTAINER_NAT_CHAIN], opts);
+  await exec.exec('sudo', ['iptables', '-S', CONTAINER_FWD_CHAIN], opts);
+  await exec.exec('sudo', ['iptables', '-S', DOCKER_USER_CHAIN], opts);
 }

@@ -1,0 +1,59 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`container rules forward (analyze): logs, rejects only QUIC 1`] = `
+"*filter
+:SAFER_RUNNER_CFWD - [0:0]
+-A SAFER_RUNNER_CFWD -o docker0 -j RETURN
+-A SAFER_RUNNER_CFWD -o br-+ -j RETURN
+-A SAFER_RUNNER_CFWD -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+-A SAFER_RUNNER_CFWD -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
+-A SAFER_RUNNER_CFWD -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "SaferRunner-CEgress: "
+-I DOCKER-USER 1 -i docker0 -j SAFER_RUNNER_CFWD
+-I DOCKER-USER 1 -i br-+ -j SAFER_RUNNER_CFWD
+COMMIT
+"
+`;
+
+exports[`container rules forward (enforce): snapshot; same-bridge and established first, then log + reject 1`] = `
+"*filter
+:SAFER_RUNNER_CFWD - [0:0]
+-A SAFER_RUNNER_CFWD -o docker0 -j RETURN
+-A SAFER_RUNNER_CFWD -o br-+ -j RETURN
+-A SAFER_RUNNER_CFWD -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+-A SAFER_RUNNER_CFWD -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "SaferRunner-CDrop: "
+-A SAFER_RUNNER_CFWD -p tcp -j REJECT --reject-with tcp-reset
+-A SAFER_RUNNER_CFWD -j REJECT --reject-with icmp-port-unreachable
+-I DOCKER-USER 1 -i docker0 -j SAFER_RUNNER_CFWD
+-I DOCKER-USER 1 -i br-+ -j SAFER_RUNNER_CFWD
+COMMIT
+"
+`;
+
+exports[`container rules ip6 forward: fails closed in enforce, hooks the given chain 1`] = `
+"*filter
+:SAFER_RUNNER_CFWD - [0:0]
+-A SAFER_RUNNER_CFWD -o docker0 -j RETURN
+-A SAFER_RUNNER_CFWD -o br-+ -j RETURN
+-A SAFER_RUNNER_CFWD -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+-A SAFER_RUNNER_CFWD -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "SaferRunner-CDrop: "
+-A SAFER_RUNNER_CFWD -p tcp -j REJECT --reject-with tcp-reset
+-A SAFER_RUNNER_CFWD -j REJECT --reject-with icmp6-port-unreachable
+-I DOCKER-USER 1 -i docker0 -j SAFER_RUNNER_CFWD
+-I DOCKER-USER 1 -i br-+ -j SAFER_RUNNER_CFWD
+COMMIT
+"
+`;
+
+exports[`container rules nat: snapshot (enforce and analyze are identical - DNAT is for visibility too) 1`] = `
+"*nat
+:SAFER_RUNNER_CNAT - [0:0]
+-A SAFER_RUNNER_CNAT -m addrtype --dst-type LOCAL -j RETURN
+-A SAFER_RUNNER_CNAT -d 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 -j RETURN
+-A SAFER_RUNNER_CNAT -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:53
+-A SAFER_RUNNER_CNAT -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:53
+-A SAFER_RUNNER_CNAT -p tcp -m multiport --dports 80,443 -j DNAT --to-destination 127.0.0.1:8081
+-I PREROUTING 1 -i docker0 -j SAFER_RUNNER_CNAT
+-I PREROUTING 1 -i br-+ -j SAFER_RUNNER_CNAT
+COMMIT
+"
+`;
