@@ -39,6 +39,25 @@ export function parseFlowLog(text: string): FlowRecord[] {
   return out;
 }
 
+/** Records plus the byte offset each one starts at (to tell which phase of the job wrote it). */
+export function parseFlowLogWithOffsets(text: string): { records: FlowRecord[]; offsets: number[] } {
+  const records: FlowRecord[] = [];
+  const offsets: number[] = [];
+  let at = 0;
+  for (const line of text.split('\n')) {
+    const start = at;
+    at += Buffer.byteLength(line, 'utf8') + 1;
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line) as FlowRecord);
+      offsets.push(start);
+    } catch {
+      // a partially written last line
+    }
+  }
+  return { records, offsets };
+}
+
 export function readFlowLog(file: string, fromByte = 0): FlowRecord[] {
   if (!fs.existsSync(file)) return [];
   const buf = fs.readFileSync(file);

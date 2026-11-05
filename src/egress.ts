@@ -13,7 +13,16 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { DNS_LOG, FIREWALL_LOG, LOG_PREFIX_ANALYZE, LOG_PREFIX_DROP, SELFTEST_FILE, SUDO_LOG } from './constants';
+import {
+  DNS_LOG,
+  FIREWALL_LOG,
+  FLOW_LOG,
+  LOG_PREFIX_ANALYZE,
+  LOG_PREFIX_DROP,
+  SELFTEST_FILE,
+  SUDO_LOG
+} from './constants';
+import { flowLogSize } from './flowlog';
 import { applyFirewall, detectEgressInterface, killPreexistingConnections, logFirewall } from './firewall';
 import type { Inputs } from './inputs';
 import { buildPolicyConfig, dnsDomainsFor } from './policy';
@@ -177,7 +186,10 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   });
 
   // 8. Prove it on this runner
+  const selfTestFrom = flowLogSize(FLOW_LOG);
   const results = await timed('Self-tests', () => runSelfTests(mode));
+  await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
+  const selfTestWindow = [selfTestFrom, flowLogSize(FLOW_LOG)];
   await exec.exec('sudo', ['tee', SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
   await exec.exec('sudo', ['chmod', '0644', SELFTEST_FILE]);
   const failed = results.filter(r => !r.ok);
@@ -188,7 +200,9 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   }
 
   await exec.exec('sudo', ['tee', SETUP_MARKER], {
-    input: Buffer.from(JSON.stringify({ mode, sudoRetained, dockerRetained, at: new Date().toISOString() }) + '\n'),
+    input: Buffer.from(
+      JSON.stringify({ mode, sudoRetained, dockerRetained, selfTestWindow, at: new Date().toISOString() }) + '\n'
+    ),
     silent: true
   });
 

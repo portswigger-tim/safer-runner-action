@@ -17,7 +17,7 @@ export interface SelfTestResult {
   detail: string;
 }
 
-const REPOINT_HOST = 'github.com';
+export const REPOINT_HOST = 'github.com';
 
 async function curl(args: string[]): Promise<{ code: number; out: string }> {
   const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
@@ -76,4 +76,27 @@ export async function runSelfTests(mode: Mode): Promise<SelfTestResult[]> {
     (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
   }
   return results;
+}
+
+/** Byte range of the flow log the self-tests wrote to (recorded in the root-owned setup marker). */
+export type SelfTestWindow = [number, number];
+
+/** The decision records the two probes above produce. */
+export function isSelfTestRecord(r: FlowRecord): boolean {
+  if (r.sni === SELFTEST_HOST || r.host === SELFTEST_HOST) return true;
+  return ipOf(r.dst) === SELFTEST_BOGUS_IP && (r.sni === REPOINT_HOST || r.host === REPOINT_HOST);
+}
+
+/**
+ * Flow records without the action's own self-test probes, so the report doesn't list them as
+ * the job's traffic. Only records inside the self-test window (written before any job step
+ * ran) are dropped - otherwise a step could hide traffic by dialling 192.0.2.1. Without a
+ * window only the `.invalid` probe name is dropped: it never resolves and carries nothing.
+ */
+export function withoutSelfTests(records: FlowRecord[], offsets: number[], window?: SelfTestWindow): FlowRecord[] {
+  return records.filter((r, i) => {
+    if (!isSelfTestRecord(r)) return true;
+    if (!window) return !(r.sni === SELFTEST_HOST || r.host === SELFTEST_HOST);
+    return !(offsets[i] >= window[0] && offsets[i] < window[1]);
+  });
 }

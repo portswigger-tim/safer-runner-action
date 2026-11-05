@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseFlowLog } from './flowlog';
+import { parseFlowLog, parseFlowLogWithOffsets } from './flowlog';
+import { withoutSelfTests } from './selftest';
 import { buildReport, humanBytes, modeLabel, parseFirewallLog, suggestedAllowlist, summarizeFlows } from './report';
 
 const log = [
@@ -403,5 +404,65 @@ describe('enforce labelling (review H2)', () => {
     expect(md).toContain('disable-sudo: false');
     expect(md).not.toContain('should run unchanged');
     expect(buildReport({ ...base, mode: 'analyze', sudoCommandCount: 0 })).toContain('should run unchanged');
+  });
+});
+
+describe('self-test probes are not the job traffic', () => {
+  const recs = [
+    {
+      ev: 'tls',
+      verdict: 'BLOCK',
+      reason: 'sni-not-allowed',
+      layer: 'sni',
+      sni: 'selftest.safer-runner.invalid',
+      dst: '192.0.2.1:443'
+    },
+    { ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', layer: 'sni', sni: 'github.com', dst: '192.0.2.1:443' },
+    {
+      ev: 'https',
+      verdict: 'ALLOW',
+      reason: 'allowed',
+      layer: 'http',
+      host: 'github.com',
+      sni: 'github.com',
+      dst: '192.0.2.1:443',
+      status: 200
+    },
+    // after setup: a job step dialling the same TEST-NET address must still be reported
+    { ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', layer: 'sni', sni: 'github.com', dst: '192.0.2.1:443' },
+    {
+      ev: 'tls',
+      verdict: 'BLOCK',
+      reason: 'sni-not-allowed',
+      layer: 'sni',
+      sni: 'selftest.safer-runner.invalid',
+      dst: '192.0.2.1:443'
+    }
+  ];
+  const text = recs.map(r => JSON.stringify(r)).join('\n') + '\n';
+  const { records, offsets } = parseFlowLogWithOffsets(text);
+  const windowEnd = offsets[3];
+
+  it('drops the probes written inside the self-test window', () => {
+    const kept = withoutSelfTests(records, offsets, [0, windowEnd]);
+    expect(kept).toEqual(records.slice(3));
+  });
+
+  it('never drops a look-alike written after setup (no hiding channel)', () => {
+    const kept = withoutSelfTests(records, offsets, [0, windowEnd]);
+    expect(kept.map(r => r.sni)).toEqual(['github.com', 'selftest.safer-runner.invalid']);
+  });
+
+  it('without a window, drops only the .invalid probe name', () => {
+    const kept = withoutSelfTests(records, offsets);
+    expect(kept.map(r => r.sni)).toEqual(['github.com', 'github.com', 'github.com']);
+  });
+
+  it('the beta.2 report listed selftest.safer-runner.invalid as Blocked; it is gone', () => {
+    const real = parseFlowLogWithOffsets(
+      fs.readFileSync(path.join(__dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8')
+    );
+    const names = summarizeFlows(withoutSelfTests(real.records, real.offsets)).map(h => h.name);
+    expect(names).not.toContain('selftest.safer-runner.invalid');
   });
 });
