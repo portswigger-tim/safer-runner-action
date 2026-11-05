@@ -1,0 +1,38 @@
+# Weekly, grouped dependency updates so pinned versions don't rot.
+#
+# - Dependabot reads this file from the DEFAULT branch (main) only; it takes effect once v2 is
+#   merged there. Until then nothing runs.
+# - npm updates change the bundled dist/: CI fails on the PR until someone runs
+#   `npm run package` and commits dist/. That is intended - review the bundle diff.
+# - github-actions updates keep the full-SHA pins (and their `# vX.Y.Z` comments) current.
+# - cooldown: don't propose a release until it has been public for a week, so a compromised
+#   upstream release has time to be caught and yanked before it reaches a PR here.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      runtime:
+        dependency-type: production
+      dev:
+        dependency-type: development
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ['*']
