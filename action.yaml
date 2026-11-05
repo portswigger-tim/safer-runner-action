@@ -43,26 +43,27 @@ inputs:
     default: '9.9.9.9 149.112.112.112'
   disable-sudo:
     description: >-
-      Remove sudo from the runner user after setup. Default: ON in enforce mode (with sudo any
-      step can remove the egress controls), off in analyze mode. Set `false` to keep sudo in
-      enforce: the job then runs as "enforce (ADVISORY)" - the controls are applied but are not
-      an enforced boundary. Deliberately has no default here: unset and `false` differ.
+      Override whether sudo is removed from the runner user after setup. `enforce` removes it
+      (with sudo any step could remove the egress controls); `analyze` keeps it. Set `true` to
+      force removal or `false` to keep sudo; keeping sudo in `enforce` makes the job
+      "enforce (ADVISORY)" - the controls are applied but are not an enforced boundary. Leave
+      unset to follow the mode (unset and `false` are not the same).
     required: false
   docker:
     description: >-
-      Docker access for the runner user (docker is root-equivalent: a step can use it to remove
-      the egress controls). "keep": leave docker as it is. "remove-group": remove the runner
-      user from the docker group and lock the socket to root. "stop": stop and disable the
-      docker daemon. Default: "remove-group" in enforce mode, "keep" in analyze. In enforce,
-      "keep" makes the job "enforce (ADVISORY)", and a removal that does not take effect
-      (verified on the runner) fails the job. Deliberately has no default here: unset differs
-      from an explicit value.
+      Override docker access for the runner user (docker is root-equivalent: a step can use it to
+      remove the egress controls). "keep": leave docker as it is. "remove-group": remove the
+      runner user from the docker group and lock the socket to root. "stop": stop and disable the
+      docker daemon. `enforce` removes docker access ("remove-group"); `analyze` keeps it
+      ("keep"). In enforce, "keep" makes the job "enforce (ADVISORY)", and a removal that does not
+      take effect (verified on the runner) fails the job. Leave unset to follow the mode (unset
+      differs from an explicit value).
     required: false
   fail-on-tampering:
     description: >-
-      Fail the job in the post step if the security configuration changed during the job.
-      Default: ON in enforce mode (a subverted control should fail the job), off in analyze
-      (analyze never breaks a build). Deliberately has no default here: unset and `false` differ.
+      Override whether the post step fails the job when the security configuration changed during
+      the job. `enforce` fails it (a subverted control should fail the job); `analyze` never
+      breaks a build. Leave unset to follow the mode (unset and `false` are not the same).
     required: false
 
 runs:

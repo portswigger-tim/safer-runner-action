@@ -1,17 +1,18 @@
 # Safer Runner Action — v2 (beta)
 
-> **This is the `v2` branch: a beta of the next major version.** v1 (`@v1`, branch `main`)
-> is unchanged and still supported. The v2 design is in [docs/DESIGN-v2.md](docs/DESIGN-v2.md);
-> implementation decisions in [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
+> **This is v2 — a major rewrite, currently in beta.** It is a new architecture, not an upgrade
+> of v1: pin a v2 version explicitly (there is no moving `@v2` tag). v1 lives on `@v1`
+> (branch `main`). Design: [docs/DESIGN-v2.md](docs/DESIGN-v2.md); decisions:
+> [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
 
 Egress control for GitHub-hosted Ubuntu runners, enforced on **hostnames** rather than IP
 addresses. All HTTP and HTTPS from the job is forced through a TLS-terminating proxy
 (mitmproxy). The proxy checks the TLS SNI and every request's `Host` against an allowlist and
 connects to the name itself, never to the IP the client chose.
 
-v1 allowlisted IP addresses. That admits every tenant of a shared CDN or cloud range, so
-`curl --resolve attacker.example:443:<allowed-ip>` reached an attacker-controlled site with a
-valid certificate. v2 closes that.
+Allowlisting by IP address admits every tenant of a shared CDN or cloud range:
+`curl --resolve attacker.example:443:<allowed-ip>` reaches an attacker-controlled site with a
+valid certificate. Filtering on hostnames closes that.
 
 ## Usage
 
@@ -31,8 +32,8 @@ jobs:
             pypi.org
             files.pythonhosted.org
             .docker.io        # docker.io and all of its subdomains
-          # enforce defaults: sudo removed, docker group removed, fail-on-tampering on.
-          # `disable-sudo: false` / `docker: keep` keep them, but make enforce ADVISORY.
+          # enforce removes sudo + the docker group and fails on tampering.
+          # `disable-sudo: false` / `docker: keep` opt out, but make enforce ADVISORY.
       - uses: actions/checkout@v5
       - run: npm ci
 ```
@@ -111,15 +112,15 @@ random name under an exact allowlist entry. In enforce mode the job fails if any
 | `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted), same syntax. Use only for single-tenant hosts whose clients can't trust the CA. The default is always included |
 | `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
 | `dns-servers` | `9.9.9.9 149.112.112.112` (Quad9) | Upstream resolvers CoreDNS forwards allowlisted names to: IP addresses, space/comma/newline separated. The first is the primary, the rest are tried in order. Empty = the default |
-| `disable-sudo` | **`true` in enforce**, `false` in analyze | Remove the runner's sudo after setup. In enforce, `disable-sudo: false` keeps sudo and the job is labelled **ADVISORY** |
-| `docker` | **`remove-group` in enforce**, `keep` in analyze | `keep`: leave docker alone. `remove-group`: take the runner out of the docker group and lock the socket to root. `stop`: stop and disable the docker daemon. In enforce, `keep` makes the job **ADVISORY**, and a removal that doesn't take effect fails the job |
-| `fail-on-tampering` | **`true` in enforce**, `false` in analyze | Fail the job (post step) if the safer-runner configuration changed during the job. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`) |
+| `disable-sudo` | follows `mode` | `enforce` removes the runner's sudo after setup; `analyze` keeps it. Set `true`/`false` to override; keeping sudo in enforce labels the job **ADVISORY** |
+| `docker` | follows `mode` | `enforce` removes docker access (`remove-group`); `analyze` keeps it (`keep`). `keep`: leave docker alone. `remove-group`: take the runner out of the docker group and lock the socket to root. `stop`: stop and disable the docker daemon. In enforce, `keep` makes the job **ADVISORY**, and a removal that doesn't take effect fails the job |
+| `fail-on-tampering` | follows `mode` | `enforce` fails the job (post step) if the safer-runner configuration changed during the job; `analyze` never breaks a build. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`) |
 
-An explicit value always wins over the mode's default. The proxy's ports (a free pair in
+An explicit value always wins; leaving one unset follows the mode. The proxy's ports (a free pair in
 20000–32766, picked at setup) and its streaming threshold are internal; HTTPS from containers
 is always checked by name (see [Containers](#containers)).
 
-### How defaults change in enforce
+### What enforce changes (and how to opt out)
 
 | | `mode: analyze` (default) | `mode: enforce` | Opt out in enforce |
 |---|---|---|---|
@@ -132,6 +133,13 @@ is always checked by name (see [Containers](#containers)).
 (sudo, or docker, which is root-equivalent) to remove them: the run log warns and the job
 summary header reads *"enforce (ADVISORY — sudo/docker retained, not an enforced boundary)"*.
 
+After `remove-group` or `stop`, the action verifies on the runner that docker is really gone —
+daemon and socket-unit state, the runner's groups, and whether the job's process can still open
+the socket — and records it in the summary's Diagnostics. If the removal did not take, enforce
+fails the job. Removing sudo leaves only the action's read-only validation commands and its
+post-step CA teardown. Analyze keeps both and reports any sudo the job used, so you see it before
+you enforce.
+
 ## CA trust
 
 The per-run CA is added to the system store, so curl, wget, git, Python's `ssl`, .NET (the
@@ -140,23 +148,6 @@ runner itself) and Docker pulls trust it. The action also exports `NODE_EXTRA_CA
 `AWS_CA_BUNDLE` and `CURL_CA_BUNDLE` to later steps, and imports the CA into every JDK on the
 image. The private key exists only on tmpfs, readable only by the proxy user, and the post
 step deletes it.
-
-## Enforce removes sudo and docker by default
-
-With sudo, any step can stop the proxy and flush the firewall, so enforce is only a boundary
-without it. **`mode: enforce` removes the runner's sudo by default** (since v2.0.0-beta.2). Only
-the action's own exact, read-only validation commands and its post-step CA teardown stay
-allowed. If a job needs sudo after the action, opt out with `disable-sudo: false`: the controls
-are still applied, but the job is **ADVISORY**. In analyze mode, the summary tells you if the
-job used sudo, so you find out before switching to enforce.
-
-Docker group membership is root-equivalent too, so **enforce removes the runner from the
-docker group by default** (`docker: remove-group`). After applying it the action checks what
-the runner can actually do — whether the docker daemon and its socket unit are active, whether
-the runner is still in the docker group, and whether the job's process can still open the
-docker socket — and records that **verified** state in the summary's Diagnostics. If the
-removal didn't take, enforce fails the job rather than run with a reversible boundary. A job
-that needs docker sets `docker: keep` (ADVISORY), and `docker: stop` stops the daemon instead.
 
 ## Containers
 
@@ -233,7 +224,7 @@ can send data; these limit what that dependency can reach in the first place:
 
 - **`disable-sudo: false` or `docker: keep` makes enforce advisory.** Any step with root can
   remove the proxy and firewall, and docker group membership is root-equivalent. Both are
-  removed by default in enforce; the summary labels the job ADVISORY when either was kept.
+  removed by enforce; the summary labels the job ADVISORY when either was kept.
 - **Allowlisted names that resolve to internal addresses are refused.** That includes hosted
   runners with Azure private networking that reach private services by name. Such names
   can't be allowlisted in enforce yet.
@@ -255,12 +246,12 @@ can send data; these limit what that dependency can reach in the first place:
   what a request does.
 - **Only TCP 80/443 is proxied.** In enforce, other ports are rejected, including SSH
   (`git@github.com`).
-- **Containers are a boundary only when docker is removed** (the enforce default). With
+- **Containers are a boundary only when docker is removed** (which enforce does). With
   `docker: keep` any step can `docker run --privileged --network host` and leave the
   controls behind: the container rules then protect against dependencies running inside
   containers, not against a determined step (the summary warns that docker was retained).
-- **Container HTTPS is checked by name only, trading the Host check for compatibility.** For container HTTPS
-  the proxy sees only the TLS name, so a container can reach another site served by the same
+- **Container HTTPS is checked by name only (SNI), trading the Host check for compatibility.**
+  The proxy sees only the TLS name, so a container can reach another site served by the same
   front end as an allowlisted name (domain fronting) — the same trade-off as
   `passthrough-domains`. Azure Storage front doors are excluded (intercepted, Host-checked), so
   containers that talk to an allowlisted storage account in enforce need the CA
@@ -269,9 +260,9 @@ can send data; these limit what that dependency can reach in the first place:
 - **Job containers (`container:`) are not supported.** The action would run inside the
   container and cannot control the runner: enforce fails with an explanation, analyze warns
   and monitors nothing. Run the job on the runner and use `services:` and `docker run` steps.
-- **Docker container actions (`uses: docker://…`, Dockerfile actions) don't run under the
-  enforce default**, which removes docker from the runner user (the runner starts them as that
-  user). Use `docker: keep` for such jobs (docker is then root-equivalent, see above). The
+- **Docker container actions (`uses: docker://…`, Dockerfile actions) don't run when enforce
+  has removed docker from the runner user** (the runner starts them as that user). Use
+  `docker: keep` for such jobs (docker is then root-equivalent, see above). The
   runner's end-of-job cleanup of service containers also logs a harmless permission warning.
 - **`docker build`**: RUN steps get container-path filtering; allowlisted HTTPS works by
   SNI without a CA. To intercept inside a build, `COPY` or secret-mount the CA yourself.

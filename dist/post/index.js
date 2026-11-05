@@ -4074,7 +4074,7 @@ function buildReport(input) {
         if (input.dockerRetained) {
             why.push('**ADVISORY: docker was retained** (`docker: keep`; verified on the runner). Docker access is ' +
                 'root-equivalent, so any step could have used it to remove the egress controls. Use `docker: remove-group` ' +
-                '(the enforce default) or `docker: stop` unless the job needs docker.');
+                '(what enforce does) or `docker: stop` unless the job needs docker.');
         }
         md +=
             '> [!WARNING]\n' +
@@ -4105,7 +4105,7 @@ function buildReport(input) {
             if (suggest.length)
                 md += '>\n';
             md +=
-                `> **This job ran ${plural(sudoRan, 'sudo command')}.** Enforce removes sudo by default — drop that usage, ` +
+                `> **This job ran ${plural(sudoRan, 'sudo command')}.** Enforce removes sudo — drop that usage, ` +
                     'or add `disable-sudo: false` (which makes enforce ADVISORY: sudo can remove the controls).\n';
         }
         md += '\n';
