@@ -1999,14 +1999,13 @@ const github_domains_generated_1 = __nccwpck_require__(3251);
  * Patterns are v2 allowlist syntax: a bare name is EXACT and `*.name` covers every subdomain.
  * NO wildcards here: a wildcard is a DNS channel to that zone. The only wildcards are the ones
  * meta itself lists (*.github.com, *.githubapp.com, *.actions.githubusercontent.com). A new
- * entry needs observed real-runner traffic and a one-line reason.
+ * entry needs observed real-runner traffic and a one-line reason. Not even an apex "because it
+ * costs nothing": meta lists github.com's apex but not actions.githubusercontent.com's or
+ * githubapp.com's, so those aren't contacted.
  */
 exports.GITHUB_EXTRAS = [
     // ghcr.io (in meta) answers blob/layer GETs with a 307 to this host: every ghcr pull
-    'pkg-containers.githubusercontent.com',
-    // apexes of zones meta lists only as *.x: one GitHub-owned name each, not a channel
-    'actions.githubusercontent.com',
-    'githubapp.com'
+    'pkg-containers.githubusercontent.com'
 ];
 /**
  * Risky GitHub subdomains that serve arbitrary user content (malicious payloads), refused in

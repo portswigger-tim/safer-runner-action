@@ -57,7 +57,6 @@ describe('GitHub Parser', () => {
       'npm.pkg.github.com',
       'maven.pkg.github.com',
       'tuf-repo.github.com',
-      'actions.githubusercontent.com',
       'pipelines.actions.githubusercontent.com',
       'pipelinesghubeus7.actions.githubusercontent.com',
       'runnerghubeus1.actions.githubusercontent.com',
@@ -89,6 +88,8 @@ describe('GitHub Parser', () => {
       'gist.githubusercontent.com',
       'user-content.githubusercontent.com',
       'githubusercontent.com',
+      'actions.githubusercontent.com', // meta lists only *.actions...
+      'githubapp.com',
       'attacker.blob.core.windows.net',
       'x.productionresultssa31.blob.core.windows.net',
       'evilgithub.com',
