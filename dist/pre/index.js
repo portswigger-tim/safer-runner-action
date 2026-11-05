@@ -191,7 +191,7 @@ function getRiskySubdomains() {
  * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.POLICY_FILE = exports.ETC_DIR = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.POLICY_FILE = exports.ETC_DIR = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
 exports.MITMPROXY_VERSION = '12.3.1';
 exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
@@ -235,6 +235,18 @@ exports.FILTER_CHAIN = 'SAFER_RUNNER_OUT';
 exports.NAT_CHAIN = 'SAFER_RUNNER_NAT';
 exports.LOG_PREFIX_DROP = 'SaferRunner-Drop: ';
 exports.LOG_PREFIX_ANALYZE = 'SaferRunner-Egress: ';
+/** Container egress (P2): nat PREROUTING DNAT + a filter chain jumped to from DOCKER-USER. */
+exports.CONTAINER_NAT_CHAIN = 'SAFER_RUNNER_CNAT';
+exports.CONTAINER_FWD_CHAIN = 'SAFER_RUNNER_CFWD';
+exports.LOG_PREFIX_CDROP = 'SaferRunner-CDrop: ';
+exports.LOG_PREFIX_CEGRESS = 'SaferRunner-CEgress: ';
+/** Chain Docker creates and promises never to touch (it re-inserts its own FORWARD jumps on restart). */
+exports.DOCKER_USER_CHAIN = 'DOCKER-USER';
+/**
+ * dockerd config: setup merges live-restore into it (F1), and it is where a runtime or proxy
+ * override would be planted, so it joins the integrity baseline when setup wrote it.
+ */
+exports.DOCKER_DAEMON_JSON = '/etc/docker/daemon.json';
 /** Azure platform endpoints every hosted runner needs (scoped to the ports they use). */
 exports.AZURE_IMDS = '169.254.169.254';
 exports.AZURE_WIRESERVER = '168.63.129.16';
@@ -293,8 +305,15 @@ exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
 exports.disableDockerForRunner = disableDockerForRunner;
 exports.stopDockerService = stopDockerService;
 exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
+exports.mergeLiveRestore = mergeLiveRestore;
+exports.isDockerActive = isDockerActive;
+exports.runningContainers = runningContainers;
+exports.restartDockerForCaTrust = restartDockerForCaTrust;
+exports.parseContainerAddresses = parseContainerAddresses;
+exports.containerAddresses = containerAddresses;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
+const constants_1 = __nccwpck_require__(8729);
 // Constants
 exports.RUNNER_USERNAME = 'runner';
 exports.DOCKER_GROUP = 'docker';
@@ -380,6 +399,128 @@ async function isRunnerInDockerGroup() {
         return false;
     }
 }
+/**
+ * Merge `live-restore: true` into a daemon.json body. Returns null when the existing file is
+ * not a JSON object (never overwrite a config we can't parse - dockerd would refuse to start).
+ */
+function mergeLiveRestore(existing) {
+    let cfg = {};
+    if (existing.trim() !== '') {
+        try {
+            const parsed = JSON.parse(existing);
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+                return null;
+            cfg = parsed;
+        }
+        catch {
+            return null;
+        }
+    }
+    if (cfg['live-restore'] === true)
+        return { json: existing, changed: false };
+    return { json: JSON.stringify({ ...cfg, 'live-restore': true }, null, 2) + '\n', changed: true };
+}
+/** `systemctl is-active docker`. */
+async function isDockerActive() {
+    const rc = await exec.exec('systemctl', ['is-active', '--quiet', 'docker'], { ignoreReturnCode: true, silent: true });
+    return rc === 0;
+}
+/** IDs of running containers (empty when docker is not reachable). */
+async function runningContainers() {
+    const { stdout, exitCode } = await exec.getExecOutput('sudo', ['docker', 'ps', '-q', '--no-trunc'], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    return exitCode === 0 ? stdout.split('\n').filter(Boolean) : [];
+}
+async function waitForDocker(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const rc = await exec.exec('sudo', ['docker', 'info', '--format', '{{.ServerVersion}}'], {
+            ignoreReturnCode: true,
+            silent: true
+        });
+        if (rc === 0)
+            return true;
+        await new Promise(r => setTimeout(r, 500));
+    }
+    return false;
+}
+/**
+ * F1: dockerd is Go and caches the system roots on its first TLS handshake. When the runner
+ * pulled a service/job container image before the action ran, those roots predate our CA and
+ * every later `docker pull` through the proxy fails with x509 - in every mode. Restarting
+ * dockerd reloads the roots; live-restore (reloadable by SIGHUP) keeps the running service
+ * containers alive across the restart. Must run after the CA is in the system store and
+ * before the firewall (Docker rebuilds its own chains on restart).
+ *
+ * Returns true when daemon.json was written (it then belongs in the integrity baseline).
+ */
+async function restartDockerForCaTrust() {
+    const before = await runningContainers();
+    const { stdout: existing } = await exec.getExecOutput('sudo', ['cat', constants_1.DOCKER_DAEMON_JSON], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    const merged = mergeLiveRestore(existing);
+    if (merged === null) {
+        core.warning(`${constants_1.DOCKER_DAEMON_JSON} is not a JSON object: dockerd not restarted, so a dockerd that pulled images ` +
+            'before this action may not trust the proxy CA (docker pull: x509 errors)');
+        return false;
+    }
+    if (merged.changed) {
+        await exec.exec('sudo', ['install', '-d', '-m', '0755', '/etc/docker']);
+        await exec.exec('sudo', ['tee', constants_1.DOCKER_DAEMON_JSON], { input: Buffer.from(merged.json), silent: true });
+        // live-restore is one of the options dockerd reloads on SIGHUP (ExecReload)
+        await exec.exec('sudo', ['systemctl', 'reload', 'docker']);
+        await new Promise(r => setTimeout(r, 500));
+    }
+    const t0 = Date.now();
+    await exec.exec('sudo', ['systemctl', 'restart', 'docker']);
+    if (!(await waitForDocker(30000))) {
+        throw new Error('dockerd did not come back within 30s after restart (F1 CA trust reload)');
+    }
+    const after = new Set(await runningContainers());
+    const lost = before.filter(id => !after.has(id));
+    core.info(`dockerd restarted to trust the proxy CA in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
+        `(${before.length} running container(s) kept: ${before.length - lost.length})`);
+    if (lost.length > 0) {
+        core.warning(`${lost.length} container(s) stopped across the dockerd restart: ${lost.map(i => i.slice(0, 12)).join(', ')}`);
+    }
+    return true;
+}
+/**
+ * Parse `docker inspect --format '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}'`
+ * output into container IP -> name.
+ */
+function parseContainerAddresses(output) {
+    const out = new Map();
+    for (const line of output.split('\n')) {
+        const [rawName, ...ips] = line.trim().split(/\s+/);
+        if (!rawName)
+            continue;
+        const name = rawName.replace(/^\//, '');
+        for (const ip of ips)
+            if (ip && !out.has(ip))
+                out.set(ip, name);
+    }
+    return out;
+}
+/**
+ * Container IP -> name for the report. Without sudo: under the default enforce the runner has
+ * lost docker access, and the report then shows addresses only. Containers already removed
+ * (`docker run --rm`) are not listed either.
+ */
+async function containerAddresses() {
+    const opts = { ignoreReturnCode: true, silent: true };
+    const ids = await exec.getExecOutput('docker', ['ps', '-aq'], opts);
+    const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];
+    if (!list.length)
+        return new Map();
+    const fmt = '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}';
+    const { stdout, exitCode } = await exec.getExecOutput('docker', ['inspect', '--format', fmt, ...list], opts);
+    return exitCode === 0 ? parseContainerAddresses(stdout) : new Map();
+}
 
 
 /***/ }),
@@ -396,9 +537,11 @@ async function isRunnerInDockerGroup() {
  * Order (each step depends on the previous):
  *   allowlist (api.github.com/meta, before DNS changes) -> install (dnsmasq + pinned mitmdump,
  *   in parallel) -> users -> addon + policy + CA -> start proxy (waits for the addon's own
- *   self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS -> firewall (nat REDIRECT +
- *   filter) -> kill pre-existing :443 -> live self-tests -> docker -> sudo logging ->
- *   integrity baseline -> sudo restriction (last).
+ *   self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS -> dockerd restart so it
+ *   trusts the CA (F1) -> firewall (nat REDIRECT + filter, plus the container DNAT /
+ *   DOCKER-USER rules when docker runs) -> kill pre-existing :443 and container flows ->
+ *   live self-tests -> docker access -> sudo logging -> integrity baseline -> sudo
+ *   restriction (last).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -434,9 +577,10 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SETUP_MARKER = void 0;
+exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
 exports.setupCompleted = setupCompleted;
 exports.installDnsmasq = installDnsmasq;
+exports.inJobContainer = inJobContainer;
 exports.runSetup = runSetup;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
@@ -471,15 +615,36 @@ async function timed(label, fn) {
 async function installDnsmasq() {
     const opts = { ignoreReturnCode: true };
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
-    const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'dnsmasq'];
+    // conntrack: flushes container flows that predate the container rules (not on the image)
+    const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'dnsmasq', 'conntrack'];
     if ((await exec.exec('sudo', ['-E', ...install], { ...opts, env })) === 0)
         return;
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
     await exec.exec('sudo', ['-E', ...install], { env });
 }
+/**
+ * F3: with a job `container:`, JS actions run INSIDE that container (as root, no sudo, no
+ * access to the host's iptables), so the action cannot apply anything to the runner VM.
+ */
+function inJobContainer(exists = fs.existsSync) {
+    return exists('/.dockerenv') || exists('/run/.containerenv');
+}
+exports.JOB_CONTAINER_MESSAGE = 'safer-runner cannot protect a job that runs in a job `container:` - the action runs inside the ' +
+    'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
+    '`services:` and `docker run` steps instead (their egress is controlled).';
 async function runSetup(inputs) {
     const { mode } = inputs;
     core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
+    if (inJobContainer()) {
+        if (mode === 'enforce')
+            throw new Error(exports.JOB_CONTAINER_MESSAGE);
+        core.warning(`${exports.JOB_CONTAINER_MESSAGE} Analyze mode: nothing is monitored in this job.`, {
+            title: 'safer-runner: job container not supported'
+        });
+        return;
+    }
+    if (inputs.containerTlsWarning)
+        core.warning(inputs.containerTlsWarning);
     if (inputs.disableSudo && inputs.sudoConfig) {
         core.warning('Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
     }
@@ -506,6 +671,8 @@ async function runSetup(inputs) {
     }
     const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
     core.info(`sudo implementation: ${sudoFlavour}`);
+    const ports = await (0, proxy_1.allocateProxyPorts)(inputs.proxyPort);
+    core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
     // 1. Allowlist - fetched while normal DNS and direct egress still work
     const { domains: githubDomains, source } = await (0, github_parser_1.resolveGitHubDomains)();
     core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
@@ -514,7 +681,9 @@ async function runSetup(inputs) {
         githubDomains,
         allowedDomains: inputs.allowedDomains,
         passthroughDomains: inputs.passthroughDomains,
-        blockRiskySubdomains: inputs.blockRiskySubdomains
+        blockRiskySubdomains: inputs.blockRiskySubdomains,
+        containerTls: inputs.containerTls,
+        containerPort: ports.containerPort
     });
     for (const w of warnings)
         core.warning(w);
@@ -531,7 +700,11 @@ async function runSetup(inputs) {
     await (0, proxy_1.generateCa)();
     await (0, proxy_1.installTeardownHelper)();
     // 4. Proxy
-    const proxyOpts = { port: inputs.proxyPort, streamLargeBodies: inputs.streamLargeBodies };
+    const proxyOpts = {
+        port: ports.port,
+        containerPort: ports.containerPort,
+        streamLargeBodies: inputs.streamLargeBodies
+    };
     await timed('Start proxy', () => (0, proxy_1.startProxy)(proxyOpts));
     // 5. Trust - before any traffic is forced through the proxy
     await timed('Install CA trust', async () => {
@@ -545,21 +718,36 @@ async function runSetup(inputs) {
         await (0, setup_1.setupDNSMasq)(mode, '', inputs.blockRiskySubdomains, dnsUser.username, constants_1.DNS_LOG, inputs.primaryDnsServer, inputs.secondaryDnsServer, (0, policy_1.dnsDomainsFor)([...policy.allow, ...policy.passthrough]));
         await (0, setup_1.restartServices)(constants_1.DNS_LOG);
     });
-    // 7. Firewall
+    // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
+    // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
+    const dockerActive = !inputs.stopDocker && (await (0, docker_1.isDockerActive)());
+    let dockerConfigWritten = false;
+    if (dockerActive) {
+        const services = await (0, docker_1.runningContainers)();
+        if (dockerRetained || services.length > 0) {
+            dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => (0, docker_1.restartDockerForCaTrust)());
+        }
+    }
+    // 8. Firewall
     await timed('Configure firewall', async () => {
-        await (0, setup_1.setupIptablesLogging)(constants_1.FIREWALL_LOG, [constants_1.LOG_PREFIX_DROP.trim(), constants_1.LOG_PREFIX_ANALYZE.trim()], 'v2');
+        const prefixes = [constants_1.LOG_PREFIX_DROP, constants_1.LOG_PREFIX_ANALYZE, constants_1.LOG_PREFIX_CDROP, constants_1.LOG_PREFIX_CEGRESS].map(p => p.trim());
+        await (0, setup_1.setupIptablesLogging)(constants_1.FIREWALL_LOG, prefixes, 'v2');
         await (0, firewall_1.detectEgressInterface)();
         await (0, firewall_1.applyFirewall)({
             mode,
             proxyUid,
             dnsUid: dnsUser.uid,
-            proxyPort: inputs.proxyPort,
+            proxyPort: ports.port,
+            containerProxyPort: ports.containerPort,
+            containers: dockerActive,
             dnsServers: [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean)
         });
         await (0, firewall_1.killPreexistingConnections)();
+        if (dockerActive)
+            await (0, firewall_1.flushContainerConntrack)();
         await (0, firewall_1.logFirewall)();
     });
-    // 8. Prove it on this runner
+    // 9. Prove it on this runner
     const selfTestFrom = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
     const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode));
     await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
@@ -574,10 +762,19 @@ async function runSetup(inputs) {
         core.warning(msg);
     }
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
-        input: Buffer.from(JSON.stringify({ mode, sudoRetained, dockerRetained, selfTestWindow, at: new Date().toISOString() }) + '\n'),
+        input: Buffer.from(JSON.stringify({
+            mode,
+            sudoRetained,
+            dockerRetained,
+            containerTls: inputs.containerTls,
+            containerRules: dockerActive,
+            proxyPorts: [ports.port, ports.containerPort],
+            selfTestWindow,
+            at: new Date().toISOString()
+        }) + '\n'),
         silent: true
     });
-    // 9. Privilege layer (carried from v1). Docker first: it needs sudo.
+    // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
     if (inputs.stopDocker) {
         await (0, docker_1.stopDockerService)();
     }
@@ -585,7 +782,11 @@ async function runSetup(inputs) {
         await (0, docker_1.disableDockerForRunner)();
     }
     await (0, sudo_1.setupSudoLogging)(constants_1.SUDO_LOG, sudoFlavour);
-    const validator = new validation_1.SystemValidator([...validation_1.CRITICAL_FILES, (0, sudo_1.getSudoLoggingConfigFile)(sudoFlavour)]);
+    const validator = new validation_1.SystemValidator([
+        ...validation_1.CRITICAL_FILES,
+        (0, sudo_1.getSudoLoggingConfigFile)(sudoFlavour),
+        ...(dockerConfigWritten ? [constants_1.DOCKER_DAEMON_JSON] : [])
+    ]);
     await validator.capturePostSetupBaseline();
     if (inputs.disableSudo) {
         await (0, sudo_1.disableSudoForRunner)(sudoFlavour);
@@ -650,17 +851,24 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.buildNatRules = buildNatRules;
 exports.buildFilterRules = buildFilterRules;
 exports.buildIp6FilterRules = buildIp6FilterRules;
+exports.buildContainerNatRules = buildContainerNatRules;
+exports.buildContainerForwardRules = buildContainerForwardRules;
+exports.buildIp6ContainerForwardRules = buildIp6ContainerForwardRules;
 exports.parseDefaultRouteInterfaces = parseDefaultRouteInterfaces;
 exports.detectEgressInterface = detectEgressInterface;
 exports.removeFirewall = removeFirewall;
 exports.applyFirewall = applyFirewall;
+exports.parseDockerSubnets = parseDockerSubnets;
+exports.flushContainerConntrack = flushContainerConntrack;
 exports.killPreexistingConnections = killPreexistingConnections;
 exports.logFirewall = logFirewall;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const constants_1 = __nccwpck_require__(8729);
-/** Local bridges (docker0, user-defined networks). Container egress itself (FORWARD) is P2. */
+/** Local bridges (docker0, user-defined networks). */
 const LOCAL_BRIDGES = ['docker0', 'br-+'];
+/** Private destinations a container may reach on its own bridge (container <-> container). */
+const RFC1918 = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
 /**
  * nat OUTPUT: send DNS to dnsmasq and 80/443 to the proxy. Exempt: the proxy and dnsmasq
  * uids (their own upstream connections), loopback, local bridges and the Azure platform IPs.
@@ -751,6 +959,85 @@ function buildIp6FilterRules(o) {
     lines.push(`-I OUTPUT 1 -j ${c}`, 'COMMIT', '');
     return lines.join('\n');
 }
+/**
+ * nat PREROUTING for traffic containers send off their bridge (docker0, user networks): DNS
+ * to dnsmasq and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
+ * route_localnet). Container -> host services and container <-> container (bridged traffic
+ * traverses PREROUTING once Docker loads br_netfilter) are left alone; anything they don't
+ * cover falls through to the DOCKER-USER chain below.
+ */
+function buildContainerNatRules(o) {
+    const c = constants_1.CONTAINER_NAT_CHAIN;
+    return [
+        '*nat',
+        `:${c} - [0:0]`,
+        `-A ${c} -m addrtype --dst-type LOCAL -j RETURN`,
+        `-A ${c} -d ${RFC1918} -j RETURN`,
+        `-A ${c} -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
+        `-A ${c} -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
+        `-A ${c} -p tcp -m multiport --dports 80,443 -j DNAT --to-destination 127.0.0.1:${o.containerProxyPort}`,
+        ...LOCAL_BRIDGES.map(b => `-I PREROUTING 1 -i ${b} -j ${c}`),
+        'COMMIT',
+        ''
+    ].join('\n');
+}
+function containerForwardTail(c, o, icmpReject) {
+    if (o.mode === 'enforce') {
+        return [
+            `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_CDROP}"`,
+            `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`,
+            `-A ${c} -j REJECT --reject-with ${icmpReject}`
+        ];
+    }
+    return [
+        // QUIC: make HTTP/3 clients fall back to TCP, through the proxy (as on the host)
+        `-A ${c} -p udp --dport 443 -j REJECT --reject-with ${icmpReject}`,
+        `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_CEGRESS}"`
+    ];
+}
+/**
+ * filter DOCKER-USER: everything a container forwards off-host that the DNAT did not send to
+ * the proxy or dnsmasq. enforce rejects it (so a hole in the DNAT still fails closed), analyze
+ * logs it. DOCKER-USER, not FORWARD: Docker re-inserts its FORWARD jumps ahead of ours on
+ * every restart, but never touches DOCKER-USER.
+ */
+function buildContainerForwardRules(o) {
+    const c = constants_1.CONTAINER_FWD_CHAIN;
+    return [
+        '*filter',
+        `:${c} - [0:0]`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
+        ...containerForwardTail(c, o, 'icmp-port-unreachable'),
+        ...LOCAL_BRIDGES.map(b => `-I ${constants_1.DOCKER_USER_CHAIN} 1 -i ${b} -j ${c}`),
+        'COMMIT',
+        ''
+    ].join('\n');
+}
+/**
+ * ip6tables counterpart: there is no IPv6 path through the proxy, so an IPv6-enabled container
+ * network fails closed (enforce) or is pushed back to IPv4 for 80/443 (analyze). `hook` is
+ * DOCKER-USER when Docker manages ip6tables, otherwise FORWARD.
+ */
+function buildIp6ContainerForwardRules(o, hook = constants_1.DOCKER_USER_CHAIN) {
+    const c = constants_1.CONTAINER_FWD_CHAIN;
+    const tail = o.mode === 'enforce'
+        ? containerForwardTail(c, o, 'icmp6-port-unreachable')
+        : [
+            `-A ${c} -p tcp -m multiport --dports 80,443 -j REJECT --reject-with tcp-reset`,
+            ...containerForwardTail(c, o, 'icmp6-port-unreachable')
+        ];
+    return [
+        '*filter',
+        `:${c} - [0:0]`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
+        ...tail,
+        ...LOCAL_BRIDGES.map(b => `-I ${hook} 1 -i ${b} -j ${c}`),
+        'COMMIT',
+        ''
+    ].join('\n');
+}
 /** Parse `ip -4 route show default` output into the interface names carrying the default route. */
 function parseDefaultRouteInterfaces(output) {
     const out = [];
@@ -802,6 +1089,36 @@ async function removeFirewall() {
         await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
         await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
     }
+    const jumps = [
+        ['iptables', 'nat', 'PREROUTING', constants_1.CONTAINER_NAT_CHAIN],
+        ['iptables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', 'FORWARD', constants_1.CONTAINER_FWD_CHAIN]
+    ];
+    for (const [bin, table, from, chain] of jumps) {
+        for (const b of LOCAL_BRIDGES) {
+            for (let i = 0; i < 5; i++) {
+                if ((await exec.exec('sudo', [bin, '-t', table, '-D', from, '-i', b, '-j', chain], opts)) !== 0)
+                    break;
+            }
+        }
+    }
+    for (const [bin, table, chain] of [
+        ['iptables', 'nat', constants_1.CONTAINER_NAT_CHAIN],
+        ['iptables', 'filter', constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', constants_1.CONTAINER_FWD_CHAIN]
+    ]) {
+        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
+        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
+    }
+}
+/** True if `chain` exists in the filter table of `bin`. */
+async function chainExists(bin, chain) {
+    const rc = await exec.exec('sudo', [bin, '-t', 'filter', '-n', '-L', chain], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    return rc === 0;
 }
 /**
  * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
@@ -811,17 +1128,75 @@ async function applyFirewall(o) {
     await removeFirewall();
     // REDIRECT to 127.0.0.1 of packets that were routed to another interface
     await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
-    await restore('iptables-restore', buildNatRules(o) + buildFilterRules(o));
-    const v6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
-        input: Buffer.from(buildIp6FilterRules(o)),
+    let v4 = buildNatRules(o) + buildFilterRules(o);
+    let v6 = buildIp6FilterRules(o);
+    if (o.containers) {
+        if (!(await chainExists('iptables', constants_1.DOCKER_USER_CHAIN))) {
+            // Docker is running but has not set up its chains (iptables: false?): nothing forwards
+            // through DOCKER-USER, so there is nothing to hook. Say so rather than fail open silently.
+            core.warning('Docker is running but the DOCKER-USER chain is missing: container egress rules not applied');
+        }
+        else {
+            v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
+            const hook = (await chainExists('ip6tables', constants_1.DOCKER_USER_CHAIN)) ? constants_1.DOCKER_USER_CHAIN : 'FORWARD';
+            v6 += buildIp6ContainerForwardRules(o, hook);
+        }
+    }
+    await restore('iptables-restore', v4);
+    const rc6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
+        input: Buffer.from(v6),
         ignoreReturnCode: true
     });
-    if (v6 !== 0) {
+    if (rc6 !== 0) {
         const msg = 'ip6tables rules could not be applied';
         if (o.mode === 'enforce')
             throw new Error(msg);
         core.warning(msg);
     }
+}
+/** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
+function parseDockerSubnets(json) {
+    const out = [];
+    try {
+        const nets = JSON.parse(json);
+        for (const n of nets) {
+            if (n.Driver !== 'bridge')
+                continue;
+            for (const cfg of n.IPAM?.Config || [])
+                if (cfg.Subnet)
+                    out.push(cfg.Subnet);
+        }
+    }
+    catch {
+        // not JSON (docker error): no subnets
+    }
+    return Array.from(new Set(out));
+}
+/**
+ * Drop conntrack entries of flows sourced from the container networks. Without this, a
+ * service container's connections that predate the rules keep going via ESTABLISHED (the
+ * forwarded-traffic counterpart of killPreexistingConnections).
+ */
+async function flushContainerConntrack() {
+    const opts = { ignoreReturnCode: true, silent: true };
+    const ids = await exec.getExecOutput('sudo', ['docker', 'network', 'ls', '-q', '--filter', 'driver=bridge'], opts);
+    const netIds = ids.stdout.split('\n').filter(Boolean);
+    let subnets = ['172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8'];
+    if (netIds.length > 0) {
+        const inspect = await exec.getExecOutput('sudo', ['docker', 'network', 'inspect', ...netIds], opts);
+        const found = parseDockerSubnets(inspect.stdout);
+        if (found.length > 0)
+            subnets = found;
+    }
+    if ((await exec.exec('sh', ['-c', 'command -v conntrack'], opts)) !== 0) {
+        core.warning('conntrack not installed: container connections that predate the rules may continue');
+        return;
+    }
+    for (const s of subnets) {
+        // exit 1 = nothing matched
+        await exec.exec('sudo', ['conntrack', '-D', '-f', s.includes(':') ? 'ipv6' : 'ipv4', '-s', s], opts);
+    }
+    core.info(`Flushed container conntrack entries for ${subnets.join(', ')}`);
 }
 /**
  * Kill established :80/:443 connections that predate the REDIRECT (runner long-polls etc.),
@@ -842,6 +1217,9 @@ async function logFirewall() {
     await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.NAT_CHAIN], opts);
     await exec.exec('sudo', ['iptables', '-S', constants_1.FILTER_CHAIN], opts);
     await exec.exec('sudo', ['ip6tables', '-S', constants_1.FILTER_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.CONTAINER_NAT_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-S', constants_1.CONTAINER_FWD_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-S', constants_1.DOCKER_USER_CHAIN], opts);
 }
 
 
@@ -993,6 +1371,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseMode = parseMode;
 exports.parsePort = parsePort;
+exports.parseContainerTls = parseContainerTls;
 exports.parseSize = parseSize;
 exports.resolveDisableSudo = resolveDisableSudo;
 exports.resolveDisableDocker = resolveDisableDocker;
@@ -1005,12 +1384,34 @@ function parseMode(raw) {
     }
     return m;
 }
+/** proxy-port: an explicit override, or null (unset) to allocate free ports at setup. */
 function parsePort(raw) {
-    const n = Number((raw || '8080').trim());
-    if (!Number.isInteger(n) || n < 1024 || n > 65535) {
-        throw new Error(`proxy-port must be an integer between 1024 and 65535, got "${raw}"`);
+    if ((raw || '').trim() === '')
+        return null;
+    const n = Number(raw.trim());
+    // the container listener is proxy-port + 1
+    if (!Number.isInteger(n) || n < 1024 || n > 65534) {
+        throw new Error(`proxy-port must be an integer between 1024 and 65534, got "${raw}"`);
     }
     return n;
+}
+/**
+ * container-tls: `sni-only` (default) or `intercept`. `intercept` needs the CA inside every
+ * container, which only the OCI runtime shim can provide; that is not built yet (P3), so it
+ * is accepted but treated as `sni-only` with a warning. Returns [effective, warning].
+ */
+function parseContainerTls(raw) {
+    const v = (raw || 'sni-only').trim().toLowerCase();
+    if (v === 'sni-only')
+        return ['sni-only', ''];
+    if (v === 'intercept') {
+        return [
+            'sni-only',
+            'container-tls: intercept is not yet implemented (it needs the CA injected into every container); ' +
+                'treated as sni-only - container HTTPS to allowlisted hosts is checked by SNI, not decrypted.'
+        ];
+    }
+    throw new Error(`container-tls must be "sni-only" or "intercept", got "${raw}"`);
 }
 function parseSize(raw) {
     const s = (raw || '1m').trim().toLowerCase();
@@ -1065,6 +1466,7 @@ function readInputs() {
     const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode, sudoConfig);
     // core.getInput reads the raw INPUT_DISABLE-DOCKER variable ('' when unset - no action.yaml default)
     const [disableDocker, disableDockerDefaulted] = resolveDisableDocker(core.getInput('disable-docker'), mode);
+    const [containerTls, containerTlsWarning] = parseContainerTls(core.getInput('container-tls'));
     return {
         mode,
         allowedDomains: core.getInput('allowed-domains'),
@@ -1081,7 +1483,9 @@ function readInputs() {
         stopDocker: bool('stop-docker'),
         failOnTampering: bool('fail-on-tampering'),
         proxyPort: parsePort(core.getInput('proxy-port')),
-        streamLargeBodies: parseSize(core.getInput('proxy-stream-large-bodies'))
+        streamLargeBodies: parseSize(core.getInput('proxy-stream-large-bodies')),
+        containerTls,
+        containerTlsWarning
     };
 }
 
@@ -1674,7 +2078,7 @@ function generateSudoersConfig(commands, username = 'runner') {
  *  - `a-*.example.com` -> `*` matches within ONE label; the rest must match exactly
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MANDATORY_PASSTHROUGH = void 0;
+exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = void 0;
 exports.normHost = normHost;
 exports.isIpLiteral = isIpLiteral;
 exports.validatePattern = validatePattern;
@@ -1686,6 +2090,20 @@ exports.dnsDomainsFor = dnsDomainsFor;
 const github_parser_1 = __nccwpck_require__(9170);
 const dns_config_builder_1 = __nccwpck_require__(1877);
 const constants_1 = __nccwpck_require__(8729);
+/**
+ * Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
+ * SNI-only check would allow fronting to any tenant. Under container sni-only these stay
+ * intercepted for containers in enforce. Mirrors FRONT_DOORS in proxy/policy_core.py (both
+ * are checked against proxy/test-vectors.json).
+ */
+exports.FRONT_DOORS = [
+    '*.blob.core.windows.net',
+    '*.dfs.core.windows.net',
+    '*.file.core.windows.net',
+    '*.queue.core.windows.net',
+    '*.table.core.windows.net',
+    '*.web.core.windows.net'
+];
 /**
  * Hosts that MUST be passed through (SNI-only, never decrypted). Empirical (P0 spike): the
  * Go hosted-compute agent loads system roots at boot and can never trust a CA added later,
@@ -1797,7 +2215,9 @@ function buildPolicyConfig(opts) {
             allow: uniq([...github, ...user]),
             passthrough,
             deny,
-            flow_log: constants_1.FLOW_LOG
+            flow_log: constants_1.FLOW_LOG,
+            container_tls: opts.containerTls,
+            container_port: opts.containerPort
         },
         warnings
     };
@@ -1933,7 +2353,9 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.PROXY_PORT_BAND = void 0;
 exports.actionRoot = actionRoot;
+exports.allocateProxyPorts = allocateProxyPorts;
 exports.installMitmproxy = installMitmproxy;
 exports.createProxyUser = createProxyUser;
 exports.installAddon = installAddon;
@@ -1949,6 +2371,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs = __importStar(__nccwpck_require__(9896));
+const net = __importStar(__nccwpck_require__(9278));
 const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
 /**
@@ -1959,6 +2382,35 @@ const constants_1 = __nccwpck_require__(8729);
 function actionRoot() {
     const script = process.argv[1] || '';
     return path.resolve(path.dirname(script), '..', '..');
+}
+/**
+ * Free-port band for the proxy listeners: above the registered ports dev servers favour
+ * (3000, 5000, 8080, 9000...) and below Linux's ephemeral range (32768-60999), so an outgoing
+ * connection's local port can never be the one we picked.
+ */
+exports.PROXY_PORT_BAND = [20000, 32766];
+function canBind(port) {
+    return new Promise(resolve => {
+        const srv = net.createServer();
+        srv.once('error', () => resolve(false));
+        srv.listen({ host: constants_1.PROXY_LISTEN_HOST, port, exclusive: true }, () => srv.close(() => resolve(true)));
+    });
+}
+/**
+ * Pick the proxy's two listener ports: host = P, container = P + 1. An explicit proxy-port is
+ * honoured as is; otherwise a random pair in PROXY_PORT_BAND where both are free right now
+ * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
+ */
+async function allocateProxyPorts(explicit, probe = canBind, random = Math.random) {
+    if (explicit !== null)
+        return { port: explicit, containerPort: explicit + 1 };
+    const [lo, hi] = exports.PROXY_PORT_BAND;
+    for (let i = 0; i < 50; i++) {
+        const p = lo + Math.floor(random() * (hi - lo));
+        if ((await probe(p)) && (await probe(p + 1)))
+            return { port: p, containerPort: p + 1 };
+    }
+    throw new Error(`no free pair of loopback ports found in ${lo}-${hi + 1}`);
 }
 async function sudo(args, opts = {}) {
     return exec.exec('sudo', args, opts);
@@ -2086,12 +2538,11 @@ rm -f ${constants_1.PROXY_CA_KEY_FILE} ${constants_1.PROXY_CONF_DIR}/ca-key.pem 
 function mitmdumpArgs(o) {
     return [
         constants_1.MITMDUMP_BIN,
+        // two transparent listeners: a connection's listener tells host from container traffic
         '--mode',
-        'transparent',
-        '--listen-host',
-        constants_1.PROXY_LISTEN_HOST,
-        '--listen-port',
-        String(o.port),
+        `transparent@${constants_1.PROXY_LISTEN_HOST}:${o.port}`,
+        '--mode',
+        `transparent@${constants_1.PROXY_LISTEN_HOST}:${o.containerPort}`,
         '--set',
         `confdir=${constants_1.PROXY_CONF_DIR}`,
         '--set',
@@ -2182,7 +2633,7 @@ async function startProxy(o, timeoutMs = 90000) {
         while (Date.now() < deadline) {
             const log = fs.existsSync(constants_1.FLOW_LOG) ? fs.readFileSync(constants_1.FLOW_LOG, 'utf8') : '';
             const start = findStartRecord(log);
-            if (start && (await isListening(o.port))) {
+            if (start && (await isListening(o.port)) && (await isListening(o.containerPort))) {
                 core.info(`✅ Proxy up (pid ${start.pid}, ${start.mode} policy loaded and self-tested)`);
                 return;
             }
@@ -2700,7 +3151,13 @@ async function removeSudoLogging() {
  * These are the only sudo commands the runner keeps after sudo is restricted.
  */
 function getValidationSudoCommands() {
-    const files = [...validation_1.CRITICAL_FILES, exports.SUDO_LOGGING_SUDOERS_FILE, exports.SUDO_LOGGING_RSYSLOG_FILE, constants_1.VALIDATION_STATE_FILE];
+    const files = [
+        ...validation_1.CRITICAL_FILES,
+        constants_1.DOCKER_DAEMON_JSON,
+        exports.SUDO_LOGGING_SUDOERS_FILE,
+        exports.SUDO_LOGGING_RSYSLOG_FILE,
+        constants_1.VALIDATION_STATE_FILE
+    ];
     return [
         ...files.map(file => `/usr/bin/cat ${file}`),
         ...validation_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, validation_1.iptablesListArgs)(chain).join(' ')}`),
@@ -3103,7 +3560,11 @@ exports.IPTABLES_CHAINS = [
     'FORWARD',
     'SAFER_RUNNER_OUT',
     'nat:OUTPUT',
-    'nat:SAFER_RUNNER_NAT'
+    'nat:SAFER_RUNNER_NAT',
+    // container egress (P2); absent when Docker isn't running (capture skips missing chains)
+    'DOCKER-USER',
+    'SAFER_RUNNER_CFWD',
+    'nat:SAFER_RUNNER_CNAT'
 ];
 /** `iptables` arguments that list one chain spec (`CHAIN` or `table:CHAIN`). */
 function iptablesListArgs(spec) {
