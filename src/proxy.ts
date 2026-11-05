@@ -22,6 +22,7 @@ import {
   PROXY_CA_KEY_FILE,
   PROXY_CONF_DIR,
   PROXY_LISTEN_HOST,
+  PROXY_STREAM_LARGE_BODIES,
   PROXY_UNIT,
   PROXY_USER,
   TEARDOWN_BIN
@@ -33,7 +34,6 @@ export interface ProxyOptions {
   port: number;
   /** container listener (nat PREROUTING DNAT from the docker bridges); the addon classifies by it */
   containerPort: number;
-  streamLargeBodies: string;
 }
 
 /**
@@ -62,16 +62,14 @@ function canBind(port: number): Promise<boolean> {
 }
 
 /**
- * Pick the proxy's two listener ports: host = P, container = P + 1. An explicit proxy-port is
- * honoured as is; otherwise a random pair in PROXY_PORT_BAND where both are free right now
+ * Pick the proxy's two listener ports: host = P, container = P + 1, a random pair in
+ * PROXY_PORT_BAND where both are free right now
  * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
  */
 export async function allocateProxyPorts(
-  explicit: number | null,
   probe: (port: number) => Promise<boolean> = canBind,
   random: () => number = Math.random
 ): Promise<{ port: number; containerPort: number }> {
-  if (explicit !== null) return { port: explicit, containerPort: explicit + 1 };
   const [lo, hi] = PROXY_PORT_BAND;
   for (let i = 0; i < 50; i++) {
     const p = lo + Math.floor(random() * (hi - lo));
@@ -243,7 +241,7 @@ export function mitmdumpArgs(o: ProxyOptions): string[] {
     '--set',
     'connection_strategy=lazy',
     '--set',
-    `stream_large_bodies=${o.streamLargeBodies}`,
+    `stream_large_bodies=${PROXY_STREAM_LARGE_BODIES}`,
     '--set',
     'block_global=false',
     '--set',

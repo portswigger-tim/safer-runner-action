@@ -121,6 +121,12 @@ function hostsLines(h: LocalHosts): string[] {
   return [`  hosts ${h.file} {`, ...inline, `    fallthrough`, `  }`];
 }
 
+/** dns-servers order matters: the first is the primary, the rest are tried in order after it. */
+function forwardLines(upstreams: string[]): string[] {
+  if (upstreams.length === 1) return [`  forward . ${upstreams[0]}`];
+  return [`  forward . ${upstreams.join(' ')} {`, `    policy sequential`, `  }`];
+}
+
 function forwardBlock(label: string, upstreams: string[], view?: string, hosts?: LocalHosts): string {
   return [
     `.:53 {`,
@@ -133,7 +139,7 @@ function forwardBlock(label: string, upstreams: string[], view?: string, hosts?:
     `  cache ${CACHE_TTL} {`,
     `    serve_stale 1h`,
     `  }`,
-    `  forward . ${upstreams.join(' ')}`,
+    ...forwardLines(upstreams),
     `}`
   ].join('\n');
 }

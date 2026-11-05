@@ -16,7 +16,6 @@ import {
   buildSudoRsyslogConfig,
   setupSudoLogging,
   removeSudoLogging,
-  applyCustomSudoConfig,
   disableSudoForRunner,
   parseSudoLogs,
   readSudoUsage,
@@ -255,36 +254,13 @@ describe('sudo module', () => {
     });
   });
 
-  describe('applyCustomSudoConfig', () => {
-    it('appends the validation allowlist to the user config', async () => {
-      visudoResult(0);
-      await applyCustomSudoConfig('runner ALL=(root) NOPASSWD: /usr/bin/apt-get', 'sudo-rs');
-
-      const written = teeInput('/tmp/runner-sudoers.tmp');
-      expect(written.startsWith('runner ALL=(root) NOPASSWD: /usr/bin/apt-get\n')).toBe(true);
-      expect(written).toContain('SAFER_RUNNER_VALIDATION');
-    });
-
-    it('sudo-rs: fails with guidance naming sudo-rs when visudo rejects the config', async () => {
-      visudoResult(1, '/tmp/runner-sudoers.tmp:1:28: syntax error: wildcards are not allowed in command arguments');
-
-      await expect(
-        applyCustomSudoConfig('runner ALL=(root) NOPASSWD: /usr/bin/ls /home/*/x', 'sudo-rs')
-      ).rejects.toThrow(/wildcards are not allowed/);
-
-      expect(core.error).toHaveBeenCalledWith(expect.stringContaining('sudo-rs'));
-      expect(core.error).toHaveBeenCalledWith(expect.stringContaining('whole argument list'));
-      expect(sudoCalls()).toContain('rm -f /tmp/runner-sudoers.tmp');
-      expect(sudoCalls()).not.toContain('mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner');
-    });
-
-    it('classic sudo: fails without sudo-rs guidance', async () => {
+  describe('disableSudoForRunner: visudo rejection', () => {
+    it('removes the temp file and never installs a rejected sudoers file', async () => {
       visudoResult(1, 'syntax error');
 
-      await expect(applyCustomSudoConfig('runner ALL=(root) NOPASSWD: bogus', 'sudo')).rejects.toThrow(
-        'Invalid sudoers configuration'
-      );
-      expect(core.error).not.toHaveBeenCalledWith(expect.stringContaining('sudo-rs'));
+      await expect(disableSudoForRunner('sudo-rs')).rejects.toThrow(/rejected by visudo \(sudo-rs\): syntax error/);
+      expect(sudoCalls()).toContain('rm -f /tmp/runner-sudoers.tmp');
+      expect(sudoCalls()).not.toContain('mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner');
     });
   });
 

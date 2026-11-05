@@ -255,8 +255,13 @@ describe('Option R layout', () => {
 
   it('opens with a title, a chip row and a CAUTION verdict for bypass attempts', () => {
     const lines = md.split('\n');
-    expect(lines[0]).toBe('## 🛡️ Safer Runner — egress');
-    expect(lines[2]).toBe('<kbd>🔒 ENFORCE</kbd> <kbd>⚠️ docker retained</kbd> <kbd>🧪 self-tests 2/2</kbd>');
+    // docker: keep under enforce is ADVISORY, like retained sudo (G4)
+    expect(lines[0]).toBe(
+      '## 🛡️ Safer Runner — egress — enforce (ADVISORY — docker retained, not an enforced boundary)'
+    );
+    expect(lines[2]).toBe(
+      '<kbd>⚠️ ENFORCE · ADVISORY</kbd> <kbd>⚠️ docker retained</kbd> <kbd>🧪 self-tests 2/2</kbd>'
+    );
     expect(md).toContain(
       '> [!CAUTION]\n> **Bypass attempts to 4 hosts were blocked** — 2 Host/SNI spoofs and 2 names that point at internal addresses.'
     );
@@ -614,9 +619,59 @@ describe('enforce labelling (review H2)', () => {
     expect(buildReport({ ...base, mode: 'analyze', sudoRetained: true })).not.toContain('ADVISORY —');
   });
 
-  it('warns when enforce left docker (root-equivalent) in place', () => {
-    expect(buildReport({ ...base, mode: 'enforce', dockerRetained: true })).toContain('> [!WARNING]');
+  it('labels enforce with docker retained (verified) as ADVISORY, like sudo (G4)', () => {
+    const md = buildReport({ ...base, mode: 'enforce', dockerRetained: true });
+    expect(md.split('\n')[0]).toBe(
+      '## 🛡️ Safer Runner — egress — enforce (ADVISORY — docker retained, not an enforced boundary)'
+    );
+    expect(md).toContain('<kbd>⚠️ ENFORCE · ADVISORY</kbd> <kbd>⚠️ docker retained</kbd>');
+    expect(md).toContain('> [!WARNING]');
+    expect(md).toContain('**ADVISORY: docker was retained** (`docker: keep`; verified on the runner)');
+    expect(md).toContain('`docker: remove-group`');
+    expect(md).not.toMatch(/disable-docker|stop-docker|sudo-config/);
     expect(buildReport({ ...base, mode: 'enforce', dockerRetained: false })).not.toContain('[!');
+  });
+
+  it('names both when sudo and docker were retained', () => {
+    const md = buildReport({ ...base, mode: 'enforce', sudoRetained: true, dockerRetained: true });
+    expect(md.split('\n')[0]).toContain('ADVISORY — sudo and docker retained');
+    expect(modeLabel('enforce', true, true)).toBe(
+      '⚠️ ENFORCE (ADVISORY — sudo and docker retained, not an enforced boundary)'
+    );
+    expect(modeLabel('enforce', false, true)).toContain('docker retained');
+    expect(modeLabel('enforce')).toBe('🔒 ENFORCE');
+  });
+
+  it('never labels analyze ADVISORY for kept docker', () => {
+    expect(buildReport({ ...base, mode: 'analyze', dockerRetained: true })).not.toContain('ADVISORY');
+  });
+
+  it('reports the verified docker state, not just the input (G4)', () => {
+    const removed = buildReport({
+      ...base,
+      mode: 'enforce',
+      docker: { requested: 'remove-group', access: 'group-removed' }
+    });
+    expect(removed).toContain('docker removed ✓');
+    expect(removed).toContain(
+      '**Docker** — `docker: remove-group`; verified at setup: runner user removed from the docker group, socket root-only'
+    );
+    const stopped = buildReport({ ...base, mode: 'enforce', docker: { requested: 'stop', access: 'not-running' } });
+    expect(stopped).toContain('docker stopped ✓');
+    expect(stopped).toContain('verified at setup: docker daemon not running');
+    const kept = buildReport({
+      ...base,
+      mode: 'enforce',
+      dockerRetained: true,
+      docker: { requested: 'keep', access: 'retained' }
+    });
+    expect(kept).toContain('verified at setup: runner user can use docker');
+  });
+
+  it('the sudo ADVISORY wording no longer mentions sudo-config', () => {
+    const md = buildReport({ ...base, mode: 'enforce', sudoRetained: true });
+    expect(md).toContain('**ADVISORY: sudo was retained** (`disable-sudo: false`)');
+    expect(md).not.toContain('sudo-config');
   });
 
   const cmd = (command: string) => ({ timestamp: '', user: 'runner', targetUser: 'root', command, args: '' });

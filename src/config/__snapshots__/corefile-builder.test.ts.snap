@@ -14,7 +14,9 @@ exports[`buildCorefile matches the Corefile snapshot 1`] = `
   cache 3600 {
     serve_stale 1h
   }
-  forward . 9.9.9.9 149.112.112.112
+  forward . 9.9.9.9 149.112.112.112 {
+    policy sequential
+  }
 }
 .:53 {
   bind 127.0.0.1

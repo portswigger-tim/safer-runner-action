@@ -142,6 +142,12 @@ function hostsLines(h) {
     // fallthrough: allowlisted names not in the file go on to forward
     return [`  hosts ${h.file} {`, ...inline, `    fallthrough`, `  }`];
 }
+/** dns-servers order matters: the first is the primary, the rest are tried in order after it. */
+function forwardLines(upstreams) {
+    if (upstreams.length === 1)
+        return [`  forward . ${upstreams[0]}`];
+    return [`  forward . ${upstreams.join(' ')} {`, `    policy sequential`, `  }`];
+}
 function forwardBlock(label, upstreams, view, hosts) {
     return [
         `.:53 {`,
@@ -154,7 +160,7 @@ function forwardBlock(label, upstreams, view, hosts) {
         `  cache ${exports.CACHE_TTL} {`,
         `    serve_stale 1h`,
         `  }`,
-        `  forward . ${upstreams.join(' ')}`,
+        ...forwardLines(upstreams),
         `}`
     ].join('\n');
 }
@@ -201,7 +207,7 @@ function buildCorefile(o) {
  * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
 exports.MITMPROXY_VERSION = '12.3.1';
 exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
@@ -220,6 +226,8 @@ exports.DNS_UNIT = 'safer-runner-dns';
 exports.PROXY_USER = 'safer-runner-proxy';
 exports.PROXY_UNIT = 'safer-runner-proxy';
 exports.PROXY_LISTEN_HOST = '127.0.0.1';
+/** mitmproxy stream_large_bodies: larger bodies are streamed instead of buffered. */
+exports.PROXY_STREAM_LARGE_BODIES = '1m';
 /** Root-owned install location: the runner user must not be able to change what the proxy loads. */
 exports.INSTALL_DIR = '/opt/safer-runner';
 exports.MITMDUMP_BIN = `${exports.INSTALL_DIR}/bin/mitmdump`;
@@ -482,8 +490,7 @@ async function startCoreDns(dnsUser, readinessName, timeoutMs = 20000) {
 "use strict";
 
 /**
- * Docker access control module
- * Handles Docker group membership and container access restrictions
+ * Docker access control (the `docker` input) and dockerd handling for the proxy CA.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -519,10 +526,12 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
 exports.disableDockerForRunner = disableDockerForRunner;
 exports.stopDockerService = stopDockerService;
 exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
+exports.dockerAccess = dockerAccess;
+exports.readDockerState = readDockerState;
 exports.mergeLiveRestore = mergeLiveRestore;
 exports.isDockerActive = isDockerActive;
 exports.runningContainers = runningContainers;
@@ -531,91 +540,102 @@ exports.parseContainerAddresses = parseContainerAddresses;
 exports.containerAddresses = containerAddresses;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 // Constants
 exports.RUNNER_USERNAME = 'runner';
 exports.DOCKER_GROUP = 'docker';
-/**
- * Disable Docker access for the runner user
- * This prevents container escape attacks, docker socket abuse, and privileged container execution
- *
- * Strategy:
- * 1. Remove runner from docker group (prevents new sessions from getting access)
- * 2. Change docker socket permissions to block current session
- *
- * Note: Simply removing group membership doesn't affect the current process's
- * credential cache, so we must also restrict the docker socket directly.
- */
-async function disableDockerForRunner() {
-    core.info('Disabling Docker access for runner user...');
-    try {
-        // Step 1: Remove runner from docker group (for future sessions)
-        await exec.exec('sudo', ['gpasswd', '-d', exports.RUNNER_USERNAME, exports.DOCKER_GROUP]);
-        core.info(`✅ Removed ${exports.RUNNER_USERNAME} from ${exports.DOCKER_GROUP} group`);
-        // Step 2: Restrict docker socket permissions to block current session
-        // Change ownership to root:root and set permissions to 600 (owner-only access)
-        core.info('Restricting docker socket permissions...');
-        await exec.exec('sudo', ['chown', 'root:root', '/var/run/docker.sock']);
-        await exec.exec('sudo', ['chmod', '600', '/var/run/docker.sock']);
-        core.info('✅ Docker socket access restricted to root only');
-        core.info('🔒 Docker commands will no longer be available to the runner user');
-        core.info('ℹ️  This prevents container escape attacks and docker socket abuse');
-    }
-    catch (error) {
-        core.warning(`Could not fully disable Docker access: ${error}`);
-    }
+exports.DOCKER_SOCKET = '/var/run/docker.sock';
+async function run(args) {
+    const rc = await exec.exec('sudo', args, { ignoreReturnCode: true });
+    return rc === 0 ? null : `sudo ${args.join(' ')} exited ${rc}`;
 }
 /**
- * Stop and disable the Docker service completely
- * This provides stronger protection than disableDockerForRunner by preventing
- * all Docker usage system-wide, not just for the runner user.
+ * docker: remove-group. Removes the runner user from the docker group (new sessions) and locks
+ * the socket to root:root 0600 (the current session keeps the group in its credentials, so
+ * the group change alone would not stop it). Idempotent: a runner already outside the group,
+ * or without a socket, is left alone.
  *
- * Strategy:
- * 1. Stop the Docker service (kills all running containers)
- * 2. Disable the Docker service (prevents automatic restart)
- *
- * Note: This affects the entire system and will terminate any running containers.
+ * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
+ * afterwards - the caller fails closed on that, not on these messages.
+ */
+async function disableDockerForRunner(socket = exports.DOCKER_SOCKET) {
+    core.info('Removing the runner user from the docker group and locking the docker socket...');
+    const failed = [];
+    if (await isRunnerInDockerGroup()) {
+        const err = await run(['gpasswd', '-d', exports.RUNNER_USERNAME, exports.DOCKER_GROUP]);
+        if (err)
+            failed.push(err);
+    }
+    if (fs.existsSync(socket)) {
+        for (const args of [
+            ['chown', 'root:root', socket],
+            ['chmod', '600', socket]
+        ]) {
+            const err = await run(args);
+            if (err)
+                failed.push(err);
+        }
+    }
+    return failed;
+}
+/**
+ * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
+ * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
 async function stopDockerService() {
-    core.info('Stopping and disabling Docker service...');
-    try {
-        // Step 1: Stop the Docker service
-        core.info('Stopping Docker service...');
-        await exec.exec('sudo', ['systemctl', 'stop', 'docker.socket']);
-        await exec.exec('sudo', ['systemctl', 'stop', 'docker.service']);
-        core.info('✅ Docker service stopped');
-        // Step 2: Disable the Docker service (prevents restart)
-        core.info('Disabling Docker service...');
-        await exec.exec('sudo', ['systemctl', 'disable', 'docker.socket']);
-        await exec.exec('sudo', ['systemctl', 'disable', 'docker.service']);
-        core.info('✅ Docker service disabled');
-        core.info('🔒 Docker has been completely stopped and disabled');
-        core.info('ℹ️  This prevents all Docker usage system-wide');
+    core.info('Stopping and disabling the docker daemon...');
+    const failed = [];
+    for (const verb of ['stop', 'disable']) {
+        for (const unit of ['docker.socket', 'docker.service']) {
+            const err = await run(['systemctl', verb, unit]);
+            if (err)
+                failed.push(err);
+        }
     }
-    catch (error) {
-        core.warning(`Could not stop Docker service: ${error}`);
-    }
+    return failed;
 }
 /**
- * Check if the runner user is a member of the docker group
- * @returns Promise<boolean> - true if runner is in docker group
+ * Whether the runner user is in the docker group (`id -nG runner`, i.e. what a new session
+ * gets). Fails closed: if membership cannot be read, it is assumed.
  */
 async function isRunnerInDockerGroup() {
-    try {
-        let output = '';
-        await exec.exec('groups', [exports.RUNNER_USERNAME], {
-            listeners: {
-                stdout: (data) => {
-                    output += data.toString();
-                }
-            }
-        });
-        return output.includes(exports.DOCKER_GROUP);
+    const { stdout, exitCode } = await exec.getExecOutput('id', ['-nG', exports.RUNNER_USERNAME], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    if (exitCode !== 0) {
+        core.warning(`Could not read the groups of ${exports.RUNNER_USERNAME} (id exit ${exitCode}); assuming docker membership`);
+        return true;
     }
-    catch (error) {
-        core.warning(`Could not check docker group membership: ${error}`);
+    return stdout.trim().split(/\s+/).includes(exports.DOCKER_GROUP);
+}
+function dockerAccess(s) {
+    if (!s.daemonActive && !s.socketUnitActive)
+        return 'not-running';
+    if (!s.runnerInGroup && !s.socketAccessible)
+        return 'group-removed';
+    return 'retained';
+}
+function canUseSocket(socket) {
+    try {
+        fs.accessSync(socket, fs.constants.R_OK | fs.constants.W_OK);
+        return true;
+    }
+    catch {
         return false;
     }
+}
+async function unitActive(unit) {
+    return (await exec.exec('systemctl', ['is-active', '--quiet', unit], { ignoreReturnCode: true, silent: true })) === 0;
+}
+async function readDockerState(socket = exports.DOCKER_SOCKET) {
+    return {
+        daemonActive: await unitActive('docker.service'),
+        socketUnitActive: await unitActive('docker.socket'),
+        runnerInGroup: await isRunnerInDockerGroup(),
+        socketAccessible: canUseSocket(socket)
+    };
 }
 /**
  * Merge `live-restore: true` into a daemon.json body. Returns null when the existing file is
@@ -800,6 +820,7 @@ exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
 exports.setupCompleted = setupCompleted;
 exports.installPackages = installPackages;
 exports.inJobContainer = inJobContainer;
+exports.applyDockerPolicy = applyDockerPolicy;
 exports.runSetup = runSetup;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
@@ -856,6 +877,39 @@ function inJobContainer(exists = fs.existsSync) {
 exports.JOB_CONTAINER_MESSAGE = 'safer-runner cannot protect a job that runs in a job `container:` - the action runs inside the ' +
     'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
     '`services:` and `docker run` steps instead (their egress is controlled).';
+/**
+ * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
+ * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
+ * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ */
+async function applyDockerPolicy(inputs, ops = { disableDockerForRunner: docker_1.disableDockerForRunner, stopDockerService: docker_1.stopDockerService, readDockerState: docker_1.readDockerState }) {
+    const { mode, docker } = inputs;
+    const failures = docker === 'stop'
+        ? await ops.stopDockerService()
+        : docker === 'remove-group'
+            ? await ops.disableDockerForRunner()
+            : [];
+    const state = await ops.readDockerState();
+    const access = (0, docker_1.dockerAccess)(state);
+    core.info(`docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+        `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`);
+    if (docker !== 'keep' && access === 'retained') {
+        const msg = `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
+            (failures.length ? `: ${failures.join('; ')}` : '');
+        if (mode === 'enforce')
+            throw new Error(msg);
+        core.warning(msg);
+    }
+    else if (failures.length) {
+        core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
+    }
+    if (mode === 'enforce' && access === 'retained') {
+        core.warning('enforce is ADVISORY in this job: docker is retained (docker: keep), and docker access is root-equivalent, ' +
+            'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
+            'or docker: stop unless the job needs docker.', { title: 'safer-runner: enforce (ADVISORY - docker retained)' });
+    }
+    return { requested: docker, access, state };
+}
 async function runSetup(inputs) {
     const { mode } = inputs;
     core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
@@ -867,35 +921,22 @@ async function runSetup(inputs) {
         });
         return;
     }
-    if (inputs.containerTlsWarning)
-        core.warning(inputs.containerTlsWarning);
-    if (inputs.disableSudo && inputs.sudoConfig) {
-        core.warning('Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
-    }
-    if (inputs.stopDocker && inputs.disableDocker && !inputs.disableDockerDefaulted) {
-        core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
-    }
     // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
     const sudoRetained = mode === 'enforce' && !inputs.disableSudo;
-    const dockerRetained = !inputs.disableDocker && !inputs.stopDocker;
     if (sudoRetained) {
-        core.warning(`enforce is ADVISORY in this job: sudo is retained (${inputs.sudoConfig ? 'sudo-config is set' : 'disable-sudo: false'}), ` +
-            'so any step can use it to remove the egress controls. This is not an enforced boundary. ' +
-            'Remove disable-sudo: false / sudo-config to make enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo retained)' });
+        core.warning('enforce is ADVISORY in this job: sudo is retained (disable-sudo: false), so any step can use it to ' +
+            'remove the egress controls. This is not an enforced boundary. Remove disable-sudo: false to make ' +
+            'enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo retained)' });
     }
     else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
         core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
     }
-    if (mode === 'enforce' && dockerRetained) {
-        core.warning('enforce with docker access: the docker group is root-equivalent, so a step can use docker to remove ' +
-            'the egress controls. Set disable-docker: true or stop-docker: true unless the job needs docker.');
-    }
-    else if (mode === 'enforce' && inputs.disableDockerDefaulted) {
-        core.info('disable-docker not set: enforce mode removes docker access by default (set disable-docker: false to keep it)');
+    if (mode === 'enforce' && inputs.dockerDefaulted) {
+        core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
     }
     const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
     core.info(`sudo implementation: ${sudoFlavour}`);
-    const ports = await (0, proxy_1.allocateProxyPorts)(inputs.proxyPort);
+    const ports = await (0, proxy_1.allocateProxyPorts)();
     core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
     // 1. Allowlist - fetched while normal DNS and direct egress still work
     const { domains: githubDomains, source } = await (0, github_parser_1.resolveGitHubDomains)();
@@ -906,13 +947,12 @@ async function runSetup(inputs) {
         allowedDomains: inputs.allowedDomains,
         passthroughDomains: inputs.passthroughDomains,
         blockRiskySubdomains: inputs.blockRiskySubdomains,
-        containerTls: inputs.containerTls,
         containerPort: ports.containerPort
     });
     for (const w of warnings)
         core.warning(w);
     core.info(`Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`);
-    const dnsServers = [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean);
+    const { dnsServers } = inputs;
     // 2. Install (parallel - both are network-bound)
     await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), (0, dns_1.installCoreDns)(), (0, proxy_1.installMitmproxy)()]));
     // 3. Users, addon, policy, CA
@@ -925,12 +965,7 @@ async function runSetup(inputs) {
     await (0, proxy_1.generateCa)();
     await (0, proxy_1.installTeardownHelper)();
     // 4. Proxy
-    const proxyOpts = {
-        port: ports.port,
-        containerPort: ports.containerPort,
-        streamLargeBodies: inputs.streamLargeBodies
-    };
-    await timed('Start proxy', () => (0, proxy_1.startProxy)(proxyOpts));
+    await timed('Start proxy', () => (0, proxy_1.startProxy)(ports));
     // 5. Trust - before any traffic is forced through the proxy
     await timed('Install CA trust', async () => {
         await (0, trust_1.installSystemTrust)();
@@ -953,11 +988,11 @@ async function runSetup(inputs) {
     });
     // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
     // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
-    const dockerActive = !inputs.stopDocker && (await (0, docker_1.isDockerActive)());
+    const dockerActive = inputs.docker !== 'stop' && (await (0, docker_1.isDockerActive)());
     let dockerConfigWritten = false;
     if (dockerActive) {
         const services = await (0, docker_1.runningContainers)();
-        if (dockerRetained || services.length > 0) {
+        if (inputs.docker === 'keep' || services.length > 0) {
             dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => (0, docker_1.restartDockerForCaTrust)());
         }
     }
@@ -995,12 +1030,16 @@ async function runSetup(inputs) {
             throw new Error(msg);
         core.warning(msg);
     }
+    // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
+    const docker = await applyDockerPolicy(inputs);
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
         input: Buffer.from(JSON.stringify({
             mode,
             sudoRetained,
-            dockerRetained,
-            containerTls: inputs.containerTls,
+            dockerRetained: docker.access === 'retained',
+            docker,
+            failOnTampering: inputs.failOnTampering,
+            containerTls: policy_1.CONTAINER_TLS,
             containerRules: dockerActive,
             proxyPorts: [ports.port, ports.containerPort],
             selfTestWindow,
@@ -1009,13 +1048,6 @@ async function runSetup(inputs) {
         }) + '\n'),
         silent: true
     });
-    // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-    if (inputs.stopDocker) {
-        await (0, docker_1.stopDockerService)();
-    }
-    else if (inputs.disableDocker) {
-        await (0, docker_1.disableDockerForRunner)();
-    }
     await (0, sudo_1.setupSudoLogging)(constants_1.SUDO_LOG, sudoFlavour);
     const validator = new validation_1.SystemValidator([
         ...validation_1.CRITICAL_FILES,
@@ -1025,9 +1057,6 @@ async function runSetup(inputs) {
     await validator.capturePostSetupBaseline();
     if (inputs.disableSudo) {
         await (0, sudo_1.disableSudoForRunner)(sudoFlavour);
-    }
-    else if (inputs.sudoConfig) {
-        await (0, sudo_1.applyCustomSudoConfig)(inputs.sudoConfig, sudoFlavour);
     }
     core.info(`✅ safer-runner v2 active in ${mode} mode`);
 }
@@ -1569,6 +1598,11 @@ function ipOf(hostport) {
 
 /**
  * v2 action inputs (see action.yaml).
+ *
+ * Several inputs are mode-aware: action.yaml declares no default for them, so the runner
+ * leaves the input empty when the workflow doesn't set it and "unset" can be told apart from
+ * an explicit value (getBooleanInput would collapse "unset" and "false"). Unset picks the
+ * mode's default; an explicit value always wins. Resolvers return [effective, defaulted].
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -1604,14 +1638,19 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_DNS_SERVERS = exports.DOCKER_POLICIES = void 0;
 exports.parseMode = parseMode;
-exports.parsePort = parsePort;
-exports.parseContainerTls = parseContainerTls;
-exports.parseSize = parseSize;
 exports.resolveDisableSudo = resolveDisableSudo;
-exports.resolveDisableDocker = resolveDisableDocker;
+exports.resolveDocker = resolveDocker;
+exports.resolveFailOnTampering = resolveFailOnTampering;
+exports.effectiveFailOnTampering = effectiveFailOnTampering;
+exports.parseDnsServers = parseDnsServers;
 exports.readInputs = readInputs;
 const core = __importStar(__nccwpck_require__(7484));
+const net = __importStar(__nccwpck_require__(9278));
+exports.DOCKER_POLICIES = ['keep', 'remove-group', 'stop'];
+/** Quad9 (filtering, no logging of client IPs): primary + secondary. */
+exports.DEFAULT_DNS_SERVERS = ['9.9.9.9', '149.112.112.112'];
 function parseMode(raw) {
     const m = (raw || 'analyze').trim().toLowerCase();
     if (m !== 'analyze' && m !== 'enforce') {
@@ -1619,75 +1658,64 @@ function parseMode(raw) {
     }
     return m;
 }
-/** proxy-port: an explicit override, or null (unset) to allocate free ports at setup. */
-function parsePort(raw) {
-    if ((raw || '').trim() === '')
+/** A YAML boolean, or null when unset. */
+function triState(raw, name) {
+    const v = (raw || '').trim();
+    if (v === '')
         return null;
-    const n = Number(raw.trim());
-    // the container listener is proxy-port + 1
-    if (!Number.isInteger(n) || n < 1024 || n > 65534) {
-        throw new Error(`proxy-port must be an integer between 1024 and 65534, got "${raw}"`);
-    }
-    return n;
-}
-/**
- * container-tls: `sni-only` (default) or `intercept`. `intercept` needs the CA inside every
- * container, which only the OCI runtime shim can provide; that is not built yet (P3), so it
- * is accepted but treated as `sni-only` with a warning. Returns [effective, warning].
- */
-function parseContainerTls(raw) {
-    const v = (raw || 'sni-only').trim().toLowerCase();
-    if (v === 'sni-only')
-        return ['sni-only', ''];
-    if (v === 'intercept') {
-        return [
-            'sni-only',
-            'container-tls: intercept is not yet implemented (it needs the CA injected into every container); ' +
-                'treated as sni-only - container HTTPS to allowlisted hosts is checked by SNI, not decrypted.'
-        ];
-    }
-    throw new Error(`container-tls must be "sni-only" or "intercept", got "${raw}"`);
-}
-function parseSize(raw) {
-    const s = (raw || '1m').trim().toLowerCase();
-    if (!/^\d+[kmg]?$/.test(s))
-        throw new Error(`proxy-stream-large-bodies must look like 512k / 1m / 1g, got "${raw}"`);
-    return s;
-}
-/**
- * disable-sudo is tri-state (review H2). Unset means ON in enforce mode: with sudo any step
- * can switch the egress controls off, so enforce is only a boundary without it. A non-empty
- * sudo-config is an explicit sudo policy and keeps sudo unless disable-sudo is set. Explicit
- * true/false always wins. action.yaml declares no default for disable-sudo, so the runner
- * leaves the input empty when the workflow doesn't set it (getBooleanInput would collapse
- * "unset" and "false"). Returns [effective value, whether it was defaulted].
- */
-function resolveDisableSudo(raw, mode, sudoConfig) {
-    const v = (raw || '').trim();
-    if (v === '')
-        return [mode === 'enforce' && sudoConfig.trim() === '', true];
     if (['true', 'True', 'TRUE'].includes(v))
-        return [true, false];
+        return true;
     if (['false', 'False', 'FALSE'].includes(v))
-        return [false, false];
-    throw new Error(`disable-sudo must be true or false, got "${raw}"`);
+        return false;
+    throw new Error(`${name} must be true or false, got "${raw}"`);
 }
 /**
- * disable-docker is tri-state, mirroring disable-sudo (review H2). Docker group membership is
- * root-equivalent, so a step can use it to remove the egress controls; unset therefore means ON
- * in enforce mode, off in analyze. Explicit true/false always wins. action.yaml declares no
- * default for disable-docker, so the runner leaves the input empty when the workflow doesn't set
- * it (getBooleanInput would collapse "unset" and "false"). Returns [effective value, defaulted].
+ * disable-sudo (review H2). Unset means ON in enforce mode: with sudo any step can switch the
+ * egress controls off, so enforce is only a boundary without it. Off in analyze.
  */
-function resolveDisableDocker(raw, mode) {
-    const v = (raw || '').trim();
+function resolveDisableSudo(raw, mode) {
+    const v = triState(raw, 'disable-sudo');
+    return v === null ? [mode === 'enforce', true] : [v, false];
+}
+/**
+ * docker. Unset means remove-group in enforce (docker is root-equivalent, mirroring
+ * disable-sudo), keep in analyze.
+ */
+function resolveDocker(raw, mode) {
+    const v = (raw || '').trim().toLowerCase();
     if (v === '')
-        return [mode === 'enforce', true];
-    if (['true', 'True', 'TRUE'].includes(v))
-        return [true, false];
-    if (['false', 'False', 'FALSE'].includes(v))
-        return [false, false];
-    throw new Error(`disable-docker must be true or false, got "${raw}"`);
+        return [mode === 'enforce' ? 'remove-group' : 'keep', true];
+    if (exports.DOCKER_POLICIES.includes(v))
+        return [v, false];
+    throw new Error(`docker must be one of ${exports.DOCKER_POLICIES.join(', ')}, got "${raw}"`);
+}
+/**
+ * fail-on-tampering. Unset means ON in enforce (a subverted control should fail the job), off
+ * in analyze (analyze never breaks a build).
+ */
+function resolveFailOnTampering(raw, mode) {
+    const v = triState(raw, 'fail-on-tampering');
+    return v === null ? [mode === 'enforce', true] : [v, false];
+}
+/**
+ * fail-on-tampering as the post step applies it: the value setup resolved and recorded in the
+ * root-owned setup marker (a step cannot change it), else - a marker from an older setup -
+ * resolved again from the input.
+ */
+function effectiveFailOnTampering(recorded, raw, mode) {
+    return typeof recorded === 'boolean' ? recorded : resolveFailOnTampering(raw, mode)[0];
+}
+/**
+ * dns-servers: space/comma/newline separated IP addresses, first = primary. Empty falls back
+ * to Quad9 so the resolver is never left without an upstream.
+ */
+function parseDnsServers(raw) {
+    const servers = (raw || '').split(/[\s,]+/).filter(Boolean);
+    for (const s of servers) {
+        if (net.isIP(s) === 0)
+            throw new Error(`dns-servers: '${s}' is not an IP address`);
+    }
+    return servers.length ? Array.from(new Set(servers)) : [...exports.DEFAULT_DNS_SERVERS];
 }
 function bool(name) {
     // getBooleanInput throws on an empty value (e.g. when inputs are absent in the pre step on a local action)
@@ -1696,31 +1724,21 @@ function bool(name) {
 }
 function readInputs() {
     const mode = parseMode(core.getInput('mode'));
-    const sudoConfig = core.getInput('sudo-config');
-    // core.getInput reads the raw INPUT_DISABLE-SUDO variable ('' when unset - no action.yaml default)
-    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode, sudoConfig);
-    // core.getInput reads the raw INPUT_DISABLE-DOCKER variable ('' when unset - no action.yaml default)
-    const [disableDocker, disableDockerDefaulted] = resolveDisableDocker(core.getInput('disable-docker'), mode);
-    const [containerTls, containerTlsWarning] = parseContainerTls(core.getInput('container-tls'));
+    // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
+    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+    const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
+    const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
     return {
         mode,
         allowedDomains: core.getInput('allowed-domains'),
         passthroughDomains: core.getInput('passthrough-domains'),
         blockRiskySubdomains: core.getInput('block-risky-github-subdomains') === '' ? true : bool('block-risky-github-subdomains'),
-        primaryDnsServer: core.getInput('primary-dns-server') || '9.9.9.9',
-        // action.yaml supplies the Quad9 default; an explicit '' disables the secondary (M1)
-        secondaryDnsServer: core.getInput('secondary-dns-server'),
+        dnsServers: parseDnsServers(core.getInput('dns-servers')),
         disableSudo,
         disableSudoDefaulted,
-        sudoConfig,
-        disableDocker,
-        disableDockerDefaulted,
-        stopDocker: bool('stop-docker'),
-        failOnTampering: bool('fail-on-tampering'),
-        proxyPort: parsePort(core.getInput('proxy-port')),
-        streamLargeBodies: parseSize(core.getInput('proxy-stream-large-bodies')),
-        containerTls,
-        containerTlsWarning
+        docker,
+        dockerDefaulted,
+        failOnTampering
     };
 }
 
@@ -2574,7 +2592,7 @@ function isDangerousSudoCommand(command) {
 /**
  * Generate suggested sudoers rules from observed sudo usage.
  *
- * This is ADVISORY output (a starting point for the `sudo-config` input), not a
+ * This is ADVISORY output (a starting point for a sudoers policy), not a
  * guarantee of safety. Design choices that make it least-privilege:
  * - run-as the exact target user observed (usually root), not `(ALL)`;
  * - pin the EXACT arguments observed. A bare command with no argument spec would
@@ -2635,7 +2653,7 @@ function generateSudoersConfig(commands, username = 'runner') {
  *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = void 0;
+exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = exports.CONTAINER_TLS = void 0;
 exports.normHost = normHost;
 exports.isIpLiteral = isIpLiteral;
 exports.parseAllowedDomains = parseAllowedDomains;
@@ -2647,6 +2665,8 @@ exports.isDangerouslyBroad = isDangerouslyBroad;
 exports.buildPolicyConfig = buildPolicyConfig;
 const github_parser_1 = __nccwpck_require__(9170);
 const constants_1 = __nccwpck_require__(8729);
+/** The only posture implemented: `intercept` needs the CA injected into every container (P3). */
+exports.CONTAINER_TLS = 'sni-only';
 /**
  * Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
  * SNI-only check would allow fronting to any tenant. Under container sni-only these stay
@@ -2792,7 +2812,8 @@ function buildPolicyConfig(opts) {
             passthrough,
             deny,
             flow_log: constants_1.FLOW_LOG,
-            container_tls: opts.containerTls,
+            // TODO P3: re-add container-tls input when intercept (CA-into-container) ships
+            container_tls: exports.CONTAINER_TLS,
             container_port: opts.containerPort
         },
         warnings
@@ -2891,13 +2912,11 @@ function canBind(port) {
     });
 }
 /**
- * Pick the proxy's two listener ports: host = P, container = P + 1. An explicit proxy-port is
- * honoured as is; otherwise a random pair in PROXY_PORT_BAND where both are free right now
+ * Pick the proxy's two listener ports: host = P, container = P + 1, a random pair in
+ * PROXY_PORT_BAND where both are free right now
  * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
  */
-async function allocateProxyPorts(explicit, probe = canBind, random = Math.random) {
-    if (explicit !== null)
-        return { port: explicit, containerPort: explicit + 1 };
+async function allocateProxyPorts(probe = canBind, random = Math.random) {
     const [lo, hi] = exports.PROXY_PORT_BAND;
     for (let i = 0; i < 50; i++) {
         const p = lo + Math.floor(random() * (hi - lo));
@@ -3056,7 +3075,7 @@ function mitmdumpArgs(o) {
         '--set',
         'connection_strategy=lazy',
         '--set',
-        `stream_large_bodies=${o.streamLargeBodies}`,
+        `stream_large_bodies=${constants_1.PROXY_STREAM_LARGE_BODIES}`,
         '--set',
         'block_global=false',
         '--set',
@@ -3477,7 +3496,7 @@ async function restartResolved() {
 
 /**
  * Sudo logging and configuration module
- * Handles sudo logging setup, custom sudo configuration, and permission management
+ * Handles sudo logging setup and removing the runner user's sudo (disable-sudo)
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -3513,7 +3532,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.DEFAULT_RUNNER_SUDO_CONFIG = exports.RUNNER_USERNAME = void 0;
+exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
 exports.parseSudoFlavour = parseSudoFlavour;
 exports.detectSudoFlavour = detectSudoFlavour;
 exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
@@ -3522,7 +3541,6 @@ exports.setupSudoLogging = setupSudoLogging;
 exports.removeSudoLogging = removeSudoLogging;
 exports.getValidationSudoCommands = getValidationSudoCommands;
 exports.getRequiredSudoCommands = getRequiredSudoCommands;
-exports.applyCustomSudoConfig = applyCustomSudoConfig;
 exports.disableSudoForRunner = disableSudoForRunner;
 exports.parseSudoLogs = parseSudoLogs;
 exports.readSudoUsage = readSudoUsage;
@@ -3535,11 +3553,6 @@ const validation_1 = __nccwpck_require__(8449);
 const constants_1 = __nccwpck_require__(8729);
 // Constants
 exports.RUNNER_USERNAME = 'runner';
-/**
- * Default sudoers configuration for GitHub Actions runner user
- * This is the standard unrestricted sudo access that exists by default
- */
-exports.DEFAULT_RUNNER_SUDO_CONFIG = `${exports.RUNNER_USERNAME} ALL=(ALL) NOPASSWD: ALL`;
 /** Classic sudo: sudoers drop-in enabling `Defaults logfile=` */
 exports.SUDO_LOGGING_SUDOERS_FILE = '/etc/sudoers.d/00-sudo-logging';
 /** sudo-rs: rsyslog rule copying sudo's syslog messages into the safer-runner log file */
@@ -3594,7 +3607,7 @@ if $programname == 'sudo' and $msg contains 'COMMAND=' then {
  * - sudo-rs: rsyslog rule filtering sudo's syslog messages into <logFile>
  *
  * Must run while the runner still has unrestricted sudo (i.e. before
- * disableSudoForRunner/applyCustomSudoConfig).
+ * disableSudoForRunner).
  *
  * @param logFile - Path to sudo log file (e.g., /var/log/safer-runner/main-sudo.log)
  * @param flavour - Sudo implementation (detected if omitted)
@@ -3666,7 +3679,7 @@ function getValidationSudoCommands() {
  */
 exports.INTERNAL_SUDO_COMMANDS = [
     ...getValidationSudoCommands(),
-    // applyCustomSudoConfig()
+    // disableSudoForRunner()
     `tee ${SUDOERS_TEMP_FILE}`,
     `visudo -c -f ${SUDOERS_TEMP_FILE}`,
     `chmod 0440 ${SUDOERS_TEMP_FILE}`,
@@ -3702,75 +3715,32 @@ ${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 `;
 }
 /**
- * Apply custom sudoers configuration for the runner user
- * This rewrites the /etc/sudoers.d/runner file with the specified configuration
+ * Disable sudo access for the runner user
+ * This prevents malicious code from using sudo to bypass security controls
  *
- * If no config is provided, defaults to the standard GitHub Actions runner config.
- * Always appends required commands for post-action validation.
- * The config is checked with the active visudo, so it must be valid for sudo-rs on Ubuntu 25.10+.
- *
- * @param sudoConfig - The custom sudoers configuration (defaults to unrestricted sudo)
- * @param flavour - Sudo implementation (detected if omitted), used for error guidance
+ * Replaces the sudoers file with only the read-only commands needed for
+ * post-action integrity validation (see getValidationSudoCommands()). The file is checked
+ * with the active visudo (visudo-rs on sudo-rs systems) before it is moved into place.
  */
-async function applyCustomSudoConfig(sudoConfig = exports.DEFAULT_RUNNER_SUDO_CONFIG, flavour) {
-    const isDefaultConfig = sudoConfig === exports.DEFAULT_RUNNER_SUDO_CONFIG;
-    if (isDefaultConfig) {
-        core.info(`Applying default sudo configuration for user: ${exports.RUNNER_USERNAME}`);
-    }
-    else {
-        core.info(`Applying custom sudo configuration for user: ${exports.RUNNER_USERNAME}`);
-    }
+async function disableSudoForRunner(flavour) {
+    core.info('Restricting sudo access to validation commands only');
     const sudoersFile = `/etc/sudoers.d/${exports.RUNNER_USERNAME}`;
     const tempFile = SUDOERS_TEMP_FILE;
-    // Build complete config: user config + required validation commands
-    const requiredCommands = getRequiredSudoCommands(exports.RUNNER_USERNAME);
-    const fullConfig = sudoConfig + '\n' + requiredCommands;
-    // Write custom config + required commands to temp file
-    await exec.exec('sudo', ['tee', tempFile], {
-        input: Buffer.from(fullConfig + '\n')
-    });
-    // Validate with the active visudo (visudo-rs on sudo-rs systems)
+    const config = `# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation.
+# All other sudo commands will be denied.
+${getRequiredSudoCommands(exports.RUNNER_USERNAME)}`;
+    await exec.exec('sudo', ['tee', tempFile], { input: Buffer.from(config + '\n') });
     const visudo = await exec.getExecOutput('sudo', ['visudo', '-c', '-f', tempFile], { ignoreReturnCode: true });
     if (visudo.exitCode !== 0) {
-        const sudoFlavour = flavour ?? (await detectSudoFlavour());
         await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
-        core.error('Invalid sudoers syntax. Please check your sudo-config input.');
-        if (sudoFlavour === 'sudo-rs') {
-            core.error('This runner uses sudo-rs (the default sudo on Ubuntu 25.10+ / 26.04), which supports a subset of sudoers: ' +
-                'a wildcard may only be the whole argument list (`/usr/bin/apt-get *`), not embedded among other arguments ' +
-                '(`/usr/bin/chmod * /tmp/x`), ' +
-                'and many Defaults settings are not recognised.');
-        }
-        throw new Error(`Invalid sudoers configuration: ${(visudo.stderr || visudo.stdout).trim()}`);
+        const sudoFlavour = flavour ?? (await detectSudoFlavour());
+        throw new Error(`Generated sudoers rejected by visudo (${sudoFlavour}): ${(visudo.stderr || visudo.stdout).trim()}`);
     }
     // Set permissions before moving into place
     await exec.exec('sudo', ['chmod', '0440', tempFile]);
     await exec.exec('sudo', ['chown', 'root:root', tempFile]);
     await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
-    if (isDefaultConfig) {
-        core.info(`✅ Default sudo configuration rewritten to ${sudoersFile}`);
-    }
-    else {
-        core.info(`✅ Custom sudo configuration applied to ${sudoersFile}`);
-        core.info(`🔒 ${exports.RUNNER_USERNAME} user now has restricted sudo access`);
-    }
-    core.info('ℹ️  Required validation commands automatically added');
-}
-/**
- * Disable sudo access for the runner user
- * This prevents malicious code from using sudo to bypass security controls
- *
- * Replaces the sudoers file with only the read-only commands needed for
- * post-action integrity validation (see getValidationSudoCommands()).
- */
-async function disableSudoForRunner(flavour) {
-    core.info('Restricting sudo access to validation commands only');
-    // Rewrite with only a comment header - the required validation commands will be added
-    const validationOnlyHeader = `# Safer Runner Action - Validation-only sudo access
-# This configuration allows only the commands needed for post-action integrity validation.
-# All other sudo commands will be denied.
-`;
-    await applyCustomSudoConfig(validationOnlyHeader, flavour);
     core.info(`🔒 ${exports.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
 }
 /**

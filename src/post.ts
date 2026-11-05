@@ -11,11 +11,16 @@ import { type SelfTestWindow, withoutSelfTests } from './selftest';
 import { readSudoUsage } from './sudo';
 import { SystemValidator } from './validation';
 import { parseAllowedDomains, type Mode } from './policy';
+import { effectiveFailOnTampering } from './inputs';
 
 interface SetupMarker {
   mode: Mode;
   sudoRetained?: boolean;
   dockerRetained?: boolean;
+  /** the docker input and the verified access (G4) */
+  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
+  /** resolved fail-on-tampering (mode-aware); kept in the root-owned marker, not re-read from inputs */
+  failOnTampering?: boolean;
   /** flow-log byte range the setup self-tests wrote */
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
@@ -57,6 +62,15 @@ async function run(): Promise<void> {
   if (rc === 0) core.info('🔑 Ephemeral CA private key destroyed');
   else core.warning(`Could not run ${TEARDOWN_BIN} (exit ${rc}); the CA key dies with the VM`);
 
+  // integrity first, outside the report: a report failure must never skip fail-on-tampering
+  const validator = new SystemValidator();
+  let intact = false;
+  try {
+    intact = await validator.verifyAgainstBaseline();
+  } catch (error) {
+    core.warning(`Integrity check failed: ${error}`);
+  }
+
   try {
     await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
     const flows = fs.existsSync(FLOW_LOG)
@@ -82,8 +96,6 @@ async function run(): Promise<void> {
       );
     }
 
-    const validator = new SystemValidator();
-    const intact = await validator.verifyAgainstBaseline();
     const integrity = await validator.generateValidationDetails();
     const sudo = readSudoUsage(SUDO_LOG);
     for (const c of sudo.ran) core.info(`sudo (workflow) ${c.command} ${c.args}`);
@@ -93,6 +105,7 @@ async function run(): Promise<void> {
       mode,
       sudoRetained: marker.sudoRetained === true,
       dockerRetained: marker.dockerRetained === true,
+      docker: marker.docker,
       sudo,
       job: process.env.GITHUB_JOB || 'unknown',
       actionRef: process.env.GITHUB_ACTION_REF,
@@ -110,12 +123,12 @@ async function run(): Promise<void> {
       containers
     });
     await core.summary.addRaw(md).write();
-
-    if (!intact && core.getInput('fail-on-tampering') === 'true') {
-      core.setFailed('🚨 Security configuration was tampered with during the job');
-    }
   } catch (error) {
     core.warning(`Failed to generate the safer-runner report: ${error}`);
+  }
+
+  if (!intact && effectiveFailOnTampering(marker.failOnTampering, core.getInput('fail-on-tampering'), mode)) {
+    core.setFailed('🚨 Security configuration was tampered with (or could not be verified) during the job');
   }
 }
 

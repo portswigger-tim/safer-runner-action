@@ -57,7 +57,6 @@ describe('buildPolicyConfig', () => {
     mode: 'enforce' as const,
     githubDomains: ['github.com', 'api.github.com', 'productionresultssa1.blob.core.windows.net'],
     allowedDomains: '',
-    containerTls: 'sni-only' as const,
     containerPort: 8081,
     passthroughDomains: '',
     blockRiskySubdomains: true
@@ -135,7 +134,6 @@ describe('buildPolicyConfig container posture', () => {
       allowedDomains: '',
       passthroughDomains: '',
       blockRiskySubdomains: true,
-      containerTls: 'sni-only',
       containerPort: 18081
     });
     expect(config.container_tls).toBe('sni-only');

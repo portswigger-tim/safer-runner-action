@@ -4,187 +4,138 @@
 
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   disableDockerForRunner,
+  dockerAccess,
   stopDockerService,
   isRunnerInDockerGroup,
+  readDockerState,
   RUNNER_USERNAME,
   DOCKER_GROUP,
+  DOCKER_SOCKET,
   mergeLiveRestore,
   parseContainerAddresses
 } from './docker';
 
-// Mock the modules
 jest.mock('@actions/core');
 jest.mock('@actions/exec');
 
-describe('docker module', () => {
+const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+const mockGetExecOutput = exec.getExecOutput as jest.MockedFunction<typeof exec.getExecOutput>;
+
+function groups(out: string, exitCode = 0): void {
+  mockGetExecOutput.mockResolvedValue({ stdout: out, stderr: '', exitCode });
+}
+
+function sudoCalls(): string[] {
+  return mockExec.mock.calls.filter(c => c[0] === 'sudo').map(c => (c[1] as string[]).join(' '));
+}
+
+describe('docker access (docker input)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  describe('disableDockerForRunner', () => {
-    it('should remove runner from docker group and restrict socket permissions', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+  describe('disableDockerForRunner (docker: remove-group)', () => {
+    it('removes the runner from the group and locks the socket to root', async () => {
+      groups('runner adm docker');
       mockExec.mockResolvedValue(0);
 
-      await disableDockerForRunner();
-
-      // Should remove from docker group
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
-
-      // Should restrict docker socket permissions
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['chown', 'root:root', '/var/run/docker.sock']);
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['chmod', '600', '/var/run/docker.sock']);
-
-      // Should log appropriate messages
-      expect(core.info).toHaveBeenCalledWith('Disabling Docker access for runner user...');
-      expect(core.info).toHaveBeenCalledWith(`✅ Removed ${RUNNER_USERNAME} from ${DOCKER_GROUP} group`);
-      expect(core.info).toHaveBeenCalledWith('Restricting docker socket permissions...');
-      expect(core.info).toHaveBeenCalledWith('✅ Docker socket access restricted to root only');
-      expect(core.info).toHaveBeenCalledWith('🔒 Docker commands will no longer be available to the runner user');
-      expect(core.info).toHaveBeenCalledWith('ℹ️  This prevents container escape attacks and docker socket abuse');
+      expect(await disableDockerForRunner(__filename)).toEqual([]);
+      expect(sudoCalls()).toEqual([
+        `gpasswd -d ${RUNNER_USERNAME} ${DOCKER_GROUP}`,
+        `chown root:root ${__filename}`,
+        `chmod 600 ${__filename}`
+      ]);
+      expect(DOCKER_SOCKET).toBe('/var/run/docker.sock');
     });
 
-    it('should handle errors gracefully', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockRejectedValue(new Error('Permission denied'));
+    it('is idempotent: skips the group change and a missing socket', async () => {
+      groups('runner adm');
 
-      await disableDockerForRunner();
-
-      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Could not fully disable Docker access'));
+      expect(await disableDockerForRunner('/nonexistent/docker.sock')).toEqual([]);
+      expect(sudoCalls()).toEqual([]);
     });
 
-    it('should use correct constants', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+    it('reports failed steps instead of swallowing them (G4)', async () => {
+      groups('runner docker');
+      mockExec.mockImplementation(async (_cmd, args) => ((args as string[])[0] === 'gpasswd' ? 3 : 0));
+
+      expect(await disableDockerForRunner(__filename)).toEqual([`sudo gpasswd -d runner docker exited 3`]);
+    });
+  });
+
+  describe('stopDockerService (docker: stop)', () => {
+    it('stops, then disables, the socket and the service', async () => {
       mockExec.mockResolvedValue(0);
+      expect(await stopDockerService()).toEqual([]);
+      expect(sudoCalls()).toEqual([
+        'systemctl stop docker.socket',
+        'systemctl stop docker.service',
+        'systemctl disable docker.socket',
+        'systemctl disable docker.service'
+      ]);
+    });
 
-      await disableDockerForRunner();
-
-      expect(RUNNER_USERNAME).toBe('runner');
-      expect(DOCKER_GROUP).toBe('docker');
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['gpasswd', '-d', 'runner', 'docker']);
+    it('reports failed steps instead of swallowing them (G4)', async () => {
+      mockExec.mockResolvedValue(1);
+      expect(await stopDockerService()).toHaveLength(4);
     });
   });
 
   describe('isRunnerInDockerGroup', () => {
-    it('should return true when runner is in docker group', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockImplementation(async (cmd, args, options) => {
-        if (options?.listeners?.stdout) {
-          options.listeners.stdout(Buffer.from('runner : runner adm cdrom sudo dip plugdev lxd docker'));
-        }
-        return 0;
-      });
-
-      const result = await isRunnerInDockerGroup();
-
-      expect(result).toBe(true);
-      expect(mockExec).toHaveBeenCalledWith('groups', [RUNNER_USERNAME], expect.any(Object));
+    it('reads the group database for the runner user', async () => {
+      groups('runner adm cdrom sudo dip plugdev lxd docker\n');
+      expect(await isRunnerInDockerGroup()).toBe(true);
+      expect(mockGetExecOutput).toHaveBeenCalledWith('id', ['-nG', RUNNER_USERNAME], expect.any(Object));
     });
 
-    it('should return false when runner is not in docker group', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockImplementation(async (cmd, args, options) => {
-        if (options?.listeners?.stdout) {
-          options.listeners.stdout(Buffer.from('runner : runner adm cdrom sudo dip plugdev lxd'));
-        }
-        return 0;
-      });
-
-      const result = await isRunnerInDockerGroup();
-
-      expect(result).toBe(false);
-      expect(mockExec).toHaveBeenCalledWith('groups', [RUNNER_USERNAME], expect.any(Object));
+    it('does not match a group that merely contains the word', async () => {
+      groups('runner dockerroot');
+      expect(await isRunnerInDockerGroup()).toBe(false);
     });
 
-    it('should handle command failure gracefully', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockRejectedValue(new Error('Command failed'));
-
-      const result = await isRunnerInDockerGroup();
-
-      expect(result).toBe(false);
-      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Could not check docker group membership'));
-    });
-
-    it('should handle empty output', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockImplementation(async (cmd, args, options) => {
-        if (options?.listeners?.stdout) {
-          options.listeners.stdout(Buffer.from(''));
-        }
-        return 0;
-      });
-
-      const result = await isRunnerInDockerGroup();
-
-      expect(result).toBe(false);
+    it('fails closed when membership cannot be read', async () => {
+      groups('', 1);
+      expect(await isRunnerInDockerGroup()).toBe(true);
+      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('assuming docker membership'));
     });
   });
 
-  describe('stopDockerService', () => {
-    it('should stop and disable docker service and socket', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockResolvedValue(0);
+  describe('readDockerState / dockerAccess (verified, not the input value)', () => {
+    const base = { daemonActive: true, socketUnitActive: true, runnerInGroup: false, socketAccessible: false };
 
-      await stopDockerService();
-
-      // Should stop both docker service and socket
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'stop', 'docker.socket']);
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'stop', 'docker.service']);
-
-      // Should disable both docker service and socket
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'disable', 'docker.socket']);
-      expect(mockExec).toHaveBeenCalledWith('sudo', ['systemctl', 'disable', 'docker.service']);
-
-      // Should log appropriate messages
-      expect(core.info).toHaveBeenCalledWith('Stopping and disabling Docker service...');
-      expect(core.info).toHaveBeenCalledWith('Stopping Docker service...');
-      expect(core.info).toHaveBeenCalledWith('✅ Docker service stopped');
-      expect(core.info).toHaveBeenCalledWith('Disabling Docker service...');
-      expect(core.info).toHaveBeenCalledWith('✅ Docker service disabled');
-      expect(core.info).toHaveBeenCalledWith('🔒 Docker has been completely stopped and disabled');
-      expect(core.info).toHaveBeenCalledWith('ℹ️  This prevents all Docker usage system-wide');
+    it('classifies the observed state', () => {
+      expect(dockerAccess(base)).toBe('group-removed');
+      expect(dockerAccess({ ...base, runnerInGroup: true })).toBe('retained');
+      expect(dockerAccess({ ...base, socketAccessible: true })).toBe('retained');
+      expect(dockerAccess({ ...base, daemonActive: false, socketUnitActive: false, runnerInGroup: true })).toBe(
+        'not-running'
+      );
+      // socket activation alone can start dockerd on the next connection
+      expect(dockerAccess({ ...base, daemonActive: false, runnerInGroup: true })).toBe('retained');
     });
 
-    it('should handle errors gracefully', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      mockExec.mockRejectedValue(new Error('Service not found'));
-
-      await stopDockerService();
-
-      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('Could not stop Docker service'));
-    });
-
-    it('should stop service before disabling it', async () => {
-      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-      const calls: string[] = [];
-
-      mockExec.mockImplementation(async (cmd, args) => {
-        if (args && args.length >= 3) {
-          // args is: ['systemctl', 'stop|disable', 'docker.socket|docker.service']
-          calls.push(`${args[1]} ${args[2]}`);
-        }
-        return 0;
-      });
-
-      await stopDockerService();
-
-      // Verify order: stop socket, stop service, disable socket, disable service
-      expect(calls).toEqual([
-        'stop docker.socket',
-        'stop docker.service',
-        'disable docker.socket',
-        'disable docker.service'
-      ]);
-    });
-  });
-
-  describe('constants', () => {
-    it('should export correct constants', () => {
-      expect(RUNNER_USERNAME).toBe('runner');
-      expect(DOCKER_GROUP).toBe('docker');
+    it('checks the socket with this process credentials and the units with systemctl', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'safer-runner-docker-'));
+      const sock = path.join(dir, 'docker.sock');
+      fs.writeFileSync(sock, '');
+      groups('runner');
+      mockExec.mockImplementation(async (_cmd, args) => ((args as string[]).includes('docker.service') ? 0 : 3));
+      try {
+        expect(await readDockerState(sock)).toEqual({
+          daemonActive: true,
+          socketUnitActive: false,
+          runnerInGroup: false,
+          socketAccessible: true
+        });
+        expect((await readDockerState(path.join(dir, 'missing.sock'))).socketAccessible).toBe(false);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -1,102 +1,128 @@
 /**
- * Docker access control module
- * Handles Docker group membership and container access restrictions
+ * Docker access control (the `docker` input) and dockerd handling for the proxy CA.
  */
 
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
+import * as fs from 'fs';
 import { DOCKER_DAEMON_JSON } from './constants';
 
 // Constants
 export const RUNNER_USERNAME = 'runner';
 export const DOCKER_GROUP = 'docker';
+export const DOCKER_SOCKET = '/var/run/docker.sock';
 
-/**
- * Disable Docker access for the runner user
- * This prevents container escape attacks, docker socket abuse, and privileged container execution
- *
- * Strategy:
- * 1. Remove runner from docker group (prevents new sessions from getting access)
- * 2. Change docker socket permissions to block current session
- *
- * Note: Simply removing group membership doesn't affect the current process's
- * credential cache, so we must also restrict the docker socket directly.
- */
-export async function disableDockerForRunner(): Promise<void> {
-  core.info('Disabling Docker access for runner user...');
-
-  try {
-    // Step 1: Remove runner from docker group (for future sessions)
-    await exec.exec('sudo', ['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
-    core.info(`✅ Removed ${RUNNER_USERNAME} from ${DOCKER_GROUP} group`);
-
-    // Step 2: Restrict docker socket permissions to block current session
-    // Change ownership to root:root and set permissions to 600 (owner-only access)
-    core.info('Restricting docker socket permissions...');
-    await exec.exec('sudo', ['chown', 'root:root', '/var/run/docker.sock']);
-    await exec.exec('sudo', ['chmod', '600', '/var/run/docker.sock']);
-
-    core.info('✅ Docker socket access restricted to root only');
-    core.info('🔒 Docker commands will no longer be available to the runner user');
-    core.info('ℹ️  This prevents container escape attacks and docker socket abuse');
-  } catch (error) {
-    core.warning(`Could not fully disable Docker access: ${error}`);
-  }
+async function run(args: string[]): Promise<string | null> {
+  const rc = await exec.exec('sudo', args, { ignoreReturnCode: true });
+  return rc === 0 ? null : `sudo ${args.join(' ')} exited ${rc}`;
 }
 
 /**
- * Stop and disable the Docker service completely
- * This provides stronger protection than disableDockerForRunner by preventing
- * all Docker usage system-wide, not just for the runner user.
+ * docker: remove-group. Removes the runner user from the docker group (new sessions) and locks
+ * the socket to root:root 0600 (the current session keeps the group in its credentials, so
+ * the group change alone would not stop it). Idempotent: a runner already outside the group,
+ * or without a socket, is left alone.
  *
- * Strategy:
- * 1. Stop the Docker service (kills all running containers)
- * 2. Disable the Docker service (prevents automatic restart)
- *
- * Note: This affects the entire system and will terminate any running containers.
+ * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
+ * afterwards - the caller fails closed on that, not on these messages.
  */
-export async function stopDockerService(): Promise<void> {
-  core.info('Stopping and disabling Docker service...');
-
-  try {
-    // Step 1: Stop the Docker service
-    core.info('Stopping Docker service...');
-    await exec.exec('sudo', ['systemctl', 'stop', 'docker.socket']);
-    await exec.exec('sudo', ['systemctl', 'stop', 'docker.service']);
-    core.info('✅ Docker service stopped');
-
-    // Step 2: Disable the Docker service (prevents restart)
-    core.info('Disabling Docker service...');
-    await exec.exec('sudo', ['systemctl', 'disable', 'docker.socket']);
-    await exec.exec('sudo', ['systemctl', 'disable', 'docker.service']);
-    core.info('✅ Docker service disabled');
-
-    core.info('🔒 Docker has been completely stopped and disabled');
-    core.info('ℹ️  This prevents all Docker usage system-wide');
-  } catch (error) {
-    core.warning(`Could not stop Docker service: ${error}`);
+export async function disableDockerForRunner(socket: string = DOCKER_SOCKET): Promise<string[]> {
+  core.info('Removing the runner user from the docker group and locking the docker socket...');
+  const failed: string[] = [];
+  if (await isRunnerInDockerGroup()) {
+    const err = await run(['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
+    if (err) failed.push(err);
   }
+  if (fs.existsSync(socket)) {
+    for (const args of [
+      ['chown', 'root:root', socket],
+      ['chmod', '600', socket]
+    ]) {
+      const err = await run(args);
+      if (err) failed.push(err);
+    }
+  }
+  return failed;
 }
 
 /**
- * Check if the runner user is a member of the docker group
- * @returns Promise<boolean> - true if runner is in docker group
+ * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
+ * running containers). Returns the steps that failed; readDockerState() is the verdict.
+ */
+export async function stopDockerService(): Promise<string[]> {
+  core.info('Stopping and disabling the docker daemon...');
+  const failed: string[] = [];
+  for (const verb of ['stop', 'disable']) {
+    for (const unit of ['docker.socket', 'docker.service']) {
+      const err = await run(['systemctl', verb, unit]);
+      if (err) failed.push(err);
+    }
+  }
+  return failed;
+}
+
+/**
+ * Whether the runner user is in the docker group (`id -nG runner`, i.e. what a new session
+ * gets). Fails closed: if membership cannot be read, it is assumed.
  */
 export async function isRunnerInDockerGroup(): Promise<boolean> {
+  const { stdout, exitCode } = await exec.getExecOutput('id', ['-nG', RUNNER_USERNAME], {
+    ignoreReturnCode: true,
+    silent: true
+  });
+  if (exitCode !== 0) {
+    core.warning(`Could not read the groups of ${RUNNER_USERNAME} (id exit ${exitCode}); assuming docker membership`);
+    return true;
+  }
+  return stdout.trim().split(/\s+/).includes(DOCKER_GROUP);
+}
+
+/** Docker access as observed on the runner (not as requested). */
+export interface DockerState {
+  /** docker.service is active */
+  daemonActive: boolean;
+  /** docker.socket (socket activation) is active */
+  socketUnitActive: boolean;
+  /** a new runner session would get the docker group */
+  runnerInGroup: boolean;
+  /** this process (the runner user's current credentials) can read+write the docker socket */
+  socketAccessible: boolean;
+}
+
+/**
+ * Verified docker access for the runner user:
+ * - not-running: neither the daemon nor its socket unit is active
+ * - group-removed: the daemon runs, but the runner is out of the group and cannot use the socket
+ * - retained: the runner can use docker (root-equivalent)
+ */
+export type DockerAccess = 'retained' | 'group-removed' | 'not-running';
+
+export function dockerAccess(s: DockerState): DockerAccess {
+  if (!s.daemonActive && !s.socketUnitActive) return 'not-running';
+  if (!s.runnerInGroup && !s.socketAccessible) return 'group-removed';
+  return 'retained';
+}
+
+function canUseSocket(socket: string): boolean {
   try {
-    let output = '';
-    await exec.exec('groups', [RUNNER_USERNAME], {
-      listeners: {
-        stdout: (data: Buffer) => {
-          output += data.toString();
-        }
-      }
-    });
-    return output.includes(DOCKER_GROUP);
-  } catch (error) {
-    core.warning(`Could not check docker group membership: ${error}`);
+    fs.accessSync(socket, fs.constants.R_OK | fs.constants.W_OK);
+    return true;
+  } catch {
     return false;
   }
+}
+
+async function unitActive(unit: string): Promise<boolean> {
+  return (await exec.exec('systemctl', ['is-active', '--quiet', unit], { ignoreReturnCode: true, silent: true })) === 0;
+}
+
+export async function readDockerState(socket: string = DOCKER_SOCKET): Promise<DockerState> {
+  return {
+    daemonActive: await unitActive('docker.service'),
+    socketUnitActive: await unitActive('docker.socket'),
+    runnerInGroup: await isRunnerInDockerGroup(),
+    socketAccessible: canUseSocket(socket)
+  };
 }
 
 /**

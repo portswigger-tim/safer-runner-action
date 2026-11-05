@@ -123,8 +123,12 @@ describe('buildCorefile', () => {
     expect(c).not.toContain('NXDOMAIN');
   });
 
-  it('honours a single custom upstream', () => {
+  it('honours custom upstreams, primary first', () => {
     expect(buildCorefile({ ...base, mode: 'enforce', upstreams: ['1.1.1.1'] })).toContain('forward . 1.1.1.1\n');
+    // dns-servers: the first entry is the primary, the rest are tried in order after it
+    expect(buildCorefile({ ...base, mode: 'enforce', upstreams: ['1.1.1.1', '8.8.8.8', '9.9.9.9'] })).toContain(
+      '  forward . 1.1.1.1 8.8.8.8 9.9.9.9 {\n    policy sequential\n  }\n'
+    );
   });
 
   it('refuses a missing or malformed upstream', () => {

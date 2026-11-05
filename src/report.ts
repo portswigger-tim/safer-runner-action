@@ -398,7 +398,7 @@ export interface ContainerSummary {
   name?: string;
   allowed: string[];
   denied: string[];
-  /** names checked by SNI only (container-tls: sni-only) */
+  /** names checked by SNI only (container HTTPS to allowlisted names) */
   sniOnly: string[];
   /** names whose intercepted TLS the container refused (it does not trust the runtime CA) */
   untrusted: string[];
@@ -471,7 +471,7 @@ export function containerSection(containers: ContainerSummary[], mode: Mode): st
   let md = `<details${untrusted.length ? ' open' : ''}>\n<summary>🐳 <b>Container egress</b> — ${summary.join(' · ')}</summary>\n\n`;
   md +=
     '<sub>Traffic from Docker containers (service containers, `docker run`, `docker build`) goes through the same ' +
-    'proxy and DNS filter. 🔀 = checked by TLS name only (`container-tls: sni-only`), no CA needed in the container.</sub>\n\n';
+    'proxy and DNS filter. 🔀 = checked by TLS name only, no CA needed in the container.</sub>\n\n';
   const { shown, note } = capped(containers);
   md += table(
     ['Container', 'Allowed', enforce ? 'Blocked' : 'Would be blocked', 'Outside the proxy'],
@@ -491,7 +491,7 @@ export function containerSection(containers: ContainerSummary[], mode: Mode): st
     md +=
       '**TLS failed because the container did not trust the runtime CA:** ' +
       untrusted.map(c => `${code(c.name ?? c.ip)} → ${listCell(c.untrusted)}`).join('; ') +
-      '. Under `container-tls: sni-only` containers need no CA, except for multi-tenant front doors (Azure ' +
+      '. Containers need no CA, except for multi-tenant front doors (Azure ' +
       'Storage): those stay intercepted so the Host check still stops fronting to another tenant. Reach them ' +
       'from a step on the runner, or give the container the CA (`/etc/safer-runner/ca.pem`).\n\n';
   }
@@ -538,8 +538,10 @@ export interface ReportInput {
   mode: Mode;
   /** enforce ran with sudo left in place: the controls were advisory (review H2) */
   sudoRetained?: boolean;
-  /** the runner user kept docker access (root-equivalent) */
+  /** the runner user kept docker access (root-equivalent): as verified at setup, not the input */
   dockerRetained?: boolean;
+  /** the docker input and the access verified after applying it (G4) */
+  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
   /** sudo log split by who ran what (analyze: tells the user enforce's default will remove sudo) */
   sudo?: SudoUsage;
   job: string;
@@ -587,11 +589,26 @@ export function suggestedAllowlist(hosts: HostSummary[]): string[] {
   );
 }
 
-/** Mode as shown in the summary header. enforce with sudo retained is never shown as plain enforce. */
-export function modeLabel(mode: Mode, sudoRetained = false): string {
-  if (mode === 'analyze') return '📊 ANALYZE';
-  return sudoRetained ? '⚠️ ENFORCE (ADVISORY — sudo retained, not an enforced boundary)' : '🔒 ENFORCE';
+/** What made enforce advisory: 'sudo', 'docker', 'sudo and docker', or '' (a boundary). */
+function retained(sudoRetained: boolean, dockerRetained: boolean): string {
+  return [sudoRetained ? 'sudo' : '', dockerRetained ? 'docker' : ''].filter(Boolean).join(' and ');
 }
+
+/**
+ * Mode as shown in the summary header. enforce with sudo or docker (root-equivalent) retained
+ * is never shown as plain enforce.
+ */
+export function modeLabel(mode: Mode, sudoRetained = false, dockerRetained = false): string {
+  if (mode === 'analyze') return '📊 ANALYZE';
+  const what = retained(sudoRetained, dockerRetained);
+  return what ? `⚠️ ENFORCE (ADVISORY — ${what} retained, not an enforced boundary)` : '🔒 ENFORCE';
+}
+
+const DOCKER_ACCESS_TEXT: Record<string, string> = {
+  retained: 'runner user can use docker',
+  'group-removed': 'runner user removed from the docker group, socket root-only',
+  'not-running': 'docker daemon not running'
+};
 
 function compileUserPatterns(patterns: string[]): RegExp[] {
   const out: RegExp[] = [];
@@ -681,7 +698,8 @@ function destinationText(e: FirewallEvent): string {
 export function buildReport(input: ReportInput): string {
   const { mode } = input;
   const enforce = mode === 'enforce';
-  const advisory = enforce && input.sudoRetained === true;
+  const advisoryWhat = enforce ? retained(input.sudoRetained === true, input.dockerRetained === true) : '';
+  const advisory = advisoryWhat !== '';
   const dnsRefused = new Set(input.dnsRefused.map(n => n.toLowerCase()));
   const blockedWord = enforce ? 'blocked' : 'would be blocked';
 
@@ -721,7 +739,7 @@ export function buildReport(input: ReportInput): string {
   const inSubdomainGroup = new Set(subdomains.flatMap(g => g.names));
 
   // ---- title + chips
-  let md = `## 🛡️ Safer Runner — egress${advisory ? ' — enforce (ADVISORY — sudo retained, not an enforced boundary)' : ''}\n\n`;
+  let md = `## 🛡️ Safer Runner — egress${advisory ? ` — enforce (ADVISORY — ${advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
   const chips = [advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
   if (enforce) {
     const weak: string[] = [];
@@ -771,15 +789,16 @@ export function buildReport(input: ReportInput): string {
     const why: string[] = [];
     if (input.sudoRetained) {
       why.push(
-        '**ADVISORY: sudo was retained** (`disable-sudo: false` or `sudo-config`), so any step could have used it to ' +
+        '**ADVISORY: sudo was retained** (`disable-sudo: false`), so any step could have used it to ' +
           'remove the egress controls. The policy below was applied, but this job did not run inside an enforced ' +
-          'boundary. Remove `disable-sudo: false` / `sudo-config` to make enforce a boundary.'
+          'boundary. Remove `disable-sudo: false` to make enforce a boundary.'
       );
     }
     if (input.dockerRetained) {
       why.push(
-        'The runner user kept **docker** access, which is root-equivalent: a step could use it to remove the egress ' +
-          'controls. Set `disable-docker: true` or `stop-docker: true` unless the job needs docker.'
+        '**ADVISORY: docker was retained** (`docker: keep`; verified on the runner). Docker access is ' +
+          'root-equivalent, so any step could have used it to remove the egress controls. Use `docker: remove-group` ' +
+          '(the enforce default) or `docker: stop` unless the job needs docker.'
       );
     }
     md +=
@@ -1029,6 +1048,13 @@ export function buildReport(input: ReportInput): string {
     if (refused.length) {
       body += `Refused by sudo (${refused.length}):\n\n` + codeBlock('console', lines(refused)) + '\n\n';
     }
+  }
+  if (input.docker) {
+    const { requested, access } = input.docker;
+    diag.push(
+      access === 'retained' ? 'docker retained' : access === 'group-removed' ? 'docker removed ✓' : 'docker stopped ✓'
+    );
+    body += `**Docker** — \`docker: ${requested}\`; verified at setup: ${DOCKER_ACCESS_TEXT[access] ?? access}\n\n`;
   }
   if (input.integrity) {
     const s = input.integrity.status;

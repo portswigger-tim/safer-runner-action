@@ -351,7 +351,7 @@ export function isDangerousSudoCommand(command: string): boolean {
 /**
  * Generate suggested sudoers rules from observed sudo usage.
  *
- * This is ADVISORY output (a starting point for the `sudo-config` input), not a
+ * This is ADVISORY output (a starting point for a sudoers policy), not a
  * guarantee of safety. Design choices that make it least-privilege:
  * - run-as the exact target user observed (usually root), not `(ALL)`;
  * - pin the EXACT arguments observed. A bare command with no argument spec would

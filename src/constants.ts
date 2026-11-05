@@ -22,6 +22,8 @@ export const DNS_UNIT = 'safer-runner-dns';
 export const PROXY_USER = 'safer-runner-proxy';
 export const PROXY_UNIT = 'safer-runner-proxy';
 export const PROXY_LISTEN_HOST = '127.0.0.1';
+/** mitmproxy stream_large_bodies: larger bodies are streamed instead of buffered. */
+export const PROXY_STREAM_LARGE_BODIES = '1m';
 
 /** Root-owned install location: the runner user must not be able to change what the proxy loads. */
 export const INSTALL_DIR = '/opt/safer-runner';

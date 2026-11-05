@@ -35,8 +35,8 @@ import {
   killPreexistingConnections,
   logFirewall
 } from './firewall';
-import type { Inputs } from './inputs';
-import { buildPolicyConfig } from './policy';
+import type { DockerPolicy, Inputs } from './inputs';
+import { CONTAINER_TLS, buildPolicyConfig } from './policy';
 import {
   allocateProxyPorts,
   createProxyUser,
@@ -57,16 +57,14 @@ import {
 } from './setup';
 import { installCoreDns, localHosts, startCoreDns, writeCorefile } from './dns';
 import { resolveGitHubDomains } from './parsers/github-parser';
+import { detectSudoFlavour, disableSudoForRunner, getSudoLoggingConfigFile, setupSudoLogging } from './sudo';
 import {
-  applyCustomSudoConfig,
-  detectSudoFlavour,
-  disableSudoForRunner,
-  getSudoLoggingConfigFile,
-  setupSudoLogging
-} from './sudo';
-import {
+  type DockerAccess,
+  type DockerState,
   disableDockerForRunner,
+  dockerAccess,
   isDockerActive,
+  readDockerState,
   restartDockerForCaTrust,
   runningContainers,
   stopDockerService
@@ -119,6 +117,55 @@ export const JOB_CONTAINER_MESSAGE =
   'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
   '`services:` and `docker run` steps instead (their egress is controlled).';
 
+/** What the setup marker (and so the report) records about docker: requested AND verified. */
+export interface DockerOutcome {
+  requested: DockerPolicy;
+  access: DockerAccess;
+  state: DockerState;
+}
+
+/**
+ * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
+ * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
+ * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ */
+export async function applyDockerPolicy(
+  inputs: Pick<Inputs, 'mode' | 'docker'>,
+  ops = { disableDockerForRunner, stopDockerService, readDockerState }
+): Promise<DockerOutcome> {
+  const { mode, docker } = inputs;
+  const failures =
+    docker === 'stop'
+      ? await ops.stopDockerService()
+      : docker === 'remove-group'
+        ? await ops.disableDockerForRunner()
+        : [];
+  const state = await ops.readDockerState();
+  const access = dockerAccess(state);
+  core.info(
+    `docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+      `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`
+  );
+  if (docker !== 'keep' && access === 'retained') {
+    const msg =
+      `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
+      (failures.length ? `: ${failures.join('; ')}` : '');
+    if (mode === 'enforce') throw new Error(msg);
+    core.warning(msg);
+  } else if (failures.length) {
+    core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
+  }
+  if (mode === 'enforce' && access === 'retained') {
+    core.warning(
+      'enforce is ADVISORY in this job: docker is retained (docker: keep), and docker access is root-equivalent, ' +
+        'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
+        'or docker: stop unless the job needs docker.',
+      { title: 'safer-runner: enforce (ADVISORY - docker retained)' }
+    );
+  }
+  return { requested: docker, access, state };
+}
+
 export async function runSetup(inputs: Inputs): Promise<void> {
   const { mode } = inputs;
   core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
@@ -130,42 +177,27 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     });
     return;
   }
-  if (inputs.containerTlsWarning) core.warning(inputs.containerTlsWarning);
 
-  if (inputs.disableSudo && inputs.sudoConfig) {
-    core.warning('Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
-  }
-  if (inputs.stopDocker && inputs.disableDocker && !inputs.disableDockerDefaulted) {
-    core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
-  }
   // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
   const sudoRetained = mode === 'enforce' && !inputs.disableSudo;
-  const dockerRetained = !inputs.disableDocker && !inputs.stopDocker;
   if (sudoRetained) {
     core.warning(
-      `enforce is ADVISORY in this job: sudo is retained (${inputs.sudoConfig ? 'sudo-config is set' : 'disable-sudo: false'}), ` +
-        'so any step can use it to remove the egress controls. This is not an enforced boundary. ' +
-        'Remove disable-sudo: false / sudo-config to make enforce a boundary.',
+      'enforce is ADVISORY in this job: sudo is retained (disable-sudo: false), so any step can use it to ' +
+        'remove the egress controls. This is not an enforced boundary. Remove disable-sudo: false to make ' +
+        'enforce a boundary.',
       { title: 'safer-runner: enforce (ADVISORY - sudo retained)' }
     );
   } else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
     core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
   }
-  if (mode === 'enforce' && dockerRetained) {
-    core.warning(
-      'enforce with docker access: the docker group is root-equivalent, so a step can use docker to remove ' +
-        'the egress controls. Set disable-docker: true or stop-docker: true unless the job needs docker.'
-    );
-  } else if (mode === 'enforce' && inputs.disableDockerDefaulted) {
-    core.info(
-      'disable-docker not set: enforce mode removes docker access by default (set disable-docker: false to keep it)'
-    );
+  if (mode === 'enforce' && inputs.dockerDefaulted) {
+    core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
   }
 
   const sudoFlavour = await detectSudoFlavour();
   core.info(`sudo implementation: ${sudoFlavour}`);
 
-  const ports = await allocateProxyPorts(inputs.proxyPort);
+  const ports = await allocateProxyPorts();
   core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
 
   // 1. Allowlist - fetched while normal DNS and direct egress still work
@@ -177,7 +209,6 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     allowedDomains: inputs.allowedDomains,
     passthroughDomains: inputs.passthroughDomains,
     blockRiskySubdomains: inputs.blockRiskySubdomains,
-    containerTls: inputs.containerTls,
     containerPort: ports.containerPort
   });
   for (const w of warnings) core.warning(w);
@@ -185,7 +216,7 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     `Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`
   );
 
-  const dnsServers = [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean);
+  const { dnsServers } = inputs;
 
   // 2. Install (parallel - both are network-bound)
   await timed('Install CoreDNS + mitmproxy', () =>
@@ -203,12 +234,7 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   await installTeardownHelper();
 
   // 4. Proxy
-  const proxyOpts = {
-    port: ports.port,
-    containerPort: ports.containerPort,
-    streamLargeBodies: inputs.streamLargeBodies
-  };
-  await timed('Start proxy', () => startProxy(proxyOpts));
+  await timed('Start proxy', () => startProxy(ports));
 
   // 5. Trust - before any traffic is forced through the proxy
   await timed('Install CA trust', async () => {
@@ -234,11 +260,11 @@ export async function runSetup(inputs: Inputs): Promise<void> {
 
   // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
   // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
-  const dockerActive = !inputs.stopDocker && (await isDockerActive());
+  const dockerActive = inputs.docker !== 'stop' && (await isDockerActive());
   let dockerConfigWritten = false;
   if (dockerActive) {
     const services = await runningContainers();
-    if (dockerRetained || services.length > 0) {
+    if (inputs.docker === 'keep' || services.length > 0) {
       dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => restartDockerForCaTrust());
     }
   }
@@ -277,13 +303,17 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     core.warning(msg);
   }
 
+  // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
+  const docker = await applyDockerPolicy(inputs);
   await exec.exec('sudo', ['tee', SETUP_MARKER], {
     input: Buffer.from(
       JSON.stringify({
         mode,
         sudoRetained,
-        dockerRetained,
-        containerTls: inputs.containerTls,
+        dockerRetained: docker.access === 'retained',
+        docker,
+        failOnTampering: inputs.failOnTampering,
+        containerTls: CONTAINER_TLS,
         containerRules: dockerActive,
         proxyPorts: [ports.port, ports.containerPort],
         selfTestWindow,
@@ -293,13 +323,6 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     ),
     silent: true
   });
-
-  // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-  if (inputs.stopDocker) {
-    await stopDockerService();
-  } else if (inputs.disableDocker) {
-    await disableDockerForRunner();
-  }
   await setupSudoLogging(SUDO_LOG, sudoFlavour);
   const validator = new SystemValidator([
     ...CRITICAL_FILES,
@@ -309,8 +332,6 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   await validator.capturePostSetupBaseline();
   if (inputs.disableSudo) {
     await disableSudoForRunner(sudoFlavour);
-  } else if (inputs.sudoConfig) {
-    await applyCustomSudoConfig(inputs.sudoConfig, sudoFlavour);
   }
 
   core.info(`✅ safer-runner v2 active in ${mode} mode`);

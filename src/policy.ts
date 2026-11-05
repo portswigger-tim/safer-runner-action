@@ -22,6 +22,8 @@ export type Mode = 'analyze' | 'enforce';
  * same as the host (needs the CA in every container; the runtime shim that injects it is P3).
  */
 export type ContainerTls = 'sni-only' | 'intercept';
+/** The only posture implemented: `intercept` needs the CA injected into every container (P3). */
+export const CONTAINER_TLS: ContainerTls = 'sni-only';
 
 /**
  * Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
@@ -143,7 +145,6 @@ export interface PolicyBuildOptions {
   allowedDomains: string;
   passthroughDomains: string;
   blockRiskySubdomains: boolean;
-  containerTls: ContainerTls;
   containerPort: number;
 }
 
@@ -200,7 +201,8 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
       passthrough,
       deny,
       flow_log: FLOW_LOG,
-      container_tls: opts.containerTls,
+      // TODO P3: re-add container-tls input when intercept (CA-into-container) ships
+      container_tls: CONTAINER_TLS,
       container_port: opts.containerPort
     },
     warnings
