@@ -48,7 +48,11 @@ export const IPTABLES_CHAINS = [
   'FORWARD',
   'SAFER_RUNNER_OUT',
   'nat:OUTPUT',
-  'nat:SAFER_RUNNER_NAT'
+  'nat:SAFER_RUNNER_NAT',
+  // container egress (P2); absent when Docker isn't running (capture skips missing chains)
+  'DOCKER-USER',
+  'SAFER_RUNNER_CFWD',
+  'nat:SAFER_RUNNER_CNAT'
 ] as const;
 
 /** `iptables` arguments that list one chain spec (`CHAIN` or `table:CHAIN`). */

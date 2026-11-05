@@ -127,6 +127,7 @@ describe('sudo module', () => {
         '/usr/bin/cat /etc/safer-runner/policy.json',
         '/usr/bin/cat /opt/safer-runner/proxy/policy.py',
         '/usr/bin/cat /opt/safer-runner/proxy/policy_core.py',
+        '/usr/bin/cat /etc/docker/daemon.json',
         `/usr/bin/cat ${SUDO_LOGGING_SUDOERS_FILE}`,
         `/usr/bin/cat ${SUDO_LOGGING_RSYSLOG_FILE}`,
         '/usr/bin/cat /etc/safer-runner/validation-state.json',
@@ -136,6 +137,9 @@ describe('sudo module', () => {
         '/usr/sbin/iptables -L SAFER_RUNNER_OUT -n --line-numbers',
         '/usr/sbin/iptables -t nat -L OUTPUT -n --line-numbers',
         '/usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers',
+        '/usr/sbin/iptables -L DOCKER-USER -n --line-numbers',
+        '/usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers',
+        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers',
         '/opt/safer-runner/bin/teardown ""'
       ]);
     });

@@ -9,7 +9,9 @@ import {
   stopDockerService,
   isRunnerInDockerGroup,
   RUNNER_USERNAME,
-  DOCKER_GROUP
+  DOCKER_GROUP,
+  mergeLiveRestore,
+  parseContainerAddresses
 } from './docker';
 
 // Mock the modules
@@ -184,5 +186,39 @@ describe('docker module', () => {
       expect(RUNNER_USERNAME).toBe('runner');
       expect(DOCKER_GROUP).toBe('docker');
     });
+  });
+});
+
+describe('mergeLiveRestore (F1)', () => {
+  it('creates a config when there is none', () => {
+    expect(mergeLiveRestore('')).toEqual({ json: '{\n  "live-restore": true\n}\n', changed: true });
+  });
+
+  it('keeps existing keys', () => {
+    const r = mergeLiveRestore('{"registry-mirrors":["https://mirror.gcr.io"],"live-restore":false}');
+    expect(r?.changed).toBe(true);
+    expect(JSON.parse(r!.json)).toEqual({ 'registry-mirrors': ['https://mirror.gcr.io'], 'live-restore': true });
+  });
+
+  it('leaves an already live-restore config untouched', () => {
+    const body = '{ "live-restore": true }\n';
+    expect(mergeLiveRestore(body)).toEqual({ json: body, changed: false });
+  });
+
+  it('refuses to rewrite a config it cannot parse', () => {
+    expect(mergeLiveRestore('{ not json')).toBeNull();
+    expect(mergeLiveRestore('[]')).toBeNull();
+    expect(mergeLiveRestore('null')).toBeNull();
+  });
+});
+
+describe('parseContainerAddresses', () => {
+  it('maps every network address of a container to its name', () => {
+    const m = parseContainerAddresses('/svc_redis 172.18.0.2\n/builder 172.17.0.3 172.19.0.4\n/stopped \n\n');
+    expect(Array.from(m.entries())).toEqual([
+      ['172.18.0.2', 'svc_redis'],
+      ['172.17.0.3', 'builder'],
+      ['172.19.0.4', 'builder']
+    ]);
   });
 });

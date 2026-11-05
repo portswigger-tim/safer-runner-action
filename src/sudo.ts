@@ -14,7 +14,7 @@ import {
   type SudoUsage
 } from './parsers/sudo-parser';
 import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
-import { TEARDOWN_BIN, VALIDATION_STATE_FILE } from './constants';
+import { DOCKER_DAEMON_JSON, TEARDOWN_BIN, VALIDATION_STATE_FILE } from './constants';
 
 // Re-export SudoCommand type for convenience
 export type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
@@ -153,7 +153,13 @@ export async function removeSudoLogging(): Promise<void> {
  * These are the only sudo commands the runner keeps after sudo is restricted.
  */
 export function getValidationSudoCommands(): string[] {
-  const files = [...CRITICAL_FILES, SUDO_LOGGING_SUDOERS_FILE, SUDO_LOGGING_RSYSLOG_FILE, VALIDATION_STATE_FILE];
+  const files = [
+    ...CRITICAL_FILES,
+    DOCKER_DAEMON_JSON,
+    SUDO_LOGGING_SUDOERS_FILE,
+    SUDO_LOGGING_RSYSLOG_FILE,
+    VALIDATION_STATE_FILE
+  ];
   return [
     ...files.map(file => `/usr/bin/cat ${file}`),
     ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${iptablesListArgs(chain).join(' ')}`),
