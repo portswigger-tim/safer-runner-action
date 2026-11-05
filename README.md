@@ -40,6 +40,14 @@ To work out what a job needs, start with `mode: analyze` (the default). Nothing 
 The job summary lists every host the job contacted, marks the ones enforce mode would block,
 and suggests an `allowed-domains` block.
 
+The summary leads with a verdict and groups blocked traffic by cause: **bypass attempts**
+(Host/SNI mismatch, or an allowlisted name resolving to an internal address) first, then
+hosts **not on the allowlist** (with YAML to paste), then traffic with **no hostname**.
+Allowed traffic is split into the job's own hosts and GitHub platform traffic (collapsed),
+and self-tests, non-proxied packets, DNS refusals, sudo use and the config check sit in one
+collapsed **Diagnostics** section. Totals count only traffic that was actually allowed, and
+passthrough hosts (never decrypted) show `n/a` rather than a byte count.
+
 GitHub's own endpoints come from `api.github.com/meta` at runtime (with a static fallback),
 so the runner, `actions/checkout`, artifacts and caches work without configuration.
 

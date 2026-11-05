@@ -334,9 +334,17 @@ export class SystemValidator {
    * Generate detailed validation report
    */
   async generateValidationReport(): Promise<string> {
+    const { status, body } = await this.generateValidationDetails();
+    // Wrap in collapsible section with warning emoji if tampering detected
+    const titleEmoji = status === 'tampered' ? '⚠️ ' : '';
+    return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${body}</details>\n\n`;
+  }
+
+  /** The checksum tables and an overall result, for embedding in the job summary. */
+  async generateValidationDetails(): Promise<{ status: 'verified' | 'tampered' | 'unavailable'; body: string }> {
     const baseline = await this.readBaseline();
     if (baseline === null) {
-      return '<details>\n<summary><h2>Config File Tamper Detection</h2></summary>\n\nNo validation data available.\n\n</details>\n\n';
+      return { status: 'unavailable', body: 'No validation data available.\n\n' };
     }
 
     // Check if tampering occurred to add warning emoji
@@ -350,7 +358,7 @@ export class SystemValidator {
       reportContent += `**Verified:** ${new Date().toISOString()}\n\n`;
 
       // File integrity report
-      reportContent += '### Configuration Files\n\n';
+      reportContent += '**Configuration Files**\n\n';
       reportContent += '| File | Status | Checksum Comparison |\n';
       reportContent += '|------|--------|--------------------|\n';
 
@@ -376,7 +384,7 @@ export class SystemValidator {
       }
 
       // iptables integrity report
-      reportContent += '\n### Firewall Rules\n\n';
+      reportContent += '\n**Firewall Rules**\n\n';
       reportContent += '| Chain | Status | Checksum Comparison |\n';
       reportContent += '|-------|--------|--------------|\n';
 
@@ -408,8 +416,6 @@ export class SystemValidator {
       tamperingDetected = true;
     }
 
-    // Wrap in collapsible section with warning emoji if tampering detected
-    const titleEmoji = tamperingDetected ? '⚠️ ' : '';
-    return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${reportContent}</details>\n\n`;
+    return { status: tamperingDetected ? 'tampered' : 'verified', body: reportContent };
   }
 }

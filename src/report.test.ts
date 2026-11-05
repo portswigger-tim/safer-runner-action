@@ -2,7 +2,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parseFlowLog, parseFlowLogWithOffsets } from './flowlog';
 import { withoutSelfTests } from './selftest';
-import { buildReport, humanBytes, modeLabel, parseFirewallLog, suggestedAllowlist, summarizeFlows } from './report';
+import {
+  addressClass,
+  buildReport,
+  humanBytes,
+  modeLabel,
+  parseDnsRebind,
+  parseFirewallLog,
+  suggestedAllowlist,
+  summarizeFlows
+} from './report';
 
 const log = [
   { ev: 'start', ok: true },
@@ -100,24 +109,18 @@ describe('parseFirewallLog', () => {
 
 describe('buildReport', () => {
   const hosts = summarizeFlows(parseFlowLog(log));
+  const base = { job: 'j', firewall: [], dnsRefused: [], selfTests: [] };
 
-  it('enforce: blocked section first, nothing about suggestions', () => {
-    const md = buildReport({
-      mode: 'enforce',
-      job: 'j',
-      hosts,
-      firewall: [],
-      dnsRefused: ['x.example'],
-      selfTests: [],
-      extraSections: []
-    });
-    expect(md.indexOf('Blocked')).toBeLessThan(md.indexOf('Allowed'));
-    expect(md).toContain('evil.example.com');
+  it('enforce: bypass attempts before allowlist misses before allowed; no analyze suggestions', () => {
+    const md = buildReport({ ...base, mode: 'enforce', hosts, dnsRefused: ['x.example'] });
+    expect(md.indexOf('Bypass attempts')).toBeLessThan(md.indexOf('Not on the allowlist'));
+    expect(md.indexOf('Not on the allowlist')).toBeLessThan(md.indexOf('### ✅ Allowed'));
+    expect(md).toContain('`evil.example.com`');
     expect(md).toContain('`x.example`');
-    expect(md).not.toContain('Suggested configuration');
+    expect(md).not.toContain('mode: enforce\n');
   });
 
-  it('analyze: suggests would-be-blocked names, never .invalid or nameless ones', () => {
+  it('analyze: suggests would-be-blocked names, never .invalid, nameless or fronting ones', () => {
     const wb = summarizeFlows(
       parseFlowLog(
         [
@@ -130,27 +133,31 @@ describe('buildReport', () => {
             sni: 'selftest.safer-runner.invalid'
           },
           { ev: 'tls', verdict: 'WOULD_BLOCK', reason: 'no-sni', layer: 'sni', sni: null, dst: '1.1.1.1:443' },
-          { ev: 'https', verdict: 'WOULD_BLOCK', reason: 'host-sni-mismatch', layer: 'http', host: 'api.github.com' }
+          { ev: 'https', verdict: 'WOULD_BLOCK', reason: 'host-sni-mismatch', layer: 'http', host: 'api.github.com' },
+          // beta.2 suggested fronting names: they were also not on the allowlist
+          { ev: 'tls', verdict: 'WOULD_BLOCK', reason: 'sni-not-allowed', layer: 'sni', sni: 'evil.example.com' },
+          {
+            ev: 'https',
+            verdict: 'WOULD_BLOCK',
+            reason: 'host-sni-mismatch',
+            layer: 'http',
+            host: 'evil.example.com',
+            sni: 'github.com'
+          }
         ]
           .map(r => JSON.stringify(r))
           .join('\n')
       )
     );
     expect(suggestedAllowlist(wb)).toEqual(['registry.npmjs.org']);
-    const md = buildReport({
-      mode: 'analyze',
-      job: 'j',
-      hosts: wb,
-      firewall: [],
-      dnsRefused: [],
-      selfTests: [],
-      extraSections: []
-    });
-    expect(md).toContain('Would be blocked (4)');
-    expect(md).toContain('      registry.npmjs.org');
+    const md = buildReport({ ...base, mode: 'analyze', hosts: wb });
+    expect(md).toContain('> [!IMPORTANT]');
+    expect(md).toContain('>       registry.npmjs.org');
+    expect(md).toContain('### 🚨 Bypass attempts (2) — would be blocked');
+    expect(md).toContain('not blocked (analyze)');
   });
 
-  it('says explicitly when rows are cut', () => {
+  it('says explicitly when rows are cut, per group (attacks are never pushed out)', () => {
     const many = Array.from({ length: 305 }, (_, i) => ({
       ev: 'tls',
       verdict: 'BLOCK',
@@ -158,30 +165,242 @@ describe('buildReport', () => {
       layer: 'sni',
       sni: `h${i}.example.com`
     }));
+    many.push({
+      ev: 'https',
+      verdict: 'BLOCK',
+      reason: 'host-sni-mismatch',
+      layer: 'http',
+      host: 'zz.example',
+      sni: 'github.com'
+    } as never);
     const md = buildReport({
+      ...base,
       mode: 'enforce',
-      job: 'j',
-      hosts: summarizeFlows(parseFlowLog(many.map(r => JSON.stringify(r)).join('\n'))),
-      firewall: [],
-      dnsRefused: [],
-      selfTests: [],
-      extraSections: []
+      hosts: summarizeFlows(parseFlowLog(many.map(r => JSON.stringify(r)).join('\n')))
     });
     expect(md).toContain('+5 more not shown here');
+    expect(md).toContain('`zz.example`');
   });
 
   it('escapes table-breaking characters in hostnames', () => {
     const md = buildReport({
+      ...base,
       mode: 'enforce',
-      job: 'j',
-      hosts: summarizeFlows(parseFlowLog(JSON.stringify({ ev: 'http', verdict: 'BLOCK', reason: 'x', host: 'a|<b>' }))),
+      hosts: summarizeFlows(parseFlowLog(JSON.stringify({ ev: 'http', verdict: 'BLOCK', reason: 'x', host: 'a|`b' })))
+    });
+    expect(md).toContain("`a\\|'b`");
+    expect(md).toContain('### ⚙️ Other (1)'); // unknown reasons are never dropped
+  });
+
+  it('never pastes a malformed name into the YAML', () => {
+    const h = summarizeFlows(
+      parseFlowLog(JSON.stringify({ ev: 'http', verdict: 'BLOCK', reason: 'host-not-allowed', host: 'a b:c\nx' }))
+    );
+    expect(suggestedAllowlist(h)).toEqual([]);
+  });
+
+  it('a sudo command line cannot break out of its code fence', () => {
+    const md = buildReport({
+      ...base,
+      mode: 'analyze',
+      hosts: [],
+      sudo: {
+        ran: [{ timestamp: '', user: 'runner', targetUser: 'root', command: '/usr/bin/echo', args: '```\n> [!NOTE]' }],
+        refused: [],
+        internal: []
+      }
+    });
+    expect(md).toContain('````console');
+  });
+});
+
+describe('Option R layout', () => {
+  const real = parseFlowLogWithOffsets(
+    fs.readFileSync(path.join(__dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8')
+  );
+  const dnsLog = fs.readFileSync(path.join(__dirname, '__fixtures__', 'beta2-enforce-dns.log'), 'utf8');
+  const hosts = summarizeFlows(withoutSelfTests(real.records, real.offsets));
+  const userDomains = [
+    'pypi.org',
+    'files.pythonhosted.org',
+    'registry.npmjs.org',
+    'docker.io',
+    'production.cloudfront.docker.com',
+    'nip.io',
+    'sslip.io'
+  ];
+  const md = buildReport({
+    mode: 'enforce',
+    dockerRetained: true,
+    job: 'enforce',
+    hosts,
+    firewall: [{ prefix: 'SaferRunner-Drop', proto: 'TCP', dst: '1.1.1.1', dport: '853', uid: '1001' }],
+    dnsRefused: ['example.org'],
+    dnsRebind: parseDnsRebind(dnsLog),
+    userDomains,
+    selfTests: [
+      { name: 'sni-block', ok: true, detail: 'x' },
+      { name: 'repoint', ok: true, detail: 'y' }
+    ],
+    integrity: { status: 'verified', body: '(tables)' },
+    now: new Date('2026-11-04T19:21:00Z')
+  });
+
+  it('opens with a title, a chip row and a CAUTION verdict for bypass attempts', () => {
+    const lines = md.split('\n');
+    expect(lines[0]).toBe('## 🛡️ Safer Runner — egress');
+    expect(lines[2]).toBe('<kbd>🔒 ENFORCE</kbd> <kbd>⚠️ docker retained</kbd> <kbd>🧪 self-tests 2/2</kbd>');
+    expect(md).toContain(
+      '> [!CAUTION]\n> **Bypass attempts to 7 hosts were blocked** — 2 Host/SNI spoofs and 5 names that point at internal addresses.'
+    );
+    expect(md).toContain('> [!WARNING]\n> **The boundary was weaker than it looks.**');
+  });
+
+  it('counts only genuinely allowed traffic in the headline (beta.2 counted blocked requests and phantom hosts)', () => {
+    const allowed = hosts.filter(h => !['BLOCK', 'WOULD_BLOCK'].includes(h.verdict));
+    const requests = allowed.reduce((a, h) => a + h.requests, 0);
+    const blockedRequests = hosts.filter(h => h.verdict === 'BLOCK').reduce((a, h) => a + h.requests, 0);
+    expect(blockedRequests).toBeGreaterThan(0);
+    expect(md).toContain(`| ✅ **Allowed** | ${allowed.length} hosts · ${requests} requests · `);
+    expect(allowed.map(h => h.name)).not.toEqual(expect.arrayContaining(['100.64.0.1.nip.io']));
+    expect(allowed).toHaveLength(15); // 18 in beta.2: 3 phantoms refused upstream
+  });
+
+  it('groups blocked traffic by cause, attacks first', () => {
+    const order = [
+      '### 🚨 Bypass attempts (7)',
+      '### 🚫 Not on the allowlist (2)',
+      '🔢 <b>No hostname</b> — 3 blocked'
+    ];
+    const at = order.map(o => md.indexOf(o));
+    expect(at.every(i => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(md).toContain('| `100.64.0.1.nip.io` | 🕳️ **Internal address** → `100.64.0.1` (CGNAT), refused | 2 |');
+    expect(md).toContain('sent inside TLS for `github.com`');
+  });
+
+  it('names cross-referenced with a dnsmasq rebind drop are internal-address attempts', () => {
+    expect(md).toContain(
+      '| `127.0.0.1.nip.io` | 🕳️ **Internal address** — DNS answer dropped by DNS-rebind protection | 1 |'
+    );
+    expect(md).not.toContain('Did not resolve');
+  });
+
+  it('without the rebind log line an unresolved name is only "did not resolve", never an attack', () => {
+    const md2 = buildReport({ mode: 'enforce', job: 'j', hosts, firewall: [], dnsRefused: [], selfTests: [] });
+    expect(md2).toContain('### ❔ Did not resolve (3)');
+    expect(md2).toContain('**Bypass attempts to 4 hosts were blocked**');
+  });
+
+  it('offers ready-to-paste allowed-domains YAML for allowlist misses only', () => {
+    expect(md).toContain('```yaml\nallowed-domains: |\n  example.org\n  octocat.github.io\n```');
+  });
+
+  it("splits allowed traffic into the job's hosts (open) and GitHub platform (collapsed, result in the summary)", () => {
+    expect(md).toContain("### ✅ Allowed — this job's hosts (7)");
+    expect(md).toMatch(
+      /<summary>🐙 <b>GitHub platform<\/b> — 8 hosts · \d+ requests · [\d.]+ MiB · expected for every job<\/summary>/
+    );
+    const platform = md.slice(md.indexOf('GitHub platform</b>'));
+    expect(platform).toContain('`release-assets.githubusercontent.com`');
+  });
+
+  it('never prints a measurement that was not taken (beta.2 printed 0 B for passthrough)', () => {
+    expect(md).toContain(
+      '| `hosted-compute-watchdog-prod-iad-01.githubapp.com` <sub>🔀 passthrough</sub> | — | n/a | n/a |'
+    );
+    expect(md).toContain('| `broker.actions.githubusercontent.com` | 1 | — | 101 |');
+    expect(md).not.toContain('0 B');
+  });
+
+  it('collapses diagnostics into one section whose summary states each result', () => {
+    expect(md).toContain(
+      '<summary>🔧 <b>Diagnostics</b> — self-tests 2/2 ✓ · 1 non-proxy destination rejected · 1 DNS refusal · config files ✓</summary>'
+    );
+    expect(md).toContain('| `1.1.1.1:853` | TCP | DNS-over-TLS | 1001 | 1 | ❌ rejected |');
+  });
+
+  it('ends with a metadata footer', () => {
+    expect(md.trimEnd().split('\n').pop()).toBe(
+      '<sub>enforce · job `enforce` · 2026-11-04 19:21 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>'
+    );
+  });
+
+  it('keeps GitHub alerts at the top level (they do not render inside <details>)', () => {
+    let depth = 0;
+    for (const line of md.split('\n')) {
+      depth += (line.match(/<details>/g) ?? []).length - (line.match(/<\/details>/g) ?? []).length;
+      if (/^> \[!/.test(line)) expect(depth).toBe(0);
+    }
+  });
+
+  it('a clean run is about five visible lines', () => {
+    const clean = summarizeFlows(
+      parseFlowLog(
+        [
+          { ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', layer: 'sni', sni: 'pypi.org', client: 'c:1' },
+          {
+            ev: 'https',
+            verdict: 'ALLOW',
+            reason: 'allowed',
+            layer: 'http',
+            host: 'pypi.org',
+            sni: 'pypi.org',
+            client: 'c:1',
+            status: 200,
+            resp_bytes: 2048
+          },
+          { ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', layer: 'sni', sni: 'github.com', client: 'c:2' },
+          {
+            ev: 'https',
+            verdict: 'ALLOW',
+            reason: 'allowed',
+            layer: 'http',
+            host: 'github.com',
+            sni: 'github.com',
+            client: 'c:2',
+            status: 200,
+            resp_bytes: 10
+          }
+        ]
+          .map(r => JSON.stringify(r))
+          .join('\n')
+      )
+    );
+    const out = buildReport({
+      mode: 'enforce',
+      job: 'build',
+      hosts: clean,
       firewall: [],
       dnsRefused: [],
-      selfTests: [],
-      extraSections: []
+      selfTests: [{ name: 'sni-block', ok: true, detail: '' }],
+      userDomains: ['pypi.org'],
+      sudo: { ran: [], refused: [], internal: [] },
+      integrity: { status: 'verified', body: '' }
     });
-    expect(md).toContain('a\\|&lt;b>');
+    expect(out).not.toContain('[!');
+    expect(out).toContain('<kbd>✅ boundary intact</kbd>');
+    expect(out).toContain('**✅ Nothing blocked.** 2 hosts · 2 requests · 2.0 KiB through the proxy.');
+    // outside <details>: title, chips, verdict line, one small table
+    const visible = out
+      .replace(/<details>[\s\S]*?<\/details>/g, '')
+      .split('\n')
+      .filter(l => l.trim() && !l.startsWith('|'));
+    expect(visible.length).toBeLessThanOrEqual(5);
   });
+});
+
+describe('addressClass', () => {
+  it.each([
+    ['100.64.0.1', 'CGNAT'],
+    ['127.0.0.1', 'loopback'],
+    ['169.254.169.254', 'cloud metadata service'],
+    ['10.1.2.3', 'private, RFC 1918'],
+    ['172.31.0.1', 'private, RFC 1918'],
+    ['172.32.0.1', 'internal'],
+    ['fd00::1', 'private, ULA'],
+    ['::1', 'loopback']
+  ])('%s -> %s', (ip, cls) => expect(addressClass(ip)).toBe(cls));
 });
 
 describe('humanBytes', () => {
@@ -370,22 +589,23 @@ describe('reconciling refused connections (no host is both allowed and blocked)'
 });
 
 describe('enforce labelling (review H2)', () => {
-  const base = { job: 'j', hosts: [], firewall: [], dnsRefused: [], selfTests: [], extraSections: [] };
+  const base = { job: 'j', hosts: [], firewall: [], dnsRefused: [], selfTests: [] };
 
-  it('labels enforce with sudo retained as ADVISORY in the header and the mode', () => {
+  it('labels enforce with sudo retained as ADVISORY in the title and the mode chip', () => {
     const md = buildReport({ ...base, mode: 'enforce', sudoRetained: true });
     expect(md.split('\n')[0]).toBe(
-      '# Safer Runner v2 egress report — enforce (ADVISORY — sudo retained, not an enforced boundary)'
+      '## 🛡️ Safer Runner — egress — enforce (ADVISORY — sudo retained, not an enforced boundary)'
     );
     expect(md).toContain('> [!WARNING]');
-    expect(md).toContain('**Mode:** ⚠️ ENFORCE (ADVISORY — sudo retained, not an enforced boundary)');
+    expect(md).toContain('<kbd>⚠️ ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo retained</kbd>');
+    expect(md).not.toContain('boundary intact');
   });
 
   it('labels enforce with sudo removed as plain enforce', () => {
     const md = buildReport({ ...base, mode: 'enforce', sudoRetained: false });
-    expect(md.split('\n')[0]).toBe('# Safer Runner v2 egress report');
+    expect(md.split('\n')[0]).toBe('## 🛡️ Safer Runner — egress');
     expect(md).not.toContain('ADVISORY');
-    expect(md).toContain('**Mode:** 🔒 ENFORCE');
+    expect(md).toContain('<kbd>🔒 ENFORCE</kbd>');
   });
 
   it('never labels analyze as advisory enforce', () => {
@@ -394,16 +614,36 @@ describe('enforce labelling (review H2)', () => {
   });
 
   it('warns when enforce left docker (root-equivalent) in place', () => {
-    expect(buildReport({ ...base, mode: 'enforce', dockerRetained: true })).toContain('> [!CAUTION]');
-    expect(buildReport({ ...base, mode: 'enforce', dockerRetained: false })).not.toContain('[!CAUTION]');
+    expect(buildReport({ ...base, mode: 'enforce', dockerRetained: true })).toContain('> [!WARNING]');
+    expect(buildReport({ ...base, mode: 'enforce', dockerRetained: false })).not.toContain('[!');
   });
 
+  const cmd = (command: string) => ({ timestamp: '', user: 'runner', targetUser: 'root', command, args: '' });
+
   it('analyze: tells a sudo-using job that enforce removes sudo by default', () => {
-    const md = buildReport({ ...base, mode: 'analyze', sudoCommandCount: 3 });
-    expect(md).toContain('**This job ran 3 sudo command(s)**');
+    const sudo = { ran: [cmd('/usr/bin/apt-get'), cmd('/usr/bin/id'), cmd('/usr/bin/tee')], refused: [], internal: [] };
+    const md = buildReport({ ...base, mode: 'analyze', sudo });
+    expect(md).toContain('**This job ran 3 sudo commands.**');
     expect(md).toContain('disable-sudo: false');
     expect(md).not.toContain('should run unchanged');
-    expect(buildReport({ ...base, mode: 'analyze', sudoCommandCount: 0 })).toContain('should run unchanged');
+    expect(buildReport({ ...base, mode: 'analyze', sudo: { ran: [], refused: [], internal: [] } })).toContain(
+      'should run unchanged'
+    );
+  });
+
+  // beta.2 said "Workflow executed 4 sudo commands": its own teardown plus three refused attempts
+  it("the action's own and refused sudo never count as the workflow's usage", () => {
+    const sudo = {
+      ran: [],
+      refused: [cmd('/usr/bin/true'), cmd('/usr/sbin/iptables-save')],
+      internal: [cmd('/opt/safer-runner/bin/teardown')]
+    };
+    const analyze = buildReport({ ...base, mode: 'analyze', sudo });
+    expect(analyze).not.toContain('This job ran');
+    expect(analyze).toContain('should run unchanged');
+    const enforce = buildReport({ ...base, mode: 'enforce', sudo });
+    expect(enforce).toContain('workflow sudo 0 (1 by Safer Runner) · 2 sudo attempts refused');
+    expect(enforce).toContain('Refused by sudo (2):');
   });
 });
 

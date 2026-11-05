@@ -4,8 +4,8 @@
  */
 
 import { ipOf, type FlowRecord } from './flowlog';
-import { isIpLiteral } from './policy';
-import type { Mode } from './policy';
+import { compilePattern, isIpLiteral, matchesAny, type Mode } from './policy';
+import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
 
 export interface HostSummary {
   name: string;
@@ -188,6 +188,87 @@ export function parseFirewallLog(text: string): FirewallEvent[] {
   return out;
 }
 
+// ---------------------------------------------------------------- classification
+
+/** Why a host was blocked, most severe first. A host goes in its most severe category only. */
+export type Category = 'fronting' | 'internal' | 'not-allowed' | 'unresolved' | 'no-name' | 'other';
+
+const FRONTING = new Set(['host-sni-mismatch', 'authority-host-mismatch']);
+const NOT_LISTED = new Set(['sni-not-allowed', 'host-not-allowed']);
+const DENYLISTED = new Set(['sni-denied', 'host-denied']);
+const NO_NAME = new Set(['no-sni', 'ip-literal-sni', 'ip-literal-host', 'no-host']);
+
+/**
+ * `upstream-unresolved` is only called an attack when dnsmasq logged that it dropped the
+ * name's answer as a DNS-rebind (a private address); otherwise it is just a name that did
+ * not resolve - calling a typo an attack would cost the report its credibility.
+ */
+export function categorize(h: HostSummary, rebind: ReadonlySet<string> = new Set()): Category {
+  const r = h.reasons;
+  if (r.some(x => FRONTING.has(x))) return 'fronting';
+  if (r.includes('upstream-ip-forbidden')) return 'internal';
+  if (r.includes('upstream-unresolved') && rebind.has(h.name)) return 'internal';
+  if (r.some(x => NOT_LISTED.has(x) || DENYLISTED.has(x))) return 'not-allowed';
+  if (r.includes('upstream-unresolved')) return 'unresolved';
+  if (r.length > 0 && r.every(x => NO_NAME.has(x))) return 'no-name';
+  return 'other';
+}
+
+function inCidr4(ip: string, base: string, bits: number): boolean {
+  const n = (s: string) => s.split('.').reduce((a, o) => a * 256 + Number(o), 0);
+  const size = 2 ** (32 - bits);
+  return Math.floor(n(ip) / size) === Math.floor(n(base) / size);
+}
+
+/** Plain-words class of an internal address (mirrors FORBIDDEN_UPSTREAM_NETS in policy_core.py). */
+export function addressClass(ip: string): string {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+    if (ip === '169.254.169.254') return 'cloud metadata service';
+    if (ip === '168.63.129.16') return 'Azure wireserver';
+    const nets: [string, number, string][] = [
+      ['127.0.0.0', 8, 'loopback'],
+      ['169.254.0.0', 16, 'link-local'],
+      ['10.0.0.0', 8, 'private, RFC 1918'],
+      ['172.16.0.0', 12, 'private, RFC 1918'],
+      ['192.168.0.0', 16, 'private, RFC 1918'],
+      ['100.64.0.0', 10, 'CGNAT'],
+      ['0.0.0.0', 8, '"this network"'],
+      ['224.0.0.0', 4, 'multicast'],
+      ['240.0.0.0', 4, 'reserved']
+    ];
+    for (const [base, bits, label] of nets) if (inCidr4(ip, base, bits)) return label;
+    return 'internal';
+  }
+  const v6 = ip.toLowerCase();
+  if (v6 === '::1') return 'loopback';
+  if (/^fe[89ab]/.test(v6)) return 'link-local';
+  if (/^f[cd]/.test(v6)) return 'private, ULA';
+  if (v6.startsWith('ff')) return 'multicast';
+  return 'internal';
+}
+
+/** dnsmasq: "possible DNS-rebind attack detected: <name>" (stop-dns-rebind, enforce mode). */
+export function parseDnsRebind(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/possible DNS-rebind attack detected: (\S+)/g)) out.add(m[1].toLowerCase());
+  return Array.from(out);
+}
+
+const PORT_NAMES: Record<string, string> = {
+  '22': 'SSH',
+  '25': 'SMTP',
+  '53': 'DNS',
+  '123': 'NTP',
+  '443': 'HTTPS (not proxied)',
+  '80': 'HTTP (not proxied)',
+  '853': 'DNS-over-TLS',
+  '3128': 'HTTP proxy',
+  '8080': 'HTTP proxy',
+  '9418': 'git'
+};
+
+// ---------------------------------------------------------------- formatting
+
 export function humanBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const units = ['KiB', 'MiB', 'GiB', 'TiB'];
@@ -200,32 +281,105 @@ export function humanBytes(n: number): string {
   return `${v.toFixed(1)} ${units[i]}`;
 }
 
-function esc(s: string): string {
-  return s.replace(/\|/g, '\\|').replace(/</g, '&lt;');
+/** Untrusted text (hostnames come from the job's own Host headers) as a code span in a table. */
+function code(s: string): string {
+  return (
+    '`' +
+    s
+      .slice(0, 253)
+      .replace(/`/g, "'")
+      .replace(/\|/g, '\\|')
+      .replace(/[\r\n]/g, ' ') +
+    '`'
+  );
 }
 
-function table(header: string[], rows: string[][]): string {
-  return [
-    `| ${header.join(' | ')} |`,
-    `|${header.map(() => '---').join('|')}|`,
-    ...rows.map(r => `| ${r.map(esc).join(' | ')} |`)
-  ].join('\n');
+/** The same, inside raw HTML (<summary>). */
+function codeHtml(s: string): string {
+  const h = s.slice(0, 253).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<code>${h}</code>`;
+}
+
+function table(header: string[], align: string[], rows: string[][]): string {
+  return [`| ${header.join(' | ')} |`, `|${align.join('|')}|`, ...rows.map(r => `| ${r.join(' | ')} |`)].join('\n');
 }
 
 function capped<T>(rows: T[]): { shown: T[]; note: string } {
   if (rows.length <= MAX_ROWS) return { shown: rows, note: '' };
   return {
     shown: rows.slice(0, MAX_ROWS),
-    note: `\n\n**+${rows.length - MAX_ROWS} more not shown here** - the full list is in the post step's job log.\n`
+    note: `\n\n**+${rows.length - MAX_ROWS} more not shown here** - the full list is in the post step's job log.`
   };
 }
 
-function statusText(s: Record<string, number>): string {
-  return Object.entries(s)
-    .sort()
-    .map(([k, v]) => (v > 1 ? `${k}×${v}` : k))
-    .join(' ');
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
+
+function nameList(hosts: HostSummary[]): string {
+  const names = hosts.slice(0, MAX_LIST).map(h => code(displayName(h)));
+  return names.join(', ') + (hosts.length > MAX_LIST ? `, +${hosts.length - MAX_LIST} more` : '');
+}
+
+function displayName(h: HostSummary): string {
+  return h.name.replace(/^\(no name\) /, '');
+}
+
+function isPassthroughOnly(h: HostSummary): boolean {
+  return h.requests === 0 && h.kinds.includes('passthrough');
+}
+
+/** Passthrough is never decrypted: no request or byte counts exist, so never print 0. */
+function requestsCell(h: HostSummary): string {
+  return isPassthroughOnly(h) ? '—' : String(h.requests);
+}
+
+function dataCell(h: HostSummary): string {
+  if (isPassthroughOnly(h)) return 'n/a';
+  const parts = [];
+  if (h.reqBytes > 0) parts.push(`↑ ${humanBytes(h.reqBytes)}`);
+  if (h.respBytes > 0) parts.push(`↓ ${humanBytes(h.respBytes)}`);
+  return parts.join(' ') || '—';
+}
+
+/** "2xx ×23 · 307 ×2 · 401": only codes that need a look stand out. */
+export function statusSummary(h: HostSummary): string {
+  if (isPassthroughOnly(h)) return 'n/a';
+  const times = (k: string, n: number) => (n > 1 ? `${k} ×${n}` : k);
+  let ok = 0;
+  const other: [string, number][] = [];
+  let answered = 0;
+  for (const [k, n] of Object.entries(h.statuses)) {
+    answered += n;
+    if (/^2\d\d$/.test(k)) ok += n;
+    else other.push([k, n]);
+  }
+  other.sort((a, b) => Number(a[0]) - Number(b[0]));
+  const parts = ok ? [times('2xx', ok)] : [];
+  parts.push(...other.map(([k, n]) => times(k, n)));
+  if (h.requests > answered) parts.push(times('no response', h.requests - answered));
+  return parts.join(' · ') || '—';
+}
+
+function hostCell(h: HostSummary): string {
+  let c = code(h.name);
+  if (h.kinds.includes('passthrough')) c += ' <sub>🔀 passthrough</sub>';
+  else if (h.kinds.length === 1 && h.kinds[0] === 'http') c += ' <sub>plain HTTP</sub>';
+  return c;
+}
+
+/** Longest backtick run + 1, so untrusted text can't close the fence early. */
+function fenceFor(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(m => m.length));
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
+function codeBlock(lang: string, text: string): string {
+  const f = fenceFor(text);
+  return `${f}${lang}\n${text}\n${f}`;
+}
+
+// ---------------------------------------------------------------- report
 
 export interface ReportInput {
   mode: Mode;
@@ -233,24 +387,40 @@ export interface ReportInput {
   sudoRetained?: boolean;
   /** the runner user kept docker access (root-equivalent) */
   dockerRetained?: boolean;
-  /** sudo commands the job ran (analyze: tells the user enforce's default will remove sudo) */
-  sudoCommandCount?: number;
+  /** sudo log split by who ran what (analyze: tells the user enforce's default will remove sudo) */
+  sudo?: SudoUsage;
   job: string;
   hosts: HostSummary[];
   firewall: FirewallEvent[];
   dnsRefused: string[];
+  /** names dnsmasq dropped as a possible DNS-rebind (their answer was a private address) */
+  dnsRebind?: string[];
+  /**
+   * The job's own `allowed-domains` + `passthrough-domains` patterns. Allowed traffic to
+   * anything else matched the GitHub list (allow = GitHub ∪ user), so it is shown as GitHub
+   * platform traffic. Undefined: no split.
+   */
+  userDomains?: string[];
   selfTests: { name: string; ok: boolean; detail: string }[];
-  extraSections: string[];
+  integrity?: { status: 'verified' | 'tampered' | 'unavailable'; body: string };
+  extraSections?: string[];
+  now?: Date;
 }
 
-/** Names that were refused only because they're not on the allowlist (not fronting, IPs, ...). */
-export function suggestedAllowlist(hosts: HostSummary[]): string[] {
-  const notListed = new Set(['sni-not-allowed', 'host-not-allowed']);
+const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)+$/;
+
+/**
+ * Names refused only because they're not on the allowlist - never fronting, internal
+ * addresses, IPs, the risky-subdomain denylist or the self-test - and only well-formed
+ * hostnames (they are pasted into YAML).
+ */
+export function suggestedAllowlist(hosts: HostSummary[], rebind: ReadonlySet<string> = new Set()): string[] {
   return Array.from(
     new Set(
       hosts
-        .filter(h => h.verdict === 'WOULD_BLOCK' && h.reasons.some(r => notListed.has(r)))
-        .filter(h => !h.name.startsWith('(no name)') && !h.name.endsWith('.invalid'))
+        .filter(h => DENIED.has(h.verdict) && categorize(h, rebind) === 'not-allowed')
+        .filter(h => h.reasons.some(r => NOT_LISTED.has(r)) && !h.reasons.some(r => DENYLISTED.has(r)))
+        .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid'))
         .map(h => h.name)
     )
   );
@@ -262,129 +432,426 @@ export function modeLabel(mode: Mode, sudoRetained = false): string {
   return sudoRetained ? '⚠️ ENFORCE (ADVISORY — sudo retained, not an enforced boundary)' : '🔒 ENFORCE';
 }
 
-export function buildReport(input: ReportInput): string {
-  const { mode, hosts } = input;
-  const denied = hosts.filter(h => DENIED.has(h.verdict));
-  const allowed = hosts.filter(h => !denied.includes(h));
-  const deniedWord = mode === 'enforce' ? 'Blocked' : 'Would be blocked';
-  const advisory = mode === 'enforce' && input.sudoRetained === true;
+function compileUserPatterns(patterns: string[]): RegExp[] {
+  const out: RegExp[] = [];
+  for (const p of patterns) {
+    try {
+      out.push(compilePattern(p));
+    } catch {
+      // invalid entries were dropped (and warned about) at setup
+    }
+  }
+  return out;
+}
 
-  let md = `# Safer Runner v2 egress report${advisory ? ' — enforce (ADVISORY — sudo retained, not an enforced boundary)' : ''}\n\n`;
-  if (advisory) {
+function byData(a: HostSummary, b: HostSummary): number {
+  return (
+    b.reqBytes + b.respBytes - (a.reqBytes + a.respBytes) || b.requests - a.requests || a.name.localeCompare(b.name)
+  );
+}
+
+function allowedTable(rows: HostSummary[]): string {
+  const { shown, note } = capped([...rows].sort(byData));
+  let md = table(
+    ['Host', 'Requests', 'Data', 'Responses'],
+    [':--', '--:', '--:', ':--'],
+    shown.map(h => [hostCell(h), requestsCell(h), dataCell(h), statusSummary(h)])
+  );
+  md += note + '\n\n';
+  if (shown.some(h => h.kinds.includes('passthrough'))) {
+    md += '<sub>🔀 passthrough = checked by TLS name only, not decrypted, so no request or byte counts.</sub>\n\n';
+  }
+  return md;
+}
+
+function totals(rows: HostSummary[]): { requests: number; bytes: number } {
+  return {
+    requests: rows.reduce((a, h) => a + h.requests, 0),
+    bytes: rows.reduce((a, h) => a + h.reqBytes + h.respBytes, 0)
+  };
+}
+
+function frontingCell(h: HostSummary, verb: string): string {
+  const what = h.reasons.includes('host-sni-mismatch')
+    ? '🎭 **Host/SNI mismatch** (domain fronting)'
+    : '🎭 **Conflicting Host / authority**';
+  const notes: string[] = [];
+  if (h.snis.length) notes.push(`sent inside TLS for ${h.snis.map(code).join(', ')}`);
+  if (h.reasons.some(r => NOT_LISTED.has(r))) notes.push('also not on allowlist');
+  if (h.dsts.length) notes.push(`dialled ${h.dsts.map(code).join(', ')}`);
+  return what + (verb ? `, ${verb}` : '') + (notes.length ? `<br><sub>${notes.join(' · ')}</sub>` : '');
+}
+
+function internalCell(h: HostSummary, verb: string): string {
+  if (h.upstreamIps.length) {
+    const ips = h.upstreamIps.map(ip => `${code(ip)} (${addressClass(ip)})`).join(', ');
+    return `🕳️ **Internal address** → ${ips}, ${verb}`;
+  }
+  // the address itself is not logged by dnsmasq: say only what was measured
+  return `🕳️ **Internal address** — DNS answer dropped by DNS-rebind protection`;
+}
+
+const NO_NAME_TEXT: Record<string, string> = {
+  'no-sni': 'TLS with no SNI',
+  'ip-literal-sni': 'TLS with an IP address as SNI',
+  'ip-literal-host': 'HTTP request with an IP literal as the Host',
+  'no-host': 'HTTP request with no Host'
+};
+
+function firewallSummary(events: FirewallEvent[]): {
+  rows: { e: FirewallEvent; n: number }[];
+  rejected: number;
+  logged: number;
+} {
+  const seen = new Map<string, { e: FirewallEvent; n: number }>();
+  for (const e of events) {
+    const k = `${e.prefix} ${e.proto} ${e.dst}:${e.dport} uid ${e.uid}`;
+    seen.set(k, { e, n: (seen.get(k)?.n ?? 0) + 1 });
+  }
+  const rows = Array.from(seen.values());
+  const rejected = rows.filter(r => r.e.prefix === 'SaferRunner-Drop').length;
+  return { rows, rejected, logged: rows.length - rejected };
+}
+
+function destinationText(e: FirewallEvent): string {
+  const likely = PORT_NAMES[e.dport];
+  return `${likely ? `${likely} to ` : ''}${code(`${e.dst}:${e.dport}`)}`;
+}
+
+export function buildReport(input: ReportInput): string {
+  const { mode } = input;
+  const enforce = mode === 'enforce';
+  const advisory = enforce && input.sudoRetained === true;
+  const rebind = new Set((input.dnsRebind ?? []).map(n => n.toLowerCase()));
+  const dnsRefused = new Set(input.dnsRefused.map(n => n.toLowerCase()));
+  const blockedWord = enforce ? 'blocked' : 'would be blocked';
+
+  const denied = input.hosts.filter(h => DENIED.has(h.verdict));
+  const allowed = input.hosts.filter(h => !DENIED.has(h.verdict));
+  const groups: Record<Category, HostSummary[]> = {
+    fronting: [],
+    internal: [],
+    'not-allowed': [],
+    unresolved: [],
+    'no-name': [],
+    other: []
+  };
+  for (const h of denied) groups[categorize(h, rebind)].push(h);
+  const byTries = (a: HostSummary, b: HostSummary) => b.tries - a.tries || a.name.localeCompare(b.name);
+  for (const g of Object.values(groups)) g.sort(byTries);
+  const bypass = [...groups.fronting, ...groups.internal];
+
+  let jobHosts = allowed;
+  let platform: HostSummary[] = [];
+  if (input.userDomains) {
+    const user = compileUserPatterns(input.userDomains);
+    jobHosts = allowed.filter(h => matchesAny(h.name, user));
+    platform = allowed.filter(h => !jobHosts.includes(h));
+  }
+  const all = totals(allowed);
+  const plat = totals(platform);
+
+  const selfOk = input.selfTests.filter(t => t.ok).length;
+  const selfFailed = input.selfTests.filter(t => !t.ok);
+  const tampered = input.integrity?.status === 'tampered';
+  const fw = firewallSummary(input.firewall);
+  const sudoRan = input.sudo?.ran.length ?? 0;
+  const suggest = suggestedAllowlist(denied, rebind);
+
+  // ---- title + chips
+  let md = `## 🛡️ Safer Runner — egress${advisory ? ' — enforce (ADVISORY — sudo retained, not an enforced boundary)' : ''}\n\n`;
+  const chips = [advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
+  if (enforce) {
+    const weak: string[] = [];
+    if (input.sudoRetained) weak.push('⚠️ sudo retained');
+    if (input.dockerRetained) weak.push('⚠️ docker retained');
+    if (tampered) weak.push('🚨 config tampered');
+    chips.push(...(weak.length ? weak : ['✅ boundary intact']));
+  } else {
+    chips.push(denied.length ? `${plural(denied.length, 'host')} would be blocked` : 'nothing would be blocked');
+  }
+  if (input.selfTests.length) {
+    chips.push(`${selfFailed.length ? '❌' : '🧪'} self-tests ${selfOk}/${input.selfTests.length}`);
+  }
+  md += chips.map(c => `<kbd>${c}</kbd>`).join(' ') + '\n\n';
+
+  // ---- verdict alerts (top level only: alerts don't render inside <details>)
+  const critical: string[] = [];
+  if (bypass.length) {
+    const kinds = [];
+    if (groups.fronting.length) kinds.push(plural(groups.fronting.length, 'Host/SNI spoof'));
+    if (groups.internal.length) {
+      kinds.push(
+        `${plural(groups.internal.length, 'name')} that point${groups.internal.length === 1 ? 's' : ''} at internal addresses`
+      );
+    }
+    critical.push(
+      enforce
+        ? `**Bypass attempts to ${plural(bypass.length, 'host')} were blocked** — ${kinds.join(' and ')}.\n` +
+            '> Nothing in a normal build does this. Check the steps that ran before the post step.'
+        : `**Bypass attempts to ${plural(bypass.length, 'host')} were seen and NOT blocked** (analyze mode) — ${kinds.join(' and ')}.\n` +
+            '> Enforce would block them. Nothing in a normal build does this: check the steps that ran.'
+    );
+  }
+  if (selfFailed.length) {
+    critical.push(
+      `**Self-test failed:** ${selfFailed.map(t => `\`${t.name}\``).join(', ')} — the proxy may not be enforcing as designed on this runner.`
+    );
+  }
+  if (tampered) {
+    critical.push(
+      '**Safer Runner configuration changed during the job** — see the config file check under Diagnostics.'
+    );
+  }
+  if (critical.length) md += '> [!CAUTION]\n' + critical.map(c => `> ${c}`).join('\n>\n') + '\n\n';
+
+  if (enforce && (input.sudoRetained || input.dockerRetained)) {
+    const why: string[] = [];
+    if (input.sudoRetained) {
+      why.push(
+        '**ADVISORY: sudo was retained** (`disable-sudo: false` or `sudo-config`), so any step could have used it to ' +
+          'remove the egress controls. The policy below was applied, but this job did not run inside an enforced ' +
+          'boundary. Remove `disable-sudo: false` / `sudo-config` to make enforce a boundary.'
+      );
+    }
+    if (input.dockerRetained) {
+      why.push(
+        'The runner user kept **docker** access, which is root-equivalent: a step could use it to remove the egress ' +
+          'controls. Set `disable-docker: true` or `stop-docker: true` unless the job needs docker.'
+      );
+    }
     md +=
       '> [!WARNING]\n' +
-      '> **ADVISORY: sudo was retained** (`disable-sudo: false` or `sudo-config`), so any step could have used it to ' +
-      'remove the egress controls. The policy below was applied, but this job did not run inside an enforced boundary. ' +
-      'Remove `disable-sudo: false` / `sudo-config` to make enforce a boundary.\n\n';
+      '> **The boundary was weaker than it looks.**\n>\n' +
+      why.map(w => `> ${w}`).join('\n>\n') +
+      '\n\n';
   }
-  if (mode === 'enforce' && input.dockerRetained) {
+
+  if (enforce && !bypass.length && groups['not-allowed'].length) {
     md +=
-      '> [!CAUTION]\n' +
-      '> The runner user kept **docker** access, which is root-equivalent: a step could use it to remove the egress ' +
-      'controls. Set `disable-docker: true` or `stop-docker: true` unless the job needs docker.\n\n';
-  }
-  md += `**Job:** ${input.job} · **Mode:** ${modeLabel(mode, input.sudoRetained)} · **Generated:** ${new Date().toISOString()}\n\n`;
-  const totalReq = hosts.reduce((a, h) => a + h.requests, 0);
-  const totalBytes = hosts.reduce((a, h) => a + h.reqBytes + h.respBytes, 0);
-  md += `${allowed.length} host(s) allowed · **${denied.length} host(s) ${deniedWord.toLowerCase()}** · `;
-  md += `${totalReq} HTTP request(s) · ${humanBytes(totalBytes)} through the proxy\n\n`;
-
-  if (input.selfTests.length) {
-    md +=
-      input.selfTests.map(t => `${t.ok ? '✅' : '❌'} self-test **${t.name}**: ${esc(t.detail)}`).join('  \n') + '\n\n';
+      '> [!IMPORTANT]\n' +
+      `> **${plural(groups['not-allowed'].length, 'host')} not on the allowlist ${groups['not-allowed'].length === 1 ? 'was' : 'were'} blocked.** ` +
+      'If this job failed, this is probably why — see below.\n\n';
   }
 
-  md += `## ${mode === 'enforce' ? '❌' : '⚠️'} ${deniedWord} (${denied.length})\n\n`;
-  if (denied.length === 0) {
-    md += `None.\n\n`;
-  } else {
-    const { shown, note } = capped(denied);
-    md += table(
-      ['Host (SNI / Host)', 'Reason', 'Layer', 'Connections', 'Requests', 'Dialled IP(s)'],
-      shown.map(h => [
-        h.name,
-        h.reasons.join(', '),
-        h.layers.join(', '),
-        String(h.connections),
-        String(h.requests),
-        h.dsts.join(', ')
-      ])
-    );
-    md += note + '\n\n';
-  }
-
-  md += `## ✅ Allowed (${allowed.length})\n\n`;
-  if (allowed.length === 0) {
-    md += `None.\n\n`;
-  } else {
-    const { shown, note } = capped(allowed);
-    md += table(
-      ['Host', 'How', 'Connections', 'Requests', 'Sent', 'Received', 'Status codes'],
-      shown.map(h => [
-        h.name,
-        h.kinds.join(', '),
-        String(h.connections),
-        String(h.requests),
-        humanBytes(h.reqBytes),
-        humanBytes(h.respBytes),
-        statusText(h.statuses)
-      ])
-    );
-    md += note + '\n\n';
-    md += `<sub>intercept = TLS terminated and every request's Host checked · passthrough = SNI-only, not decrypted (byte counts not available) · http = plain HTTP</sub>\n\n`;
-  }
-
-  const nonHttp = input.firewall;
-  md += `## Other egress - not through the proxy (${nonHttp.length})\n\n`;
-  if (nonHttp.length === 0) {
-    md += `None logged.\n\n`;
-  } else {
-    const seen = new Map<string, { e: FirewallEvent; n: number }>();
-    for (const e of nonHttp) {
-      const k = `${e.proto} ${e.dst}:${e.dport} uid ${e.uid}`;
-      seen.set(k, { e, n: (seen.get(k)?.n ?? 0) + 1 });
+  if (!enforce && (suggest.length || sudoRan)) {
+    md += '> [!IMPORTANT]\n';
+    if (suggest.length) {
+      md += `> **Enforce would block ${plural(suggest.length, 'host')} this job used.** Add ${suggest.length === 1 ? 'it' : 'them'} to run this job under \`mode: enforce\` (review each one first):\n>\n`;
+      const yaml =
+        '- uses: portswigger-tim/safer-runner-action@v2\n  with:\n    mode: enforce\n    allowed-domains: |\n' +
+        suggest.map(s => `      ${s}`).join('\n');
+      md +=
+        codeBlock('yaml', yaml)
+          .split('\n')
+          .map(l => `> ${l}`)
+          .join('\n') + '\n';
     }
-    const rows = Array.from(seen.values()).map(({ e, n }) => [
-      e.prefix === 'SaferRunner-Drop' ? '❌ rejected' : '⚠️ allowed (not proxied)',
-      e.proto,
-      `${e.dst}:${e.dport}`,
-      e.uid,
-      String(n)
-    ]);
+    if (sudoRan) {
+      if (suggest.length) md += '>\n';
+      md +=
+        `> **This job ran ${plural(sudoRan, 'sudo command')}.** Enforce removes sudo by default — drop that usage, ` +
+        'or add `disable-sudo: false` (which makes enforce ADVISORY: sudo can remove the controls).\n';
+    }
+    md += '\n';
+  }
+
+  // ---- scorecard, or the one-line clean verdict
+  const platNote = platform.length && plat.bytes ? ` <sub>(${humanBytes(plat.bytes)} of it GitHub platform)</sub>` : '';
+  const allowedLine = `${plural(allowed.length, 'host')} · ${plural(all.requests, 'request')} · ${humanBytes(all.bytes)}`;
+  if (denied.length === 0 && fw.rows.length === 0) {
+    md += enforce
+      ? `**✅ Nothing blocked.** ${allowedLine} through the proxy.\n\n`
+      : `**✅ Nothing would be blocked.** ${allowedLine} through the proxy.` +
+        (sudoRan ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
+  } else {
+    const rows: string[][] = [];
+    if (bypass.length) rows.push(['🚨 **Bypass attempts**', `**${plural(bypass.length, 'host')} ${blockedWord}**`]);
+    if (groups['not-allowed'].length) {
+      rows.push([
+        '🚫 **Not on allowlist**',
+        `**${groups['not-allowed'].length} ${blockedWord}** — ${nameList(groups['not-allowed'])}`
+      ]);
+    }
+    if (groups.unresolved.length) {
+      rows.push([
+        '❔ **Did not resolve**',
+        `${groups.unresolved.length} ${blockedWord} — ${nameList(groups.unresolved)}`
+      ]);
+    }
+    if (groups['no-name'].length) {
+      rows.push(['🔢 **No hostname**', `${groups['no-name'].length} ${blockedWord} (raw IP / no SNI)`]);
+    }
+    if (groups.other.length) rows.push(['⚙️ **Other**', `${groups.other.length} ${blockedWord}`]);
+    rows.push(['✅ **Allowed**', allowedLine + platNote]);
+    if (fw.rows.length) {
+      const parts = [];
+      if (fw.rejected) parts.push(`${fw.rejected} rejected`);
+      if (fw.logged) parts.push(`${fw.logged} allowed, not proxied`);
+      const one = fw.rows.length === 1 ? ` (${destinationText(fw.rows[0].e)})` : '';
+      rows.push(['🧱 **Outside the proxy**', parts.join(' · ') + one]);
+    }
+    md += table(['', ''], [':--', ':--'], rows) + '\n\n';
+  }
+
+  // ---- blocked, grouped by cause, attacks first
+  const verb = enforce ? 'refused' : 'would be refused';
+  const suffix = enforce ? '' : ' — would be blocked';
+  const section = (title: string, rows: HostSummary[], header: string[], cells: (h: HostSummary) => string[]) => {
     const { shown, note } = capped(rows);
-    md += table(['Result', 'Proto', 'Destination', 'UID', 'Packets logged'], shown) + note + '\n\n';
-    md += `<sub>New connections only; only TCP 80/443 is proxied. Logging is rate-limited (60/min).</sub>\n\n`;
+    return (
+      `### ${title} (${rows.length})${suffix}\n\n` +
+      table(
+        header,
+        header.map((_, i) => (i === header.length - 1 ? '--:' : ':--')),
+        shown.map(cells)
+      ) +
+      note +
+      '\n\n'
+    );
+  };
+  if (bypass.length) {
+    md += section('🚨 Bypass attempts', bypass, ['Host', 'What happened', 'Tries'], h => [
+      code(h.name),
+      categorize(h, rebind) === 'fronting'
+        ? frontingCell(h, enforce ? '' : 'not blocked (analyze)')
+        : internalCell(h, verb),
+      String(h.tries)
+    ]);
+  }
+  if (groups['not-allowed'].length) {
+    md += section('🚫 Not on the allowlist', groups['not-allowed'], ['Host', 'Seen as', 'Tries'], h => {
+      const seen: string[] = [];
+      if (h.reasons.includes('sni-not-allowed')) seen.push('HTTPS (SNI)');
+      if (h.reasons.includes('host-not-allowed')) seen.push('plain HTTP');
+      if (h.reasons.some(r => DENYLISTED.has(r))) seen.push('on the risky-subdomain denylist');
+      if (dnsRefused.has(h.name)) seen.push('DNS also refused');
+      return [code(h.name), seen.join(' · '), String(h.tries)];
+    });
+    if (enforce && suggest.length) {
+      md += 'If the job needs them, add them (review each one first):\n\n';
+      md += codeBlock('yaml', 'allowed-domains: |\n' + suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
+    }
+  }
+  if (groups.unresolved.length) {
+    md += section('❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
+      code(h.name),
+      'allowed name, but the proxy could not resolve it, so nothing was sent',
+      String(h.tries)
+    ]);
+  }
+  if (groups['no-name'].length) {
+    const { shown, note } = capped(groups['no-name']);
+    md += `<details>\n<summary>🔢 <b>No hostname</b> — ${groups['no-name'].length} ${blockedWord} (raw IP / no SNI)</summary>\n\n`;
+    md += table(
+      ['Destination', 'What happened', 'Tries'],
+      [':--', ':--', '--:'],
+      shown.map(h => [code(displayName(h)), h.reasons.map(r => NO_NAME_TEXT[r] ?? r).join(' · '), String(h.tries)])
+    );
+    md += note + '\n\n</details>\n\n';
+  }
+  if (groups.other.length) {
+    // unknown reasons are never dropped: show the raw code
+    md += section('⚙️ Other', groups.other, ['Host', 'Reason', 'Tries'], h => [
+      code(h.name),
+      h.reasons.map(code).join(', '),
+      String(h.tries)
+    ]);
   }
 
+  // ---- allowed: the job's own hosts open, GitHub platform collapsed
+  if (input.userDomains) {
+    if (jobHosts.length) md += `### ✅ Allowed — this job's hosts (${jobHosts.length})\n\n` + allowedTable(jobHosts);
+    if (platform.length) {
+      md += `<details>\n<summary>🐙 <b>GitHub platform</b> — ${plural(platform.length, 'host')} · ${plural(plat.requests, 'request')} · ${humanBytes(plat.bytes)} · expected for every job</summary>\n\n`;
+      md += allowedTable(platform) + '</details>\n\n';
+    }
+  } else if (allowed.length) {
+    md += `### ✅ Allowed (${allowed.length})\n\n` + allowedTable(allowed);
+  }
+
+  // ---- diagnostics: one collapsed section, every part states its result
+  const diag: string[] = [];
+  let body = '';
+  if (input.selfTests.length) {
+    diag.push(`self-tests ${selfOk}/${input.selfTests.length} ${selfFailed.length ? '✗' : '✓'}`);
+    body += '**Self-tests**\n\n';
+    body +=
+      input.selfTests
+        .map(t => `- ${t.ok ? '✅' : '❌'} ${code(t.name)} — ${t.detail.replace(/[<>|`*_[\]]/g, '\\$&')}`)
+        .join('\n') + '\n\n';
+  } else {
+    diag.push('self-tests not run');
+  }
+  if (fw.rows.length) {
+    const p = [];
+    if (fw.rejected) p.push(`${fw.rejected} non-proxy ${fw.rejected === 1 ? 'destination' : 'destinations'} rejected`);
+    if (fw.logged) p.push(`${fw.logged} allowed outside the proxy`);
+    diag.push(p.join(' · '));
+    const { shown, note } = capped(fw.rows);
+    body +=
+      '**Outside the proxy** <sub>(only TCP 80/443 is proxied; new connections only; logging rate-limited to 60/min)</sub>\n\n';
+    body += table(
+      ['Destination', 'Proto', 'Likely', 'UID', 'Packets', 'Result'],
+      [':--', ':--', ':--', '--:', '--:', ':--'],
+      shown.map(({ e, n }) => [
+        code(`${e.dst}:${e.dport}`),
+        e.proto,
+        PORT_NAMES[e.dport] ?? '',
+        e.uid,
+        String(n),
+        e.prefix === 'SaferRunner-Drop' ? '❌ rejected' : '⚠️ allowed (not proxied)'
+      ])
+    );
+    body += note + '\n\n';
+  } else {
+    diag.push('nothing outside the proxy');
+  }
   if (input.dnsRefused.length) {
-    const { shown, note } = capped(input.dnsRefused);
-    md += `## DNS queries refused (${input.dnsRefused.length})\n\n`;
-    md += shown.map(d => `\`${d}\``).join(', ') + note + '\n\n';
+    diag.push(plural(input.dnsRefused.length, 'DNS refusal'));
+    const shownAbove = new Set(denied.map(h => h.name));
+    const rest = input.dnsRefused.filter(d => !shownAbove.has(d.toLowerCase()));
+    const { shown, note } = capped(rest);
+    body += `**DNS refused** (${input.dnsRefused.length}): `;
+    body += rest.length
+      ? shown.map(code).join(', ') + note
+      : 'all of them are listed with their blocked connection above';
+    body += '\n\n';
   }
-
-  if (mode === 'analyze') {
-    const suggest = suggestedAllowlist(hosts);
-    md += `## Suggested configuration\n\n`;
-    const sudoUsed = (input.sudoCommandCount ?? 0) > 0;
-    if (suggest.length === 0) {
-      md += sudoUsed
-        ? `Every host seen is already allowed, but see the sudo note below.\n\n`
-        : `Everything seen is already allowed - this job should run unchanged with \`mode: enforce\`.\n\n`;
-    } else {
-      md += 'To run this job in enforce mode, allow these hosts (review each one first):\n\n';
-      md +=
-        '```yaml\n- uses: portswigger-tim/safer-runner-action@v2\n  with:\n    mode: enforce\n    allowed-domains: |\n';
-      md += suggest.map(s => `      ${s}`).join('\n') + '\n```\n\n';
-    }
-    if (sudoUsed) {
-      md +=
-        `**This job ran ${input.sudoCommandCount} sudo command(s)** (see "Sudo usage"). enforce removes sudo by default, ` +
-        'so either remove that sudo usage from the job, or add `disable-sudo: false` - which makes enforce ' +
-        'ADVISORY (sudo can remove the controls).\n\n';
+  if (input.sudo) {
+    const { ran, refused, internal } = input.sudo;
+    diag.push(
+      `workflow sudo ${ran.length}` +
+        (internal.length ? ` (${internal.length} by Safer Runner)` : '') +
+        (refused.length ? ` · ${plural(refused.length, 'sudo attempt')} refused` : '')
+    );
+    const lines = (cmds: SudoCommand[]) =>
+      cmds
+        .slice(0, 50)
+        .map(
+          c =>
+            `$ sudo ${c.targetUser && c.targetUser !== 'root' ? `-u ${c.targetUser} ` : ''}${c.command}${c.args ? ` ${c.args}` : ''}`
+        )
+        .join('\n') + (cmds.length > 50 ? `\n# ... +${cmds.length - 50} more (job log)` : '');
+    body += `**Sudo** — the workflow ran ${ran.length ? plural(ran.length, 'command') : 'none'}`;
+    body += internal.length ? `; Safer Runner itself ran ${internal.length} (setup, integrity checks, teardown)` : '';
+    body += ran.length ? ':\n\n' + codeBlock('console', lines(ran)) + '\n\n' : '.\n\n';
+    if (refused.length) {
+      body += `Refused by sudo (${refused.length}):\n\n` + codeBlock('console', lines(refused)) + '\n\n';
     }
   }
+  if (input.integrity) {
+    const s = input.integrity.status;
+    diag.push(
+      s === 'verified' ? 'config files ✓' : s === 'tampered' ? 'config files ⚠️ CHANGED' : 'config files: no baseline'
+    );
+    body += `**Config file tamper check** — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
+    body += input.integrity.body + '\n\n';
+  }
+  for (const s of input.extraSections ?? []) if (s) body += s + '\n\n';
+  md += `<details>\n<summary>🔧 <b>Diagnostics</b> — ${diag.join(' · ')}</summary>\n\n${body}</details>\n\n`;
 
-  for (const s of input.extraSections) md += s + '\n\n';
-  md += `*Secured by [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2*\n`;
+  const now = (input.now ?? new Date()).toISOString().replace('T', ' ').slice(0, 16);
+  md += `<sub>${mode} · job ${code(input.job)} · ${now} UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>\n`;
   return md;
 }
