@@ -133,6 +133,73 @@ class Upstream(unittest.TestCase):
         self.assertEqual(pc.pick_upstream(["2606:4700::1111", "1.1.1.1", "fd00::1"]), ("fd00::1", pc.UPSTREAM_FORBIDDEN))
 
 
+class Container(unittest.TestCase):
+    """container_tls posture (P2): decisions for connections from the container listener."""
+
+    ALLOW_FD = ALLOW + ["productionresultssa*.blob.core.windows.net"]
+
+    def p(self, mode="enforce", ctls="sni-only"):
+        return pc.Policy(mode, self.ALLOW_FD, PASS, DENY, ctls)
+
+    def test_allowlisted_container_sni_passed_through(self):
+        d = self.p().decide_tls("api.github.com", pc.SOURCE_CONTAINER)
+        self.assertEqual((d.action, d.reason), ("passthrough", "container-sni-only"))
+
+    def test_host_unchanged(self):
+        d = self.p().decide_tls("api.github.com", pc.SOURCE_HOST)
+        self.assertEqual((d.action, d.reason), ("intercept", "allowed"))
+        self.assertEqual(self.p().decide_tls("api.github.com").action, "intercept")
+
+    def test_blocks_never_relaxed(self):
+        p = self.p()
+        for name, reason in (("evil.example.com", "sni-not-allowed"), ("gist.github.com", "sni-denied"),
+                             ("", "no-sni"), ("1.2.3.4", "ip-literal-sni")):
+            with self.subTest(name=name):
+                d = p.decide_tls(name, pc.SOURCE_CONTAINER)
+                self.assertEqual((d.action, d.reason), ("block", reason))
+
+    def test_front_door_stays_intercepted_in_enforce(self):
+        d = self.p().decide_tls("productionresultssa3.blob.core.windows.net", pc.SOURCE_CONTAINER)
+        self.assertEqual((d.action, d.reason), ("intercept", "container-front-door"))
+
+    def test_front_door_passthrough_in_analyze(self):
+        # analyze never breaks a container: fronting is not a block concern there
+        d = self.p("analyze").decide_tls("productionresultssa3.blob.core.windows.net", pc.SOURCE_CONTAINER)
+        self.assertEqual((d.action, d.reason), ("passthrough", "container-sni-only"))
+
+    def test_explicit_passthrough_unchanged(self):
+        d = self.p().decide_tls("hosted-compute-a.githubapp.com", pc.SOURCE_CONTAINER)
+        self.assertEqual((d.action, d.reason), ("passthrough", "passthrough"))
+
+    def test_intercept_posture_matches_host(self):
+        p = self.p(ctls="intercept")
+        for name in ("api.github.com", "evil.example.com", "productionresultssa3.blob.core.windows.net"):
+            self.assertEqual(repr(p.decide_tls(name, pc.SOURCE_CONTAINER)), repr(p.decide_tls(name)))
+
+    def test_front_door_list_matches_vectors(self):
+        with open(os.path.join(HERE, "test-vectors.json")) as f:
+            v = json.load(f)
+        self.assertEqual(list(pc.FRONT_DOORS), v["front_doors"])
+        p = self.p()
+        for case in v["front_door_hosts"]:
+            with self.subTest(**case):
+                self.assertEqual(p.is_front_door(case["host"]), case["expect"])
+
+    def test_bad_posture(self):
+        with self.assertRaises(pc.PolicyError):
+            pc.Policy("enforce", [], [], [], "mitm")
+
+    def test_selftest(self):
+        self.assertTrue(pc.selftest(self.p()))
+        self.assertTrue(pc.selftest(self.p("analyze")))
+
+    def test_from_config_default_is_host_behaviour(self):
+        p = pc.Policy.from_config({"mode": "enforce", "allow": ALLOW})
+        self.assertEqual(p.container_tls, "intercept")
+        p = pc.Policy.from_config({"mode": "enforce", "allow": ALLOW, "container_tls": "sni-only"})
+        self.assertEqual(p.container_tls, "sni-only")
+
+
 class Config(unittest.TestCase):
     def test_bad_mode(self):
         with self.assertRaises(pc.PolicyError):

@@ -10,6 +10,12 @@ Pattern semantics (mirrors src/policy.ts):
   * ``a-*.example.com``  -> ``*`` matches within ONE label; the rest must match exactly
 
 Decisions are made on names only, never on the destination IP the client chose.
+
+Container sources (P2): traffic containers send off their bridge arrives on a second proxy
+listener. With ``container_tls: sni-only`` (the default) an allowlisted name from a container
+is passed through by SNI (repointed, IP-pinned, never decrypted - no CA needed inside the
+container), except for multi-tenant front doors (FRONT_DOORS), which stay intercepted in
+enforce so the Host check still stops fronting to another tenant behind the same front end.
 """
 
 import ipaddress
@@ -22,6 +28,26 @@ PASSTHROUGH = "PASSTHROUGH"  # TLS not decrypted, SNI enforced, upstream repoint
 ALLOW = "ALLOW"  # HTTP request allowed
 BLOCK = "BLOCK"  # enforce mode: refused
 WOULD_BLOCK = "WOULD_BLOCK"  # analyze mode: would have been refused, allowed and logged
+
+# Flow-log ``source`` of a connection: which proxy listener it arrived on.
+SOURCE_HOST = "host"
+SOURCE_CONTAINER = "container"
+
+CONTAINER_TLS_MODES = ("sni-only", "intercept")
+
+# Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
+# SNI-only check of an allowlisted tenant would let a client reach ANY tenant (domain fronting).
+# Under container sni-only these stay intercepted for containers in enforce (fail closed when
+# the container doesn't trust the CA). Mirrored in src/policy.ts; both are checked against
+# proxy/test-vectors.json "front_doors".
+FRONT_DOORS = (
+    "*.blob.core.windows.net",
+    "*.dfs.core.windows.net",
+    "*.file.core.windows.net",
+    "*.queue.core.windows.net",
+    "*.table.core.windows.net",
+    "*.web.core.windows.net",
+)
 
 _LABEL = re.compile(r"^[a-z0-9_*]([a-z0-9_*-]*[a-z0-9_*])?$")
 
@@ -156,10 +182,14 @@ class Decision:
 class Policy:
     """Hostname policy. ``mode`` is 'enforce' or 'analyze'."""
 
-    def __init__(self, mode, allow, passthrough, deny):
+    def __init__(self, mode, allow, passthrough, deny, container_tls="intercept"):
         if mode not in ("enforce", "analyze"):
             raise PolicyError(f"invalid mode: {mode!r}")
+        if container_tls not in CONTAINER_TLS_MODES:
+            raise PolicyError(f"invalid container_tls: {container_tls!r}")
         self.mode = mode
+        self.container_tls = container_tls
+        self._front_doors = [compile_pattern(p) for p in FRONT_DOORS]
         self.allow_patterns = [validate_pattern(p) for p in allow]
         self.passthrough_patterns = [validate_pattern(p) for p in passthrough]
         self.deny_patterns = [validate_pattern(p) for p in deny]
@@ -169,7 +199,14 @@ class Policy:
 
     @classmethod
     def from_config(cls, cfg):
-        return cls(cfg["mode"], cfg.get("allow", []), cfg.get("passthrough", []), cfg.get("deny", []))
+        return cls(
+            cfg["mode"],
+            cfg.get("allow", []),
+            cfg.get("passthrough", []),
+            cfg.get("deny", []),
+            # absent (older config): containers are treated exactly like the host
+            cfg.get("container_tls", "intercept"),
+        )
 
     @classmethod
     def load(cls, path):
@@ -187,8 +224,25 @@ class Policy:
             return False
         return matches(host, self._allow) or matches(host, self._pass)
 
-    def decide_tls(self, sni):
-        """Decision at the TLS ClientHello: block | passthrough | intercept."""
+    def is_front_door(self, host):
+        return matches(host, self._front_doors)
+
+    def decide_tls(self, sni, source=SOURCE_HOST):
+        """Decision at the TLS ClientHello: block | passthrough | intercept.
+
+        For a container source under ``container_tls: sni-only``, an allowlisted name that
+        would be intercepted is passed through instead (reason ``container-sni-only``), unless
+        it is a multi-tenant front door in enforce (reason ``container-front-door``: still
+        intercepted, so the Host check holds). Blocks are never relaxed.
+        """
+        d = self._decide_tls(sni)
+        if source != SOURCE_CONTAINER or self.container_tls != "sni-only" or d.action != "intercept":
+            return d
+        if self.enforce and self.is_front_door(sni):
+            return Decision("intercept", "container-front-door")
+        return Decision("passthrough", "container-sni-only")
+
+    def _decide_tls(self, sni):
         name = norm_host(sni)
         if not name:
             return Decision("block", "no-sni")
@@ -246,4 +300,10 @@ def selftest(policy):
     for ip in ("169.254.169.254", "127.0.0.1", "10.0.0.1", "100.64.0.1", "::1", "::ffff:169.254.169.254"):
         assert pick_upstream([ip])[1] == UPSTREAM_FORBIDDEN, f"upstream {ip} not refused"
     assert pick_upstream(["140.82.112.3"]) == ("140.82.112.3", None), "public upstream refused"
+    # container posture never relaxes a block
+    for name in (probe, "", "1.2.3.4"):
+        assert policy.decide_tls(name, SOURCE_CONTAINER).action == "block", "container SNI block relaxed"
+    if policy.enforce and policy.container_tls == "sni-only":
+        fd = "selftest.blob.core.windows.net"
+        assert policy.is_front_door(fd), "front door not recognised"
     return True

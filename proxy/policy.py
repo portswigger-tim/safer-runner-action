@@ -18,6 +18,9 @@ Security rules (docs/DESIGN-v2.md section 4):
     incl. IMDS, RFC 1918, CGNAT, ULA...), and pinned to the checked address so mitmproxy
     cannot re-resolve to something else.
   * Any exception in a hook fails closed.
+  * Source (P2): container traffic is DNATed to a second transparent listener
+    (``container_port`` in policy.json); a connection's source is the listener it arrived on,
+    never inferred from its address (host traffic keeps its eth0 source after REDIRECT).
 
 Every decision is written as one JSON line to the flow log.
 """
@@ -94,6 +97,7 @@ class SaferRunnerPolicy:
         self.flowlog = None
         self.conns = {}  # client connection id -> state recorded at the outer layer decision
         self.pinned = {}  # server connection id -> (name, port) while connecting to the pinned IP
+        self.container_port = None
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -116,6 +120,14 @@ class SaferRunnerPolicy:
             self.policy = None
             return
         builtin.next_layer = _no_decision
+        self.container_port = self.cfg.get("container_port")
+
+    def source(self, client):
+        """host | container: which listener the client connection arrived on."""
+        sock = client.sockname if client is not None else None
+        if self.container_port and sock and len(sock) > 1 and sock[1] == self.container_port:
+            return pc.SOURCE_CONTAINER
+        return pc.SOURCE_HOST
 
     def running(self):
         if self.policy is None:
@@ -135,6 +147,8 @@ class SaferRunnerPolicy:
             allow=len(self.policy.allow_patterns),
             passthrough=self.policy.passthrough_patterns,
             deny=self.policy.deny_patterns,
+            container_tls=self.policy.container_tls,
+            container_port=self.container_port,
             pid=os.getpid(),
         )
 
@@ -171,6 +185,7 @@ class SaferRunnerPolicy:
     def _next_layer(self, nl):
         c = nl.context
         client = addr(c.client.peername)
+        source = self.source(c.client)
         state = self.conns.get(c.client.id)
 
         if state is not None:
@@ -181,7 +196,7 @@ class SaferRunnerPolicy:
             else:
                 nl.layer = Block(c)
                 self.emit(ev="tls", verdict=pc.BLOCK, reason="unexpected-inner-layer", layer="sni",
-                          sni=state.get("name"), client=client)
+                          sni=state.get("name"), client=client, source=source)
             return
 
         if self.policy is None or c.client.transport_protocol != "tcp" or not c.server.address:
@@ -196,7 +211,7 @@ class SaferRunnerPolicy:
         if not starts_like_tls_record(data):
             # Plain text: only HTTP is supported. Host is enforced (and the upstream repointed)
             # per request in requestheaders(); a non-HTTP stream fails to parse and is closed.
-            self.conns[c.client.id] = {"kind": "http", "dst": dst}
+            self.conns[c.client.id] = {"kind": "http", "dst": dst, "source": source}
             nl.layer = layers.HttpLayer(c, HTTPMode.transparent)
             return
 
@@ -205,16 +220,16 @@ class SaferRunnerPolicy:
         except ValueError:
             nl.layer = Block(c)
             self.emit(ev="tls", verdict=pc.BLOCK, reason="invalid-clienthello", layer="sni",
-                      dst=dst, client=client)
+                      dst=dst, client=client, source=source)
             return
         if ch is None:
             return  # ClientHello incomplete: wait for more data
 
         sni = pc.norm_host(ch.sni) or None
-        d = self.policy.decide_tls(sni)
+        d = self.policy.decide_tls(sni, source)
         verdict = self._verdict(d.action)
         record = dict(ev="tls", verdict=verdict, reason=d.reason, layer="sni", sni=sni, dst=dst,
-                      client=client)
+                      client=client, source=source)
 
         if d.action == "block" and self.policy.enforce:
             nl.layer = Block(c)
@@ -226,17 +241,17 @@ class SaferRunnerPolicy:
             server_tls = ServerTLSLayer(c)
             server_tls.child_layer = ClientTLSLayer(c)
             nl.layer = server_tls
-            self.conns[c.client.id] = {"kind": "intercept", "name": sni, "dst": dst}
+            self.conns[c.client.id] = {"kind": "intercept", "name": sni, "dst": dst, "source": source}
             self.emit(**record, repointed=True)
             return
 
-        # passthrough, or analyze-mode would-block: SNI-only, not decrypted (no CA trust needed),
-        # repointed to the SNI when there is a usable name.
+        # passthrough (incl. container sni-only), or analyze-mode would-block: SNI-only, not
+        # decrypted (no CA trust needed), repointed to the SNI when there is a usable name.
         repoint = bool(sni) and not pc.is_ip_literal(sni)
         if repoint:
             self._repoint(c, sni)
         nl.layer = layers.TCPLayer(c, ignore=True)
-        self.conns[c.client.id] = {"kind": "passthrough", "name": sni, "dst": dst}
+        self.conns[c.client.id] = {"kind": "passthrough", "name": sni, "dst": dst, "source": source}
         self.emit(**record, repointed=repoint, passthrough=True)
 
     # ---------------------------------------------------------------- HTTP
@@ -267,6 +282,7 @@ class SaferRunnerPolicy:
             ev="https" if sni else "http", verdict=verdict, reason=d.reason, layer="http",
             host=host or None, sni=sni, method=req.method, path=safe_path(req.path),
             dst=state.get("dst"), client=addr(flow.client_conn.peername),
+            source=state.get("source") or self.source(flow.client_conn),
         )
         if d.action == "block" and self.policy.enforce:
             self._refuse(flow, d.reason, host)
@@ -343,7 +359,7 @@ class SaferRunnerPolicy:
         if reason:
             self.emit(ev="upstream", verdict=self._verdict("block"), reason=reason, layer="ip",
                       host=None if pc.is_ip_literal(name) else name, dst=addr((ip, port)) if ip else None,
-                      resolved=addrs[:8], client=addr(data.client.peername))
+                      resolved=addrs[:8], client=addr(data.client.peername), source=self.source(data.client))
             if self.policy.enforce:
                 s.error = f"safer-runner: upstream blocked ({reason})"
                 return
@@ -373,17 +389,19 @@ class SaferRunnerPolicy:
         s = data.server
         self._unpin(s)
         self.emit(ev="server-connect", address=addr(s.address), peername=addr(s.peername),
-                  client=addr(data.client.peername))
+                  client=addr(data.client.peername), source=self.source(data.client))
 
     def client_disconnected(self, client):
         self.conns.pop(client.id, None)
 
     def tls_failed_client(self, data):
-        self.emit(ev="tls-client-fail", sni=data.context.client.sni,
-                  client=addr(data.context.client.peername), error=str(data.conn.error)[:200])
+        client = data.context.client
+        self.emit(ev="tls-client-fail", sni=client.sni, client=addr(client.peername),
+                  source=self.source(client), error=str(data.conn.error)[:200])
 
     def tls_failed_server(self, data):
         self.emit(ev="tls-server-fail", sni=data.conn.sni, address=addr(data.conn.address),
+                  client=addr(data.context.client.peername), source=self.source(data.context.client),
                   error=str(data.conn.error)[:200])
 
 
