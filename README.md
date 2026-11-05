@@ -178,8 +178,12 @@ RUN steps — get the same policy as the host, through the same proxy and DNS fi
   can't be allowlisted in enforce yet.
 - **Wildcard entries are a DNS channel by design.** `*.example.com` forwards every lookup under
   it, so whoever runs `example.com`'s name servers sees `<anything>.example.com`. Exact entries
-  aren't. The DNS-refused names in the summary are redacted only in the *Subdomains of exact
-  entries* section; names that aren't under any allowlisted entry are shown in full.
+  aren't.
+- **Blocked names are redacted, best effort.** A refused name can be the payload
+  (`<base64 secret>.attacker.example`). GitHub already masks a registered secret's literal value,
+  so the summary and job log hide hostname labels that look *encoded* (hex, base32/64: long, few
+  vowels, scattered digits) as `‹N chars›`, always keeping the zone (`attacker.example`) visible.
+  It complements GitHub's masking. Short encoded labels (≈12–16 chars) are caught only part of the time.
 - **No DNS-rebinding protection for clients outside the proxy.** The resolver returns internal
   answers as-is; the proxy refuses them for all proxied traffic. A process that dials a
   loopback, docker-bridge or IMDS address by name gets no more than it could by IP literal

@@ -9,7 +9,8 @@ import {
   humanBytes,
   modeLabel,
   exactSubdomainRefusals,
-  redactSubdomain,
+  blockedName,
+  type HostSummary,
   parseFirewallLog,
   suggestedAllowlist,
   summarizeContainers,
@@ -827,10 +828,13 @@ describe('DNS: subdomains of exact entries', () => {
     ]);
   });
 
-  it('redacts everything but recognisable labels (the summary must not become the channel)', () => {
-    expect(redactSubdomain('www.example.com', 'example.com')).toBe('www.example.com');
-    expect(redactSubdomain('aghvsbg8gd29ybgq.api.example.com', 'example.com')).toBe('‹16 chars›.api.example.com');
-    expect(redactSubdomain('abc.example.com', 'example.com')).toBe('‹3 chars›.example.com');
+  it('redacts payload-looking labels, keeps the allowlisted parent and ordinary labels', () => {
+    expect(blockedName('www.example.com', 'example.com')).toBe('www.example.com');
+    expect(blockedName('aghvsbg8gd29ybgq.api.example.com', 'example.com')).toBe('‹16 chars›.api.example.com');
+    expect(blockedName('0dd2149bb6f23853.objects.githubusercontent.com', 'objects.githubusercontent.com')).toBe(
+      '‹16 chars›.objects.githubusercontent.com'
+    );
+    expect(blockedName('1.2.3.4')).toBe('1.2.3.4');
   });
 
   const base = { job: 'j', hosts: [], firewall: [], selfTests: [], allowPatterns: allow };
@@ -850,6 +854,36 @@ describe('DNS: subdomains of exact entries', () => {
     expect(md.toLowerCase()).not.toContain(secret.toLowerCase());
     // the rest stays in the DNS diagnostics, unredacted (an unlisted name is what the user must add)
     expect(md).toContain('**DNS refused** (3): `example.org`');
+  });
+
+  it('redacts encoded labels in every blocked-name display, and never suggests such a name', () => {
+    const secret = '0dd2149bb6f23853a1b2';
+    const h = (name: string, reason: string): HostSummary => ({
+      name,
+      verdict: 'BLOCK',
+      reasons: [reason],
+      layers: ['sni'],
+      kinds: ['tls'],
+      connections: 1,
+      requests: 0,
+      tries: 1,
+      reqBytes: 0,
+      respBytes: 0,
+      statuses: {},
+      dsts: [],
+      snis: [],
+      upstreamIps: []
+    });
+    const md = buildReport({
+      ...base,
+      mode: 'enforce',
+      hosts: [h(`${secret}.attacker.com`, 'sni-not-allowed'), h('ok.attacker.com', 'sni-not-allowed')],
+      dnsRefused: [`${secret}.evil.example.net`]
+    });
+    expect(md).not.toContain(secret);
+    expect(md).toContain('`‹20 chars›.attacker.com`');
+    expect(md).toContain('`‹20 chars›.evil.example.net`');
+    expect(md).toContain('allowed-domains: |\n  ok.attacker.com\n```');
   });
 
   it('analyze: says what enforce would do', () => {

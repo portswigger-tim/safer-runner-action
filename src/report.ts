@@ -6,6 +6,7 @@
 import { ipOf, type FlowRecord } from './flowlog';
 import { compilePattern, expandPattern, isIpLiteral, matchesAny, type Mode } from './policy';
 import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
+import { needsRedaction, redactName } from './redact';
 
 export interface HostSummary {
   name: string;
@@ -322,8 +323,16 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 function nameList(hosts: HostSummary[]): string {
-  const names = hosts.slice(0, MAX_LIST).map(h => code(displayName(h)));
+  const names = hosts.slice(0, MAX_LIST).map(h => code(blockedName(displayName(h))));
   return names.join(', ') + (hosts.length > MAX_LIST ? `, +${hosts.length - MAX_LIST} more` : '');
+}
+
+/**
+ * A refused name as printed: payload-looking labels redacted (src/redact.ts), because a blocked
+ * name can be the data a step tried to send. IP literals are shown as they are.
+ */
+export function blockedName(name: string, keepSuffix?: string): string {
+  return isIpLiteral(name) || name.startsWith('(') ? name : redactName(name, keepSuffix);
 }
 
 function displayName(h: HostSummary): string {
@@ -367,7 +376,7 @@ export function statusSummary(h: HostSummary): string {
 }
 
 function hostCell(h: HostSummary): string {
-  let c = code(h.name);
+  let c = code(blockedName(h.name));
   if (h.kinds.includes('passthrough')) c += ' <sub>🔀 passthrough</sub>';
   else if (h.kinds.length === 1 && h.kinds[0] === 'http') c += ' <sub>plain HTTP</sub>';
   return c;
@@ -448,7 +457,10 @@ export function summarizeContainers(
 
 function listCell(names: string[]): string {
   if (!names.length) return '';
-  const shown = names.slice(0, MAX_LIST).map(code).join(', ');
+  const shown = names
+    .slice(0, MAX_LIST)
+    .map(n => code(blockedName(n)))
+    .join(', ');
   return names.length > MAX_LIST ? `${shown} +${names.length - MAX_LIST} more` : shown;
 }
 
@@ -524,56 +536,6 @@ export function exactSubdomainRefusals(refused: string[], allowPatterns: string[
   );
 }
 
-/**
- * Labels a user would recognise and that can't carry data (a fixed vocabulary). Anything else
- * left of the allowlisted parent is shown only as its length: the public job summary must not
- * become the channel the resolver just closed.
- */
-const BENIGN_LABELS = new Set([
-  'www',
-  'api',
-  'cdn',
-  'static',
-  'assets',
-  'img',
-  'images',
-  'media',
-  'm',
-  'mail',
-  'docs',
-  'auth',
-  'login',
-  'registry',
-  'download',
-  'downloads',
-  'files',
-  'objects',
-  'raw',
-  'gist',
-  'pkg',
-  'pkgs',
-  'npm',
-  'upload',
-  'uploads',
-  'app',
-  'apps',
-  'dev',
-  'test',
-  'staging',
-  'prod',
-  'beta',
-  'mirror',
-  'mirrors',
-  'repo',
-  'repos'
-]);
-
-export function redactSubdomain(name: string, parent: string): string {
-  const prefix = name.slice(0, name.length - parent.length - 1);
-  const labels = prefix.split('.').map(l => (BENIGN_LABELS.has(l) ? l : `‹${l.length} chars›`));
-  return `${labels.join('.')}.${parent}`;
-}
-
 // ---------------------------------------------------------------- report
 
 export interface ReportInput {
@@ -621,7 +583,7 @@ export function suggestedAllowlist(hosts: HostSummary[]): string[] {
       hosts
         .filter(h => DENIED.has(h.verdict) && categorize(h) === 'not-allowed')
         .filter(h => h.reasons.some(r => NOT_LISTED.has(r)) && !h.reasons.some(r => DENYLISTED.has(r)))
-        .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid'))
+        .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid') && !needsRedaction(h.name))
         .map(h => h.name)
     )
   );
@@ -677,7 +639,7 @@ function frontingCell(h: HostSummary, verb: string): string {
     ? '🎭 **Host/SNI mismatch** (domain fronting)'
     : '🎭 **Conflicting Host / authority**';
   const notes: string[] = [];
-  if (h.snis.length) notes.push(`sent inside TLS for ${h.snis.map(code).join(', ')}`);
+  if (h.snis.length) notes.push(`sent inside TLS for ${h.snis.map(n => code(blockedName(n))).join(', ')}`);
   if (h.reasons.some(r => NOT_LISTED.has(r))) notes.push('also not on allowlist');
   if (h.dsts.length) notes.push(`dialled ${h.dsts.map(code).join(', ')}`);
   return what + (verb ? `, ${verb}` : '') + (notes.length ? `<br><sub>${notes.join(' · ')}</sub>` : '');
@@ -914,7 +876,7 @@ export function buildReport(input: ReportInput): string {
   };
   if (bypass.length) {
     md += section('🚨 Bypass attempts', bypass, ['Host', 'What happened', 'Tries'], h => [
-      code(h.name),
+      code(blockedName(h.name)),
       categorize(h) === 'fronting' ? frontingCell(h, enforce ? '' : 'not blocked (analyze)') : internalCell(h, verb),
       String(h.tries)
     ]);
@@ -926,7 +888,7 @@ export function buildReport(input: ReportInput): string {
       if (h.reasons.includes('host-not-allowed')) seen.push('plain HTTP');
       if (h.reasons.some(r => DENYLISTED.has(r))) seen.push('on the risky-subdomain denylist');
       if (dnsRefused.has(h.name)) seen.push('DNS also refused');
-      return [code(h.name), seen.join(' · '), String(h.tries)];
+      return [code(blockedName(h.name)), seen.join(' · '), String(h.tries)];
     });
     if (enforce && suggest.length) {
       md += 'If the job needs them, add them (review each one first):\n\n';
@@ -939,7 +901,7 @@ export function buildReport(input: ReportInput): string {
     md +=
       'A bare allowlist entry means that name only. These lookups were for names under one, so ' +
       `they were ${enforce ? 'answered NXDOMAIN on the runner and never sent upstream' : 'logged (enforce answers them NXDOMAIN on the runner)'}.` +
-      ' Names are redacted: a refused lookup can carry data.\n\n';
+      ' Payload-looking labels are redacted: a refused lookup can carry data.\n\n';
     const { shown, note } = capped(subdomains);
     md += table(
       ['Allowlisted as', 'Refused lookups', 'Examples', 'If the job needs them'],
@@ -949,7 +911,7 @@ export function buildReport(input: ReportInput): string {
         String(g.names.length),
         g.names
           .slice(0, 3)
-          .map(n => code(redactSubdomain(n, g.parent)))
+          .map(n => code(blockedName(n, g.parent)))
           .join(', ') + (g.names.length > 3 ? ', …' : ''),
         `add ${code('*.' + g.parent)}`
       ])
@@ -958,7 +920,7 @@ export function buildReport(input: ReportInput): string {
   }
   if (groups.unresolved.length) {
     md += section('❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
-      code(h.name),
+      code(blockedName(h.name)),
       'allowed name, but the proxy could not resolve it, so nothing was sent',
       String(h.tries)
     ]);
@@ -969,14 +931,18 @@ export function buildReport(input: ReportInput): string {
     md += table(
       ['Destination', 'What happened', 'Tries'],
       [':--', ':--', '--:'],
-      shown.map(h => [code(displayName(h)), h.reasons.map(r => NO_NAME_TEXT[r] ?? r).join(' · '), String(h.tries)])
+      shown.map(h => [
+        code(blockedName(displayName(h))),
+        h.reasons.map(r => NO_NAME_TEXT[r] ?? r).join(' · '),
+        String(h.tries)
+      ])
     );
     md += note + '\n\n</details>\n\n';
   }
   if (groups.other.length) {
     // unknown reasons are never dropped: show the raw code
     md += section('⚙️ Other', groups.other, ['Host', 'Reason', 'Tries'], h => [
-      code(h.name),
+      code(blockedName(h.name)),
       h.reasons.map(code).join(', '),
       String(h.tries)
     ]);
@@ -1039,7 +1005,7 @@ export function buildReport(input: ReportInput): string {
     const { shown, note } = capped(rest);
     body += `**DNS ${enforce ? 'refused' : 'would refuse'}** (${input.dnsRefused.length}): `;
     body += rest.length
-      ? shown.map(code).join(', ') + note
+      ? shown.map(n => code(blockedName(n))).join(', ') + note
       : 'all of them are listed with their blocked connection above';
     body += '\n\n';
   }

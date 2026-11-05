@@ -5,7 +5,7 @@ import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, 
 import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
 import { readRefusedNames } from './parsers/dns-parser';
-import { buildReport, parseFirewallLog, summarizeContainers, summarizeFlows } from './report';
+import { blockedName, buildReport, parseFirewallLog, summarizeContainers, summarizeFlows } from './report';
 import { containerAddresses } from './docker';
 import { type SelfTestWindow, withoutSelfTests } from './selftest';
 import { readSudoUsage } from './sudo';
@@ -74,10 +74,11 @@ async function run(): Promise<void> {
       selfTests = [];
     }
 
-    // Full lists in the job log, so nothing is ever silently dropped from the summary.
+    // Full lists in the job log, so nothing is ever silently dropped from the summary (names
+    // redacted like the summary: the job log is just as public).
     for (const h of hosts) {
       core.info(
-        `${h.verdict.padEnd(11)} ${h.name} conns=${h.connections} reqs=${h.requests} tries=${h.tries} ${h.reasons.join(',')}`
+        `${h.verdict.padEnd(11)} ${blockedName(h.name)} conns=${h.connections} reqs=${h.requests} tries=${h.tries} ${h.reasons.join(',')}`
       );
     }
 

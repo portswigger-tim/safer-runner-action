@@ -84,9 +84,25 @@ export function normalizeMetaDomain(raw: string): string | null {
 }
 
 /**
+ * The meta groups the GitHub list is built from, raw (no normalisation): `.domains.actions`
+ * (required) + `.domains.artifact_attestations` (GitHub's Sigstore for actions/attest-*; an
+ * array, or an object with a `services` array). Null when `.domains.actions` is missing/empty.
+ * Shared by the live fetch and `npm run gen:domains` so the snapshot matches the live path.
+ */
+export function metaDomainGroups(data: unknown): unknown[] | null {
+  const domains = (data as { domains?: { actions?: unknown; artifact_attestations?: unknown } })?.domains;
+  const actions = domains?.actions;
+  if (!Array.isArray(actions) || actions.length === 0) return null;
+  const att = domains?.artifact_attestations;
+  const services = Array.isArray(att) ? att : (att as { services?: unknown })?.services;
+  return [...actions, ...(Array.isArray(services) ? services : [])];
+}
+
+/**
  * Fetch the GitHub Actions domain allowlist from api.github.com/meta.
  *
- * Uses the `.domains.actions` section - GitHub's recommended middle tier, which
+ * Uses the `.domains.actions` section (+ artifact attestations, see metaDomainGroups) -
+ * GitHub's recommended middle tier, which
  * wildcards GitHub-owned domains but enumerates shared-namespace ones (e.g. the
  * productionresultssa* storage accounts) specifically. We deliberately do NOT use
  * `.domains.actions_inbound.wildcard_domains`, which contains *.core.windows.net and
@@ -111,9 +127,8 @@ export async function fetchGitHubActionsDomains(timeoutMs = 10000): Promise<stri
       clearTimeout(timer);
     }
     if (!res.ok) return null;
-    const data = (await res.json()) as { domains?: { actions?: unknown } };
-    const actions = data?.domains?.actions;
-    if (!Array.isArray(actions) || actions.length === 0) return null;
+    const actions = metaDomainGroups(await res.json());
+    if (!actions) return null;
 
     const normalized = actions
       .filter((d): d is string => typeof d === 'string')

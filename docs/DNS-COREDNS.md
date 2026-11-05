@@ -30,7 +30,11 @@ by two spikes:
   - CoreDNS starts **before** `resolv.conf` is switched to it, so there is no resolution gap. The firewall is unchanged: it is keyed on port 53 and the DNS uid.
 - `src/parsers/dns-parser.ts` is about 20 lines.
 - Self-test `dns-exact`: at setup, a random name under an exact entry must get `BLOCK` + NXDOMAIN in enforce, or `WOULD_BLOCK` in analyze.
-- Report: a new **Subdomains of exact entries** section groups the refused names by their exact parent and suggests `add *.parent`. The names are **redacted**: labels outside a small fixed vocabulary are shown only as their length. A refused lookup can carry data, and the public summary must not become the channel the resolver just closed.
+- Report: a new **Subdomains of exact entries** section groups the refused names by their exact parent and suggests `add *.parent`.
+- Every blocked name in the summary and job log goes through `src/redact.ts`: the subdomain section, the DNS-refused diagnostics, blocked SNI/Host rows, fronting SNIs and container rows.
+  - Labels that look *encoded* (hex, base32/64) are shown as `‹N chars›`; the zone is always kept. Charset and length are the primary signal (vowel ratio, digit runs, hex), with Shannon entropy as a tie-breaker. The constants are tunable.
+  - This complements GitHub's own masking, which only catches a secret's literal value. A refused lookup can carry data, and the public summary must not become the channel the resolver just closed.
+  - Names that need redaction are never pasted into a suggested `allowed-domains` block.
 
 ## Accepted residuals
 
@@ -56,8 +60,8 @@ by two spikes:
 >
 > Internal-address answers (DNS rebinding) are now refused by the proxy alone. The proxy already
 > covered a superset of them, and the job summary now shows the address. The summary also gains
-> a **Subdomains of exact entries** section that suggests the `*.parent` entry to add (names
-> redacted).
+> a **Subdomains of exact entries** section that suggests the `*.parent` entry to add, and
+> encoded-looking labels in blocked names are redacted in the summary and job log.
 >
 > **To migrate:** run once in `mode: analyze` and add the suggested entries, or prefix entries
 > whose subdomains you need with a dot (`.docker.io`).

@@ -4,6 +4,7 @@ import {
   DANGEROUS_BROAD_DOMAINS,
   GITHUB_EXTRAS,
   getGitHubRequiredDomains,
+  metaDomainGroups,
   normalizeMetaDomain,
   fetchGitHubActionsDomains,
   resolveGitHubDomains
@@ -72,7 +73,11 @@ describe('GitHub Parser', () => {
       'pkg-containers.githubusercontent.com',
       'objects.githubusercontent.com',
       'release-assets.githubusercontent.com',
-      'productionresultssa31.blob.core.windows.net'
+      'productionresultssa31.blob.core.windows.net',
+      // artifact attestations (actions/attest-build-provenance): GitHub's Sigstore
+      'tuf-repo.github.com',
+      'fulcio.githubapp.com',
+      'timestamp.githubapp.com'
     ])('allows %s', host => {
       expect(matchesAny(host, compiled)).toBe(true);
     });
@@ -100,6 +105,35 @@ describe('GitHub Parser', () => {
 
     it('every entry is a valid pattern', () => {
       expect(compiled.length).toBe(getGitHubRequiredDomains().length);
+    });
+  });
+
+  describe('metaDomainGroups', () => {
+    it('unions .domains.actions with the artifact-attestation services', () => {
+      expect(
+        metaDomainGroups({
+          domains: {
+            actions: ['github.com', '*.github.com'],
+            artifact_attestations: { trust_domain: '', services: ['tuf-repo.github.com', 'fulcio.githubapp.com'] }
+          }
+        })
+      ).toEqual(['github.com', '*.github.com', 'tuf-repo.github.com', 'fulcio.githubapp.com']);
+      expect(metaDomainGroups({ domains: { actions: ['a.com'], artifact_attestations: ['b.com'] } })).toEqual([
+        'a.com',
+        'b.com'
+      ]);
+    });
+
+    it('needs .domains.actions; attestations alone are not enough', () => {
+      expect(metaDomainGroups({ domains: { artifact_attestations: { services: ['x.com'] } } })).toBeNull();
+      expect(metaDomainGroups({ domains: { actions: [] } })).toBeNull();
+      expect(metaDomainGroups(null)).toBeNull();
+    });
+
+    it('the generated snapshot carries the attestation hosts', () => {
+      expect(GITHUB_ACTIONS_DOMAINS).toEqual(
+        expect.arrayContaining(['tuf-repo.github.com', 'fulcio.githubapp.com', 'timestamp.githubapp.com'])
+      );
     });
   });
 
