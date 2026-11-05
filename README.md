@@ -83,7 +83,8 @@ fails if either check fails.
 | `disable-docker` | **on in `enforce`**, off in `analyze` | Remove the runner from the docker group (root-equivalent). In enforce, `disable-docker: false` keeps docker and the summary warns |
 | `stop-docker` | `false` | Stop and disable the Docker service entirely |
 | `fail-on-tampering` | `false` | Fail the job if the configuration changed during the job (the baseline is stored root-owned, `/etc/safer-runner/validation-state.json`) |
-| `proxy-port` | `8080` | Loopback port of the proxy (advanced) |
+| `container-tls` | `sni-only` | How HTTPS from containers is checked: `sni-only` = by TLS name, not decrypted, no CA needed in the container (see [Containers](#containers)). `intercept` is not implemented yet and is treated as `sni-only` with a warning |
+| `proxy-port` | free port picked at setup | Loopback port of the proxy for host traffic; containers use `proxy-port + 1` (advanced). Unset, a free pair in 20000–32766 is used, so the proxy never takes a port the job needs |
 | `proxy-stream-large-bodies` | `1m` | Stream rather than buffer bodies above this size (advanced) |
 
 ## CA trust
@@ -116,6 +117,29 @@ docker group by default** (`disable-docker` unset = on in enforce, off in analyz
 needs docker, opt out with `disable-docker: false`; the controls are still applied and the job
 summary warns that docker was retained. `stop-docker: true` goes further and stops the daemon.
 
+## Containers
+
+Containers on the runner — `services:`, `docker run`, compose, testcontainers, `docker build`
+RUN steps — get the same policy as the host, through the same proxy and DNS filter:
+
+- Their DNS is answered by the action's dnsmasq (denied names: NXDOMAIN), whatever resolver
+  the container is configured with.
+- Their HTTP/HTTPS (TCP 80/443) goes to the proxy; anything else they send off the runner is
+  **rejected** in enforce (logged in analyze). Container ↔ container and container → runner
+  traffic is not touched.
+- **HTTPS from containers is checked by name (SNI) by default** (`container-tls: sni-only`): an
+  allowlisted name is passed through without decryption, to the address the proxy resolved,
+  so containers need **no CA** and nothing in the image changes. Non-allowlisted names are
+  still blocked. Plain HTTP is checked by `Host` as on the host. Multi-tenant front doors
+  (Azure Storage, `*.blob.core.windows.net` etc.) stay intercepted for containers in enforce,
+  so they need the CA there (see Limitations).
+- Host traffic is unchanged: always intercepted.
+- When Docker already pulled images before the action (any job with `services:`), the action
+  restarts `dockerd` once (with `live-restore`, so service containers keep running) so that
+  later `docker pull`s trust the CA.
+- The job summary has a **Container egress** section: what each container reached or was
+  refused, by container name when docker is still accessible to the post step.
+
 ## Limitations (read these)
 
 - **`disable-sudo: false` (or `sudo-config`) makes enforce advisory.** Any step with root can
@@ -130,8 +154,27 @@ summary warns that docker was retained. `stop-docker: true` goes further and sto
   what a request does.
 - **Only TCP 80/443 is proxied.** In enforce, other ports are rejected, including SSH
   (`git@github.com`).
-- **Containers are not filtered yet.** Traffic from containers goes through `FORWARD`, as in v1.
-  Planned for v2 P2.
+- **Containers are a boundary only when docker is removed** (the enforce default). With
+  `disable-docker: false` any step can `docker run --privileged --network host` and leave the
+  controls behind: the container rules then protect against dependencies running inside
+  containers, not against a determined step (the summary warns that docker was retained).
+- **`container-tls: sni-only` trades the Host check for compatibility.** For container HTTPS
+  the proxy sees only the TLS name, so a container can reach another site served by the same
+  front end as an allowlisted name (domain fronting) — the same trade-off as
+  `passthrough-domains`. Azure Storage front doors are excluded (intercepted, Host-checked), so
+  containers that talk to an allowlisted storage account in enforce need the CA
+  (`/etc/safer-runner/ca.pem`) or must do it from a step on the runner. Container HTTPS is not
+  path-logged.
+- **Job containers (`container:`) are not supported.** The action would run inside the
+  container and cannot control the runner: enforce fails with an explanation, analyze warns
+  and monitors nothing. Run the job on the runner and use `services:` and `docker run` steps.
+- **Docker container actions (`uses: docker://…`, Dockerfile actions) don't run under the
+  enforce default**, which removes docker from the runner user (the runner starts them as that
+  user). Use `disable-docker: false` for such jobs (docker is then root-equivalent, see above). The
+  runner's end-of-job cleanup of service containers also logs a harmless permission warning.
+- **`docker build`**: RUN steps get container-path filtering; allowlisted HTTPS works by
+  SNI without a CA. To intercept inside a build, `COPY` or secret-mount the CA yourself.
+- **IPv6 container networks** are rejected in enforce (there is no IPv6 path through the proxy).
 - **Clients that pin certificates, or that ignore both the system store and the variables
   above, fail** on allowlisted hosts. Fix: add the host to `passthrough-domains`, but only if it
   is single-tenant.
