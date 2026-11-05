@@ -1,0 +1,55 @@
+name: CI
+
+# Runs everything the local pre-commit hooks (.pre-commit-config.yaml) do, but
+# enforced: formatting, types, tests, and a rebuild of the committed dist/ bundles.
+# On failure it prints the diff so you can see exactly what drifted.
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      # python3 for the proxy-policy tests (npm test -> test:py); preinstalled on ubuntu runners.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - run: npm ci
+
+      # Clean + Prettier (write) + jest + python + build all three ncc bundles.
+      # Same work as `pre-commit run --all-files`; a type error fails the build (tsc) and a
+      # test failure fails here, each with its own output.
+      - name: Build and test (npm run package)
+        run: npm run package
+
+      # Nothing above should have changed a tracked file. If Prettier reformatted something
+      # or dist/ was rebuilt differently from what's committed, show the diff and fail.
+      - name: Verify formatting and dist/ are in sync
+        run: |
+          if ! git diff --quiet; then
+            echo "::error::Formatting or dist/ is out of date. Run 'npm run package' locally and commit the result."
+            echo "----- git diff (stat) -----"
+            git --no-pager diff --stat
+            echo "----- git diff -----"
+            git --no-pager diff
+            exit 1
+          fi
+          echo "Working tree clean: formatting and dist/ are in sync."
