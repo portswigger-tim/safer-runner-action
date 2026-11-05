@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  FRONT_DOORS,
   MANDATORY_PASSTHROUGH,
   buildPolicyConfig,
   compilePattern,
@@ -23,6 +24,14 @@ describe('pattern matching (shared vectors with proxy/policy_core.py)', () => {
   it.each(vectors.invalid_patterns as string[])('rejects invalid pattern %p', p => {
     expect(() => validatePattern(p)).toThrow();
   });
+
+  it("front-door list is the same as the addon's", () => {
+    expect(FRONT_DOORS).toEqual(vectors.front_doors);
+    const compiled = FRONT_DOORS.map(compilePattern);
+    for (const c of vectors.front_door_hosts as { host: string; expect: boolean }[]) {
+      expect([c.host, matchesAny(c.host, compiled)]).toEqual([c.host, c.expect]);
+    }
+  });
 });
 
 describe('normHost', () => {
@@ -38,6 +47,8 @@ describe('buildPolicyConfig', () => {
     mode: 'enforce' as const,
     githubDomains: ['github.com', 'api.github.com', 'productionresultssa1.blob.core.windows.net'],
     allowedDomains: '',
+    containerTls: 'sni-only' as const,
+    containerPort: 8081,
     passthroughDomains: '',
     blockRiskySubdomains: true
   };
@@ -79,6 +90,22 @@ describe('buildPolicyConfig', () => {
     expect(config.mode).toBe('analyze');
     expect(config.flow_log).toMatch(/proxy-flows\.jsonl$/);
     expect(config.version).toBe(1);
+  });
+});
+
+describe('buildPolicyConfig container posture', () => {
+  it('writes container_tls and the container listener port', () => {
+    const { config } = buildPolicyConfig({
+      mode: 'enforce',
+      githubDomains: ['github.com'],
+      allowedDomains: '',
+      passthroughDomains: '',
+      blockRiskySubdomains: true,
+      containerTls: 'sni-only',
+      containerPort: 18081
+    });
+    expect(config.container_tls).toBe('sni-only');
+    expect(config.container_port).toBe(18081);
   });
 });
 

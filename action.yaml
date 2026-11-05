@@ -69,10 +69,24 @@ inputs:
     description: 'Fail the job in the post step if security configuration was changed during the job.'
     required: false
     default: 'false'
-  proxy-port:
-    description: '(advanced) Loopback port the proxy listens on.'
+  container-tls:
+    description: >-
+      How HTTPS from containers (service containers, `docker run`, `docker build`) is checked.
+      "sni-only" (default): allowlisted names are checked by SNI and passed through (upstream
+      repointed by name, never decrypted), so containers need no CA; non-allowlisted names are
+      still blocked at DNS and at the proxy. Multi-tenant front doors (Azure Storage) stay
+      intercepted for containers in enforce. "intercept": decrypt like host traffic - NOT YET
+      IMPLEMENTED (needs CA injection into containers), currently treated as "sni-only" with a
+      warning. Host traffic is always intercepted.
     required: false
-    default: '8080'
+    default: 'sni-only'
+  proxy-port:
+    description: >-
+      (advanced) Loopback port the proxy listens on for host traffic; container traffic uses
+      proxy-port + 1. Unset (default): a free pair is picked at setup (20000-32766), so the
+      proxy never takes a port the job's own services want.
+    required: false
+    default: ''
   proxy-stream-large-bodies:
     description: '(advanced) Bodies larger than this are streamed instead of buffered (mitmproxy stream_large_bodies).'
     required: false

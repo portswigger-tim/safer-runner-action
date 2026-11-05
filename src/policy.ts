@@ -15,6 +15,28 @@ import { FLOW_LOG } from './constants';
 export type Mode = 'analyze' | 'enforce';
 
 /**
+ * How the proxy treats TLS from containers (P2). `sni-only`: allowlisted names are passed
+ * through by SNI (repointed, never decrypted - no CA needed in the container). `intercept`:
+ * same as the host (needs the CA in every container; the runtime shim that injects it is P3).
+ */
+export type ContainerTls = 'sni-only' | 'intercept';
+
+/**
+ * Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
+ * SNI-only check would allow fronting to any tenant. Under container sni-only these stay
+ * intercepted for containers in enforce. Mirrors FRONT_DOORS in proxy/policy_core.py (both
+ * are checked against proxy/test-vectors.json).
+ */
+export const FRONT_DOORS = [
+  '*.blob.core.windows.net',
+  '*.dfs.core.windows.net',
+  '*.file.core.windows.net',
+  '*.queue.core.windows.net',
+  '*.table.core.windows.net',
+  '*.web.core.windows.net'
+];
+
+/**
  * Hosts that MUST be passed through (SNI-only, never decrypted). Empirical (P0 spike): the
  * Go hosted-compute agent loads system roots at boot and can never trust a CA added later,
  * and it runs as the same uid as job steps, so it cannot be exempted by uid instead.
@@ -28,6 +50,9 @@ export interface PolicyConfig {
   passthrough: string[];
   deny: string[];
   flow_log: string;
+  container_tls: ContainerTls;
+  /** Proxy listener that only receives container traffic (the addon classifies by it). */
+  container_port: number;
 }
 
 const LABEL = /^[a-z0-9_*]([a-z0-9_*-]*[a-z0-9_*])?$/;
@@ -97,6 +122,8 @@ export interface PolicyBuildOptions {
   allowedDomains: string;
   passthroughDomains: string;
   blockRiskySubdomains: boolean;
+  containerTls: ContainerTls;
+  containerPort: number;
 }
 
 export interface PolicyBuildResult {
@@ -151,7 +178,9 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
       allow: uniq([...github, ...user]),
       passthrough,
       deny,
-      flow_log: FLOW_LOG
+      flow_log: FLOW_LOG,
+      container_tls: opts.containerTls,
+      container_port: opts.containerPort
     },
     warnings
   };

@@ -7,6 +7,7 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as path from 'path';
 import {
   ADDON_DIR,
@@ -29,7 +30,10 @@ import {
 import type { PolicyConfig } from './policy';
 
 export interface ProxyOptions {
+  /** host listener (nat OUTPUT REDIRECT) */
   port: number;
+  /** container listener (nat PREROUTING DNAT from the docker bridges); the addon classifies by it */
+  containerPort: number;
   streamLargeBodies: string;
 }
 
@@ -41,6 +45,40 @@ export interface ProxyOptions {
 export function actionRoot(): string {
   const script = process.argv[1] || '';
   return path.resolve(path.dirname(script), '..', '..');
+}
+
+/**
+ * Free-port band for the proxy listeners: above the registered ports dev servers favour
+ * (3000, 5000, 8080, 9000...) and below Linux's ephemeral range (32768-60999), so an outgoing
+ * connection's local port can never be the one we picked.
+ */
+export const PROXY_PORT_BAND: [number, number] = [20000, 32766];
+
+function canBind(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.listen({ host: PROXY_LISTEN_HOST, port, exclusive: true }, () => srv.close(() => resolve(true)));
+  });
+}
+
+/**
+ * Pick the proxy's two listener ports: host = P, container = P + 1. An explicit proxy-port is
+ * honoured as is; otherwise a random pair in PROXY_PORT_BAND where both are free right now
+ * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
+ */
+export async function allocateProxyPorts(
+  explicit: number | null,
+  probe: (port: number) => Promise<boolean> = canBind,
+  random: () => number = Math.random
+): Promise<{ port: number; containerPort: number }> {
+  if (explicit !== null) return { port: explicit, containerPort: explicit + 1 };
+  const [lo, hi] = PROXY_PORT_BAND;
+  for (let i = 0; i < 50; i++) {
+    const p = lo + Math.floor(random() * (hi - lo));
+    if ((await probe(p)) && (await probe(p + 1))) return { port: p, containerPort: p + 1 };
+  }
+  throw new Error(`no free pair of loopback ports found in ${lo}-${hi + 1}`);
 }
 
 async function sudo(args: string[], opts: exec.ExecOptions = {}): Promise<number> {
@@ -176,12 +214,11 @@ rm -f ${PROXY_CA_KEY_FILE} ${PROXY_CONF_DIR}/ca-key.pem ${PROXY_CONF_DIR}/mitmpr
 export function mitmdumpArgs(o: ProxyOptions): string[] {
   return [
     MITMDUMP_BIN,
+    // two transparent listeners: a connection's listener tells host from container traffic
     '--mode',
-    'transparent',
-    '--listen-host',
-    PROXY_LISTEN_HOST,
-    '--listen-port',
-    String(o.port),
+    `transparent@${PROXY_LISTEN_HOST}:${o.port}`,
+    '--mode',
+    `transparent@${PROXY_LISTEN_HOST}:${o.containerPort}`,
     '--set',
     `confdir=${PROXY_CONF_DIR}`,
     '--set',
@@ -282,7 +319,7 @@ export async function startProxy(o: ProxyOptions, timeoutMs = 90000): Promise<vo
     while (Date.now() < deadline) {
       const log = fs.existsSync(FLOW_LOG) ? fs.readFileSync(FLOW_LOG, 'utf8') : '';
       const start = findStartRecord(log);
-      if (start && (await isListening(o.port))) {
+      if (start && (await isListening(o.port)) && (await isListening(o.containerPort))) {
         core.info(`✅ Proxy up (pid ${start.pid}, ${start.mode} policy loaded and self-tested)`);
         return;
       }

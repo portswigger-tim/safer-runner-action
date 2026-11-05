@@ -1,4 +1,4 @@
-import { resolveDisableDocker, resolveDisableSudo } from './inputs';
+import { parseContainerTls, parsePort, resolveDisableDocker, resolveDisableSudo } from './inputs';
 
 describe('resolveDisableSudo (review H2: enforce removes sudo by default)', () => {
   it('defaults ON in enforce mode when disable-sudo is unset', () => {
@@ -53,5 +53,31 @@ describe('resolveDisableDocker (beta.3: enforce removes docker by default)', () 
   it('rejects anything that is not a YAML boolean', () => {
     expect(() => resolveDisableDocker('yes', 'enforce')).toThrow(/disable-docker must be true or false/);
     expect(() => resolveDisableDocker('0', 'enforce')).toThrow();
+  });
+});
+
+describe('parseContainerTls', () => {
+  it('defaults to sni-only', () => {
+    expect(parseContainerTls('')).toEqual(['sni-only', '']);
+    expect(parseContainerTls(' SNI-only ')).toEqual(['sni-only', '']);
+  });
+
+  it('accepts intercept but treats it as sni-only (P3) with a warning', () => {
+    const [v, warning] = parseContainerTls('intercept');
+    expect(v).toBe('sni-only');
+    expect(warning).toMatch(/not yet implemented/);
+  });
+
+  it('rejects anything else', () => {
+    expect(() => parseContainerTls('passthrough')).toThrow(/container-tls/);
+  });
+});
+
+describe('parsePort', () => {
+  it('unset means allocate at setup; an override leaves room for the container listener (port + 1)', () => {
+    expect(parsePort('')).toBeNull();
+    expect(parsePort(' 8080 ')).toBe(8080);
+    expect(parsePort('65534')).toBe(65534);
+    expect(() => parsePort('65535')).toThrow();
   });
 });

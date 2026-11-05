@@ -3,7 +3,7 @@
  */
 
 import * as core from '@actions/core';
-import type { Mode } from './policy';
+import type { ContainerTls, Mode } from './policy';
 
 export interface Inputs {
   mode: Mode;
@@ -24,8 +24,13 @@ export interface Inputs {
   disableDockerDefaulted: boolean;
   stopDocker: boolean;
   failOnTampering: boolean;
-  proxyPort: number;
+  /** host listener (containers use proxyPort + 1); null = pick free ports at setup */
+  proxyPort: number | null;
   streamLargeBodies: string;
+  /** effective container TLS posture (see parseContainerTls) */
+  containerTls: ContainerTls;
+  /** set when the requested posture is not available and was replaced */
+  containerTlsWarning: string;
 }
 
 export function parseMode(raw: string): Mode {
@@ -36,12 +41,33 @@ export function parseMode(raw: string): Mode {
   return m;
 }
 
-export function parsePort(raw: string): number {
-  const n = Number((raw || '8080').trim());
-  if (!Number.isInteger(n) || n < 1024 || n > 65535) {
-    throw new Error(`proxy-port must be an integer between 1024 and 65535, got "${raw}"`);
+/** proxy-port: an explicit override, or null (unset) to allocate free ports at setup. */
+export function parsePort(raw: string): number | null {
+  if ((raw || '').trim() === '') return null;
+  const n = Number(raw.trim());
+  // the container listener is proxy-port + 1
+  if (!Number.isInteger(n) || n < 1024 || n > 65534) {
+    throw new Error(`proxy-port must be an integer between 1024 and 65534, got "${raw}"`);
   }
   return n;
+}
+
+/**
+ * container-tls: `sni-only` (default) or `intercept`. `intercept` needs the CA inside every
+ * container, which only the OCI runtime shim can provide; that is not built yet (P3), so it
+ * is accepted but treated as `sni-only` with a warning. Returns [effective, warning].
+ */
+export function parseContainerTls(raw: string): [ContainerTls, string] {
+  const v = (raw || 'sni-only').trim().toLowerCase();
+  if (v === 'sni-only') return ['sni-only', ''];
+  if (v === 'intercept') {
+    return [
+      'sni-only',
+      'container-tls: intercept is not yet implemented (it needs the CA injected into every container); ' +
+        'treated as sni-only - container HTTPS to allowlisted hosts is checked by SNI, not decrypted.'
+    ];
+  }
+  throw new Error(`container-tls must be "sni-only" or "intercept", got "${raw}"`);
 }
 
 export function parseSize(raw: string): string {
@@ -94,6 +120,7 @@ export function readInputs(): Inputs {
   const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode, sudoConfig);
   // core.getInput reads the raw INPUT_DISABLE-DOCKER variable ('' when unset - no action.yaml default)
   const [disableDocker, disableDockerDefaulted] = resolveDisableDocker(core.getInput('disable-docker'), mode);
+  const [containerTls, containerTlsWarning] = parseContainerTls(core.getInput('container-tls'));
   return {
     mode,
     allowedDomains: core.getInput('allowed-domains'),
@@ -111,6 +138,8 @@ export function readInputs(): Inputs {
     stopDocker: bool('stop-docker'),
     failOnTampering: bool('fail-on-tampering'),
     proxyPort: parsePort(core.getInput('proxy-port')),
-    streamLargeBodies: parseSize(core.getInput('proxy-stream-large-bodies'))
+    streamLargeBodies: parseSize(core.getInput('proxy-stream-large-bodies')),
+    containerTls,
+    containerTlsWarning
   };
 }
