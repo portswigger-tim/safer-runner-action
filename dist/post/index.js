@@ -483,7 +483,7 @@ async function runSetup(inputs) {
     if (inputs.disableSudo && inputs.sudoConfig) {
         core.warning('Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
     }
-    if (inputs.stopDocker && inputs.disableDocker) {
+    if (inputs.stopDocker && inputs.disableDocker && !inputs.disableDockerDefaulted) {
         core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
     }
     // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
@@ -500,6 +500,9 @@ async function runSetup(inputs) {
     if (mode === 'enforce' && dockerRetained) {
         core.warning('enforce with docker access: the docker group is root-equivalent, so a step can use docker to remove ' +
             'the egress controls. Set disable-docker: true or stop-docker: true unless the job needs docker.');
+    }
+    else if (mode === 'enforce' && inputs.disableDockerDefaulted) {
+        core.info('disable-docker not set: enforce mode removes docker access by default (set disable-docker: false to keep it)');
     }
     const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
     core.info(`sudo implementation: ${sudoFlavour}`);

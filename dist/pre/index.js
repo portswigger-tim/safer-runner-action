@@ -483,7 +483,7 @@ async function runSetup(inputs) {
     if (inputs.disableSudo && inputs.sudoConfig) {
         core.warning('Both disable-sudo and sudo-config are set. Ignoring sudo-config (disable-sudo takes precedence).');
     }
-    if (inputs.stopDocker && inputs.disableDocker) {
+    if (inputs.stopDocker && inputs.disableDocker && !inputs.disableDockerDefaulted) {
         core.warning('Both stop-docker and disable-docker are set. stop-docker takes precedence.');
     }
     // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
@@ -500,6 +500,9 @@ async function runSetup(inputs) {
     if (mode === 'enforce' && dockerRetained) {
         core.warning('enforce with docker access: the docker group is root-equivalent, so a step can use docker to remove ' +
             'the egress controls. Set disable-docker: true or stop-docker: true unless the job needs docker.');
+    }
+    else if (mode === 'enforce' && inputs.disableDockerDefaulted) {
+        core.info('disable-docker not set: enforce mode removes docker access by default (set disable-docker: false to keep it)');
     }
     const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
     core.info(`sudo implementation: ${sudoFlavour}`);
@@ -992,6 +995,7 @@ exports.parseMode = parseMode;
 exports.parsePort = parsePort;
 exports.parseSize = parseSize;
 exports.resolveDisableSudo = resolveDisableSudo;
+exports.resolveDisableDocker = resolveDisableDocker;
 exports.readInputs = readInputs;
 const core = __importStar(__nccwpck_require__(7484));
 function parseMode(raw) {
@@ -1032,6 +1036,23 @@ function resolveDisableSudo(raw, mode, sudoConfig) {
         return [false, false];
     throw new Error(`disable-sudo must be true or false, got "${raw}"`);
 }
+/**
+ * disable-docker is tri-state, mirroring disable-sudo (review H2). Docker group membership is
+ * root-equivalent, so a step can use it to remove the egress controls; unset therefore means ON
+ * in enforce mode, off in analyze. Explicit true/false always wins. action.yaml declares no
+ * default for disable-docker, so the runner leaves the input empty when the workflow doesn't set
+ * it (getBooleanInput would collapse "unset" and "false"). Returns [effective value, defaulted].
+ */
+function resolveDisableDocker(raw, mode) {
+    const v = (raw || '').trim();
+    if (v === '')
+        return [mode === 'enforce', true];
+    if (['true', 'True', 'TRUE'].includes(v))
+        return [true, false];
+    if (['false', 'False', 'FALSE'].includes(v))
+        return [false, false];
+    throw new Error(`disable-docker must be true or false, got "${raw}"`);
+}
 function bool(name) {
     // getBooleanInput throws on an empty value (e.g. when inputs are absent in the pre step on a local action)
     const v = core.getInput(name);
@@ -1042,6 +1063,8 @@ function readInputs() {
     const sudoConfig = core.getInput('sudo-config');
     // core.getInput reads the raw INPUT_DISABLE-SUDO variable ('' when unset - no action.yaml default)
     const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode, sudoConfig);
+    // core.getInput reads the raw INPUT_DISABLE-DOCKER variable ('' when unset - no action.yaml default)
+    const [disableDocker, disableDockerDefaulted] = resolveDisableDocker(core.getInput('disable-docker'), mode);
     return {
         mode,
         allowedDomains: core.getInput('allowed-domains'),
@@ -1053,7 +1076,8 @@ function readInputs() {
         disableSudo,
         disableSudoDefaulted,
         sudoConfig,
-        disableDocker: bool('disable-docker'),
+        disableDocker,
+        disableDockerDefaulted,
         stopDocker: bool('stop-docker'),
         failOnTampering: bool('fail-on-tampering'),
         proxyPort: parsePort(core.getInput('proxy-port')),

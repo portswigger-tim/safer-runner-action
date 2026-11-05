@@ -30,8 +30,8 @@ jobs:
             registry.npmjs.org
             pypi.org
             files.pythonhosted.org
-          disable-docker: true    # docker access is root-equivalent (see "Limitations")
-          # enforce removes sudo by default; `disable-sudo: false` keeps it but makes enforce ADVISORY
+          # enforce removes sudo and docker access by default (both are root-equivalent):
+          # `disable-sudo: false` keeps sudo (makes enforce ADVISORY); `disable-docker: false` keeps docker
       - uses: actions/checkout@v5
       - run: npm ci
 ```
@@ -80,7 +80,8 @@ fails if either check fails.
 | `primary-dns-server` / `secondary-dns-server` | Quad9 | Upstream resolvers for dnsmasq |
 | `disable-sudo` | **on in `enforce`**, off in `analyze` | Remove the runner's sudo after setup. In enforce, `disable-sudo: false` keeps sudo and the job is labelled **ADVISORY** (see below) |
 | `sudo-config` | | Custom sudoers rules for the runner user. Keeps sudo in enforce (labelled ADVISORY) unless `disable-sudo: true` is also set |
-| `disable-docker` / `stop-docker` | `false` | Remove docker group membership or stop Docker |
+| `disable-docker` | **on in `enforce`**, off in `analyze` | Remove the runner from the docker group (root-equivalent). In enforce, `disable-docker: false` keeps docker and the summary warns |
+| `stop-docker` | `false` | Stop and disable the Docker service entirely |
 | `fail-on-tampering` | `false` | Fail the job if the configuration changed during the job (the baseline is stored root-owned, `/etc/safer-runner/validation-state.json`) |
 | `proxy-port` | `8080` | Loopback port of the proxy (advanced) |
 | `proxy-stream-large-bodies` | `1m` | Stream rather than buffer bodies above this size (advanced) |
@@ -107,12 +108,20 @@ gets a warning and the job summary header reads *"enforce (ADVISORY — sudo ret
 enforced boundary)"*. In analyze mode, the summary tells you if the job used sudo, so you find
 out before switching to enforce.
 
+## Enforce removes docker by default (changed in v2.0.0-beta.3)
+
+Docker group membership is root-equivalent — a step with docker can stop the proxy and flush
+the firewall just like sudo. Since **v2.0.0-beta.3, `mode: enforce` removes the runner from the
+docker group by default** (`disable-docker` unset = on in enforce, off in analyze). If a job
+needs docker, opt out with `disable-docker: false`; the controls are still applied and the job
+summary warns that docker was retained. `stop-docker: true` goes further and stops the daemon.
+
 ## Limitations (read these)
 
 - **`disable-sudo: false` (or `sudo-config`) makes enforce advisory.** Any step with root can
   remove the proxy and firewall. **Docker group membership is root-equivalent too** and is
-  still kept by default: set `disable-docker: true` or `stop-docker: true` in enforce unless
-  the job needs docker. The summary warns when docker access was kept.
+  removed by default in enforce (set `disable-docker: false` to keep it, or `stop-docker: true`
+  to stop the daemon). The summary warns when docker access was kept.
 - **Allowlisted names that resolve to internal addresses are refused.** That includes hosted
   runners with Azure private networking that reach private services by name. Such names
   can't be allowlisted in enforce yet.

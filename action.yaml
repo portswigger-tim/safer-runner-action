@@ -55,9 +55,12 @@ inputs:
     required: false
     default: ''
   disable-docker:
-    description: 'Remove the runner user from the docker group (docker access is root-equivalent).'
+    description: >-
+      Remove the runner user from the docker group (docker access is root-equivalent: a step can
+      use it to remove the egress controls). Default: ON in enforce mode, off in analyze. Set
+      `false` to keep docker in enforce; the job summary then warns that docker was retained.
+      Deliberately has no default here: unset and `false` differ.
     required: false
-    default: 'false'
   stop-docker:
     description: 'Stop and disable the Docker service entirely.'
     required: false
