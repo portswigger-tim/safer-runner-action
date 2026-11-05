@@ -3,9 +3,12 @@
  * addon's pattern matching (proxy/policy_core.py) for the report and DNS config.
  *
  * Pattern semantics (identical in Python; both are checked against proxy/test-vectors.json):
- *  - `example.com`     -> example.com and any subdomain
+ *  - `example.com`     -> exactly example.com (no subdomains)
  *  - `*.example.com`   -> any subdomain of example.com (not the apex)
  *  - `a-*.example.com` -> `*` matches within ONE label; the rest must match exactly
+ *
+ * Input shorthand (expanded before validation, never reaches the addon or the Corefile):
+ *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
  */
 
 import { DANGEROUS_BROAD_DOMAINS } from './parsers/github-parser';
@@ -88,6 +91,16 @@ export function validatePattern(pattern: string): string {
   return p;
 }
 
+/**
+ * Expand the `.host` shorthand into `host` + `*.host`; anything else is returned as is. The
+ * result still has to pass validatePattern.
+ */
+export function expandPattern(entry: string): string[] {
+  const e = entry.trim();
+  if (e.startsWith('.') && !e.startsWith('..')) return [e.slice(1), `*${e}`];
+  return [e];
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -100,7 +113,7 @@ export function compilePattern(pattern: string): RegExp {
   } else if (p.includes('*')) {
     body = p.split('*').map(escapeRegex).join('[a-z0-9_-]*');
   } else {
-    body = '(?:[a-z0-9_-]+\\.)*' + escapeRegex(p);
+    body = escapeRegex(p);
   }
   return new RegExp('^' + body + '$');
 }
@@ -139,7 +152,7 @@ function uniq(xs: string[]): string[] {
 /** Validate user patterns, dropping (and reporting) anything invalid or dangerously broad. */
 function cleanUserPatterns(raw: string, inputName: string, warnings: string[]): string[] {
   const out: string[] = [];
-  for (const entry of parseAllowedDomains(raw)) {
+  for (const entry of parseAllowedDomains(raw).flatMap(expandPattern)) {
     try {
       const p = validatePattern(entry);
       if (isDangerouslyBroad(p)) {

@@ -1509,38 +1509,52 @@ exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
 exports.normalizeMetaDomain = normalizeMetaDomain;
 exports.fetchGitHubActionsDomains = fetchGitHubActionsDomains;
 exports.resolveGitHubDomains = resolveGitHubDomains;
-exports.isGitHubDomain = isGitHubDomain;
-exports.isGitHubRelated = isGitHubRelated;
 /**
  * Stable GitHub-owned core domains that are always allowed.
  *
- * These are either GitHub-controlled domains (safe to match with subdomains) or
- * specific GitHub-registered names. They do NOT include the dynamic results-storage
- * (productionresultssa*) accounts, which live in getProductionResultsStorageDomains()
- * and are preferably sourced from api.github.com/meta at runtime.
+ * Patterns use the v2 allowlist syntax: a bare name is EXACT (that name only) and `*.name`
+ * covers every subdomain (not the apex). Before beta.5 a bare name also matched all of its
+ * subdomains, so every entry was audited (against api.github.com/meta .domains.actions and
+ * the hosts real runners use) when exact-by-default landed:
+ *
+ *  - GitHub-owned zones whose subdomains the runner or common actions use get the apex AND
+ *    `*.`: github.com (api., codeload., uploads., pkg. ...), actions.githubusercontent.com
+ *    (pipelines*, runner*, broker., token. (OIDC), results-receiver., vstoken. ...),
+ *    githubapp.com (hosted-compute-*, dependabot, fulcio./timestamp. attestations) and
+ *    ghcr.io (meta .packages lists *.ghcr.io). The apex is included even where meta lists
+ *    only the wildcard: it is GitHub-owned, so it costs nothing and can't break a runner.
+ *  - Everything else is exact, as meta lists it. Several of these sit under shared or
+ *    third-party namespaces where suffix matching was a latent exfil channel: e.g.
+ *    `<anything>.github-cloud.s3.amazonaws.com` is a different, registrable S3 bucket, and
+ *    subdomains of the *.githubusercontent.com hosts are not all GitHub's to vouch for.
+ *
+ * The dynamic results-storage (productionresultssa*) accounts are NOT here; they live in
+ * getProductionResultsStorageDomains() and are preferably sourced from api.github.com/meta.
  */
 const GITHUB_CORE_DOMAINS = [
     'github.com',
+    '*.github.com',
     'actions.githubusercontent.com',
+    '*.actions.githubusercontent.com',
+    'githubapp.com',
+    '*.githubapp.com',
+    'ghcr.io',
+    '*.ghcr.io',
+    // exact names (several are also covered by a wildcard above; listed so the static
+    // fallback documents what the runner needs)
     'api.github.com',
     'codeload.github.com',
+    'pkg.github.com',
     'pkg.actions.githubusercontent.com',
-    'ghcr.io',
     'results-receiver.actions.githubusercontent.com',
     'objects.githubusercontent.com',
     'objects-origin.githubusercontent.com',
     'github-releases.githubusercontent.com',
     'github-registry-files.githubusercontent.com',
-    'pkg.github.com',
+    'release-assets.githubusercontent.com',
     'pkg-containers.githubusercontent.com',
     'github-cloud.githubusercontent.com',
     'github-cloud.s3.amazonaws.com',
-    // githubapp.com is GitHub-owned at the DNS level (unlike the shared blob.core.windows.net
-    // namespace), so matching it + subdomains is safe - this mirrors GitHub's own
-    // api.github.com/meta .domains.actions list (which wildcards *.githubapp.com). Covers
-    // dependabot, artifact-attestation (fulcio/timestamp), and hosted-compute orchestrators.
-    'githubapp.com',
-    'release-assets.githubusercontent.com',
     'api.snapcraft.io'
 ];
 /**
@@ -1596,19 +1610,20 @@ function getGitHubRequiredDomains() {
     return [...GITHUB_CORE_DOMAINS, ...getProductionResultsStorageDomains()];
 }
 /**
- * Normalise a domain from api.github.com/meta into a dnsmasq-usable base domain,
- * or return null if it must be dropped.
+ * Normalise a domain from api.github.com/meta into an allowlist pattern, or return null if
+ * it must be dropped.
  *
- * - Leading "*." is stripped: dnsmasq's server=/domain/ rule already matches the
- *   domain and all of its subdomains.
- * - Entries that are still wildcards, empty, or an over-broad shared suffix
- *   (DANGEROUS_BROAD_DOMAINS) are dropped.
+ * - A leading "*." is KEPT: meta's `*.github.com` means "subdomains of github.com", which is
+ *   exactly what the v2 pattern `*.github.com` means (meta lists the apex separately).
+ * - Any other wildcard, an empty entry, or an over-broad shared suffix
+ *   (DANGEROUS_BROAD_DOMAINS, checked on the part after "*.") is dropped.
  */
 function normalizeMetaDomain(raw) {
-    const d = raw.trim().toLowerCase().replace(/^\*\./, '');
-    if (!d || d.includes('*'))
+    const d = raw.trim().toLowerCase();
+    const base = d.startsWith('*.') ? d.slice(2) : d;
+    if (!base || base.includes('*'))
         return null;
-    if (exports.DANGEROUS_BROAD_DOMAINS.has(d))
+    if (exports.DANGEROUS_BROAD_DOMAINS.has(base))
         return null;
     return d;
 }
@@ -1672,31 +1687,6 @@ async function resolveGitHubDomains() {
         return { domains: Array.from(new Set([...GITHUB_CORE_DOMAINS, ...fetched])), source: 'meta' };
     }
     return { domains: getGitHubRequiredDomains(), source: 'static' };
-}
-/**
- * Check if a domain is a GitHub domain (exact match or subdomain).
- * Examples:
- * - 'actions.githubusercontent.com' matches 'actions.githubusercontent.com'
- * - 'run-actions-3-azure-eastus.actions.githubusercontent.com' is a subdomain of 'actions.githubusercontent.com'
- *
- * @param domain - The domain to check
- * @param githubDomains - List of GitHub required domains
- * @returns true if domain is an exact match or subdomain of any GitHub domain
- */
-function isGitHubDomain(domain, githubDomains) {
-    // Check exact match or if domain is a subdomain of any GitHub domain
-    return githubDomains.some(ghDomain => domain === ghDomain || domain.endsWith('.' + ghDomain));
-}
-/**
- * Check if a domain should be excluded from configuration suggestions.
- * A domain is excluded if it's in the explicit GitHub domain list or is a subdomain.
- *
- * @param domain - The domain to check
- * @returns true if domain should be excluded from suggestions
- */
-function isGitHubRelated(domain) {
-    const githubDomains = getGitHubRequiredDomains();
-    return isGitHubDomain(domain, githubDomains);
 }
 
 
@@ -2073,15 +2063,19 @@ function generateSudoersConfig(commands, username = 'runner') {
  * addon's pattern matching (proxy/policy_core.py) for the report and DNS config.
  *
  * Pattern semantics (identical in Python; both are checked against proxy/test-vectors.json):
- *  - `example.com`     -> example.com and any subdomain
+ *  - `example.com`     -> exactly example.com (no subdomains)
  *  - `*.example.com`   -> any subdomain of example.com (not the apex)
  *  - `a-*.example.com` -> `*` matches within ONE label; the rest must match exactly
+ *
+ * Input shorthand (expanded before validation, never reaches the addon or the Corefile):
+ *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = void 0;
 exports.normHost = normHost;
 exports.isIpLiteral = isIpLiteral;
 exports.validatePattern = validatePattern;
+exports.expandPattern = expandPattern;
 exports.compilePattern = compilePattern;
 exports.matchesAny = matchesAny;
 exports.isDangerouslyBroad = isDangerouslyBroad;
@@ -2144,6 +2138,16 @@ function validatePattern(pattern) {
     }
     return p;
 }
+/**
+ * Expand the `.host` shorthand into `host` + `*.host`; anything else is returned as is. The
+ * result still has to pass validatePattern.
+ */
+function expandPattern(entry) {
+    const e = entry.trim();
+    if (e.startsWith('.') && !e.startsWith('..'))
+        return [e.slice(1), `*${e}`];
+    return [e];
+}
 function escapeRegex(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -2157,7 +2161,7 @@ function compilePattern(pattern) {
         body = p.split('*').map(escapeRegex).join('[a-z0-9_-]*');
     }
     else {
-        body = '(?:[a-z0-9_-]+\\.)*' + escapeRegex(p);
+        body = escapeRegex(p);
     }
     return new RegExp('^' + body + '$');
 }
@@ -2176,7 +2180,7 @@ function uniq(xs) {
 /** Validate user patterns, dropping (and reporting) anything invalid or dangerously broad. */
 function cleanUserPatterns(raw, inputName, warnings) {
     const out = [];
-    for (const entry of (0, dns_config_builder_1.parseAllowedDomains)(raw)) {
+    for (const entry of (0, dns_config_builder_1.parseAllowedDomains)(raw).flatMap(expandPattern)) {
         try {
             const p = validatePattern(entry);
             if (isDangerouslyBroad(p)) {

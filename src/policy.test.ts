@@ -6,6 +6,7 @@ import {
   buildPolicyConfig,
   compilePattern,
   dnsDomainsFor,
+  expandPattern,
   matchesAny,
   normHost,
   validatePattern
@@ -31,6 +32,15 @@ describe('pattern matching (shared vectors with proxy/policy_core.py)', () => {
     for (const c of vectors.front_door_hosts as { host: string; expect: boolean }[]) {
       expect([c.host, matchesAny(c.host, compiled)]).toEqual([c.host, c.expect]);
     }
+  });
+});
+
+describe('expandPattern', () => {
+  it('expands .host and leaves everything else alone', () => {
+    expect(expandPattern('.example.com')).toEqual(['example.com', '*.example.com']);
+    expect(expandPattern(' example.com ')).toEqual(['example.com']);
+    expect(expandPattern('*.example.com')).toEqual(['*.example.com']);
+    expect(expandPattern('..example.com')).toEqual(['..example.com']);
   });
 });
 
@@ -83,6 +93,30 @@ describe('buildPolicyConfig', () => {
     expect(config.allow).not.toContain('blob.core.windows.net');
     expect(config.allow).not.toContain('*.blob.core.windows.net');
     expect(warnings).toHaveLength(4);
+  });
+
+  it('expands the .host shorthand to the apex plus all subdomains', () => {
+    const { config, warnings } = buildPolicyConfig({
+      ...base,
+      allowedDomains: '.docker.io registry.npmjs.org',
+      passthroughDomains: '.example.org'
+    });
+    expect(config.allow).toEqual(expect.arrayContaining(['docker.io', '*.docker.io', 'registry.npmjs.org']));
+    expect(config.passthrough).toEqual(expect.arrayContaining(['example.org', '*.example.org']));
+    expect(warnings).toEqual([]);
+  });
+
+  it('a bare user entry is exact: its subdomains are not allowed', () => {
+    const { config } = buildPolicyConfig({ ...base, allowedDomains: 'example.com' });
+    const allow = config.allow.map(compilePattern);
+    expect(matchesAny('example.com', allow)).toBe(true);
+    expect(matchesAny('s3cr3t.example.com', allow)).toBe(false);
+  });
+
+  it('the .host shorthand cannot smuggle in a dangerous namespace', () => {
+    const { config, warnings } = buildPolicyConfig({ ...base, allowedDomains: '.githubusercontent.com' });
+    expect(config.allow.some(p => p.includes('githubusercontent.com'))).toBe(false);
+    expect(warnings).toHaveLength(2);
   });
 
   it('records the mode and flow log path', () => {

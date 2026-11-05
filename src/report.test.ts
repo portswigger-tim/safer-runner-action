@@ -229,10 +229,10 @@ describe('Option R layout', () => {
     'pypi.org',
     'files.pythonhosted.org',
     'registry.npmjs.org',
-    'docker.io',
+    '.docker.io',
     'production.cloudfront.docker.com',
-    'nip.io',
-    'sslip.io'
+    '*.nip.io',
+    '*.sslip.io'
   ];
   const md = buildReport({
     mode: 'enforce',

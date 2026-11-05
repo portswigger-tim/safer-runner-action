@@ -4,7 +4,7 @@
  */
 
 import { ipOf, type FlowRecord } from './flowlog';
-import { compilePattern, isIpLiteral, matchesAny, type Mode } from './policy';
+import { compilePattern, expandPattern, isIpLiteral, matchesAny, type Mode } from './policy';
 import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
 
 export interface HostSummary {
@@ -555,7 +555,7 @@ export function modeLabel(mode: Mode, sudoRetained = false): string {
 
 function compileUserPatterns(patterns: string[]): RegExp[] {
   const out: RegExp[] = [];
-  for (const p of patterns) {
+  for (const p of patterns.flatMap(expandPattern)) {
     try {
       out.push(compilePattern(p));
     } catch {

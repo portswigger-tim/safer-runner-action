@@ -5,7 +5,7 @@ Python interpreter, and so the hostname-matching rules can be checked against th
 test vectors as the TypeScript side (proxy/test-vectors.json).
 
 Pattern semantics (mirrors src/policy.ts):
-  * ``example.com``      -> example.com and any subdomain of it
+  * ``example.com``      -> exactly example.com (no subdomains)
   * ``*.example.com``    -> any subdomain of example.com (not the apex)
   * ``a-*.example.com``  -> ``*`` matches within ONE label; the rest must match exactly
 
@@ -101,7 +101,7 @@ def compile_pattern(pattern):
     elif "*" in p:
         body = re.escape(p).replace(r"\*", r"[a-z0-9_-]*")
     else:
-        body = r"(?:[a-z0-9_-]+\.)*" + re.escape(p)
+        body = re.escape(p)
     return re.compile("^" + body + "$")
 
 
