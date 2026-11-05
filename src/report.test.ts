@@ -121,7 +121,7 @@ describe('buildReport', () => {
   it('enforce: bypass attempts before allowlist misses before allowed; no analyze suggestions', () => {
     const md = buildReport({ ...base, mode: 'enforce', hosts, dnsRefused: ['x.example'] });
     expect(md.indexOf('Bypass attempts')).toBeLessThan(md.indexOf('Not on the allowlist'));
-    expect(md.indexOf('Not on the allowlist')).toBeLessThan(md.indexOf('### ✅ Allowed'));
+    expect(md.indexOf('Not on the allowlist')).toBeLessThan(md.indexOf('### Allowed'));
     expect(md).toContain('`evil.example.com`');
     expect(md).toContain('`x.example`');
     expect(md).not.toContain('mode: enforce\n');
@@ -298,7 +298,7 @@ describe('Option R layout', () => {
   });
 
   it("splits allowed traffic into the job's hosts (open) and GitHub platform (collapsed, result in the summary)", () => {
-    expect(md).toContain("### ✅ Allowed — this job's hosts (7)");
+    expect(md).toContain("### Allowed — this job's hosts (7)");
     expect(md).toMatch(
       /<summary>🐙 <b>GitHub platform<\/b> — 8 hosts · \d+ requests · [\d.]+ MiB · expected for every job<\/summary>/
     );
@@ -310,13 +310,13 @@ describe('Option R layout', () => {
     expect(md).toContain(
       '| `hosted-compute-watchdog-prod-iad-01.githubapp.com` <sub>🔀 passthrough</sub> | — | n/a | n/a |'
     );
-    expect(md).toContain('| `broker.actions.githubusercontent.com` | 1 | — | 101 |');
+    expect(md).toContain('| `broker.actions.githubusercontent.com` | 1 | — | 1xx (1) |');
     expect(md).not.toContain('0 B');
   });
 
   it('collapses diagnostics into one section whose summary states each result', () => {
     expect(md).toContain(
-      '<summary>🔧 <b>Diagnostics</b> — self-tests 2/2 ✓ · 1 non-proxy destination rejected · 1 DNS refusal · config files ✓</summary>'
+      '<summary>🔧 <b>Diagnostics</b> — self-tests 2/2 ✓ · 1 non-proxy destination rejected · 1 DNS refusal · config unchanged ✓</summary>'
     );
     expect(md).toContain('| `1.1.1.1:853` | TCP | DNS-over-TLS | 1001 | 1 | ❌ rejected |');
   });
@@ -643,7 +643,7 @@ describe('enforce labelling (review H2)', () => {
     expect(analyze).not.toContain('This job ran');
     expect(analyze).toContain('should run unchanged');
     const enforce = buildReport({ ...base, mode: 'enforce', sudo });
-    expect(enforce).toContain('workflow sudo 0 (1 by Safer Runner) · 2 sudo attempts refused');
+    expect(enforce).toContain('no workflow sudo (1 by Safer Runner) · 2 sudo attempts refused');
     expect(enforce).toContain('Refused by sudo (2):');
   });
 });

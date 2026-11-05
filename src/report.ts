@@ -356,23 +356,19 @@ function dataCell(h: HostSummary): string {
   return parts.join(' ') || '—';
 }
 
-/** "2xx ×23 · 307 ×2 · 401": only codes that need a look stand out. */
+/** Grouped by class, one per line: "2xx (45)<br>3xx (4)<br>5xx (1)". */
 export function statusSummary(h: HostSummary): string {
   if (isPassthroughOnly(h)) return 'n/a';
-  const times = (k: string, n: number) => (n > 1 ? `${k} ×${n}` : k);
-  let ok = 0;
-  const other: [string, number][] = [];
+  const byClass = new Map<string, number>();
   let answered = 0;
   for (const [k, n] of Object.entries(h.statuses)) {
     answered += n;
-    if (/^2\d\d$/.test(k)) ok += n;
-    else other.push([k, n]);
+    const cls = /^[1-5]\d\d$/.test(k) ? `${k[0]}xx` : k;
+    byClass.set(cls, (byClass.get(cls) ?? 0) + n);
   }
-  other.sort((a, b) => Number(a[0]) - Number(b[0]));
-  const parts = ok ? [times('2xx', ok)] : [];
-  parts.push(...other.map(([k, n]) => times(k, n)));
-  if (h.requests > answered) parts.push(times('no response', h.requests - answered));
-  return parts.join(' · ') || '—';
+  const parts = [...byClass.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cls, n]) => `${cls} (${n})`);
+  if (h.requests > answered) parts.push(`no response (${h.requests - answered})`);
+  return parts.join('<br>') || '—';
 }
 
 function hostCell(h: HostSummary): string {
@@ -622,7 +618,7 @@ function allowedTable(rows: HostSummary[]): string {
   );
   md += note + '\n\n';
   if (shown.some(h => h.kinds.includes('passthrough'))) {
-    md += '<sub>🔀 passthrough = checked by TLS name only, not decrypted, so no request or byte counts.</sub>\n\n';
+    md += '<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>\n\n';
   }
   return md;
 }
@@ -950,13 +946,13 @@ export function buildReport(input: ReportInput): string {
 
   // ---- allowed: the job's own hosts open, GitHub platform collapsed
   if (input.userDomains) {
-    if (jobHosts.length) md += `### ✅ Allowed — this job's hosts (${jobHosts.length})\n\n` + allowedTable(jobHosts);
+    if (jobHosts.length) md += `### Allowed — this job's hosts (${jobHosts.length})\n\n` + allowedTable(jobHosts);
     if (platform.length) {
       md += `<details>\n<summary>🐙 <b>GitHub platform</b> — ${plural(platform.length, 'host')} · ${plural(plat.requests, 'request')} · ${humanBytes(plat.bytes)} · expected for every job</summary>\n\n`;
       md += allowedTable(platform) + '</details>\n\n';
     }
   } else if (allowed.length) {
-    md += `### ✅ Allowed (${allowed.length})\n\n` + allowedTable(allowed);
+    md += `### Allowed (${allowed.length})\n\n` + allowedTable(allowed);
   }
 
   md += containerSection(input.containers ?? [], mode);
@@ -996,7 +992,7 @@ export function buildReport(input: ReportInput): string {
     );
     body += note + '\n\n';
   } else {
-    diag.push('nothing outside the proxy');
+    diag.push('nothing bypassed the proxy');
   }
   if (input.dnsRefused.length) {
     diag.push(plural(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
@@ -1012,7 +1008,7 @@ export function buildReport(input: ReportInput): string {
   if (input.sudo) {
     const { ran, refused, internal } = input.sudo;
     diag.push(
-      `workflow sudo ${ran.length}` +
+      (ran.length === 0 ? 'no workflow sudo' : `workflow ran ${plural(ran.length, 'sudo command')}`) +
         (internal.length ? ` (${internal.length} by Safer Runner)` : '') +
         (refused.length ? ` · ${plural(refused.length, 'sudo attempt')} refused` : '')
     );
@@ -1033,9 +1029,7 @@ export function buildReport(input: ReportInput): string {
   }
   if (input.integrity) {
     const s = input.integrity.status;
-    diag.push(
-      s === 'verified' ? 'config files ✓' : s === 'tampered' ? 'config files ⚠️ CHANGED' : 'config files: no baseline'
-    );
+    diag.push(s === 'verified' ? 'config unchanged ✓' : s === 'tampered' ? 'config CHANGED ⚠️' : 'config: no baseline');
     body += `**Config file tamper check** — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
     body += input.integrity.body + '\n\n';
   }

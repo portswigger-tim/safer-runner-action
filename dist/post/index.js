@@ -3530,27 +3530,21 @@ function dataCell(h) {
         parts.push(`↓ ${humanBytes(h.respBytes)}`);
     return parts.join(' ') || '—';
 }
-/** "2xx ×23 · 307 ×2 · 401": only codes that need a look stand out. */
+/** Grouped by class, one per line: "2xx (45)<br>3xx (4)<br>5xx (1)". */
 function statusSummary(h) {
     if (isPassthroughOnly(h))
         return 'n/a';
-    const times = (k, n) => (n > 1 ? `${k} ×${n}` : k);
-    let ok = 0;
-    const other = [];
+    const byClass = new Map();
     let answered = 0;
     for (const [k, n] of Object.entries(h.statuses)) {
         answered += n;
-        if (/^2\d\d$/.test(k))
-            ok += n;
-        else
-            other.push([k, n]);
+        const cls = /^[1-5]\d\d$/.test(k) ? `${k[0]}xx` : k;
+        byClass.set(cls, (byClass.get(cls) ?? 0) + n);
     }
-    other.sort((a, b) => Number(a[0]) - Number(b[0]));
-    const parts = ok ? [times('2xx', ok)] : [];
-    parts.push(...other.map(([k, n]) => times(k, n)));
+    const parts = [...byClass.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cls, n]) => `${cls} (${n})`);
     if (h.requests > answered)
-        parts.push(times('no response', h.requests - answered));
-    return parts.join(' · ') || '—';
+        parts.push(`no response (${h.requests - answered})`);
+    return parts.join('<br>') || '—';
 }
 function hostCell(h) {
     let c = code(blockedName(h.name));
@@ -3729,7 +3723,7 @@ function allowedTable(rows) {
     let md = table(['Host', 'Requests', 'Data', 'Responses'], [':--', '--:', '--:', ':--'], shown.map(h => [hostCell(h), requestsCell(h), dataCell(h), statusSummary(h)]));
     md += note + '\n\n';
     if (shown.some(h => h.kinds.includes('passthrough'))) {
-        md += '<sub>🔀 passthrough = checked by TLS name only, not decrypted, so no request or byte counts.</sub>\n\n';
+        md += '<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>\n\n';
     }
     return md;
 }
@@ -4030,14 +4024,14 @@ function buildReport(input) {
     // ---- allowed: the job's own hosts open, GitHub platform collapsed
     if (input.userDomains) {
         if (jobHosts.length)
-            md += `### ✅ Allowed — this job's hosts (${jobHosts.length})\n\n` + allowedTable(jobHosts);
+            md += `### Allowed — this job's hosts (${jobHosts.length})\n\n` + allowedTable(jobHosts);
         if (platform.length) {
             md += `<details>\n<summary>🐙 <b>GitHub platform</b> — ${plural(platform.length, 'host')} · ${plural(plat.requests, 'request')} · ${humanBytes(plat.bytes)} · expected for every job</summary>\n\n`;
             md += allowedTable(platform) + '</details>\n\n';
         }
     }
     else if (allowed.length) {
-        md += `### ✅ Allowed (${allowed.length})\n\n` + allowedTable(allowed);
+        md += `### Allowed (${allowed.length})\n\n` + allowedTable(allowed);
     }
     md += containerSection(input.containers ?? [], mode);
     // ---- diagnostics: one collapsed section, every part states its result
@@ -4075,7 +4069,7 @@ function buildReport(input) {
         body += note + '\n\n';
     }
     else {
-        diag.push('nothing outside the proxy');
+        diag.push('nothing bypassed the proxy');
     }
     if (input.dnsRefused.length) {
         diag.push(plural(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
@@ -4090,7 +4084,7 @@ function buildReport(input) {
     }
     if (input.sudo) {
         const { ran, refused, internal } = input.sudo;
-        diag.push(`workflow sudo ${ran.length}` +
+        diag.push((ran.length === 0 ? 'no workflow sudo' : `workflow ran ${plural(ran.length, 'sudo command')}`) +
             (internal.length ? ` (${internal.length} by Safer Runner)` : '') +
             (refused.length ? ` · ${plural(refused.length, 'sudo attempt')} refused` : ''));
         const lines = (cmds) => cmds
@@ -4106,7 +4100,7 @@ function buildReport(input) {
     }
     if (input.integrity) {
         const s = input.integrity.status;
-        diag.push(s === 'verified' ? 'config files ✓' : s === 'tampered' ? 'config files ⚠️ CHANGED' : 'config files: no baseline');
+        diag.push(s === 'verified' ? 'config unchanged ✓' : s === 'tampered' ? 'config CHANGED ⚠️' : 'config: no baseline');
         body += `**Config file tamper check** — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
         body += input.integrity.body + '\n\n';
     }
