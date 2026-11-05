@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { parseFlowLog } from './flowlog';
 import { buildReport, humanBytes, modeLabel, parseFirewallLog, suggestedAllowlist, summarizeFlows } from './report';
 
@@ -218,7 +220,151 @@ describe('upstream IP guard records (H1)', () => {
     expect(hosts).toHaveLength(1);
     expect(hosts[0]).toMatchObject({ name: 'imds.example.org', verdict: 'BLOCK', connections: 1, requests: 1 });
     expect(hosts[0].reasons).toEqual(['upstream-ip-forbidden']);
-    expect(hosts[0].dsts).toEqual(['169.254.169.254']);
+    // the resolved address is evidence of what the name points at, not what the client dialled
+    expect(hosts[0].upstreamIps).toEqual(['169.254.169.254']);
+    expect(hosts[0].dsts).toEqual([]);
+  });
+});
+
+describe('reconciling refused connections (no host is both allowed and blocked)', () => {
+  const real = summarizeFlows(
+    parseFlowLog(fs.readFileSync(path.join(__dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8'))
+  );
+  const allowedRows = real.filter(h => !['BLOCK', 'WOULD_BLOCK'].includes(h.verdict));
+  const blockedRows = real.filter(h => ['BLOCK', 'WOULD_BLOCK'].includes(h.verdict));
+
+  // beta.2 listed these under Allowed too: the SNI check passed, then the upstream IP guard refused
+  it.each(['100.64.0.1.nip.io', '127.0.0.1.nip.io', '100-64-0-1.sslip.io'])(
+    '%s is only blocked, never allowed',
+    name => {
+      expect(allowedRows.map(h => h.name)).not.toContain(name);
+      expect(blockedRows.map(h => h.name)).toContain(name);
+    }
+  );
+
+  it('moves an intercepted TLS connection refused upstream to the refusal', () => {
+    const recs = [
+      { ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', layer: 'sni', sni: 'x.nip.io', client: 'c:1' },
+      {
+        ev: 'upstream',
+        verdict: 'BLOCK',
+        reason: 'upstream-ip-forbidden',
+        layer: 'ip',
+        host: 'x.nip.io',
+        dst: '10.0.0.1:443',
+        client: 'c:1'
+      },
+      {
+        ev: 'https',
+        verdict: 'BLOCK',
+        reason: 'upstream-ip-forbidden',
+        layer: 'http',
+        host: 'x.nip.io',
+        sni: 'x.nip.io',
+        client: 'c:1',
+        req_bytes: 0,
+        resp_bytes: 0
+      }
+    ];
+    const hosts = summarizeFlows(parseFlowLog(recs.map(r => JSON.stringify(r)).join('\n')));
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).toMatchObject({ name: 'x.nip.io', verdict: 'BLOCK', tries: 1, upstreamIps: ['10.0.0.1'] });
+  });
+
+  it('moves a passthrough connection refused upstream to the refusal', () => {
+    const recs = [
+      {
+        ev: 'tls',
+        verdict: 'PASSTHROUGH',
+        reason: 'passthrough',
+        layer: 'sni',
+        sni: 'p.sslip.io',
+        passthrough: true,
+        client: 'c:2'
+      },
+      {
+        ev: 'upstream',
+        verdict: 'BLOCK',
+        reason: 'upstream-ip-forbidden',
+        layer: 'ip',
+        host: 'p.sslip.io',
+        dst: '100.64.0.1:443',
+        client: 'c:2'
+      }
+    ];
+    const hosts = summarizeFlows(parseFlowLog(recs.map(r => JSON.stringify(r)).join('\n')));
+    expect(hosts.map(h => h.verdict)).toEqual(['BLOCK']);
+  });
+
+  it('analyze: traffic on a connection the guard would refuse is reported as would-be-blocked', () => {
+    const recs = [
+      { ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', layer: 'sni', sni: 'x.nip.io', client: 'c:3' },
+      {
+        ev: 'upstream',
+        verdict: 'WOULD_BLOCK',
+        reason: 'upstream-ip-forbidden',
+        layer: 'ip',
+        host: 'x.nip.io',
+        dst: '10.0.0.1:443',
+        client: 'c:3'
+      },
+      {
+        ev: 'https',
+        verdict: 'ALLOW',
+        reason: 'allowed',
+        layer: 'http',
+        host: 'x.nip.io',
+        sni: 'x.nip.io',
+        client: 'c:3',
+        status: 200,
+        resp_bytes: 9
+      }
+    ];
+    const hosts = summarizeFlows(parseFlowLog(recs.map(r => JSON.stringify(r)).join('\n')));
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).toMatchObject({ verdict: 'WOULD_BLOCK', reasons: ['upstream-ip-forbidden'], requests: 1 });
+  });
+
+  it('a reused client port does not taint a later, unrelated connection', () => {
+    const recs = [
+      {
+        ev: 'upstream',
+        verdict: 'BLOCK',
+        reason: 'upstream-ip-forbidden',
+        layer: 'ip',
+        host: 'bad.nip.io',
+        dst: '10.0.0.1:80',
+        client: 'c:4'
+      },
+      {
+        ev: 'http',
+        verdict: 'BLOCK',
+        reason: 'upstream-ip-forbidden',
+        layer: 'http',
+        host: 'bad.nip.io',
+        client: 'c:4'
+      },
+      { ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', layer: 'sni', sni: 'pypi.org', client: 'c:4' },
+      {
+        ev: 'https',
+        verdict: 'ALLOW',
+        reason: 'allowed',
+        layer: 'http',
+        host: 'pypi.org',
+        sni: 'pypi.org',
+        client: 'c:4',
+        status: 200
+      }
+    ];
+    const hosts = summarizeFlows(parseFlowLog(recs.map(r => JSON.stringify(r)).join('\n')));
+    expect(hosts.find(h => h.name === 'pypi.org')).toMatchObject({ verdict: 'INTERCEPT', requests: 1 });
+  });
+
+  it('records the TLS name that carried a fronted Host', () => {
+    const evil = blockedRows.find(h => h.name === 'evil.example.com')!;
+    expect(evil.reasons).toEqual(['sni-not-allowed', 'host-sni-mismatch']);
+    expect(evil.snis).toEqual(['github.com']);
+    expect(evil.tries).toBe(2);
   });
 });
 
