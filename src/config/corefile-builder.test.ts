@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { allowExpr, buildCorefile, patternsExpr } from './corefile-builder';
+import { allowExpr, buildCorefile, parseHostsNames, patternsExpr } from './corefile-builder';
 import { compilePattern, matchesAny, normHost } from '../policy';
 
 const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8'));
@@ -134,5 +134,64 @@ describe('buildCorefile', () => {
 
   it('matches the Corefile snapshot', () => {
     expect(buildCorefile({ ...base, mode: 'enforce' })).toMatchSnapshot();
+  });
+});
+
+describe('/etc/hosts names (hosts plugin)', () => {
+  const hostsText = [
+    '# comment',
+    '127.0.0.1 localhost',
+    '::1 ip6-localhost ip6-loopback # trailing',
+    '10.1.0.4 runnervm1abc.internal.cloudapp.net runnervm1abc',
+    'not-an-ip bogus.example',
+    "127.0.0.2 ok.example bad'name"
+  ].join('\n');
+
+  it('parses names, skipping comments, non-IP lines and odd names', () => {
+    expect(parseHostsNames(hostsText)).toEqual([
+      'localhost',
+      'ip6-localhost',
+      'ip6-loopback',
+      'runnervm1abc.internal.cloudapp.net',
+      'runnervm1abc',
+      'ok.example'
+    ]);
+  });
+
+  const hosts = {
+    file: '/etc/hosts',
+    names: ['localhost', 'runnervm1abc'],
+    inline: [{ ip: '10.0.139.67', name: 'ip-10-0-139-67' }]
+  };
+  const base = { mode: 'enforce' as const, allow: ['github.com'], deny: [], upstreams: ['9.9.9.9'], hosts };
+
+  it('routes the local names to the allow block, where the hosts plugin answers them', () => {
+    const c = buildCorefile(base);
+    const [allowBlock, denyBlock] = c.split(/\n(?=\.:53 \{)/).slice(-2);
+    expect(allowBlock).toContain(
+      "expr ((name() in ['github.com.'])) || name() in ['localhost.', 'runnervm1abc.', 'ip-10-0-139-67.']"
+    );
+    expect(allowBlock).toContain('  hosts /etc/hosts {\n    10.0.139.67 ip-10-0-139-67\n    fallthrough\n  }');
+    expect(allowBlock.indexOf('hosts /etc/hosts')).toBeLessThan(allowBlock.indexOf('  forward . '));
+    expect(denyBlock).not.toContain('hosts');
+  });
+
+  it('a local name is allowed; its subdomains are not', () => {
+    const view = /expr (.*)/.exec(buildCorefile(base))![1];
+    expect(evalExpr(view, 'ip-10-0-139-67')).toBe(true);
+    expect(evalExpr(view, 'localhost')).toBe(true);
+    expect(evalExpr(view, 'x.localhost')).toBe(false);
+  });
+
+  it('refuses unsafe inline entries and paths', () => {
+    expect(() => buildCorefile({ ...base, hosts: { ...hosts, inline: [{ ip: '1.2.3.4 }', name: 'x' }] } })).toThrow();
+    expect(() => buildCorefile({ ...base, hosts: { ...hosts, inline: [{ ip: '1.2.3.4', name: "x'y" }] } })).toThrow();
+    expect(() => buildCorefile({ ...base, hosts: { ...hosts, file: '/etc/hosts }' } })).toThrow();
+  });
+
+  it('without local names the view is unchanged', () => {
+    expect(buildCorefile({ ...base, hosts: { file: '/etc/hosts', names: [], inline: [] } })).toContain(
+      "expr (name() in ['github.com.'])\n"
+    );
   });
 });

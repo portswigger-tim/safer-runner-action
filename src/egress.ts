@@ -55,7 +55,7 @@ import {
   setupDNSConfig,
   setupIptablesLogging
 } from './setup';
-import { installCoreDns, startCoreDns, writeCorefile } from './dns';
+import { installCoreDns, localHosts, startCoreDns, writeCorefile } from './dns';
 import { resolveGitHubDomains } from './parsers/github-parser';
 import {
   applyCustomSudoConfig,
@@ -224,7 +224,8 @@ export async function runSetup(inputs: Inputs): Promise<void> {
       mode,
       allow: [...policy.allow, ...policy.passthrough],
       deny: policy.deny,
-      upstreams: dnsServers
+      upstreams: dnsServers,
+      hosts: await localHosts()
     });
     await startCoreDns(dnsUser.username, DNS_READY_NAME);
     await setupDNSConfig();

@@ -12,9 +12,17 @@
 
 import * as core from '@actions/core';
 import * as dns from 'dns';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as exec from '@actions/exec';
 import { COREDNS_BIN, COREDNS_SHA256, COREDNS_URL, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from './constants';
-import { buildCorefile, DNS_LISTEN, type CorefileOptions } from './config/corefile-builder';
+import {
+  buildCorefile,
+  DNS_LISTEN,
+  parseHostsNames,
+  type CorefileOptions,
+  type LocalHosts
+} from './config/corefile-builder';
 import { installPinnedBinary } from './proxy';
 
 async function sudo(args: string[], opts: exec.ExecOptions = {}): Promise<number> {
@@ -23,6 +31,39 @@ async function sudo(args: string[], opts: exec.ExecOptions = {}): Promise<number
 
 export async function installCoreDns(): Promise<void> {
   await installPinnedBinary(COREDNS_URL, COREDNS_SHA256, 'coredns', COREDNS_BIN, 'coredns');
+}
+
+export const HOSTS_FILE = '/etc/hosts';
+/** Debian's address for the machine's own name when it has no other (`127.0.1.1 <hostname>`). */
+const OWN_NAME_FALLBACK = '127.0.1.1';
+
+/**
+ * /etc/hosts names, plus the VM's hostname if /etc/hosts lacks it (AWS-hosted runners: it
+ * resolved through the VPC resolver, and without it every sudo warns "unable to resolve
+ * host"). Call BEFORE resolv.conf points at us, so the hostname resolves the original way.
+ */
+export async function localHosts(): Promise<LocalHosts> {
+  let names: string[] = [];
+  try {
+    names = parseHostsNames(fs.readFileSync(HOSTS_FILE, 'utf8'));
+  } catch {
+    // no /etc/hosts: nothing to serve
+  }
+  const inline: LocalHosts['inline'] = [];
+  const own = os.hostname().toLowerCase();
+  if (own && !names.includes(own) && /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/.test(own)) {
+    let addrs: string[] = [];
+    try {
+      addrs = (await dns.promises.lookup(own, { all: true })).map(a => a.address);
+    } catch {
+      // unresolvable before we started too
+    }
+    for (const ip of addrs.length ? addrs : [OWN_NAME_FALLBACK]) inline.push({ ip, name: own });
+    core.info(
+      `hostname ${own} is not in ${HOSTS_FILE}: the resolver answers it with ${inline.map(e => e.ip).join(', ')}`
+    );
+  }
+  return { file: HOSTS_FILE, names, inline };
 }
 
 export async function writeCorefile(o: CorefileOptions): Promise<void> {

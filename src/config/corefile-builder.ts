@@ -11,15 +11,33 @@
  *
  * analyze: both blocks forward. The second one labels what enforce would refuse.
  *
+ * /etc/hosts names (+ the VM's hostname) are routed to the allow block and answered there by
+ * the `hosts` plugin (it runs after `template` in CoreDNS's plugin order, so it can't live in
+ * the deny block).
+ *
  * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
  * format, so the report parser never has to infer a verdict (src/parsers/dns-parser.ts).
  */
 
+import * as net from 'net';
 import { validatePattern, type Mode } from '../policy';
 
 export const DNS_LISTEN = '127.0.0.1';
 /** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
 export const CACHE_TTL = 3600;
+
+/**
+ * Local names answered from /etc/hosts (the `hosts` plugin), as dnsmasq did: containers (via
+ * Docker's embedded resolver) and DNS clients like dig resolve them through us, not nsswitch.
+ * Never forwarded, so no exfil channel. `names` routes them to the allow block (the view is
+ * static, so a name added to /etc/hosts later is not routed - that needs root anyway).
+ */
+export interface LocalHosts {
+  file: string;
+  names: string[];
+  /** extra `ip name` entries, e.g. the VM's own hostname when /etc/hosts lacks it (AWS) */
+  inline: { ip: string; name: string }[];
+}
 
 export interface CorefileOptions {
   mode: Mode;
@@ -28,6 +46,23 @@ export interface CorefileOptions {
   /** names always refused (the risky-subdomain denylist) */
   deny: string[];
   upstreams: string[];
+  hosts?: LocalHosts;
+}
+
+const LOCAL_NAME = /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/;
+
+/** Hostnames from an /etc/hosts file (lower-cased, unique; comments and odd names skipped). */
+export function parseHostsNames(text: string): string[] {
+  const out = new Set<string>();
+  for (const raw of text.split('\n')) {
+    const fields = raw.replace(/#.*/, '').trim().split(/\s+/);
+    if (fields.length < 2 || net.isIP(fields[0]) === 0) continue;
+    for (const n of fields.slice(1)) {
+      const name = n.toLowerCase().replace(/\.$/, '');
+      if (LOCAL_NAME.test(name)) out.add(name);
+    }
+  }
+  return Array.from(out);
 }
 
 const LOG_ALLOW = '{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}';
@@ -76,7 +111,17 @@ export function allowExpr(allow: string[], deny: string[]): string {
   return deny.length ? `${a} && !(${patternsExpr(deny)})` : a;
 }
 
-function forwardBlock(label: string, upstreams: string[], view?: string): string {
+function hostsLines(h: LocalHosts): string[] {
+  if (!/^\/[A-Za-z0-9_./-]+$/.test(h.file)) throw new Error(`invalid hosts file path: '${h.file}'`);
+  const inline = h.inline.map(({ ip, name }) => {
+    if (net.isIP(ip) === 0 || !LOCAL_NAME.test(name)) throw new Error(`invalid hosts entry: '${ip} ${name}'`);
+    return `    ${ip} ${name}`;
+  });
+  // fallthrough: allowlisted names not in the file go on to forward
+  return [`  hosts ${h.file} {`, ...inline, `    fallthrough`, `  }`];
+}
+
+function forwardBlock(label: string, upstreams: string[], view?: string, hosts?: LocalHosts): string {
   return [
     `.:53 {`,
     `  bind ${DNS_LISTEN}`,
@@ -84,6 +129,7 @@ function forwardBlock(label: string, upstreams: string[], view?: string): string
     `  metadata`,
     `  log . "${label === 'ALLOW' ? LOG_ALLOW : logLine(label)}"`,
     `  errors`,
+    ...(hosts ? hostsLines(hosts) : []),
     `  cache ${CACHE_TTL} {`,
     `    serve_stale 1h`,
     `  }`,
@@ -97,7 +143,13 @@ export function buildCorefile(o: CorefileOptions): string {
   for (const u of o.upstreams) {
     if (!/^[0-9a-f.:]+$/i.test(u)) throw new Error(`invalid upstream DNS server: '${u}'`);
   }
-  const view = allowExpr(o.allow, o.deny);
+  let view = allowExpr(o.allow, o.deny);
+  const local = o.hosts
+    ? Array.from(new Set([...o.hosts.names, ...o.hosts.inline.map(e => e.name)].map(n => n.toLowerCase())))
+    : [];
+  if (local.length) {
+    view = `(${view}) || name() in [${local.map(n => lit(n + '.', /^[a-z0-9_.-]+$/)).join(', ')}]`;
+  }
   const header =
     `# safer-runner CoreDNS resolver (${o.mode}). Generated - do not edit.\n` +
     '# Blocks are tried in order: the first whose view matches answers the query.\n';
@@ -114,5 +166,5 @@ export function buildCorefile(o: CorefileOptions): string {
           `}`
         ].join('\n')
       : forwardBlock('WOULD_BLOCK', o.upstreams);
-  return `${header}${forwardBlock('ALLOW', o.upstreams, view)}\n${deny}\n`;
+  return `${header}${forwardBlock('ALLOW', o.upstreams, view, o.hosts)}\n${deny}\n`;
 }

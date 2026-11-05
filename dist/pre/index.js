@@ -2,7 +2,7 @@
 /******/ 	var __webpack_modules__ = ({
 
 /***/ 6100:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -19,18 +19,73 @@
  *
  * analyze: both blocks forward. The second one labels what enforce would refuse.
  *
+ * /etc/hosts names (+ the VM's hostname) are routed to the allow block and answered there by
+ * the `hosts` plugin (it runs after `template` in CoreDNS's plugin order, so it can't live in
+ * the deny block).
+ *
  * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
  * format, so the report parser never has to infer a verdict (src/parsers/dns-parser.ts).
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.CACHE_TTL = exports.DNS_LISTEN = void 0;
+exports.parseHostsNames = parseHostsNames;
 exports.patternsExpr = patternsExpr;
 exports.allowExpr = allowExpr;
 exports.buildCorefile = buildCorefile;
+const net = __importStar(__nccwpck_require__(9278));
 const policy_1 = __nccwpck_require__(2224);
 exports.DNS_LISTEN = '127.0.0.1';
 /** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
 exports.CACHE_TTL = 3600;
+const LOCAL_NAME = /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/;
+/** Hostnames from an /etc/hosts file (lower-cased, unique; comments and odd names skipped). */
+function parseHostsNames(text) {
+    const out = new Set();
+    for (const raw of text.split('\n')) {
+        const fields = raw.replace(/#.*/, '').trim().split(/\s+/);
+        if (fields.length < 2 || net.isIP(fields[0]) === 0)
+            continue;
+        for (const n of fields.slice(1)) {
+            const name = n.toLowerCase().replace(/\.$/, '');
+            if (LOCAL_NAME.test(name))
+                out.add(name);
+        }
+    }
+    return Array.from(out);
+}
 const LOG_ALLOW = '{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}';
 const logLine = (label) => `{remote} ${label} {type} {name} {rcode} upstream={/forward/upstream} {duration}`;
 /** expr string literal for a DNS name (CoreDNS's name() is lower-case and fully qualified). */
@@ -76,7 +131,18 @@ function allowExpr(allow, deny) {
     const a = `(${patternsExpr(allow)})`;
     return deny.length ? `${a} && !(${patternsExpr(deny)})` : a;
 }
-function forwardBlock(label, upstreams, view) {
+function hostsLines(h) {
+    if (!/^\/[A-Za-z0-9_./-]+$/.test(h.file))
+        throw new Error(`invalid hosts file path: '${h.file}'`);
+    const inline = h.inline.map(({ ip, name }) => {
+        if (net.isIP(ip) === 0 || !LOCAL_NAME.test(name))
+            throw new Error(`invalid hosts entry: '${ip} ${name}'`);
+        return `    ${ip} ${name}`;
+    });
+    // fallthrough: allowlisted names not in the file go on to forward
+    return [`  hosts ${h.file} {`, ...inline, `    fallthrough`, `  }`];
+}
+function forwardBlock(label, upstreams, view, hosts) {
     return [
         `.:53 {`,
         `  bind ${exports.DNS_LISTEN}`,
@@ -84,6 +150,7 @@ function forwardBlock(label, upstreams, view) {
         `  metadata`,
         `  log . "${label === 'ALLOW' ? LOG_ALLOW : logLine(label)}"`,
         `  errors`,
+        ...(hosts ? hostsLines(hosts) : []),
         `  cache ${exports.CACHE_TTL} {`,
         `    serve_stale 1h`,
         `  }`,
@@ -98,7 +165,13 @@ function buildCorefile(o) {
         if (!/^[0-9a-f.:]+$/i.test(u))
             throw new Error(`invalid upstream DNS server: '${u}'`);
     }
-    const view = allowExpr(o.allow, o.deny);
+    let view = allowExpr(o.allow, o.deny);
+    const local = o.hosts
+        ? Array.from(new Set([...o.hosts.names, ...o.hosts.inline.map(e => e.name)].map(n => n.toLowerCase())))
+        : [];
+    if (local.length) {
+        view = `(${view}) || name() in [${local.map(n => lit(n + '.', /^[a-z0-9_.-]+$/)).join(', ')}]`;
+    }
     const header = `# safer-runner CoreDNS resolver (${o.mode}). Generated - do not edit.\n` +
         '# Blocks are tried in order: the first whose view matches answers the query.\n';
     const deny = o.mode === 'enforce'
@@ -113,7 +186,7 @@ function buildCorefile(o) {
             `}`
         ].join('\n')
         : forwardBlock('WOULD_BLOCK', o.upstreams);
-    return `${header}${forwardBlock('ALLOW', o.upstreams, view)}\n${deny}\n`;
+    return `${header}${forwardBlock('ALLOW', o.upstreams, view, o.hosts)}\n${deny}\n`;
 }
 
 
@@ -257,7 +330,9 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HOSTS_FILE = void 0;
 exports.installCoreDns = installCoreDns;
+exports.localHosts = localHosts;
 exports.writeCorefile = writeCorefile;
 exports.dnsSystemdRunArgs = dnsSystemdRunArgs;
 exports.dumpDnsDiagnostics = dumpDnsDiagnostics;
@@ -265,6 +340,8 @@ exports.probe = probe;
 exports.startCoreDns = startCoreDns;
 const core = __importStar(__nccwpck_require__(7484));
 const dns = __importStar(__nccwpck_require__(2250));
+const fs = __importStar(__nccwpck_require__(9896));
+const os = __importStar(__nccwpck_require__(857));
 const exec = __importStar(__nccwpck_require__(5236));
 const constants_1 = __nccwpck_require__(8729);
 const corefile_builder_1 = __nccwpck_require__(6100);
@@ -274,6 +351,38 @@ async function sudo(args, opts = {}) {
 }
 async function installCoreDns() {
     await (0, proxy_1.installPinnedBinary)(constants_1.COREDNS_URL, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns');
+}
+exports.HOSTS_FILE = '/etc/hosts';
+/** Debian's address for the machine's own name when it has no other (`127.0.1.1 <hostname>`). */
+const OWN_NAME_FALLBACK = '127.0.1.1';
+/**
+ * /etc/hosts names, plus the VM's hostname if /etc/hosts lacks it (AWS-hosted runners: it
+ * resolved through the VPC resolver, and without it every sudo warns "unable to resolve
+ * host"). Call BEFORE resolv.conf points at us, so the hostname resolves the original way.
+ */
+async function localHosts() {
+    let names = [];
+    try {
+        names = (0, corefile_builder_1.parseHostsNames)(fs.readFileSync(exports.HOSTS_FILE, 'utf8'));
+    }
+    catch {
+        // no /etc/hosts: nothing to serve
+    }
+    const inline = [];
+    const own = os.hostname().toLowerCase();
+    if (own && !names.includes(own) && /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/.test(own)) {
+        let addrs = [];
+        try {
+            addrs = (await dns.promises.lookup(own, { all: true })).map(a => a.address);
+        }
+        catch {
+            // unresolvable before we started too
+        }
+        for (const ip of addrs.length ? addrs : [OWN_NAME_FALLBACK])
+            inline.push({ ip, name: own });
+        core.info(`hostname ${own} is not in ${exports.HOSTS_FILE}: the resolver answers it with ${inline.map(e => e.ip).join(', ')}`);
+    }
+    return { file: exports.HOSTS_FILE, names, inline };
 }
 async function writeCorefile(o) {
     const corefile = (0, corefile_builder_1.buildCorefile)(o);
@@ -835,7 +944,8 @@ async function runSetup(inputs) {
             mode,
             allow: [...policy.allow, ...policy.passthrough],
             deny: policy.deny,
-            upstreams: dnsServers
+            upstreams: dnsServers,
+            hosts: await (0, dns_1.localHosts)()
         });
         await (0, dns_1.startCoreDns)(dnsUser.username, DNS_READY_NAME);
         await (0, setup_1.setupDNSConfig)();

@@ -28,6 +28,11 @@ by two spikes:
   - The service runs via `systemd-run` as unit `safer-runner-dns`, as the random DNS uid, with `AmbientCapabilities=CAP_NET_BIND_SERVICE` and nothing else (`CapabilityBoundingSet` is the same). It uses `Restart=always`.
   - `StandardOutput=append:/var/log/safer-runner/dns.log` writes to a log that is pre-created root-owned with mode 0644.
   - CoreDNS starts **before** `resolv.conf` is switched to it, so there is no resolution gap. The firewall is unchanged: it is keyed on port 53 and the DNS uid.
+- `/etc/hosts` names are answered locally by the `hosts` plugin, as dnsmasq did. This matters for containers, which resolve through Docker's embedded resolver, and for `dig`.
+  - The names are routed into the allow block's view, and `hosts` (with `fallthrough`) answers them before `forward`.
+  - They can't live in the deny block: in CoreDNS's fixed plugin order, `template` runs before `hosts`.
+  - When `/etc/hosts` lacks the VM's own hostname (AWS-hosted runners), the address it resolved to before setup is added inline. Otherwise every `sudo` warns "unable to resolve host"; that happened under dnsmasq too.
+  - These names are never forwarded. A subdomain of one is still refused.
 - `src/parsers/dns-parser.ts` is about 20 lines.
 - Self-test `dns-exact`: at setup, a random name under an exact entry must get `BLOCK` + NXDOMAIN in enforce, or `WOULD_BLOCK` in analyze.
 - Report: a new **Subdomains of exact entries** section groups the refused names by their exact parent and suggests `add *.parent`.
