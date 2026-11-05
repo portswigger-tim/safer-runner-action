@@ -30,6 +30,7 @@ jobs:
             registry.npmjs.org
             pypi.org
             files.pythonhosted.org
+            .docker.io        # docker.io and all of its subdomains
           # enforce removes sudo and docker access by default (both are root-equivalent):
           # `disable-sudo: false` keeps sudo (makes enforce ADVISORY); `disable-docker: false` keeps docker
       - uses: actions/checkout@v5
@@ -48,8 +49,34 @@ and self-tests, non-proxied packets, DNS refusals, sudo use and the config check
 collapsed **Diagnostics** section. Totals count only traffic that was actually allowed, and
 passthrough hosts (never decrypted) show `n/a` rather than a byte count.
 
-GitHub's own endpoints come from `api.github.com/meta` at runtime (with a static fallback),
-so the runner, `actions/checkout`, artifacts and caches work without configuration.
+GitHub's own endpoints come from `api.github.com/meta` (`.domains.actions`) at runtime, with a
+generated snapshot as the offline fallback, so the runner, `actions/checkout`, artifacts and
+caches work without configuration.
+
+## Allowlist syntax: exact by default (breaking change in v2.0.0-beta.5)
+
+The same patterns drive the proxy **and** DNS, so the two never disagree:
+
+| Entry | Allows | Example |
+|---|---|---|
+| `example.com` | **exactly** `example.com` — not `www.example.com` | `pypi.org` |
+| `*.example.com` | every subdomain, any depth — not `example.com` itself | `*.nip.io` |
+| `.example.com` | shorthand for `example.com` + `*.example.com` | `.docker.io` |
+| `pre*.example.com` | `*` within one label | `productionresultssa*.blob.core.windows.net` |
+
+> [!IMPORTANT]
+> **Breaking change from v2.0.0-beta.1 – beta.4:** a bare entry used to cover all of its
+> subdomains (`docker.io` allowed `registry-1.docker.io`). It now means that name only. To keep
+> the old behaviour for an entry, write it as `.example.com`. In analyze mode, and in enforce
+> when something is refused, the summary's **Subdomains of exact entries** section lists the
+> lookups this affects and suggests the `*.parent` entry to add.
+
+Why: DNS answers for every name under an allowlisted zone used to be forwarded upstream, so
+`<secret>.allowed.example` carried data to whoever runs that zone's name servers. Now a name
+under an exact entry is answered NXDOMAIN **on the runner** and never sent anywhere. Wildcard
+entries (`*.x`, `.x`) remain a DNS channel to that zone **by design** — use them only for zones
+you trust, and prefer exact names. GitHub's own wildcards are the three `api.github.com/meta`
+lists (`*.github.com`, `*.githubapp.com`, `*.actions.githubusercontent.com`).
 
 ## What enforce mode does
 
@@ -60,24 +87,24 @@ so the runner, `actions/checkout`, artifacts and caches work without configurati
 | `--resolve allowed.name:443:<any IP>` | The proxy connects to the real `allowed.name`; the client's IP is ignored |
 | Domain fronting (`Host` ≠ SNI) | HTTP 403 |
 | Plain HTTP | Decided by `Host`; the upstream is the `Host` name, never the client's IP |
-| DNS to any server (`@8.8.8.8`, `@168.63.129.16`, ...) | Answered by the local dnsmasq. Only allowlisted names resolve |
-| An allowlisted name that resolves to an internal address (IMDS `169.254.169.254`, loopback, RFC 1918, CGNAT `100.64/10`, IPv6 ULA / link-local) | Refused. dnsmasq drops such answers (`stop-dns-rebind`) and the proxy resolves every upstream once, refuses internal addresses and connects to the address it checked (no second lookup) |
+| DNS to any server (`@8.8.8.8`, `@168.63.129.16`, ...) | Answered by the local resolver (CoreDNS). Only allowlisted names are forwarded upstream; everything else — including `<anything>.example.com` when only `example.com` is listed — gets NXDOMAIN on the runner |
+| An allowlisted name that resolves to an internal address (IMDS `169.254.169.254`, loopback, RFC 1918, CGNAT `100.64/10`, Azure wireserver, IPv6 ULA / link-local) | Refused by the proxy, which resolves every upstream once, refuses internal addresses (the summary shows which address) and connects to the address it checked (no second lookup) |
 | Any other TCP/UDP port, ICMP, IPv6 | Rejected |
 | A hole in the redirect (proxy bypassed) | Still rejected by the filter (fail closed) |
 
-Every job verifies two things on the live runner before any other step runs: an SNI-level
-block actually fires, and the proxy ignores the client's chosen IP. In enforce mode the job
-fails if either check fails.
+Every job verifies three things on the live runner before any other step runs: an SNI-level
+block actually fires, the proxy ignores the client's chosen IP, and the resolver refuses a
+random name under an exact allowlist entry. In enforce mode the job fails if any check fails.
 
 ## Inputs
 
 | Input | Default | |
 |---|---|---|
 | `mode` | `analyze` | `analyze` or `enforce` |
-| `allowed-domains` | | `example.com` = it and its subdomains; `*.example.com` = subdomains only; `a-*.example.com` = wildcard within one label. Shared namespaces such as `blob.core.windows.net` are refused |
-| `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted). Use only for single-tenant hosts whose clients can't trust the CA. The default is always included |
+| `allowed-domains` | | `example.com` = exactly that name; `*.example.com` = subdomains only; `.example.com` = both; `a-*.example.com` = wildcard within one label (see [Allowlist syntax](#allowlist-syntax-exact-by-default-breaking-change-in-v200-beta5)). Shared namespaces such as `blob.core.windows.net` are refused |
+| `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted), same syntax. Use only for single-tenant hosts whose clients can't trust the CA. The default is always included |
 | `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
-| `primary-dns-server` / `secondary-dns-server` | Quad9 | Upstream resolvers for dnsmasq |
+| `primary-dns-server` / `secondary-dns-server` | Quad9 | Upstream resolvers CoreDNS forwards allowlisted names to |
 | `disable-sudo` | **on in `enforce`**, off in `analyze` | Remove the runner's sudo after setup. In enforce, `disable-sudo: false` keeps sudo and the job is labelled **ADVISORY** (see below) |
 | `sudo-config` | | Custom sudoers rules for the runner user. Keeps sudo in enforce (labelled ADVISORY) unless `disable-sudo: true` is also set |
 | `disable-docker` | **on in `enforce`**, off in `analyze` | Remove the runner from the docker group (root-equivalent). In enforce, `disable-docker: false` keeps docker and the summary warns |
@@ -122,7 +149,7 @@ summary warns that docker was retained. `stop-docker: true` goes further and sto
 Containers on the runner — `services:`, `docker run`, compose, testcontainers, `docker build`
 RUN steps — get the same policy as the host, through the same proxy and DNS filter:
 
-- Their DNS is answered by the action's dnsmasq (denied names: NXDOMAIN), whatever resolver
+- Their DNS is answered by the action's resolver (denied names: NXDOMAIN), whatever resolver
   the container is configured with.
 - Their HTTP/HTTPS (TCP 80/443) goes to the proxy; anything else they send off the runner is
   **rejected** in enforce (logged in analyze). Container ↔ container and container → runner
@@ -149,6 +176,15 @@ RUN steps — get the same policy as the host, through the same proxy and DNS fi
 - **Allowlisted names that resolve to internal addresses are refused.** That includes hosted
   runners with Azure private networking that reach private services by name. Such names
   can't be allowlisted in enforce yet.
+- **Wildcard entries are a DNS channel by design.** `*.example.com` forwards every lookup under
+  it, so whoever runs `example.com`'s name servers sees `<anything>.example.com`. Exact entries
+  aren't. The DNS-refused names in the summary are redacted only in the *Subdomains of exact
+  entries* section; names that aren't under any allowlisted entry are shown in full.
+- **No DNS-rebinding protection for clients outside the proxy.** The resolver returns internal
+  answers as-is; the proxy refuses them for all proxied traffic. A process that dials a
+  loopback, docker-bridge or IMDS address by name gets no more than it could by IP literal
+  (those addresses are reachable directly by design), but a browser-style rebinding attack on a
+  local service inside the job is not prevented.
 - **Allowlisted hosts are full-capability channels.** If `github.com` is allowed, a malicious
   step can push data to a repository it controls. v2 narrows egress to names; it can't judge
   what a request does.

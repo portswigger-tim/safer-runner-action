@@ -1,5 +1,8 @@
 # v2 P1 implementation notes
 
+> **Superseded for DNS:** dnsmasq was replaced by CoreDNS and allowlist entries became exact by
+> default after v2.0.0-beta.4 - see [DNS-COREDNS.md](DNS-COREDNS.md). The dnsmasq notes below are history.
+
 Decisions taken while building P1 where [DESIGN-v2.md](DESIGN-v2.md) was silent or left a
 choice open. Each one is a default, not a final answer; revisit in P2/P3.
 

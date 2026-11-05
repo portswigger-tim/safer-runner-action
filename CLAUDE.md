@@ -3,10 +3,13 @@
 > **v2 branch:** the egress control is now an L7 proxy (mitmproxy) - see
 > [docs/DESIGN-v2.md](docs/DESIGN-v2.md) and [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
 > v2 module map: `src/egress.ts` (setup orchestration, runs in `pre`), `src/proxy.ts`,
+> `src/dns.ts` + `src/config/corefile-builder.ts` (CoreDNS resolver, replaced dnsmasq - see
+> [docs/DNS-COREDNS.md](docs/DNS-COREDNS.md); allowlist entries are EXACT by default),
 > `src/trust.ts`, `src/firewall.ts`, `src/policy.ts`, `src/selftest.ts`, `src/report.ts`;
+> the GitHub list is `src/parsers/github-domains.generated.ts` (`npm run gen:domains`);
 > the addon is `proxy/policy.py` + `proxy/policy_core.py` (`npm test` runs jest + the Python
 > tests). The ipset/IP-allowlist sections below describe v1 and are kept for the shared
-> DNS / sudo / docker / validation layers. Real-runner tests: test repo branch `v2-test`.
+> sudo / docker / validation layers; the dnsmasq sections are v1-only. Real-runner tests: test repo branch `v2-test`.
 
 This guide helps developers understand, maintain, and extend the Safer Runner Action codebase.
 
