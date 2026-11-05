@@ -1,6 +1,6 @@
 # v2 release notes
 
-## v2.0.0-beta.6 (draft)
+## v2.0.0
 
 **Breaking: a smaller input surface.** Workflows that set any of the
 removed inputs must be updated; the action fails setup on an unknown `docker:` value and on a
@@ -9,7 +9,7 @@ longer recognises ("Unexpected input"), but does not fail on them, so check your
 
 ### Migration (old input → new)
 
-| beta.1 – beta.5 | beta.6 |
+| v2 beta | v2.0.0 |
 |---|---|
 | `disable-docker: true` | `docker: remove-group` (what enforce does — can be dropped in enforce) |
 | `disable-docker: false` | `docker: keep` (in enforce the job is now labelled **ADVISORY**) |

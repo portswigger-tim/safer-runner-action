@@ -1,9 +1,8 @@
-# Safer Runner Action — v2 (beta)
+# Safer Runner Action — v2
 
-> **This is v2 — a major rewrite, currently in beta.** It is a new architecture, not an upgrade
-> of v1: pin a v2 version explicitly (there is no moving `@v2` tag). v1 lives on `@v1`
-> (branch `main`). Design: [docs/DESIGN-v2.md](docs/DESIGN-v2.md); decisions:
-> [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
+> **This is v2 — a major rewrite, not an upgrade of v1.** It is a new architecture; pin a v2
+> version explicitly (there is no moving `@v2` tag). v1 remains on `@v1`. Design:
+> [docs/DESIGN-v2.md](docs/DESIGN-v2.md); decisions: [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
 
 Egress control for GitHub-hosted Ubuntu runners, enforced on **hostnames** rather than IP
 addresses. All HTTP and HTTPS from the job is forced through a TLS-terminating proxy
@@ -24,7 +23,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: portswigger-tim/safer-runner-action@v2.0.0-beta.6 # pin an exact version or SHA — v2 has no moving @v2 tag
+      - uses: portswigger-tim/safer-runner-action@v2.0.0 # pin an exact version or SHA — v2 has no moving @v2 tag
         with:
           mode: enforce
           allowed-domains: |
@@ -39,10 +38,10 @@ jobs:
 ```
 
 > [!IMPORTANT]
-> **Inputs changed in v2.0.0-beta.6** (breaking): `docker:` replaces `disable-docker` /
-> `stop-docker`, `dns-servers:` replaces `primary-dns-server` / `secondary-dns-server`, and
-> `sudo-config`, `proxy-port`, `proxy-stream-large-bodies` and `container-tls` are gone. See
-> [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md#v200-beta6-draft) for the old → new mapping.
+> **Upgrading from a v2 beta?** The input surface changed before v2.0.0: `docker:` replaces
+> `disable-docker` / `stop-docker`, `dns-servers:` replaces `primary-dns-server` /
+> `secondary-dns-server`, and `sudo-config`, `proxy-port`, `proxy-stream-large-bodies` and
+> `container-tls` are gone. See [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md#v200) for the old → new mapping.
 
 To work out what a job needs, start with `mode: analyze` (the default). Nothing is blocked.
 The job summary lists every host the job contacted, marks the ones enforce mode would block,
@@ -60,7 +59,7 @@ GitHub's own endpoints come from `api.github.com/meta` (`.domains.actions`) at r
 generated snapshot as the offline fallback, so the runner, `actions/checkout`, artifacts and
 caches work without configuration.
 
-## Allowlist syntax: exact by default (breaking change in v2.0.0-beta.5)
+## Allowlist syntax: exact by default
 
 The same patterns drive the proxy **and** DNS, so the two never disagree:
 
@@ -71,12 +70,11 @@ The same patterns drive the proxy **and** DNS, so the two never disagree:
 | `.example.com` | shorthand for `example.com` + `*.example.com` | `.docker.io` |
 | `pre*.example.com` | `*` within one label | `productionresultssa*.blob.core.windows.net` |
 
-> [!IMPORTANT]
-> **Breaking change from v2.0.0-beta.1 – beta.4:** a bare entry used to cover all of its
-> subdomains (`docker.io` allowed `registry-1.docker.io`). It now means that name only. To keep
-> the old behaviour for an entry, write it as `.example.com`. In analyze mode, and in enforce
-> when something is refused, the summary's **Subdomains of exact entries** section lists the
-> lookups this affects and suggests the `*.parent` entry to add.
+> [!TIP]
+> To allow a name **and** its subdomains, write it as `.example.com` — a bare entry is that name
+> only. In analyze mode, and in enforce when something is refused, the summary's **Subdomains of
+> exact entries** section lists the lookups an exact entry blocks and suggests the `*.parent`
+> entry to add.
 
 Why: DNS answers for every name under an allowlisted zone used to be forwarded upstream, so
 `<secret>.allowed.example` carried data to whoever runs that zone's name servers. Now a name
@@ -108,7 +106,7 @@ random name under an exact allowlist entry. In enforce mode the job fails if any
 | Input | Default | |
 |---|---|---|
 | `mode` | `analyze` | `analyze` or `enforce` |
-| `allowed-domains` | | `example.com` = exactly that name; `*.example.com` = subdomains only; `.example.com` = both; `a-*.example.com` = wildcard within one label (see [Allowlist syntax](#allowlist-syntax-exact-by-default-breaking-change-in-v200-beta5)). Shared namespaces such as `blob.core.windows.net` are refused |
+| `allowed-domains` | | `example.com` = exactly that name; `*.example.com` = subdomains only; `.example.com` = both; `a-*.example.com` = wildcard within one label (see [Allowlist syntax](#allowlist-syntax-exact-by-default)). Shared namespaces such as `blob.core.windows.net` are refused |
 | `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted), same syntax. Use only for single-tenant hosts whose clients can't trust the CA. The default is always included |
 | `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
 | `dns-servers` | `9.9.9.9 149.112.112.112` (Quad9) | Upstream resolvers CoreDNS forwards allowlisted names to: IP addresses, space/comma/newline separated. The first is the primary, the rest are tried in order. Empty = the default |
@@ -177,12 +175,11 @@ RUN steps — get the same policy as the host, through the same proxy and DNS fi
 This action's `pre` step runs as root and installs root-owned binaries, so a tampered release
 of it would own your runner. Treat it like any other privileged dependency.
 
-**Pin it by full commit SHA**, not a tag or branch. Tags can be moved and `@v2` currently
-resolves to the `v2` development branch. Keep the version in a comment so Dependabot or
-Renovate can update it:
+**Pin it by full commit SHA**, not a tag or branch. Tags can be moved, and there is no moving
+`@v2` tag. Keep the version in a comment so Dependabot or Renovate can update it:
 
 ```yaml
-- uses: portswigger-tim/safer-runner-action@<40-char commit SHA> # v2.0.0-beta.N
+- uses: portswigger-tim/safer-runner-action@<40-char commit SHA> # v2.0.0
 ```
 
 **Check the build provenance** of the commit you pin. Releases from the
