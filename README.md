@@ -23,7 +23,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: portswigger-tim/safer-runner-action@v2.0.0-beta.5 # pin an exact version or SHA — v2 has no moving @v2 tag
+      - uses: portswigger-tim/safer-runner-action@v2.0.0-beta.6 # pin an exact version or SHA — v2 has no moving @v2 tag
         with:
           mode: enforce
           allowed-domains: |
@@ -31,11 +31,17 @@ jobs:
             pypi.org
             files.pythonhosted.org
             .docker.io        # docker.io and all of its subdomains
-          # enforce removes sudo and docker access by default (both are root-equivalent):
-          # `disable-sudo: false` keeps sudo (makes enforce ADVISORY); `disable-docker: false` keeps docker
+          # enforce defaults: sudo removed, docker group removed, fail-on-tampering on.
+          # `disable-sudo: false` / `docker: keep` keep them, but make enforce ADVISORY.
       - uses: actions/checkout@v5
       - run: npm ci
 ```
+
+> [!IMPORTANT]
+> **Inputs changed in v2.0.0-beta.6** (breaking): `docker:` replaces `disable-docker` /
+> `stop-docker`, `dns-servers:` replaces `primary-dns-server` / `secondary-dns-server`, and
+> `sudo-config`, `proxy-port`, `proxy-stream-large-bodies` and `container-tls` are gone. See
+> [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md#v200-beta6-draft) for the old → new mapping.
 
 To work out what a job needs, start with `mode: analyze` (the default). Nothing is blocked.
 The job summary lists every host the job contacted, marks the ones enforce mode would block,
@@ -104,15 +110,27 @@ random name under an exact allowlist entry. In enforce mode the job fails if any
 | `allowed-domains` | | `example.com` = exactly that name; `*.example.com` = subdomains only; `.example.com` = both; `a-*.example.com` = wildcard within one label (see [Allowlist syntax](#allowlist-syntax-exact-by-default-breaking-change-in-v200-beta5)). Shared namespaces such as `blob.core.windows.net` are refused |
 | `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted), same syntax. Use only for single-tenant hosts whose clients can't trust the CA. The default is always included |
 | `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
-| `primary-dns-server` / `secondary-dns-server` | Quad9 | Upstream resolvers CoreDNS forwards allowlisted names to |
-| `disable-sudo` | **on in `enforce`**, off in `analyze` | Remove the runner's sudo after setup. In enforce, `disable-sudo: false` keeps sudo and the job is labelled **ADVISORY** (see below) |
-| `sudo-config` | | Custom sudoers rules for the runner user. Keeps sudo in enforce (labelled ADVISORY) unless `disable-sudo: true` is also set |
-| `disable-docker` | **on in `enforce`**, off in `analyze` | Remove the runner from the docker group (root-equivalent). In enforce, `disable-docker: false` keeps docker and the summary warns |
-| `stop-docker` | `false` | Stop and disable the Docker service entirely |
-| `fail-on-tampering` | `false` | Fail the job if the configuration changed during the job (the baseline is stored root-owned, `/etc/safer-runner/validation-state.json`) |
-| `container-tls` | `sni-only` | How HTTPS from containers is checked: `sni-only` = by TLS name, not decrypted, no CA needed in the container (see [Containers](#containers)). `intercept` is not implemented yet and is treated as `sni-only` with a warning |
-| `proxy-port` | free port picked at setup | Loopback port of the proxy for host traffic; containers use `proxy-port + 1` (advanced). Unset, a free pair in 20000–32766 is used, so the proxy never takes a port the job needs |
-| `proxy-stream-large-bodies` | `1m` | Stream rather than buffer bodies above this size (advanced) |
+| `dns-servers` | `9.9.9.9 149.112.112.112` (Quad9) | Upstream resolvers CoreDNS forwards allowlisted names to: IP addresses, space/comma/newline separated. The first is the primary, the rest are tried in order. Empty = the default |
+| `disable-sudo` | **`true` in enforce**, `false` in analyze | Remove the runner's sudo after setup. In enforce, `disable-sudo: false` keeps sudo and the job is labelled **ADVISORY** |
+| `docker` | **`remove-group` in enforce**, `keep` in analyze | `keep`: leave docker alone. `remove-group`: take the runner out of the docker group and lock the socket to root. `stop`: stop and disable the docker daemon. In enforce, `keep` makes the job **ADVISORY**, and a removal that doesn't take effect fails the job |
+| `fail-on-tampering` | **`true` in enforce**, `false` in analyze | Fail the job (post step) if the safer-runner configuration changed during the job. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`) |
+
+An explicit value always wins over the mode's default. The proxy's ports (a free pair in
+20000–32766, picked at setup) and its streaming threshold are internal; HTTPS from containers
+is always checked by name (see [Containers](#containers)).
+
+### How defaults change in enforce
+
+| | `mode: analyze` (default) | `mode: enforce` | Opt out in enforce |
+|---|---|---|---|
+| sudo | kept | **removed** (only the action's read-only checks stay) | `disable-sudo: false` → ADVISORY |
+| docker | `keep` | **`remove-group`**, verified on the runner; fails the job if it doesn't take | `docker: keep` → ADVISORY |
+| `fail-on-tampering` | off (analyze never breaks a build) | **on** | `fail-on-tampering: false` |
+| Traffic off the allowlist | logged, not blocked | blocked | — |
+
+"ADVISORY" means the egress controls were applied but a step could have used root
+(sudo, or docker, which is root-equivalent) to remove them: the run log warns and the job
+summary header reads *"enforce (ADVISORY — sudo/docker retained, not an enforced boundary)"*.
 
 ## CA trust
 
@@ -123,26 +141,22 @@ runner itself) and Docker pulls trust it. The action also exports `NODE_EXTRA_CA
 image. The private key exists only on tmpfs, readable only by the proxy user, and the post
 step deletes it.
 
-## Enforce removes sudo by default (changed in v2.0.0-beta.2)
+## Enforce removes sudo and docker by default
 
 With sudo, any step can stop the proxy and flush the firewall, so enforce is only a boundary
-without it. Since **v2.0.0-beta.2, `mode: enforce` removes the runner's sudo by default**
-(`disable-sudo` unset = on). Only the action's own exact, read-only validation commands and
-its post-step CA teardown stay allowed.
+without it. **`mode: enforce` removes the runner's sudo by default** (since v2.0.0-beta.2). Only
+the action's own exact, read-only validation commands and its post-step CA teardown stay
+allowed. If a job needs sudo after the action, opt out with `disable-sudo: false`: the controls
+are still applied, but the job is **ADVISORY**. In analyze mode, the summary tells you if the
+job used sudo, so you find out before switching to enforce.
 
-If a job needs sudo after the action, opt out explicitly with `disable-sudo: false` (or give
-a `sudo-config`). The controls are still applied, but the job is **ADVISORY**: the run log
-gets a warning and the job summary header reads *"enforce (ADVISORY — sudo retained, not an
-enforced boundary)"*. In analyze mode, the summary tells you if the job used sudo, so you find
-out before switching to enforce.
-
-## Enforce removes docker by default (changed in v2.0.0-beta.3)
-
-Docker group membership is root-equivalent — a step with docker can stop the proxy and flush
-the firewall just like sudo. Since **v2.0.0-beta.3, `mode: enforce` removes the runner from the
-docker group by default** (`disable-docker` unset = on in enforce, off in analyze). If a job
-needs docker, opt out with `disable-docker: false`; the controls are still applied and the job
-summary warns that docker was retained. `stop-docker: true` goes further and stops the daemon.
+Docker group membership is root-equivalent too, so **enforce removes the runner from the
+docker group by default** (`docker: remove-group`). After applying it the action checks what
+the runner can actually do — whether the docker daemon and its socket unit are active, whether
+the runner is still in the docker group, and whether the job's process can still open the
+docker socket — and records that **verified** state in the summary's Diagnostics. If the
+removal didn't take, enforce fails the job rather than run with a reversible boundary. A job
+that needs docker sets `docker: keep` (ADVISORY), and `docker: stop` stops the daemon instead.
 
 ## Containers
 
@@ -154,7 +168,7 @@ RUN steps — get the same policy as the host, through the same proxy and DNS fi
 - Their HTTP/HTTPS (TCP 80/443) goes to the proxy; anything else they send off the runner is
   **rejected** in enforce (logged in analyze). Container ↔ container and container → runner
   traffic is not touched.
-- **HTTPS from containers is checked by name (SNI) by default** (`container-tls: sni-only`): an
+- **HTTPS from containers is checked by name (SNI)**: an
   allowlisted name is passed through without decryption, to the address the proxy resolved,
   so containers need **no CA** and nothing in the image changes. Non-allowlisted names are
   still blocked. Plain HTTP is checked by `Host` as on the host. Multi-tenant front doors
@@ -217,10 +231,9 @@ can send data; these limit what that dependency can reach in the first place:
 
 ## Limitations (read these)
 
-- **`disable-sudo: false` (or `sudo-config`) makes enforce advisory.** Any step with root can
-  remove the proxy and firewall. **Docker group membership is root-equivalent too** and is
-  removed by default in enforce (set `disable-docker: false` to keep it, or `stop-docker: true`
-  to stop the daemon). The summary warns when docker access was kept.
+- **`disable-sudo: false` or `docker: keep` makes enforce advisory.** Any step with root can
+  remove the proxy and firewall, and docker group membership is root-equivalent. Both are
+  removed by default in enforce; the summary labels the job ADVISORY when either was kept.
 - **Allowlisted names that resolve to internal addresses are refused.** That includes hosted
   runners with Azure private networking that reach private services by name. Such names
   can't be allowlisted in enforce yet.
@@ -243,10 +256,10 @@ can send data; these limit what that dependency can reach in the first place:
 - **Only TCP 80/443 is proxied.** In enforce, other ports are rejected, including SSH
   (`git@github.com`).
 - **Containers are a boundary only when docker is removed** (the enforce default). With
-  `disable-docker: false` any step can `docker run --privileged --network host` and leave the
+  `docker: keep` any step can `docker run --privileged --network host` and leave the
   controls behind: the container rules then protect against dependencies running inside
   containers, not against a determined step (the summary warns that docker was retained).
-- **`container-tls: sni-only` trades the Host check for compatibility.** For container HTTPS
+- **Container HTTPS is checked by name only, trading the Host check for compatibility.** For container HTTPS
   the proxy sees only the TLS name, so a container can reach another site served by the same
   front end as an allowlisted name (domain fronting) — the same trade-off as
   `passthrough-domains`. Azure Storage front doors are excluded (intercepted, Host-checked), so
@@ -258,7 +271,7 @@ can send data; these limit what that dependency can reach in the first place:
   and monitors nothing. Run the job on the runner and use `services:` and `docker run` steps.
 - **Docker container actions (`uses: docker://…`, Dockerfile actions) don't run under the
   enforce default**, which removes docker from the runner user (the runner starts them as that
-  user). Use `disable-docker: false` for such jobs (docker is then root-equivalent, see above). The
+  user). Use `docker: keep` for such jobs (docker is then root-equivalent, see above). The
   runner's end-of-job cleanup of service containers also logs a harmless permission warning.
 - **`docker build`**: RUN steps get container-path filtering; allowlisted HTTPS works by
   SNI without a CA. To intercept inside a build, `COPY` or secret-mount the CA yourself.

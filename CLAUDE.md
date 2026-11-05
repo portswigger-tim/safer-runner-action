@@ -10,6 +10,12 @@
 > the addon is `proxy/policy.py` + `proxy/policy_core.py` (`npm test` runs jest + the Python
 > tests). The ipset/IP-allowlist sections below describe v1 and are kept for the shared
 > sudo / docker / validation layers; the dnsmasq sections are v1-only. Real-runner tests: test repo branch `v2-test`.
+> **v2 inputs (beta.6+):** `mode`, `allowed-domains`, `passthrough-domains`,
+> `block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `docker` (keep | remove-group |
+> stop), `fail-on-tampering` - parsed in `src/inputs.ts`. `disable-sudo`, `docker` and
+> `fail-on-tampering` are mode-aware (no action.yaml default; unset = the enforce-safe value in
+> enforce). `sudo-config`, `disable-docker`, `stop-docker`, `*-dns-server`, `proxy-*` and
+> `container-tls` are v1/early-beta only; sections below that mention them describe v1.
 
 This guide helps developers understand, maintain, and extend the Safer Runner Action codebase.
 
