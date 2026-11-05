@@ -442,6 +442,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
+const flowlog_1 = __nccwpck_require__(5422);
 const firewall_1 = __nccwpck_require__(8094);
 const policy_1 = __nccwpck_require__(2224);
 const proxy_1 = __nccwpck_require__(3828);
@@ -556,7 +557,10 @@ async function runSetup(inputs) {
         await (0, firewall_1.logFirewall)();
     });
     // 8. Prove it on this runner
+    const selfTestFrom = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
     const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode));
+    await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
+    const selfTestWindow = [selfTestFrom, (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG)];
     await exec.exec('sudo', ['tee', constants_1.SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
     await exec.exec('sudo', ['chmod', '0644', constants_1.SELFTEST_FILE]);
     const failed = results.filter(r => !r.ok);
@@ -567,7 +571,7 @@ async function runSetup(inputs) {
         core.warning(msg);
     }
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
-        input: Buffer.from(JSON.stringify({ mode, sudoRetained, dockerRetained, at: new Date().toISOString() }) + '\n'),
+        input: Buffer.from(JSON.stringify({ mode, sudoRetained, dockerRetained, selfTestWindow, at: new Date().toISOString() }) + '\n'),
         silent: true
     });
     // 9. Privilege layer (carried from v1). Docker first: it needs sudo.
@@ -883,6 +887,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseFlowLog = parseFlowLog;
+exports.parseFlowLogWithOffsets = parseFlowLogWithOffsets;
 exports.readFlowLog = readFlowLog;
 exports.flowLogSize = flowLogSize;
 exports.ipOf = ipOf;
@@ -900,6 +905,26 @@ function parseFlowLog(text) {
         }
     }
     return out;
+}
+/** Records plus the byte offset each one starts at (to tell which phase of the job wrote it). */
+function parseFlowLogWithOffsets(text) {
+    const records = [];
+    const offsets = [];
+    let at = 0;
+    for (const line of text.split('\n')) {
+        const start = at;
+        at += Buffer.byteLength(line, 'utf8') + 1;
+        if (!line.trim())
+            continue;
+        try {
+            records.push(JSON.parse(line));
+            offsets.push(start);
+        }
+        catch {
+            // a partially written last line
+        }
+    }
+    return { records, offsets };
 }
 function readFlowLog(file, fromByte = 0) {
     if (!fs.existsSync(file))
@@ -1263,6 +1288,7 @@ exports.parseSudoLogLine = parseSudoLogLine;
 exports.deduplicateSudoCommands = deduplicateSudoCommands;
 exports.parseSudoLogsFromString = parseSudoLogsFromString;
 exports.filterInternalSudoCommands = filterInternalSudoCommands;
+exports.classifySudoCommands = classifySudoCommands;
 exports.isDangerousSudoCommand = isDangerousSudoCommand;
 exports.generateSudoersConfig = generateSudoersConfig;
 /**
@@ -1415,14 +1441,35 @@ function filterInternalSudoCommands(commands, internalCommands) {
         if (cmd.denied) {
             return true;
         }
-        // Only system binaries are treated as internal - a same-named binary elsewhere is still reported
-        const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
-        if (!match) {
-            return true;
-        }
-        const key = cmd.args ? `${match[1]} ${cmd.args}` : match[1];
-        return !internal.has(key);
+        return !isInternal(cmd, internal);
     });
+}
+/**
+ * Whether a (successful) command is one of the action's own. System binaries match by
+ * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
+ * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
+ */
+function isInternal(cmd, internal) {
+    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
+    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+    if (match) {
+        return internal.has(withArgs(match[1]));
+    }
+    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
+}
+/** Split parsed sudo log entries by who ran them and whether they were allowed. */
+function classifySudoCommands(commands, internalCommands) {
+    const internal = new Set(internalCommands);
+    const usage = { ran: [], refused: [], internal: [] };
+    for (const cmd of commands) {
+        if (cmd.denied)
+            usage.refused.push(cmd);
+        else if (isInternal(cmd, internal))
+            usage.internal.push(cmd);
+        else
+            usage.ran.push(cmd);
+    }
+    return usage;
 }
 /**
  * Convert sudo commands to sudoers config format
@@ -2170,14 +2217,17 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.REPOINT_HOST = void 0;
 exports.sniBlockSelfTest = sniBlockSelfTest;
 exports.repointSelfTest = repointSelfTest;
 exports.runSelfTests = runSelfTests;
+exports.isSelfTestRecord = isSelfTestRecord;
+exports.withoutSelfTests = withoutSelfTests;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const constants_1 = __nccwpck_require__(8729);
 const flowlog_1 = __nccwpck_require__(5422);
-const REPOINT_HOST = 'github.com';
+exports.REPOINT_HOST = 'github.com';
 async function curl(args) {
     const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
         ignoreReturnCode: true,
@@ -2211,8 +2261,8 @@ async function sniBlockSelfTest(mode) {
 }
 async function repointSelfTest() {
     const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
-    const r = await curl(['--resolve', `${REPOINT_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`, `https://${REPOINT_HOST}/robots.txt`]);
-    const rec = await waitFor(from, x => (x.ev === 'https' || x.ev === 'http') && x.host === REPOINT_HOST && (0, flowlog_1.ipOf)(x.dst) === constants_1.SELFTEST_BOGUS_IP);
+    const r = await curl(['--resolve', `${exports.REPOINT_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`, `https://${exports.REPOINT_HOST}/robots.txt`]);
+    const rec = await waitFor(from, x => (x.ev === 'https' || x.ev === 'http') && x.host === exports.REPOINT_HOST && (0, flowlog_1.ipOf)(x.dst) === constants_1.SELFTEST_BOGUS_IP);
     const upstream = (0, flowlog_1.ipOf)(rec?.upstream);
     const ok = r.out === '200' && rec !== null && upstream !== '' && upstream !== constants_1.SELFTEST_BOGUS_IP;
     return {
@@ -2229,6 +2279,27 @@ async function runSelfTests(mode) {
         (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
     }
     return results;
+}
+/** The decision records the two probes above produce. */
+function isSelfTestRecord(r) {
+    if (r.sni === constants_1.SELFTEST_HOST || r.host === constants_1.SELFTEST_HOST)
+        return true;
+    return (0, flowlog_1.ipOf)(r.dst) === constants_1.SELFTEST_BOGUS_IP && (r.sni === exports.REPOINT_HOST || r.host === exports.REPOINT_HOST);
+}
+/**
+ * Flow records without the action's own self-test probes, so the report doesn't list them as
+ * the job's traffic. Only records inside the self-test window (written before any job step
+ * ran) are dropped - otherwise a step could hide traffic by dialling 192.0.2.1. Without a
+ * window only the `.invalid` probe name is dropped: it never resolves and carries nothing.
+ */
+function withoutSelfTests(records, offsets, window) {
+    return records.filter((r, i) => {
+        if (!isSelfTestRecord(r))
+            return true;
+        if (!window)
+            return !(r.sni === constants_1.SELFTEST_HOST || r.host === constants_1.SELFTEST_HOST);
+        return !(offsets[i] >= window[0] && offsets[i] < window[1]);
+    });
 }
 
 
@@ -2485,6 +2556,7 @@ exports.getRequiredSudoCommands = getRequiredSudoCommands;
 exports.applyCustomSudoConfig = applyCustomSudoConfig;
 exports.disableSudoForRunner = disableSudoForRunner;
 exports.parseSudoLogs = parseSudoLogs;
+exports.readSudoUsage = readSudoUsage;
 exports.generateSudoSummarySection = generateSudoSummarySection;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
@@ -2744,6 +2816,21 @@ function parseSudoLogs(logFile) {
         core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
         return [];
     }
+}
+/**
+ * Read the sudo log and split it into the workflow's own commands, refused attempts and the
+ * action's own commands (so the report never counts the action's sudo as the workflow's).
+ */
+function readSudoUsage(logFile) {
+    try {
+        if (fs.existsSync(logFile)) {
+            return (0, sudo_parser_1.classifySudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), exports.INTERNAL_SUDO_COMMANDS);
+        }
+    }
+    catch (error) {
+        core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+    }
+    return { ran: [], refused: [], internal: [] };
 }
 /**
  * Generate a job summary section for sudo commands
@@ -3250,9 +3337,16 @@ class SystemValidator {
      * Generate detailed validation report
      */
     async generateValidationReport() {
+        const { status, body } = await this.generateValidationDetails();
+        // Wrap in collapsible section with warning emoji if tampering detected
+        const titleEmoji = status === 'tampered' ? '⚠️ ' : '';
+        return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${body}</details>\n\n`;
+    }
+    /** The checksum tables and an overall result, for embedding in the job summary. */
+    async generateValidationDetails() {
         const baseline = await this.readBaseline();
         if (baseline === null) {
-            return '<details>\n<summary><h2>Config File Tamper Detection</h2></summary>\n\nNo validation data available.\n\n</details>\n\n';
+            return { status: 'unavailable', body: 'No validation data available.\n\n' };
         }
         // Check if tampering occurred to add warning emoji
         let tamperingDetected = false;
@@ -3262,7 +3356,7 @@ class SystemValidator {
             reportContent += `**Baseline:** ${state.timestamp}\n`;
             reportContent += `**Verified:** ${new Date().toISOString()}\n\n`;
             // File integrity report
-            reportContent += '### Configuration Files\n\n';
+            reportContent += '**Configuration Files**\n\n';
             reportContent += '| File | Status | Checksum Comparison |\n';
             reportContent += '|------|--------|--------------------|\n';
             for (const file of state.files) {
@@ -3286,7 +3380,7 @@ class SystemValidator {
                 reportContent += `| ${file.path} | ${status} | ${displayChecksum} |\n`;
             }
             // iptables integrity report
-            reportContent += '\n### Firewall Rules\n\n';
+            reportContent += '\n**Firewall Rules**\n\n';
             reportContent += '| Chain | Status | Checksum Comparison |\n';
             reportContent += '|-------|--------|--------------|\n';
             const currentIptablesState = await this.getCurrentIptablesState();
@@ -3316,9 +3410,7 @@ class SystemValidator {
             reportContent += `Failed to generate report: ${error}\n`;
             tamperingDetected = true;
         }
-        // Wrap in collapsible section with warning emoji if tampering detected
-        const titleEmoji = tamperingDetected ? '⚠️ ' : '';
-        return `<details>\n<summary><h2>${titleEmoji}Config File Tamper Detection</h2></summary>\n\n${reportContent}</details>\n\n`;
+        return { status: tamperingDetected ? 'tampered' : 'verified', body: reportContent };
     }
 }
 exports.SystemValidator = SystemValidator;
