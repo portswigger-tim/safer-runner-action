@@ -3,9 +3,10 @@
  * every later action's pre-hook too, review H2), or in the main step if pre did not run.
  *
  * Order (each step depends on the previous):
- *   allowlist (api.github.com/meta, before DNS changes) -> install (dnsmasq + pinned mitmdump,
- *   in parallel) -> users -> addon + policy + CA -> start proxy (waits for the addon's own
- *   self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS -> dockerd restart so it
+ *   allowlist (api.github.com/meta, before DNS changes) -> install (pinned CoreDNS + pinned
+ *   mitmdump + conntrack, in parallel) -> users -> addon + policy + CA -> start proxy (waits for
+ *   the addon's own self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS (CoreDNS up
+ *   first, then resolv.conf points at it) -> dockerd restart so it
  *   trusts the CA (F1) -> firewall (nat REDIRECT + filter, plus the container DNAT /
  *   DOCKER-USER rules when docker runs) -> kill pre-existing :443 and container flows ->
  *   live self-tests -> docker access -> sudo logging -> integrity baseline -> sudo
@@ -16,7 +17,6 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import {
-  DNS_LOG,
   FIREWALL_LOG,
   FLOW_LOG,
   DOCKER_DAEMON_JSON,
@@ -36,7 +36,7 @@ import {
   logFirewall
 } from './firewall';
 import type { Inputs } from './inputs';
-import { buildPolicyConfig, dnsDomainsFor } from './policy';
+import { buildPolicyConfig } from './policy';
 import {
   allocateProxyPorts,
   createProxyUser,
@@ -47,15 +47,15 @@ import {
   startProxy,
   writePolicy
 } from './proxy';
-import { runSelfTests } from './selftest';
+import { dnsProbeName, runSelfTests } from './selftest';
 import {
   createLogDirectory,
   createRandomDNSUser,
-  restartServices,
+  restartResolved,
   setupDNSConfig,
-  setupDNSMasq,
   setupIptablesLogging
 } from './setup';
+import { installCoreDns, startCoreDns, writeCorefile } from './dns';
 import { resolveGitHubDomains } from './parsers/github-parser';
 import {
   applyCustomSudoConfig,
@@ -77,6 +77,9 @@ import { CRITICAL_FILES, SystemValidator } from './validation';
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 export const SETUP_MARKER = '/etc/safer-runner/setup-complete';
 
+/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
+const DNS_READY_NAME = 'github.com';
+
 export function setupCompleted(): boolean {
   return fs.existsSync(SETUP_MARKER);
 }
@@ -90,12 +93,14 @@ async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Install dnsmasq, only refreshing the apt index if a plain install fails (saves ~10s). */
-export async function installDnsmasq(): Promise<void> {
+/**
+ * apt packages: conntrack only (flushes container flows that predate the container rules; not
+ * on the image). Only refreshes the apt index if a plain install fails (saves ~10s).
+ */
+export async function installPackages(): Promise<void> {
   const opts = { ignoreReturnCode: true };
   const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } as { [key: string]: string };
-  // conntrack: flushes container flows that predate the container rules (not on the image)
-  const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'dnsmasq', 'conntrack'];
+  const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'conntrack'];
   if ((await exec.exec('sudo', ['-E', ...install], { ...opts, env })) === 0) return;
   await exec.exec('sudo', ['apt-get', 'update', '-qq']);
   await exec.exec('sudo', ['-E', ...install], { env });
@@ -180,14 +185,18 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     `Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`
   );
 
+  const dnsServers = [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean);
+
   // 2. Install (parallel - both are network-bound)
-  await timed('Install dnsmasq + mitmproxy', () => Promise.all([installDnsmasq(), installMitmproxy()]));
+  await timed('Install CoreDNS + mitmproxy', () =>
+    Promise.all([installPackages(), installCoreDns(), installMitmproxy()])
+  );
 
   // 3. Users, addon, policy, CA
   await createLogDirectory();
   const dnsUser = await createRandomDNSUser();
   const proxyUid = await createProxyUser();
-  core.info(`dnsmasq user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
+  core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
   await installAddon();
   await writePolicy(policy);
   await generateCa();
@@ -210,18 +219,16 @@ export async function runSetup(inputs: Inputs): Promise<void> {
 
   // 6. DNS
   await timed('Configure DNS', async () => {
-    await setupDNSConfig();
-    await setupDNSMasq(
+    // same names as the proxy: DNS and the proxy can never disagree about what is allowed
+    await writeCorefile({
       mode,
-      '',
-      inputs.blockRiskySubdomains,
-      dnsUser.username,
-      DNS_LOG,
-      inputs.primaryDnsServer,
-      inputs.secondaryDnsServer,
-      dnsDomainsFor([...policy.allow, ...policy.passthrough])
-    );
-    await restartServices(DNS_LOG);
+      allow: [...policy.allow, ...policy.passthrough],
+      deny: policy.deny,
+      upstreams: dnsServers
+    });
+    await startCoreDns(dnsUser.username, DNS_READY_NAME);
+    await setupDNSConfig();
+    await restartResolved();
   });
 
   // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
@@ -247,7 +254,7 @@ export async function runSetup(inputs: Inputs): Promise<void> {
       proxyPort: ports.port,
       containerProxyPort: ports.containerPort,
       containers: dockerActive,
-      dnsServers: [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean)
+      dnsServers
     });
     await killPreexistingConnections();
     if (dockerActive) await flushContainerConntrack();
@@ -256,7 +263,8 @@ export async function runSetup(inputs: Inputs): Promise<void> {
 
   // 9. Prove it on this runner
   const selfTestFrom = flowLogSize(FLOW_LOG);
-  const results = await timed('Self-tests', () => runSelfTests(mode));
+  const dnsSelfTestName = dnsProbeName([...policy.allow, ...policy.passthrough]);
+  const results = await timed('Self-tests', () => runSelfTests(mode, dnsSelfTestName));
   await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
   const selfTestWindow = [selfTestFrom, flowLogSize(FLOW_LOG)];
   await exec.exec('sudo', ['tee', SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
@@ -278,6 +286,7 @@ export async function runSetup(inputs: Inputs): Promise<void> {
         containerRules: dockerActive,
         proxyPorts: [ports.port, ports.containerPort],
         selfTestWindow,
+        dnsSelfTestName,
         at: new Date().toISOString()
       }) + '\n'
     ),

@@ -2,7 +2,7 @@
  * System Integrity Validation for Safer Runner Action
  *
  * This module provides SHA256 checksum-based validation to ensure that critical
- * security configurations (dnsmasq.conf, resolv.conf, iptables rules) are not
+ * security configurations (Corefile, resolv.conf, iptables rules) are not
  * tampered with between setup completion and action end.
  *
  * Validation Flow:
@@ -66,7 +66,7 @@ export function iptablesListArgs(spec: string): string[] {
  * The sudo logging config file is appended at runtime (it depends on the sudo implementation)
  */
 export const CRITICAL_FILES = [
-  '/etc/dnsmasq.conf',
+  '/etc/safer-runner/Corefile',
   '/etc/resolv.conf',
   '/etc/systemd/resolved.conf.d/no-stub.conf',
   '/etc/safer-runner/policy.json',
@@ -232,7 +232,7 @@ export class SystemValidator {
 
   /**
    * Calculate SHA256 checksum of a file
-   * Uses sudo to read files with restricted permissions (e.g., dnsmasq.conf with mode 600)
+   * Uses sudo to read files with restricted permissions (e.g. 0600 root-owned config)
    */
   protected async calculateFileChecksum(filePath: string): Promise<string | null> {
     try {

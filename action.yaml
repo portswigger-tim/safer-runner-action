@@ -15,8 +15,9 @@ inputs:
     default: 'analyze'
   allowed-domains:
     description: >-
-      Hostnames to allow in addition to GitHub's own (space/comma/newline separated).
-      `example.com` allows it and its subdomains; `*.example.com` subdomains only;
+      Hostnames to allow in addition to GitHub's own (space/comma/newline separated), for both
+      the proxy and DNS. `example.com` allows exactly that name (NOT its subdomains - changed in
+      v2.0.0-beta.5); `*.example.com` its subdomains only; `.example.com` both;
       `a-*.example.com` matches within one label. Shared multi-tenant suffixes (e.g.
       blob.core.windows.net) are refused.
     required: false
@@ -30,11 +31,11 @@ inputs:
     required: false
     default: 'hosted-compute-*.githubapp.com'
   block-risky-github-subdomains:
-    description: 'Deny gist.github.com, gist.githubusercontent.com and raw.githubusercontent.com even though github.com is allowed.'
+    description: 'Deny gist.github.com, gist.githubusercontent.com and raw.githubusercontent.com even though *.github.com is allowed.'
     required: false
     default: 'true'
   primary-dns-server:
-    description: 'Upstream DNS server dnsmasq forwards to (defaults to Quad9).'
+    description: 'Upstream DNS server the resolver (CoreDNS) forwards allowlisted names to (defaults to Quad9).'
     required: false
     default: '9.9.9.9'
   secondary-dns-server:

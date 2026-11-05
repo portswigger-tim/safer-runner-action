@@ -121,7 +121,7 @@ describe('sudo module', () => {
         'runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION'
       ]);
       expect(getValidationSudoCommands()).toEqual([
-        '/usr/bin/cat /etc/dnsmasq.conf',
+        '/usr/bin/cat /etc/safer-runner/Corefile',
         '/usr/bin/cat /etc/resolv.conf',
         '/usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf',
         '/usr/bin/cat /etc/safer-runner/policy.json',
@@ -146,7 +146,7 @@ describe('sudo module', () => {
 
     it('allows every command post-action validation runs', () => {
       for (const file of [
-        '/etc/dnsmasq.conf',
+        '/etc/safer-runner/Corefile',
         '/etc/resolv.conf',
         '/etc/systemd/resolved.conf.d/no-stub.conf',
         SUDO_LOGGING_SUDOERS_FILE,
@@ -382,7 +382,7 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
       fs.writeFileSync(
         log,
         [
-          `Nov  4 19:17:12 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/cat /etc/dnsmasq.conf`,
+          `Nov  4 19:17:12 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/cat /etc/safer-runner/Corefile`,
           `Nov  4 19:17:13 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner`,
           `Nov  4 19:17:35 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/true`,
           `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/journalctl -u safer-runner-proxy --no-pager`,

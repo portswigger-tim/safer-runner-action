@@ -1,182 +1,119 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 1877:
+/***/ 6100:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 /**
- * DNS Configuration Builder for DNSmasq
+ * Corefile builder for the CoreDNS resolver (replaces dnsmasq). Pure functions, no I/O.
  *
- * Builds DNSmasq configuration strings based on mode (analyze/enforce),
- * allowed domains, and security settings. This module contains pure functions
- * for testability - it doesn't execute any commands or have side effects.
+ * enforce: one server block selected by a `view` expression that mirrors the proxy's pattern
+ * set exactly (src/policy.ts compilePattern / proxy/policy_core.py compile_pattern; all three
+ * are checked against proxy/test-vectors.json), forwarding to the upstreams; and a catch-all
+ * block that answers NXDOMAIN locally. So a subdomain of an exact entry
+ * (`<secret>.example.com`) is refused on the host and never forwarded: default-deny, fail
+ * closed (a view that matches nothing denies; a Corefile that doesn't parse means nothing
+ * listens on :53).
+ *
+ * analyze: both blocks forward. The second one labels what enforce would refuse.
+ *
+ * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
+ * format, so the report parser never has to infer a verdict (src/parsers/dns-parser.ts).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DEFAULT_CACHE_SIZE = exports.SECONDARY_DNS_SERVER = exports.DEFAULT_DNS_SERVER = exports.RISKY_GITHUB_SUBDOMAINS = void 0;
-exports.parseAllowedDomains = parseAllowedDomains;
-exports.buildDnsConfig = buildDnsConfig;
-exports.getRiskySubdomains = getRiskySubdomains;
-const github_parser_1 = __nccwpck_require__(9170);
-/**
- * Risky GitHub subdomains that can be used for malicious payloads
- * These are blocked in enforce mode when block-risky-github-subdomains is enabled
- */
-exports.RISKY_GITHUB_SUBDOMAINS = [
-    'gist.github.com', // Gist web interface
-    'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
-    'raw.githubusercontent.com' // Common vector for serving malicious raw file content
-];
-/**
- * Default DNS server (Quad9 primary - 98% malware blocking)
- */
-exports.DEFAULT_DNS_SERVER = '9.9.9.9';
-/**
- * Secondary DNS server (Quad9 secondary - failover redundancy)
- */
-exports.SECONDARY_DNS_SERVER = '149.112.112.112';
-/**
- * Default cache size for DNSMasq
- * 1000 entries provides good performance for typical GitHub Actions workflows
- * while using minimal memory (~100KB). DNSMasq default is only 150.
- */
-exports.DEFAULT_CACHE_SIZE = 1000;
-/**
- * Parse user-provided allowed domains from input string
- * Supports both space-separated and newline-separated formats
- *
- * @param allowedDomains - Raw domain list string
- * @returns Array of trimmed, non-empty domains
- */
-function parseAllowedDomains(allowedDomains) {
-    if (!allowedDomains) {
-        return [];
-    }
-    // Split on spaces, newlines, commas, and filter empty strings
-    return allowedDomains
-        .split(/[\s\n,]+/)
-        .map(d => d.trim())
-        .filter(d => d.length > 0);
+exports.CACHE_TTL = exports.DNS_LISTEN = void 0;
+exports.patternsExpr = patternsExpr;
+exports.allowExpr = allowExpr;
+exports.buildCorefile = buildCorefile;
+const policy_1 = __nccwpck_require__(2224);
+exports.DNS_LISTEN = '127.0.0.1';
+/** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
+exports.CACHE_TTL = 3600;
+const LOG_ALLOW = '{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}';
+const logLine = (label) => `{remote} ${label} {type} {name} {rcode} upstream={/forward/upstream} {duration}`;
+/** expr string literal for a DNS name (CoreDNS's name() is lower-case and fully qualified). */
+function lit(s, allowed = /^[a-z0-9_.-]+$/) {
+    // validatePattern restricts the charset to [a-z0-9_*.-]; refuse anything that could break
+    // out of the quoted literal (a quote, a backslash, whitespace), whatever the caller passed
+    if (!allowed.test(s))
+        throw new Error(`unsafe DNS name for the Corefile: '${s}'`);
+    return `'${s}'`;
+}
+function regexFor(globPattern) {
+    const body = globPattern
+        .split('*')
+        .map(part => part.replace(/\./g, '[.]'))
+        .join('[a-z0-9_-]*');
+    return `^${body}[.]$`;
 }
 /**
- * Build DNSmasq configuration string
- *
- * @param options - Configuration options
- * @returns DNSmasq configuration and list of blocked subdomains
+ * The expr clause for a set of patterns: exact names batched into one `in [...]`, `*.x` as
+ * `endsWith '.x.'`, a single-label glob as an anchored regex.
  */
-function buildDnsConfig(options) {
-    const { mode, allowedDomains, blockRiskySubdomains, primaryDnsServer = exports.DEFAULT_DNS_SERVER, secondaryDnsServer = exports.SECONDARY_DNS_SERVER, dnsUsername, logFile, cacheSize = exports.DEFAULT_CACHE_SIZE, ipsets = true } = options;
-    let config = `# Enable query logging for summary generation
-log-queries=extra
-
-# Configure DNS cache for improved performance
-cache-size=${cacheSize}
-
-# Serve stale cache entries if upstream DNS fails (resilience for CI/CD)
-# Limited to 1 hour staleness for safety (balances freshness with resilience)
-use-stale-cache
-max-cache-ttl=3600
-
-`;
-    // Configure log facility if provided (separate log file)
-    if (logFile) {
-        config += `# Log to dedicated file for clear pre/main separation
-log-facility=${logFile}
-
-`;
-    }
-    // Configure user for privilege separation if provided
-    if (dnsUsername) {
-        config += `# Run as isolated user for privilege separation
-user=${dnsUsername}
-
-`;
-    }
-    // Listen only where resolv.conf points. The default wildcard bind fails with
-    // "Address already in use" if anything else holds port 53 on any local address
-    // (e.g. systemd-resolved on 127.0.0.53 or a resolver on 127.0.0.100 on some runner VMs)
-    config += `# Bind only to the loopback address used by /etc/resolv.conf
-bind-interfaces
-listen-address=127.0.0.1
-
-`;
-    // Explicitly disable DHCP functionality (defense in depth)
-    config += `# Disable DHCP - we only use DNS functionality
-# This prevents DHCP address conflict detection via ICMP
-no-dhcp-interface=*
-
-`;
-    // Enable all-servers for lower latency and better resilience
-    if (secondaryDnsServer) {
-        config += `# Query all upstream DNS servers simultaneously for best performance
-# Returns whichever server responds first (lower latency, better resilience)
-all-servers
-
-`;
-    }
-    // Configure DNS policy based on mode
-    if (mode === 'enforce') {
-        // Drop upstream answers in loopback / RFC 1918 / link-local (incl. IMDS) / ULA space, so an
-        // allowlisted name an attacker controls can't point at internal hosts (review H1). The
-        // Azure IMDS / wireserver are reached by IP, never by name, so they are unaffected.
-        // CGNAT (100.64/10) is not covered here; the proxy's upstream IP guard refuses it.
-        config += `# DNS-rebind protection: never hand out private/loopback/link-local addresses
-stop-dns-rebind
-
-`;
-        // NXDOMAIN all unlisted DNS (default deny)
-        config += 'server=\n';
-    }
-    else {
-        // Analyze mode: allow all DNS queries with primary and secondary servers for redundancy
-        config += `server=${primaryDnsServer}\n`;
-        if (secondaryDnsServer) {
-            config += `server=${secondaryDnsServer}\n`;
+function patternsExpr(patterns) {
+    const exact = [];
+    const terms = [];
+    for (const raw of patterns) {
+        const p = (0, policy_1.validatePattern)(raw);
+        if (p.startsWith('*.')) {
+            terms.push(`name() endsWith ${lit('.' + p.slice(2) + '.')}`);
+        }
+        else if (p.includes('*')) {
+            terms.push(`name() matches ${lit(regexFor(p), /^\^[a-z0-9_.\[\]*-]+\$$/)}`);
+        }
+        else {
+            exact.push(lit(p + '.'));
         }
     }
-    // Track which subdomains we actually blocked
-    const blockedSubdomains = [];
-    // Block risky GitHub subdomains in enforce mode (if enabled)
-    if (mode === 'enforce' && blockRiskySubdomains) {
-        for (const subdomain of exports.RISKY_GITHUB_SUBDOMAINS) {
-            // address directive without IP returns NXDOMAIN (blocks the domain)
-            // This MUST come BEFORE the parent domain server directive
-            config += `address=/${subdomain}/\n`;
-            blockedSubdomains.push(subdomain);
-        }
-    }
-    // Add GitHub required domains (runtime-resolved list if provided, else static)
-    const githubDomains = options.githubDomains ?? (0, github_parser_1.getGitHubRequiredDomains)();
-    for (const domain of githubDomains) {
-        // Skip domains that are in the risky subdomain blocklist
-        if (mode === 'enforce' && exports.RISKY_GITHUB_SUBDOMAINS.includes(domain)) {
-            continue;
-        }
-        config += `server=/${domain}/${primaryDnsServer}\n`;
-        if (secondaryDnsServer) {
-            config += `server=/${domain}/${secondaryDnsServer}\n`;
-        }
-        if (ipsets)
-            config += `ipset=/${domain}/github\n`;
-    }
-    // Add custom allowed domains if provided
-    const userDomains = parseAllowedDomains(allowedDomains);
-    for (const domain of userDomains) {
-        config += `server=/${domain}/${primaryDnsServer}\n`;
-        if (secondaryDnsServer) {
-            config += `server=/${domain}/${secondaryDnsServer}\n`;
-        }
-        if (ipsets)
-            config += `ipset=/${domain}/user\n`;
-    }
-    return { config, blockedSubdomains };
+    if (exact.length)
+        terms.unshift(`name() in [${Array.from(new Set(exact)).join(', ')}]`);
+    return terms.length ? terms.join(' || ') : 'false';
 }
-/**
- * Get risky subdomain list (for logging/reporting)
- */
-function getRiskySubdomains() {
-    return exports.RISKY_GITHUB_SUBDOMAINS;
+/** The full `view` expression: allowed and not denied. */
+function allowExpr(allow, deny) {
+    const a = `(${patternsExpr(allow)})`;
+    return deny.length ? `${a} && !(${patternsExpr(deny)})` : a;
+}
+function forwardBlock(label, upstreams, view) {
+    return [
+        `.:53 {`,
+        `  bind ${exports.DNS_LISTEN}`,
+        ...(view ? [`  view allow {`, `    expr ${view}`, `  }`] : []),
+        `  metadata`,
+        `  log . "${label === 'ALLOW' ? LOG_ALLOW : logLine(label)}"`,
+        `  errors`,
+        `  cache ${exports.CACHE_TTL} {`,
+        `    serve_stale 1h`,
+        `  }`,
+        `  forward . ${upstreams.join(' ')}`,
+        `}`
+    ].join('\n');
+}
+function buildCorefile(o) {
+    if (!o.upstreams.length)
+        throw new Error('no upstream DNS servers');
+    for (const u of o.upstreams) {
+        if (!/^[0-9a-f.:]+$/i.test(u))
+            throw new Error(`invalid upstream DNS server: '${u}'`);
+    }
+    const view = allowExpr(o.allow, o.deny);
+    const header = `# safer-runner CoreDNS resolver (${o.mode}). Generated - do not edit.\n` +
+        '# Blocks are tried in order: the first whose view matches answers the query.\n';
+    const deny = o.mode === 'enforce'
+        ? [
+            `.:53 {`,
+            `  bind ${exports.DNS_LISTEN}`,
+            `  log . "{remote} BLOCK {type} {name} {rcode}"`,
+            `  errors`,
+            `  template ANY ANY {`,
+            `    rcode NXDOMAIN`,
+            `  }`,
+            `}`
+        ].join('\n')
+        : forwardBlock('WOULD_BLOCK', o.upstreams);
+    return `${header}${forwardBlock('ALLOW', o.upstreams, view)}\n${deny}\n`;
 }
 
 
@@ -191,12 +128,21 @@ function getRiskySubdomains() {
  * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.POLICY_FILE = exports.ETC_DIR = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
 exports.MITMPROXY_VERSION = '12.3.1';
 exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
 /** sha256 of the tarball above (verified before anything is extracted). */
 exports.MITMPROXY_SHA256 = 'f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5';
+/**
+ * CoreDNS is the resolver (replaced dnsmasq): stock upstream release, sha256-pinned. It is
+ * not in the Ubuntu 24.04/26.04 archives. amd64 only, like mitmproxy above.
+ */
+exports.COREDNS_VERSION = '1.15.0';
+exports.COREDNS_URL = `https://github.com/coredns/coredns/releases/download/v${exports.COREDNS_VERSION}/coredns_${exports.COREDNS_VERSION}_linux_amd64.tgz`;
+/** sha256 of the tarball above (matches upstream's published .sha256). */
+exports.COREDNS_SHA256 = '2495c5b8f3fab6d0a336c397f1227b75406d86e6ec7125744a29df9e936ab8cd';
+exports.DNS_UNIT = 'safer-runner-dns';
 /** Dedicated system user the proxy runs as. Its UID is exempt from the REDIRECT. */
 exports.PROXY_USER = 'safer-runner-proxy';
 exports.PROXY_UNIT = 'safer-runner-proxy';
@@ -207,9 +153,12 @@ exports.MITMDUMP_BIN = `${exports.INSTALL_DIR}/bin/mitmdump`;
 exports.ADDON_DIR = `${exports.INSTALL_DIR}/proxy`;
 exports.ADDON_FILES = ['policy.py', 'policy_core.py'];
 exports.TEARDOWN_BIN = `${exports.INSTALL_DIR}/bin/teardown`;
+exports.COREDNS_BIN = `${exports.INSTALL_DIR}/bin/coredns`;
 /** Root-owned config. policy.json is read by the addon at (re)start. */
 exports.ETC_DIR = '/etc/safer-runner';
 exports.POLICY_FILE = `${exports.ETC_DIR}/policy.json`;
+/** CoreDNS config: root:root 0644 (holds only the allowlist, which policy.json already shows). */
+exports.COREFILE = `${exports.ETC_DIR}/Corefile`;
 /** Public CA certificate (world-readable) - what NODE_EXTRA_CA_CERTS points at. */
 exports.CA_CERT_FILE = `${exports.ETC_DIR}/ca.pem`;
 /**
@@ -254,6 +203,166 @@ exports.AZURE_WIRESERVER = '168.63.129.16';
 exports.SELFTEST_HOST = 'selftest.safer-runner.invalid';
 /** TEST-NET-1 (RFC 5737): never routed. Used to prove the proxy ignores the client's IP. */
 exports.SELFTEST_BOGUS_IP = '192.0.2.1';
+
+
+/***/ }),
+
+/***/ 8439:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 resolver: CoreDNS on 127.0.0.1:53 (replaced dnsmasq). The firewall sends every :53
+ * query on the host (and from containers) here; only the resolver's uid may reach the
+ * upstream servers. enforce: allowlisted names (exact / *.x / glob, the proxy's own pattern
+ * set) are forwarded, everything else - including subdomains of exact entries - gets
+ * NXDOMAIN locally and never leaves the VM. See src/config/corefile-builder.ts.
+ *
+ * No DNS-rebind filtering: the proxy's upstream-IP guard (server_connect) refuses a strict
+ * superset of internal answers and logs the address, and anything outside the proxy can
+ * only reach addresses a step could dial by IP anyway (docs/spikes, REPLACE-vs-FRONT §3).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.installCoreDns = installCoreDns;
+exports.writeCorefile = writeCorefile;
+exports.dnsSystemdRunArgs = dnsSystemdRunArgs;
+exports.dumpDnsDiagnostics = dumpDnsDiagnostics;
+exports.probe = probe;
+exports.startCoreDns = startCoreDns;
+const core = __importStar(__nccwpck_require__(7484));
+const dns = __importStar(__nccwpck_require__(2250));
+const exec = __importStar(__nccwpck_require__(5236));
+const constants_1 = __nccwpck_require__(8729);
+const corefile_builder_1 = __nccwpck_require__(6100);
+const proxy_1 = __nccwpck_require__(3828);
+async function sudo(args, opts = {}) {
+    return exec.exec('sudo', args, opts);
+}
+async function installCoreDns() {
+    await (0, proxy_1.installPinnedBinary)(constants_1.COREDNS_URL, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns');
+}
+async function writeCorefile(o) {
+    const corefile = (0, corefile_builder_1.buildCorefile)(o);
+    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
+    await sudo(['tee', constants_1.COREFILE], { input: Buffer.from(corefile), silent: true });
+    await sudo(['chown', 'root:root', constants_1.COREFILE]);
+    await sudo(['chmod', '0644', constants_1.COREFILE]);
+}
+/**
+ * systemd-run: outside the runner's process tree (its orphan cleanup would kill it), restarted
+ * on any exit, as the random DNS user with only CAP_NET_BIND_SERVICE (for :53). stdout - the
+ * `log` plugin - is appended by systemd to the world-readable DNS log the report reads.
+ */
+function dnsSystemdRunArgs(dnsUser) {
+    return [
+        'systemd-run',
+        `--unit=${constants_1.DNS_UNIT}`,
+        '--description=safer-runner DNS resolver (CoreDNS)',
+        `--uid=${dnsUser}`,
+        `--gid=${dnsUser}`,
+        '-p',
+        'Restart=always',
+        '-p',
+        'RestartSec=1',
+        '-p',
+        'AmbientCapabilities=CAP_NET_BIND_SERVICE',
+        '-p',
+        'CapabilityBoundingSet=CAP_NET_BIND_SERVICE',
+        '-p',
+        'NoNewPrivileges=yes',
+        '-p',
+        'PrivateTmp=yes',
+        '-p',
+        'ProtectHome=yes',
+        '-p',
+        'ProtectSystem=strict',
+        '-p',
+        `StandardOutput=append:${constants_1.DNS_LOG}`,
+        '-p',
+        `StandardError=append:${constants_1.DNS_LOG}`,
+        constants_1.COREDNS_BIN,
+        '-conf',
+        constants_1.COREFILE
+    ];
+}
+async function dumpDnsDiagnostics() {
+    const opts = { ignoreReturnCode: true };
+    await sudo(['systemctl', 'status', constants_1.DNS_UNIT, '--no-pager', '-l'], opts);
+    await sudo(['journalctl', '-u', constants_1.DNS_UNIT, '--no-pager', '-n', '30'], opts);
+    await sudo(['tail', '-n', '30', constants_1.DNS_LOG], opts);
+    await sudo(['ss', '-lntup', 'sport = :53'], opts);
+}
+/** Resolve `name` (A) against our resolver. Returns 'ok', 'NXDOMAIN' or the error code. */
+async function probe(name, timeoutMs = 3000) {
+    const r = new dns.promises.Resolver({ timeout: timeoutMs, tries: 1 });
+    r.setServers([corefile_builder_1.DNS_LISTEN]);
+    try {
+        await r.resolve4(name);
+        return 'ok';
+    }
+    catch (e) {
+        const code = e.code ?? String(e);
+        return code === dns.NOTFOUND ? 'NXDOMAIN' : code;
+    }
+}
+/**
+ * (Re)start CoreDNS and wait until it answers. The log file is pre-created 0644 root-owned:
+ * systemd opens it as root and appends, so the mode sticks and the runner can read it.
+ */
+async function startCoreDns(dnsUser, readinessName, timeoutMs = 20000) {
+    await sudo(['touch', constants_1.DNS_LOG]);
+    await sudo(['chown', 'root:root', constants_1.DNS_LOG]);
+    await sudo(['chmod', '0644', constants_1.DNS_LOG]);
+    await sudo(['systemctl', 'stop', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
+    await sudo(['systemctl', 'reset-failed', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
+    await sudo(dnsSystemdRunArgs(dnsUser));
+    const deadline = Date.now() + timeoutMs;
+    let last = '';
+    while (Date.now() < deadline) {
+        last = await probe(readinessName, 2000);
+        if (last === 'ok') {
+            core.info(`✅ CoreDNS up on ${corefile_builder_1.DNS_LISTEN}:53 (${readinessName} resolved)`);
+            return;
+        }
+        await new Promise(r => setTimeout(r, 300));
+    }
+    await dumpDnsDiagnostics();
+    throw new Error(`CoreDNS did not answer for ${readinessName} within ${timeoutMs / 1000}s (last: ${last})`);
+}
 
 
 /***/ }),
@@ -535,9 +644,10 @@ async function containerAddresses() {
  * every later action's pre-hook too, review H2), or in the main step if pre did not run.
  *
  * Order (each step depends on the previous):
- *   allowlist (api.github.com/meta, before DNS changes) -> install (dnsmasq + pinned mitmdump,
- *   in parallel) -> users -> addon + policy + CA -> start proxy (waits for the addon's own
- *   self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS -> dockerd restart so it
+ *   allowlist (api.github.com/meta, before DNS changes) -> install (pinned CoreDNS + pinned
+ *   mitmdump + conntrack, in parallel) -> users -> addon + policy + CA -> start proxy (waits for
+ *   the addon's own self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS (CoreDNS up
+ *   first, then resolv.conf points at it) -> dockerd restart so it
  *   trusts the CA (F1) -> firewall (nat REDIRECT + filter, plus the container DNAT /
  *   DOCKER-USER rules when docker runs) -> kill pre-existing :443 and container flows ->
  *   live self-tests -> docker access -> sudo logging -> integrity baseline -> sudo
@@ -579,7 +689,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
 exports.setupCompleted = setupCompleted;
-exports.installDnsmasq = installDnsmasq;
+exports.installPackages = installPackages;
 exports.inJobContainer = inJobContainer;
 exports.runSetup = runSetup;
 const core = __importStar(__nccwpck_require__(7484));
@@ -592,6 +702,7 @@ const policy_1 = __nccwpck_require__(2224);
 const proxy_1 = __nccwpck_require__(3828);
 const selftest_1 = __nccwpck_require__(3180);
 const setup_1 = __nccwpck_require__(1413);
+const dns_1 = __nccwpck_require__(8439);
 const github_parser_1 = __nccwpck_require__(9170);
 const sudo_1 = __nccwpck_require__(1279);
 const docker_1 = __nccwpck_require__(2306);
@@ -599,6 +710,8 @@ const trust_1 = __nccwpck_require__(7578);
 const validation_1 = __nccwpck_require__(8449);
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
+/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
+const DNS_READY_NAME = 'github.com';
 function setupCompleted() {
     return fs.existsSync(exports.SETUP_MARKER);
 }
@@ -611,12 +724,14 @@ async function timed(label, fn) {
         core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     }
 }
-/** Install dnsmasq, only refreshing the apt index if a plain install fails (saves ~10s). */
-async function installDnsmasq() {
+/**
+ * apt packages: conntrack only (flushes container flows that predate the container rules; not
+ * on the image). Only refreshes the apt index if a plain install fails (saves ~10s).
+ */
+async function installPackages() {
     const opts = { ignoreReturnCode: true };
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
-    // conntrack: flushes container flows that predate the container rules (not on the image)
-    const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'dnsmasq', 'conntrack'];
+    const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'conntrack'];
     if ((await exec.exec('sudo', ['-E', ...install], { ...opts, env })) === 0)
         return;
     await exec.exec('sudo', ['apt-get', 'update', '-qq']);
@@ -688,13 +803,14 @@ async function runSetup(inputs) {
     for (const w of warnings)
         core.warning(w);
     core.info(`Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`);
+    const dnsServers = [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean);
     // 2. Install (parallel - both are network-bound)
-    await timed('Install dnsmasq + mitmproxy', () => Promise.all([installDnsmasq(), (0, proxy_1.installMitmproxy)()]));
+    await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), (0, dns_1.installCoreDns)(), (0, proxy_1.installMitmproxy)()]));
     // 3. Users, addon, policy, CA
     await (0, setup_1.createLogDirectory)();
     const dnsUser = await (0, setup_1.createRandomDNSUser)();
     const proxyUid = await (0, proxy_1.createProxyUser)();
-    core.info(`dnsmasq user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
+    core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
     await (0, proxy_1.installAddon)();
     await (0, proxy_1.writePolicy)(policy);
     await (0, proxy_1.generateCa)();
@@ -714,9 +830,16 @@ async function runSetup(inputs) {
     });
     // 6. DNS
     await timed('Configure DNS', async () => {
+        // same names as the proxy: DNS and the proxy can never disagree about what is allowed
+        await (0, dns_1.writeCorefile)({
+            mode,
+            allow: [...policy.allow, ...policy.passthrough],
+            deny: policy.deny,
+            upstreams: dnsServers
+        });
+        await (0, dns_1.startCoreDns)(dnsUser.username, DNS_READY_NAME);
         await (0, setup_1.setupDNSConfig)();
-        await (0, setup_1.setupDNSMasq)(mode, '', inputs.blockRiskySubdomains, dnsUser.username, constants_1.DNS_LOG, inputs.primaryDnsServer, inputs.secondaryDnsServer, (0, policy_1.dnsDomainsFor)([...policy.allow, ...policy.passthrough]));
-        await (0, setup_1.restartServices)(constants_1.DNS_LOG);
+        await (0, setup_1.restartResolved)();
     });
     // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
     // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
@@ -740,7 +863,7 @@ async function runSetup(inputs) {
             proxyPort: ports.port,
             containerProxyPort: ports.containerPort,
             containers: dockerActive,
-            dnsServers: [inputs.primaryDnsServer, inputs.secondaryDnsServer].filter(Boolean)
+            dnsServers
         });
         await (0, firewall_1.killPreexistingConnections)();
         if (dockerActive)
@@ -749,7 +872,8 @@ async function runSetup(inputs) {
     });
     // 9. Prove it on this runner
     const selfTestFrom = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
-    const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode));
+    const dnsSelfTestName = (0, selftest_1.dnsProbeName)([...policy.allow, ...policy.passthrough]);
+    const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode, dnsSelfTestName));
     await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
     const selfTestWindow = [selfTestFrom, (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG)];
     await exec.exec('sudo', ['tee', constants_1.SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
@@ -770,6 +894,7 @@ async function runSetup(inputs) {
             containerRules: dockerActive,
             proxyPorts: [ports.port, ports.containerPort],
             selfTestWindow,
+            dnsSelfTestName,
             at: new Date().toISOString()
         }) + '\n'),
         silent: true
@@ -806,7 +931,7 @@ async function runSetup(inputs) {
 "use strict";
 
 /**
- * v2 iptables: force 80/443 through the proxy, force all DNS through dnsmasq, and (enforce)
+ * v2 iptables: force 80/443 through the proxy, force all DNS through the resolver (CoreDNS), and (enforce)
  * deny everything else. Rulesets are generated as iptables-restore text (pure functions,
  * unit-tested) and applied atomically with `iptables-restore --noflush` into chains we own,
  * jumped to from position 1 of OUTPUT, so the image's own rules are left alone.
@@ -870,7 +995,7 @@ const LOCAL_BRIDGES = ['docker0', 'br-+'];
 /** Private destinations a container may reach on its own bridge (container <-> container). */
 const RFC1918 = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
 /**
- * nat OUTPUT: send DNS to dnsmasq and 80/443 to the proxy. Exempt: the proxy and dnsmasq
+ * nat OUTPUT: send DNS to the resolver and 80/443 to the proxy. Exempt: the proxy and the resolver
  * uids (their own upstream connections), loopback, local bridges and the Azure platform IPs.
  */
 function buildNatRules(o) {
@@ -881,7 +1006,7 @@ function buildNatRules(o) {
         `-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`,
         `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`,
         // Every resolver, whatever address it is aimed at (8.8.8.8, 168.63.129.16, GitHub's
-        // 127.0.0.100 egress resolver...), is answered by our dnsmasq (fixes C1/M4).
+        // 127.0.0.100 egress resolver...), is answered by our resolver (fixes C1/M4).
         `-A ${c} -p udp --dport 53 -j REDIRECT --to-ports 53`,
         `-A ${c} -p tcp --dport 53 -j REDIRECT --to-ports 53`,
         `-A ${c} -d 127.0.0.0/8 -j RETURN`,
@@ -898,7 +1023,7 @@ function buildNatRules(o) {
 function commonFilterAllows(c) {
     return [
         `-A ${c} -o lo -j RETURN`,
-        // REDIRECTed packets (to the proxy / dnsmasq): after nat OUTPUT the destination is
+        // REDIRECTed packets (to the proxy / the resolver): after nat OUTPUT the destination is
         // 127.0.0.1, but `-o` still reports the ORIGINAL route (e.g. eth0), so `-o lo` alone
         // never matches them. A 127/8 destination cannot leave the host.
         `-A ${c} -d 127.0.0.0/8 -j RETURN`,
@@ -911,7 +1036,7 @@ function commonFilterAllows(c) {
 }
 /**
  * filter OUTPUT.
- * - enforce: allow lo, the proxy uid on 80/443, dnsmasq's uid to its upstream servers on 53,
+ * - enforce: allow lo, the proxy uid on 80/443, the resolver's uid to its upstream servers on 53,
  *   the Azure platform; reject everything else. A hole in the REDIRECT therefore still
  *   fails closed, and so does any non-80/443 egress.
  * - analyze: allow everything, but reject QUIC (UDP/443) so HTTP/3 clients fall back to TCP
@@ -961,7 +1086,7 @@ function buildIp6FilterRules(o) {
 }
 /**
  * nat PREROUTING for traffic containers send off their bridge (docker0, user networks): DNS
- * to dnsmasq and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
+ * to the resolver and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
  * route_localnet). Container -> host services and container <-> container (bridged traffic
  * traverses PREROUTING once Docker loads br_netfilter) are left alone; anything they don't
  * cover falls through to the DOCKER-USER chain below.
@@ -997,7 +1122,7 @@ function containerForwardTail(c, o, icmpReject) {
 }
 /**
  * filter DOCKER-USER: everything a container forwards off-host that the DNAT did not send to
- * the proxy or dnsmasq. enforce rejects it (so a hole in the DNAT still fails closed), analyze
+ * the proxy or the resolver. enforce rejects it (so a hole in the DNAT still fails closed), analyze
  * logs it. DOCKER-USER, not FORWARD: Docker re-inserts its FORWARD jumps ahead of ours on
  * every restart, but never touches DOCKER-USER.
  */
@@ -1492,70 +1617,342 @@ function readInputs() {
 
 /***/ }),
 
-/***/ 9170:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ 1106:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
 /**
- * GitHub Domain Parser
+ * CoreDNS query log parser. Each server block's `log` format labels its own lines
+ * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
+ * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
  *
- * Identifies GitHub infrastructure domains and filters them from configuration suggestions.
- * This prevents legitimate GitHub domains from appearing in user configuration advice.
+ *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
+ *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
+ *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DANGEROUS_BROAD_DOMAINS = void 0;
-exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
-exports.normalizeMetaDomain = normalizeMetaDomain;
-exports.fetchGitHubActionsDomains = fetchGitHubActionsDomains;
-exports.resolveGitHubDomains = resolveGitHubDomains;
-/**
- * Stable GitHub-owned core domains that are always allowed.
- *
- * Patterns use the v2 allowlist syntax: a bare name is EXACT (that name only) and `*.name`
- * covers every subdomain (not the apex). Before beta.5 a bare name also matched all of its
- * subdomains, so every entry was audited (against api.github.com/meta .domains.actions and
- * the hosts real runners use) when exact-by-default landed:
- *
- *  - GitHub-owned zones whose subdomains the runner or common actions use get the apex AND
- *    `*.`: github.com (api., codeload., uploads., pkg. ...), actions.githubusercontent.com
- *    (pipelines*, runner*, broker., token. (OIDC), results-receiver., vstoken. ...),
- *    githubapp.com (hosted-compute-*, dependabot, fulcio./timestamp. attestations) and
- *    ghcr.io (meta .packages lists *.ghcr.io). The apex is included even where meta lists
- *    only the wildcard: it is GitHub-owned, so it costs nothing and can't break a runner.
- *  - Everything else is exact, as meta lists it. Several of these sit under shared or
- *    third-party namespaces where suffix matching was a latent exfil channel: e.g.
- *    `<anything>.github-cloud.s3.amazonaws.com` is a different, registrable S3 bucket, and
- *    subdomains of the *.githubusercontent.com hosts are not all GitHub's to vouch for.
- *
- * The dynamic results-storage (productionresultssa*) accounts are NOT here; they live in
- * getProductionResultsStorageDomains() and are preferably sourced from api.github.com/meta.
- */
-const GITHUB_CORE_DOMAINS = [
+exports.parseDnsLog = parseDnsLog;
+exports.refusedNames = refusedNames;
+exports.readRefusedNames = readRefusedNames;
+const fs = __importStar(__nccwpck_require__(9896));
+// anchored on the plugin's own prefix: a query name can't inject a second verdict
+const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
+function parseDnsLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        const m = LINE.exec(line);
+        if (!m)
+            continue;
+        out.push({
+            client: m[1],
+            verdict: m[2],
+            type: m[3],
+            name: m[4].toLowerCase().replace(/\.$/, ''),
+            rcode: m[5]
+        });
+    }
+    return out;
+}
+/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
+function refusedNames(queries) {
+    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
+}
+function readRefusedNames(file) {
+    try {
+        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
+    }
+    catch {
+        return [];
+    }
+}
+
+
+/***/ }),
+
+/***/ 3251:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// GENERATED by `npm run gen:domains` from api.github.com/meta .domains.actions on 2026-11-05
+// - do not edit by hand. Verbatim; github-parser.ts normalises it like the live list (offline fallback).
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GITHUB_ACTIONS_DOMAINS = void 0;
+exports.GITHUB_ACTIONS_DOMAINS = [
     'github.com',
     '*.github.com',
-    'actions.githubusercontent.com',
-    '*.actions.githubusercontent.com',
-    'githubapp.com',
     '*.githubapp.com',
     'ghcr.io',
-    '*.ghcr.io',
-    // exact names (several are also covered by a wildcard above; listed so the static
-    // fallback documents what the runner needs)
-    'api.github.com',
-    'codeload.github.com',
-    'pkg.github.com',
-    'pkg.actions.githubusercontent.com',
-    'results-receiver.actions.githubusercontent.com',
     'objects.githubusercontent.com',
     'objects-origin.githubusercontent.com',
     'github-releases.githubusercontent.com',
     'github-registry-files.githubusercontent.com',
     'release-assets.githubusercontent.com',
+    '*.actions.githubusercontent.com',
+    'productionresultssa0.blob.core.windows.net',
+    'productionresultssa1.blob.core.windows.net',
+    'productionresultssa2.blob.core.windows.net',
+    'productionresultssa3.blob.core.windows.net',
+    'productionresultssa4.blob.core.windows.net',
+    'productionresultssa5.blob.core.windows.net',
+    'productionresultssa6.blob.core.windows.net',
+    'productionresultssa7.blob.core.windows.net',
+    'productionresultssa8.blob.core.windows.net',
+    'productionresultssa9.blob.core.windows.net',
+    'productionresultssa10.blob.core.windows.net',
+    'productionresultssa11.blob.core.windows.net',
+    'productionresultssa12.blob.core.windows.net',
+    'productionresultssa13.blob.core.windows.net',
+    'productionresultssa14.blob.core.windows.net',
+    'productionresultssa15.blob.core.windows.net',
+    'productionresultssa16.blob.core.windows.net',
+    'productionresultssa17.blob.core.windows.net',
+    'productionresultssa18.blob.core.windows.net',
+    'productionresultssa19.blob.core.windows.net',
+    'productionresultssa30.blob.core.windows.net',
+    'productionresultssa31.blob.core.windows.net',
+    'productionresultssa32.blob.core.windows.net',
+    'productionresultssa33.blob.core.windows.net',
+    'productionresultssa34.blob.core.windows.net',
+    'productionresultssa35.blob.core.windows.net',
+    'productionresultssa36.blob.core.windows.net',
+    'productionresultssa37.blob.core.windows.net',
+    'productionresultssa38.blob.core.windows.net',
+    'productionresultssa39.blob.core.windows.net',
+    'productionresultssa40.blob.core.windows.net',
+    'productionresultssa41.blob.core.windows.net',
+    'productionresultssa42.blob.core.windows.net',
+    'productionresultssa43.blob.core.windows.net',
+    'productionresultssa44.blob.core.windows.net',
+    'productionresultssa45.blob.core.windows.net',
+    'productionresultssa46.blob.core.windows.net',
+    'productionresultssa47.blob.core.windows.net',
+    'productionresultssa48.blob.core.windows.net',
+    'productionresultssa49.blob.core.windows.net',
+    'productionresultssa100.blob.core.windows.net',
+    'productionresultssa101.blob.core.windows.net',
+    'productionresultssa102.blob.core.windows.net',
+    'productionresultssa103.blob.core.windows.net',
+    'productionresultssa104.blob.core.windows.net',
+    'productionresultssa105.blob.core.windows.net',
+    'productionresultssa106.blob.core.windows.net',
+    'productionresultssa107.blob.core.windows.net',
+    'productionresultssa108.blob.core.windows.net',
+    'productionresultssa109.blob.core.windows.net',
+    'productionresultssa110.blob.core.windows.net',
+    'productionresultssa111.blob.core.windows.net',
+    'productionresultssa112.blob.core.windows.net',
+    'productionresultssa113.blob.core.windows.net',
+    'productionresultssa114.blob.core.windows.net',
+    'productionresultssa115.blob.core.windows.net',
+    'productionresultssa116.blob.core.windows.net',
+    'productionresultssa117.blob.core.windows.net',
+    'productionresultssa118.blob.core.windows.net',
+    'productionresultssa119.blob.core.windows.net',
+    'productionresultssa120.blob.core.windows.net',
+    'productionresultssa121.blob.core.windows.net',
+    'productionresultssa122.blob.core.windows.net',
+    'productionresultssa123.blob.core.windows.net',
+    'productionresultssa124.blob.core.windows.net',
+    'productionresultssa125.blob.core.windows.net',
+    'productionresultssa126.blob.core.windows.net',
+    'productionresultssa127.blob.core.windows.net',
+    'productionresultssa128.blob.core.windows.net',
+    'productionresultssa129.blob.core.windows.net',
+    'productionresultssa130.blob.core.windows.net',
+    'productionresultssa131.blob.core.windows.net',
+    'productionresultssa132.blob.core.windows.net',
+    'productionresultssa133.blob.core.windows.net',
+    'productionresultssa134.blob.core.windows.net',
+    'productionresultssa135.blob.core.windows.net',
+    'productionresultssa136.blob.core.windows.net',
+    'productionresultssa137.blob.core.windows.net',
+    'productionresultssa138.blob.core.windows.net',
+    'productionresultssa139.blob.core.windows.net',
+    'productionresultssa140.blob.core.windows.net',
+    'productionresultssa141.blob.core.windows.net',
+    'productionresultssa142.blob.core.windows.net',
+    'productionresultssa143.blob.core.windows.net',
+    'productionresultssa144.blob.core.windows.net',
+    'productionresultssa145.blob.core.windows.net',
+    'productionresultssa146.blob.core.windows.net',
+    'productionresultssa147.blob.core.windows.net',
+    'productionresultssa148.blob.core.windows.net',
+    'productionresultssa149.blob.core.windows.net',
+    'productionresultssa150.blob.core.windows.net',
+    'productionresultssa151.blob.core.windows.net',
+    'productionresultssa152.blob.core.windows.net',
+    'productionresultssa153.blob.core.windows.net',
+    'productionresultssa154.blob.core.windows.net',
+    'productionresultssa155.blob.core.windows.net',
+    'productionresultssa156.blob.core.windows.net',
+    'productionresultssa157.blob.core.windows.net',
+    'productionresultssa158.blob.core.windows.net',
+    'productionresultssa159.blob.core.windows.net',
+    'productionresultssa160.blob.core.windows.net',
+    'productionresultssa161.blob.core.windows.net',
+    'productionresultssa162.blob.core.windows.net',
+    'productionresultssa163.blob.core.windows.net',
+    'productionresultssa164.blob.core.windows.net',
+    'productionresultssa165.blob.core.windows.net',
+    'productionresultssa166.blob.core.windows.net',
+    'productionresultssa167.blob.core.windows.net',
+    'productionresultssa168.blob.core.windows.net',
+    'productionresultssa169.blob.core.windows.net',
+    'productionresultssa170.blob.core.windows.net',
+    'productionresultssa171.blob.core.windows.net',
+    'productionresultssa172.blob.core.windows.net',
+    'productionresultssa173.blob.core.windows.net',
+    'productionresultssa174.blob.core.windows.net',
+    'productionresultssa175.blob.core.windows.net',
+    'productionresultssa176.blob.core.windows.net',
+    'productionresultssa177.blob.core.windows.net',
+    'productionresultssa178.blob.core.windows.net',
+    'productionresultssa179.blob.core.windows.net',
+    'productionresultssa180.blob.core.windows.net',
+    'productionresultssa181.blob.core.windows.net',
+    'productionresultssa182.blob.core.windows.net',
+    'productionresultssa183.blob.core.windows.net',
+    'productionresultssa184.blob.core.windows.net',
+    'productionresultssa185.blob.core.windows.net',
+    'productionresultssa186.blob.core.windows.net',
+    'productionresultssa187.blob.core.windows.net',
+    'productionresultssa188.blob.core.windows.net',
+    'productionresultssa189.blob.core.windows.net',
+    'productionresultssa190.blob.core.windows.net',
+    'productionresultssa191.blob.core.windows.net',
+    'productionresultssa192.blob.core.windows.net',
+    'productionresultssa193.blob.core.windows.net',
+    'productionresultssa194.blob.core.windows.net',
+    'productionresultssa195.blob.core.windows.net',
+    'productionresultssa196.blob.core.windows.net',
+    'productionresultssa197.blob.core.windows.net',
+    'productionresultssa198.blob.core.windows.net',
+    'productionresultssa199.blob.core.windows.net',
+    'mpsghub.actions.githubusercontent.com',
+    'pipelinesghubeus1.actions.githubusercontent.com',
+    'pipelinesghubeus10.actions.githubusercontent.com',
+    'pipelinesghubeus11.actions.githubusercontent.com',
+    'pipelinesghubeus12.actions.githubusercontent.com',
+    'pipelinesghubeus13.actions.githubusercontent.com',
+    'pipelinesghubeus14.actions.githubusercontent.com',
+    'pipelinesghubeus15.actions.githubusercontent.com',
+    'pipelinesghubeus2.actions.githubusercontent.com',
+    'pipelinesghubeus20.actions.githubusercontent.com',
+    'pipelinesghubeus21.actions.githubusercontent.com',
+    'pipelinesghubeus22.actions.githubusercontent.com',
+    'pipelinesghubeus23.actions.githubusercontent.com',
+    'pipelinesghubeus24.actions.githubusercontent.com',
+    'pipelinesghubeus25.actions.githubusercontent.com',
+    'pipelinesghubeus26.actions.githubusercontent.com',
+    'pipelinesghubeus3.actions.githubusercontent.com',
+    'pipelinesghubeus4.actions.githubusercontent.com',
+    'pipelinesghubeus5.actions.githubusercontent.com',
+    'pipelinesghubeus6.actions.githubusercontent.com',
+    'pipelinesghubeus7.actions.githubusercontent.com',
+    'pipelinesghubeus8.actions.githubusercontent.com',
+    'pipelinesghubeus9.actions.githubusercontent.com',
+    'pipelinesproxcnc1.actions.githubusercontent.com',
+    'pipelinesproxcus1.actions.githubusercontent.com',
+    'pipelinesproxeau1.actions.githubusercontent.com',
+    'pipelinesproxjpw1.actions.githubusercontent.com',
+    'pipelinesproxsdc1.actions.githubusercontent.com',
+    'pipelinesproxweu1.actions.githubusercontent.com',
+    'pipelinesproxwus31.actions.githubusercontent.com',
+    'pipelinesproxwus32.actions.githubusercontent.com',
+    'runnerghubeus1.actions.githubusercontent.com',
+    'runnerghubeus20.actions.githubusercontent.com',
+    'runnerghubeus21.actions.githubusercontent.com',
+    'runnerghubwus31.actions.githubusercontent.com',
+    'runnerproxcnc1.actions.githubusercontent.com',
+    'runnerproxcus1.actions.githubusercontent.com',
+    'runnerproxeau1.actions.githubusercontent.com',
+    'runnerproxjpw1.actions.githubusercontent.com',
+    'runnerproxsdc1.actions.githubusercontent.com',
+    'runnerproxweu1.actions.githubusercontent.com',
+    'tokenghub.actions.githubusercontent.com'
+];
+
+
+/***/ }),
+
+/***/ 9170:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * The GitHub allowlist: api.github.com/meta .domains.actions (live, else the generated
+ * snapshot) + a tiny hand-curated GITHUB_EXTRAS, with the guards that keep meta from ever
+ * widening it into a shared namespace.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DANGEROUS_BROAD_DOMAINS = exports.RISKY_GITHUB_SUBDOMAINS = exports.GITHUB_EXTRAS = void 0;
+exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
+exports.normalizeMetaDomain = normalizeMetaDomain;
+exports.fetchGitHubActionsDomains = fetchGitHubActionsDomains;
+exports.resolveGitHubDomains = resolveGitHubDomains;
+const github_domains_generated_1 = __nccwpck_require__(3251);
+/**
+ * Hosts the runner needs that api.github.com/meta .domains.actions does not list. Hand-curated
+ * and kept tiny: everything GitHub states it needs comes from meta (live at runtime, else the
+ * generated snapshot in github-domains.generated.ts - `npm run gen:domains`).
+ *
+ * Patterns are v2 allowlist syntax: a bare name is EXACT and `*.name` covers every subdomain.
+ * NO wildcards here: a wildcard is a DNS channel to that zone. The only wildcards are the ones
+ * meta itself lists (*.github.com, *.githubapp.com, *.actions.githubusercontent.com). A new
+ * entry needs observed real-runner traffic and a one-line reason.
+ */
+exports.GITHUB_EXTRAS = [
+    // ghcr.io (in meta) answers blob/layer GETs with a 307 to this host: every ghcr pull
     'pkg-containers.githubusercontent.com',
-    'github-cloud.githubusercontent.com',
-    'github-cloud.s3.amazonaws.com',
-    'api.snapcraft.io'
+    // apexes of zones meta lists only as *.x: one GitHub-owned name each, not a channel
+    'actions.githubusercontent.com',
+    'githubapp.com'
+];
+/**
+ * Risky GitHub subdomains that serve arbitrary user content (malicious payloads), refused in
+ * enforce mode when block-risky-github-subdomains is on: a deny override, so `*.github.com`
+ * does not let them through.
+ */
+exports.RISKY_GITHUB_SUBDOMAINS = [
+    'gist.github.com', // Gist web interface
+    'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
+    'raw.githubusercontent.com' // Common vector for serving malicious raw file content
 ];
 /**
  * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
@@ -1575,39 +1972,17 @@ exports.DANGEROUS_BROAD_DOMAINS = new Set([
     'blob.storage.azure.net'
 ]);
 /**
- * The static fallback list of GitHub Actions results-storage accounts in use, from
- * https://api.github.com/meta (.domains.actions) on 2026-11-04.
+ * The offline GitHub allowlist: the generated meta snapshot plus GITHUB_EXTRAS. Used when the
+ * live api.github.com/meta list cannot be fetched (see resolveGitHubDomains()).
  *
- * Expressed as the exact contiguous blocks GitHub registers. The gaps between blocks
- * are deliberate and must be preserved.
- *
- * SECURITY: do NOT pad this range or fill the gaps (e.g. sa20-29, sa50-99, sa200+ are
- * currently unused). Azure storage account names are a single global, first-come
- * namespace, so any name GitHub has not registered can be claimed by anyone - allowing
- * an unused name here would turn enforce mode into an exfiltration channel to an
- * attacker-controlled bucket. A stale list fails safe (a new GitHub account is blocked
- * until we add it); a padded list does not. At runtime resolveGitHubDomains() prefers
- * the live meta list over this snapshot.
- */
-function getProductionResultsStorageDomains() {
-    const inUse = [];
-    const addRange = (from, to) => {
-        for (let i = from; i <= to; i++)
-            inUse.push(i);
-    };
-    addRange(0, 19);
-    addRange(30, 49);
-    addRange(100, 199);
-    return inUse.map(i => `productionresultssa${i}.blob.core.windows.net`);
-}
-/**
- * Get the static list of GitHub required domains that are always allowed.
- *
- * This is the offline fallback used when the live api.github.com/meta list cannot be
- * fetched (see resolveGitHubDomains()).
+ * SECURITY: the snapshot enumerates the productionresultssa* storage accounts exactly as meta
+ * lists them; never pad or range-fill them. Azure storage account names are a global,
+ * first-come namespace, so an unregistered name would be an exfil channel. A stale snapshot
+ * fails safe (a new account is blocked until regenerated).
  */
 function getGitHubRequiredDomains() {
-    return [...GITHUB_CORE_DOMAINS, ...getProductionResultsStorageDomains()];
+    const snapshot = github_domains_generated_1.GITHUB_ACTIONS_DOMAINS.map(normalizeMetaDomain).filter((d) => d !== null);
+    return Array.from(new Set([...snapshot, ...exports.GITHUB_EXTRAS]));
 }
 /**
  * Normalise a domain from api.github.com/meta into an allowlist pattern, or return null if
@@ -1672,19 +2047,15 @@ async function fetchGitHubActionsDomains(timeoutMs = 10000) {
     }
 }
 /**
- * Resolve the GitHub allowlist, preferring the live api.github.com/meta list and
- * falling back to the static snapshot if the fetch fails.
- *
- * On success the GitHub-owned core domains are unioned with the live meta list, so
- * the dynamic results-storage (productionresultssa*) accounts always match exactly
- * what GitHub currently registers - no stale entries, no padding. On failure we use
- * the static list, which fails safe (a newly-added GitHub account is blocked until
- * we ship an update, rather than anything extra being allowed).
+ * Resolve the GitHub allowlist, preferring the live api.github.com/meta list and falling back
+ * to the generated snapshot if the fetch fails. GITHUB_EXTRAS are added either way. On
+ * success the snapshot is NOT merged in, so the storage accounts match exactly what GitHub
+ * registers today.
  */
 async function resolveGitHubDomains() {
     const fetched = await fetchGitHubActionsDomains();
     if (fetched && fetched.length > 0) {
-        return { domains: Array.from(new Set([...GITHUB_CORE_DOMAINS, ...fetched])), source: 'meta' };
+        return { domains: Array.from(new Set([...fetched, ...exports.GITHUB_EXTRAS])), source: 'meta' };
     }
     return { domains: getGitHubRequiredDomains(), source: 'static' };
 }
@@ -2074,15 +2445,14 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = void 0;
 exports.normHost = normHost;
 exports.isIpLiteral = isIpLiteral;
+exports.parseAllowedDomains = parseAllowedDomains;
 exports.validatePattern = validatePattern;
 exports.expandPattern = expandPattern;
 exports.compilePattern = compilePattern;
 exports.matchesAny = matchesAny;
 exports.isDangerouslyBroad = isDangerouslyBroad;
 exports.buildPolicyConfig = buildPolicyConfig;
-exports.dnsDomainsFor = dnsDomainsFor;
 const github_parser_1 = __nccwpck_require__(9170);
-const dns_config_builder_1 = __nccwpck_require__(1877);
 const constants_1 = __nccwpck_require__(8729);
 /**
  * Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
@@ -2119,6 +2489,15 @@ function normHost(host) {
 }
 function isIpLiteral(host) {
     return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
+}
+/** Split an allowlist input on whitespace, newlines and commas. */
+function parseAllowedDomains(allowedDomains) {
+    if (!allowedDomains)
+        return [];
+    return allowedDomains
+        .split(/[\s,]+/)
+        .map(d => d.trim())
+        .filter(d => d.length > 0);
 }
 /** Return the normalised pattern, or throw with a reason. */
 function validatePattern(pattern) {
@@ -2180,7 +2559,7 @@ function uniq(xs) {
 /** Validate user patterns, dropping (and reporting) anything invalid or dangerously broad. */
 function cleanUserPatterns(raw, inputName, warnings) {
     const out = [];
-    for (const entry of (0, dns_config_builder_1.parseAllowedDomains)(raw).flatMap(expandPattern)) {
+    for (const entry of parseAllowedDomains(raw).flatMap(expandPattern)) {
         try {
             const p = validatePattern(entry);
             if (isDangerouslyBroad(p)) {
@@ -2211,7 +2590,7 @@ function buildPolicyConfig(opts) {
         ...exports.MANDATORY_PASSTHROUGH,
         ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
     ]);
-    const deny = opts.blockRiskySubdomains ? [...dns_config_builder_1.RISKY_GITHUB_SUBDOMAINS] : [];
+    const deny = opts.blockRiskySubdomains ? [...github_parser_1.RISKY_GITHUB_SUBDOMAINS] : [];
     return {
         config: {
             version: 1,
@@ -2225,22 +2604,6 @@ function buildPolicyConfig(opts) {
         },
         warnings
     };
-}
-/**
- * Domains dnsmasq must forward for a set of patterns. dnsmasq's server=/d/ matches d and
- * all subdomains and has no mid-label wildcard, so a pattern maps to the suffix after its
- * last wildcard label (the proxy, not DNS, enforces the exact pattern).
- */
-function dnsDomainsFor(patterns) {
-    const out = [];
-    for (const p of patterns) {
-        const labels = p.split('.');
-        let i = labels.length;
-        while (i > 0 && !labels[i - 1].includes('*'))
-            i--;
-        out.push(labels.slice(i).join('.'));
-    }
-    return uniq(out);
 }
 
 
@@ -2360,6 +2723,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.PROXY_PORT_BAND = void 0;
 exports.actionRoot = actionRoot;
 exports.allocateProxyPorts = allocateProxyPorts;
+exports.downloadVerified = downloadVerified;
+exports.installPinnedBinary = installPinnedBinary;
 exports.installMitmproxy = installMitmproxy;
 exports.createProxyUser = createProxyUser;
 exports.installAddon = installAddon;
@@ -2433,44 +2798,58 @@ async function timed(label, fn) {
         core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     }
 }
-/** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
-async function installMitmproxy() {
-    if (fs.existsSync(constants_1.MITMDUMP_BIN)) {
-        core.info(`mitmdump already installed at ${constants_1.MITMDUMP_BIN}`);
-        return;
-    }
-    const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
-    const tarball = path.join(tmp, 'mitmproxy.tar.gz');
-    await timed('download mitmproxy', async () => {
+/**
+ * Download a pinned release artefact and verify its sha256 before anything touches it
+ * (3 attempts on network errors; a digest mismatch fails immediately).
+ */
+async function downloadVerified(url, sha256, dest, label) {
+    await timed(`download ${label}`, async () => {
         let lastError;
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                const res = await fetch(constants_1.MITMPROXY_URL);
+                const res = await fetch(url);
                 if (!res.ok)
                     throw new Error(`HTTP ${res.status}`);
                 const buf = Buffer.from(await res.arrayBuffer());
                 const digest = crypto.createHash('sha256').update(buf).digest('hex');
-                if (digest !== constants_1.MITMPROXY_SHA256) {
-                    throw new Error(`sha256 mismatch for ${constants_1.MITMPROXY_URL}: got ${digest}, want ${constants_1.MITMPROXY_SHA256}`);
+                if (digest !== sha256) {
+                    throw new Error(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
                 }
-                fs.writeFileSync(tarball, buf);
+                fs.writeFileSync(dest, buf);
                 return;
             }
             catch (e) {
                 lastError = e;
                 if (String(e).includes('sha256 mismatch'))
                     break;
-                core.warning(`mitmproxy download attempt ${attempt} failed: ${e}`);
+                core.warning(`${label} download attempt ${attempt} failed: ${e}`);
             }
         }
-        throw new Error(`could not download mitmproxy: ${lastError}`);
+        throw new Error(`could not download ${label}: ${lastError}`);
     });
-    await timed('extract mitmdump', async () => {
-        await exec.exec('tar', ['-xzf', tarball, '-C', tmp, 'mitmdump']);
-        await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', `${constants_1.INSTALL_DIR}/bin`]);
-        await sudo(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, 'mitmdump'), constants_1.MITMDUMP_BIN]);
+}
+/**
+ * Install one binary from a pinned, sha256-verified release tarball, root-owned 0755.
+ * Skipped if the destination already exists (a re-run on the same VM).
+ */
+async function installPinnedBinary(url, sha256, member, dest, label) {
+    if (fs.existsSync(dest)) {
+        core.info(`${label} already installed at ${dest}`);
+        return;
+    }
+    const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
+    const tarball = path.join(tmp, `${label}.tar.gz`);
+    await downloadVerified(url, sha256, tarball, label);
+    await timed(`extract ${label}`, async () => {
+        await exec.exec('tar', ['-xzf', tarball, '-C', tmp, member]);
+        await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)]);
+        await sudo(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest]);
     });
     fs.rmSync(tmp, { recursive: true, force: true });
+}
+/** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
+async function installMitmproxy() {
+    await installPinnedBinary(constants_1.MITMPROXY_URL, constants_1.MITMPROXY_SHA256, 'mitmdump', constants_1.MITMDUMP_BIN, 'mitmproxy');
 }
 /** Create the proxy system user (idempotent). Returns its uid. */
 async function createProxyUser() {
@@ -2660,7 +3039,9 @@ async function startProxy(o, timeoutMs = 90000) {
  * Runtime self-tests, run on every job right after the firewall is in place. They prove on
  * the live runner that (1) the SNI-level check actually fires (not just the Host check -
  * the P0 spike once had SNI enforcement silently off for a whole run) and (2) the proxy
- * repoints: it ignores the IP the client dialled and connects to the name instead.
+ * repoints: it ignores the IP the client dialled and connects to the name instead; and (3) the
+ * resolver applies exact-FQDN semantics: a random subdomain of an exact entry is refused on
+ * the runner (enforce) and labelled in the DNS log.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2699,13 +3080,20 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.REPOINT_HOST = void 0;
 exports.sniBlockSelfTest = sniBlockSelfTest;
 exports.repointSelfTest = repointSelfTest;
+exports.dnsProbeName = dnsProbeName;
+exports.dnsExactSelfTest = dnsExactSelfTest;
 exports.runSelfTests = runSelfTests;
 exports.isSelfTestRecord = isSelfTestRecord;
 exports.withoutSelfTests = withoutSelfTests;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
+const crypto = __importStar(__nccwpck_require__(6982));
+const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const flowlog_1 = __nccwpck_require__(5422);
+const dns_1 = __nccwpck_require__(8439);
+const dns_parser_1 = __nccwpck_require__(1106);
+const policy_1 = __nccwpck_require__(2224);
 exports.REPOINT_HOST = 'github.com';
 async function curl(args) {
     const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
@@ -2752,8 +3140,44 @@ async function repointSelfTest() {
             : `no flow record for the repoint probe (curl: ${r.out})`
     };
 }
-async function runSelfTests(mode) {
-    const results = [await sniBlockSelfTest(mode), await repointSelfTest()];
+/** Preferred parent for the DNS probe: exact in the GitHub list, under no wildcard. */
+const DNS_PROBE_PARENT = 'objects.githubusercontent.com';
+/**
+ * A fresh name under an exact allowlist entry that no pattern allows - what a step would use to
+ * tunnel data through an allowlisted zone. Null if every exact entry sits under a wildcard.
+ */
+function dnsProbeName(allow, rand = crypto.randomBytes(6).toString('hex')) {
+    const compiled = allow.map(policy_1.compilePattern);
+    const exact = allow.filter(p => !p.includes('*'));
+    const parents = [...exact.filter(p => p === DNS_PROBE_PARENT), ...exact];
+    for (const parent of parents) {
+        const name = `srst-${rand}.${parent}`;
+        if (!(0, policy_1.matchesAny)(name, compiled))
+            return name;
+    }
+    return null;
+}
+async function dnsExactSelfTest(mode, name) {
+    if (!name)
+        return { name: 'dns-exact', ok: true, detail: 'no exact allowlist entry to probe (skipped)' };
+    const want = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
+    const answer = await (0, dns_1.probe)(name);
+    let logged = false;
+    for (let i = 0; i < 15 && !logged; i++) {
+        const log = fs.existsSync(constants_1.DNS_LOG) ? fs.readFileSync(constants_1.DNS_LOG, 'utf8') : '';
+        logged = (0, dns_parser_1.parseDnsLog)(log).some(q => q.name === name && q.verdict === want);
+        if (!logged)
+            await new Promise(r => setTimeout(r, 200));
+    }
+    const ok = logged && (mode === 'analyze' || answer === 'NXDOMAIN');
+    return {
+        name: 'dns-exact',
+        ok,
+        detail: `${name} -> ${answer}; DNS log ${logged ? `labels it ${want}` : `has no ${want} line`}`
+    };
+}
+async function runSelfTests(mode, dnsName) {
+    const results = [await sniBlockSelfTest(mode), await repointSelfTest(), await dnsExactSelfTest(mode, dnsName)];
     for (const t of results) {
         (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
     }
@@ -2790,9 +3214,8 @@ function withoutSelfTests(records, offsets, window) {
 "use strict";
 
 /**
- * DNS (dnsmasq) and logging helpers carried over from v1. In v2 DNS is a supporting layer:
- * the proxy is the egress control; dnsmasq resolves for it, logs, and (enforce) refuses to
- * resolve names outside the allowlist so DNS can't be used as a tunnel.
+ * DNS plumbing and logging helpers carried over from v1. The resolver itself (CoreDNS) lives
+ * in src/dns.ts; this points the system at it (resolv.conf, systemd-resolved).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2832,13 +3255,9 @@ exports.createLogDirectory = createLogDirectory;
 exports.createRandomDNSUser = createRandomDNSUser;
 exports.setupIptablesLogging = setupIptablesLogging;
 exports.setupDNSConfig = setupDNSConfig;
-exports.setupDNSMasq = setupDNSMasq;
-exports.startDnsmasq = startDnsmasq;
-exports.restartServices = restartServices;
-const core = __importStar(__nccwpck_require__(7484));
+exports.restartResolved = restartResolved;
 const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
-const dns_config_builder_1 = __nccwpck_require__(1877);
 /**
  * Create /var/log/safer-runner directory with proper permissions
  * This directory will contain all safer-runner log files (DNS, iptables, sudo)
@@ -2918,63 +3337,9 @@ DNSStubListener=no`;
         input: Buffer.from('nameserver 127.0.0.1\n')
     });
 }
-async function setupDNSMasq(mode, allowedDomains, blockRiskySubdomains, dnsUsername, logFile, primaryDnsServer, secondaryDnsServer, githubDomains) {
-    // Build DNS configuration using the config builder module
-    const { config: dnsmasqConfig, blockedSubdomains } = (0, dns_config_builder_1.buildDnsConfig)({
-        mode: mode,
-        allowedDomains,
-        blockRiskySubdomains,
-        dnsUsername,
-        logFile,
-        primaryDnsServer,
-        secondaryDnsServer,
-        githubDomains,
-        ipsets: false
-    });
-    // Write configuration to file
-    await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
-        input: Buffer.from(dnsmasqConfig)
-    });
-    // Restrict permissions - only root should read the DNS username
-    await exec.exec('sudo', ['chmod', '600', '/etc/dnsmasq.conf']);
-    await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
-    return blockedSubdomains;
-}
-const DNSMASQ_START_ATTEMPTS = 2;
-/**
- * (Re)start dnsmasq, retrying once if it fails
- *
- * dnsmasq occasionally fails to start on hosted runners right after systemd-resolved
- * restarts. On failure the unit journal and port 53 listeners are printed so the cause
- * is visible in the job log.
- */
-async function startDnsmasq(retryDelayMs = 2000) {
-    for (let attempt = 1; attempt <= DNSMASQ_START_ATTEMPTS; attempt++) {
-        const exitCode = await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq'], { ignoreReturnCode: true });
-        if (exitCode === 0) {
-            return;
-        }
-        core.warning(`dnsmasq failed to start (attempt ${attempt}/${DNSMASQ_START_ATTEMPTS})`);
-        await exec.exec('sudo', ['journalctl', '-xeu', 'dnsmasq', '--no-pager', '-n', '30'], { ignoreReturnCode: true });
-        await exec.exec('sudo', ['ss', '-lntup', 'sport = :53'], { ignoreReturnCode: true });
-        if (attempt < DNSMASQ_START_ATTEMPTS) {
-            await exec.exec('sudo', ['systemctl', 'reset-failed', 'dnsmasq'], { ignoreReturnCode: true });
-            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-        }
-    }
-    throw new Error('dnsmasq failed to start - see the journal output above');
-}
-async function restartServices(logFile) {
-    // Restart systemd-resolved and start dnsmasq
+/** Apply the resolved.conf drop-in written by setupDNSConfig (releases its stub listener). */
+async function restartResolved() {
     await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-    await startDnsmasq();
-    // After dnsmasq starts and creates log files, make them readable by all
-    if (logFile) {
-        // Wait a moment for dnsmasq to create the log file
-        await new Promise(resolve => setTimeout(resolve, 500));
-        // Make log file world-readable (dnsmasq creates it as 660)
-        await exec.exec('sudo', ['chmod', '0644', logFile]);
-    }
 }
 
 
@@ -3503,7 +3868,7 @@ async function installJavaTrust() {
  * System Integrity Validation for Safer Runner Action
  *
  * This module provides SHA256 checksum-based validation to ensure that critical
- * security configurations (dnsmasq.conf, resolv.conf, iptables rules) are not
+ * security configurations (Corefile, resolv.conf, iptables rules) are not
  * tampered with between setup completion and action end.
  *
  * Validation Flow:
@@ -3580,7 +3945,7 @@ function iptablesListArgs(spec) {
  * The sudo logging config file is appended at runtime (it depends on the sudo implementation)
  */
 exports.CRITICAL_FILES = [
-    '/etc/dnsmasq.conf',
+    '/etc/safer-runner/Corefile',
     '/etc/resolv.conf',
     '/etc/systemd/resolved.conf.d/no-stub.conf',
     '/etc/safer-runner/policy.json',
@@ -3729,7 +4094,7 @@ class SystemValidator {
     }
     /**
      * Calculate SHA256 checksum of a file
-     * Uses sudo to read files with restricted permissions (e.g., dnsmasq.conf with mode 600)
+     * Uses sudo to read files with restricted permissions (e.g. 0600 root-owned config)
      */
     async calculateFileChecksum(filePath) {
         try {
@@ -29602,6 +29967,14 @@ module.exports = require("crypto");
 
 "use strict";
 module.exports = require("diagnostics_channel");
+
+/***/ }),
+
+/***/ 2250:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("dns");
 
 /***/ }),
 

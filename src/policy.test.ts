@@ -5,10 +5,10 @@ import {
   MANDATORY_PASSTHROUGH,
   buildPolicyConfig,
   compilePattern,
-  dnsDomainsFor,
   expandPattern,
   matchesAny,
   normHost,
+  parseAllowedDomains,
   validatePattern
 } from './policy';
 
@@ -143,13 +143,53 @@ describe('buildPolicyConfig container posture', () => {
   });
 });
 
-describe('dnsDomainsFor', () => {
-  it('maps wildcard patterns to the suffix dnsmasq can forward', () => {
-    expect(dnsDomainsFor(['hosted-compute-*.githubapp.com', '*.pypi.org', 'github.com', 'a.b.example.com'])).toEqual([
-      'githubapp.com',
-      'pypi.org',
-      'github.com',
-      'a.b.example.com'
-    ]);
+describe('parseAllowedDomains', () => {
+  it('should parse space-separated domains', () => {
+    const result = parseAllowedDomains('example.com test.org api.service.io');
+    expect(result).toEqual(['example.com', 'test.org', 'api.service.io']);
+  });
+
+  it('should parse newline-separated domains', () => {
+    const result = parseAllowedDomains('example.com\ntest.org\napi.service.io');
+    expect(result).toEqual(['example.com', 'test.org', 'api.service.io']);
+  });
+
+  it('should parse comma-separated domains', () => {
+    const result = parseAllowedDomains('example.com,test.org,api.service.io');
+    expect(result).toEqual(['example.com', 'test.org', 'api.service.io']);
+  });
+
+  it('should parse mixed separators (spaces, newlines, commas)', () => {
+    const result = parseAllowedDomains('example.com, test.org\napi.service.io another.com');
+    expect(result).toEqual(['example.com', 'test.org', 'api.service.io', 'another.com']);
+  });
+
+  it('should trim whitespace from domains', () => {
+    const result = parseAllowedDomains('  example.com  , test.org\n  api.service.io  ');
+    expect(result).toEqual(['example.com', 'test.org', 'api.service.io']);
+  });
+
+  it('should filter out empty strings', () => {
+    const result = parseAllowedDomains('example.com,  ,\n\n,test.org');
+    expect(result).toEqual(['example.com', 'test.org']);
+  });
+
+  it('should handle empty input', () => {
+    expect(parseAllowedDomains('')).toEqual([]);
+    expect(parseAllowedDomains('   ')).toEqual([]);
+    expect(parseAllowedDomains('\n\n')).toEqual([]);
+  });
+
+  it('should handle single domain', () => {
+    const result = parseAllowedDomains('example.com');
+    expect(result).toEqual(['example.com']);
+  });
+
+  it('should handle YAML multiline format', () => {
+    const yamlStyle = `example.com
+      test.org
+      api.service.io`;
+    const result = parseAllowedDomains(yamlStyle);
+    expect(result).toEqual(['example.com', 'test.org', 'api.service.io']);
   });
 });

@@ -1,13 +1,11 @@
 /**
- * DNS (dnsmasq) and logging helpers carried over from v1. In v2 DNS is a supporting layer:
- * the proxy is the egress control; dnsmasq resolves for it, logs, and (enforce) refuses to
- * resolve names outside the allowlist so DNS can't be used as a tunnel.
+ * DNS plumbing and logging helpers carried over from v1. The resolver itself (CoreDNS) lives
+ * in src/dns.ts; this points the system at it (resolv.conf, systemd-resolved).
  */
 
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
-import { buildDnsConfig } from './config/dns-config-builder';
 
 export interface DnsUser {
   username: string;
@@ -115,81 +113,7 @@ DNSStubListener=no`;
   });
 }
 
-export async function setupDNSMasq(
-  mode: string,
-  allowedDomains: string,
-  blockRiskySubdomains: boolean,
-  dnsUsername: string,
-  logFile?: string,
-  primaryDnsServer?: string,
-  secondaryDnsServer?: string,
-  githubDomains?: string[]
-): Promise<string[]> {
-  // Build DNS configuration using the config builder module
-  const { config: dnsmasqConfig, blockedSubdomains } = buildDnsConfig({
-    mode: mode as 'analyze' | 'enforce',
-    allowedDomains,
-    blockRiskySubdomains,
-    dnsUsername,
-    logFile,
-    primaryDnsServer,
-    secondaryDnsServer,
-    githubDomains,
-    ipsets: false
-  });
-
-  // Write configuration to file
-  await exec.exec('sudo', ['tee', '/etc/dnsmasq.conf'], {
-    input: Buffer.from(dnsmasqConfig)
-  });
-
-  // Restrict permissions - only root should read the DNS username
-  await exec.exec('sudo', ['chmod', '600', '/etc/dnsmasq.conf']);
-  await exec.exec('sudo', ['chown', 'root:root', '/etc/dnsmasq.conf']);
-
-  return blockedSubdomains;
-}
-
-const DNSMASQ_START_ATTEMPTS = 2;
-
-/**
- * (Re)start dnsmasq, retrying once if it fails
- *
- * dnsmasq occasionally fails to start on hosted runners right after systemd-resolved
- * restarts. On failure the unit journal and port 53 listeners are printed so the cause
- * is visible in the job log.
- */
-export async function startDnsmasq(retryDelayMs: number = 2000): Promise<void> {
-  for (let attempt = 1; attempt <= DNSMASQ_START_ATTEMPTS; attempt++) {
-    const exitCode = await exec.exec('sudo', ['systemctl', 'restart', 'dnsmasq'], { ignoreReturnCode: true });
-    if (exitCode === 0) {
-      return;
-    }
-
-    core.warning(`dnsmasq failed to start (attempt ${attempt}/${DNSMASQ_START_ATTEMPTS})`);
-    await exec.exec('sudo', ['journalctl', '-xeu', 'dnsmasq', '--no-pager', '-n', '30'], { ignoreReturnCode: true });
-    await exec.exec('sudo', ['ss', '-lntup', 'sport = :53'], { ignoreReturnCode: true });
-
-    if (attempt < DNSMASQ_START_ATTEMPTS) {
-      await exec.exec('sudo', ['systemctl', 'reset-failed', 'dnsmasq'], { ignoreReturnCode: true });
-      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-    }
-  }
-
-  throw new Error('dnsmasq failed to start - see the journal output above');
-}
-
-export async function restartServices(logFile?: string): Promise<void> {
-  // Restart systemd-resolved and start dnsmasq
+/** Apply the resolved.conf drop-in written by setupDNSConfig (releases its stub listener). */
+export async function restartResolved(): Promise<void> {
   await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-  await startDnsmasq();
-
-  // After dnsmasq starts and creates log files, make them readable by all
-  if (logFile) {
-    // Wait a moment for dnsmasq to create the log file
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    // Make log file world-readable (dnsmasq creates it as 660)
-    await exec.exec('sudo', ['chmod', '0644', logFile]);
-  }
 }

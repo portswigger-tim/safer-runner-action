@@ -11,8 +11,7 @@
  *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
  */
 
-import { DANGEROUS_BROAD_DOMAINS } from './parsers/github-parser';
-import { RISKY_GITHUB_SUBDOMAINS, parseAllowedDomains } from './config/dns-config-builder';
+import { DANGEROUS_BROAD_DOMAINS, RISKY_GITHUB_SUBDOMAINS } from './parsers/github-parser';
 import { FLOW_LOG } from './constants';
 
 export type Mode = 'analyze' | 'enforce';
@@ -73,6 +72,15 @@ export function normHost(host: string | null | undefined): string {
 
 export function isIpLiteral(host: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
+}
+
+/** Split an allowlist input on whitespace, newlines and commas. */
+export function parseAllowedDomains(allowedDomains: string): string[] {
+  if (!allowedDomains) return [];
+  return allowedDomains
+    .split(/[\s,]+/)
+    .map(d => d.trim())
+    .filter(d => d.length > 0);
 }
 
 /** Return the normalised pattern, or throw with a reason. */
@@ -197,20 +205,4 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
     },
     warnings
   };
-}
-
-/**
- * Domains dnsmasq must forward for a set of patterns. dnsmasq's server=/d/ matches d and
- * all subdomains and has no mid-label wildcard, so a pattern maps to the suffix after its
- * last wildcard label (the proxy, not DNS, enforces the exact pattern).
- */
-export function dnsDomainsFor(patterns: string[]): string[] {
-  const out: string[] = [];
-  for (const p of patterns) {
-    const labels = p.split('.');
-    let i = labels.length;
-    while (i > 0 && !labels[i - 1].includes('*')) i--;
-    out.push(labels.slice(i).join('.'));
-  }
-  return uniq(out);
 }

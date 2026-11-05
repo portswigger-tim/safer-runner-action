@@ -1,5 +1,8 @@
 import { compilePattern, matchesAny } from '../policy';
+import { GITHUB_ACTIONS_DOMAINS } from './github-domains.generated';
 import {
+  DANGEROUS_BROAD_DOMAINS,
+  GITHUB_EXTRAS,
   getGitHubRequiredDomains,
   normalizeMetaDomain,
   fetchGitHubActionsDomains,
@@ -7,35 +10,37 @@ import {
 } from './github-parser';
 
 describe('GitHub Parser', () => {
-  describe('getGitHubRequiredDomains', () => {
-    it('should return array of GitHub domains', () => {
-      const domains = getGitHubRequiredDomains();
-      expect(domains).toBeInstanceOf(Array);
-      expect(domains.length).toBeGreaterThan(0);
+  describe('getGitHubRequiredDomains (generated meta snapshot + extras)', () => {
+    const domains = getGitHubRequiredDomains();
+
+    it('is the generated snapshot (normalised like the live list) plus the extras, de-duplicated', () => {
+      const snapshot = GITHUB_ACTIONS_DOMAINS.map(normalizeMetaDomain).filter(d => d !== null);
+      expect(domains).toEqual(expect.arrayContaining([...snapshot, ...GITHUB_EXTRAS]));
+      expect(new Set(domains).size).toBe(domains.length);
     });
 
-    it('should include core GitHub domains', () => {
-      const domains = getGitHubRequiredDomains();
-      expect(domains).toContain('github.com');
-      expect(domains).toContain('actions.githubusercontent.com');
-      expect(domains).toContain('api.github.com');
+    it('the only wildcards are the three meta itself lists', () => {
+      expect(domains.filter(d => d.includes('*')).sort()).toEqual([
+        '*.actions.githubusercontent.com',
+        '*.github.com',
+        '*.githubapp.com'
+      ]);
     });
 
-    it('should include the in-use productionresultssa accounts (sa0-19, 30-49, 100-199)', () => {
-      const domains = getGitHubRequiredDomains();
-      for (const i of [0, 19, 30, 49, 100, 150, 199]) {
-        expect(domains).toContain(`productionresultssa${i}.blob.core.windows.net`);
+    it('extras are exact names', () => {
+      expect(GITHUB_EXTRAS.filter(d => d.includes('*'))).toEqual([]);
+    });
+
+    it('never contains an over-broad shared namespace', () => {
+      for (const d of domains) {
+        expect(DANGEROUS_BROAD_DOMAINS.has(d.replace(/^\*\./, ''))).toBe(false);
       }
     });
 
-    it('should NOT list unregistered productionresultssa accounts (gaps or padding)', () => {
-      // SECURITY: Azure storage account names are a global, first-come namespace.
-      // Listing a name GitHub has not registered (a gap or beyond the in-use range)
-      // would let anyone claim it and receive exfiltrated data through enforce mode.
-      const domains = getGitHubRequiredDomains();
-      for (const i of [20, 29, 50, 99, 200, 255, 500]) {
-        expect(domains).not.toContain(`productionresultssa${i}.blob.core.windows.net`);
-      }
+    it('enumerates storage accounts exactly (no account-name globs)', () => {
+      const sa = domains.filter(d => d.startsWith('productionresultssa'));
+      expect(sa.length).toBeGreaterThan(0);
+      for (const d of sa) expect(d).toMatch(/^productionresultssa\d+\.blob\.core\.windows\.net$/);
     });
   });
 
@@ -191,8 +196,8 @@ describe('GitHub Parser', () => {
 
       const { domains, source } = await resolveGitHubDomains();
       expect(source).toBe('meta');
-      // core domain always present
-      expect(domains).toContain('github.com');
+      // the hand-curated extras always ride along
+      for (const d of GITHUB_EXTRAS) expect(domains).toContain(d);
       // live account present even though it is NOT in the static snapshot
       expect(domains).toContain('productionresultssa200.blob.core.windows.net');
       // static snapshot accounts not re-added from the stale list when meta succeeds

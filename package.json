@@ -13,6 +13,7 @@
     "package": "npm run clean && npm run format && npm test && npm run build && npm run build:pre && npm run build:post",
     "test": "jest && npm run test:py",
     "all": "npm run package",
+    "gen:domains": "tsc && node lib/scripts/gen-github-domains.js && prettier --write src/parsers/github-domains.generated.ts",
     "test:py": "python3 -m unittest discover -s proxy -p '*_test.py'"
   },
   "keywords": [

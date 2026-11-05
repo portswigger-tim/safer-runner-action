@@ -119,7 +119,7 @@ FORBIDDEN_UPSTREAM_NETS = tuple(
     for n in (
         "0.0.0.0/8",  # "this network"
         "10.0.0.0/8",  # RFC 1918
-        "100.64.0.0/10",  # CGNAT (RFC 6598) - dnsmasq's stop-dns-rebind does not cover it
+        "100.64.0.0/10",  # CGNAT (RFC 6598); the only rebind guard (the resolver does none)
         "127.0.0.0/8",  # loopback
         "169.254.0.0/16",  # link-local, incl. IMDS 169.254.169.254
         "172.16.0.0/12",  # RFC 1918

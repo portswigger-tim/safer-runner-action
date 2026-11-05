@@ -8,6 +8,16 @@ export const MITMPROXY_URL = `https://downloads.mitmproxy.org/${MITMPROXY_VERSIO
 /** sha256 of the tarball above (verified before anything is extracted). */
 export const MITMPROXY_SHA256 = 'f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5';
 
+/**
+ * CoreDNS is the resolver (replaced dnsmasq): stock upstream release, sha256-pinned. It is
+ * not in the Ubuntu 24.04/26.04 archives. amd64 only, like mitmproxy above.
+ */
+export const COREDNS_VERSION = '1.15.0';
+export const COREDNS_URL = `https://github.com/coredns/coredns/releases/download/v${COREDNS_VERSION}/coredns_${COREDNS_VERSION}_linux_amd64.tgz`;
+/** sha256 of the tarball above (matches upstream's published .sha256). */
+export const COREDNS_SHA256 = '2495c5b8f3fab6d0a336c397f1227b75406d86e6ec7125744a29df9e936ab8cd';
+export const DNS_UNIT = 'safer-runner-dns';
+
 /** Dedicated system user the proxy runs as. Its UID is exempt from the REDIRECT. */
 export const PROXY_USER = 'safer-runner-proxy';
 export const PROXY_UNIT = 'safer-runner-proxy';
@@ -19,10 +29,13 @@ export const MITMDUMP_BIN = `${INSTALL_DIR}/bin/mitmdump`;
 export const ADDON_DIR = `${INSTALL_DIR}/proxy`;
 export const ADDON_FILES = ['policy.py', 'policy_core.py'];
 export const TEARDOWN_BIN = `${INSTALL_DIR}/bin/teardown`;
+export const COREDNS_BIN = `${INSTALL_DIR}/bin/coredns`;
 
 /** Root-owned config. policy.json is read by the addon at (re)start. */
 export const ETC_DIR = '/etc/safer-runner';
 export const POLICY_FILE = `${ETC_DIR}/policy.json`;
+/** CoreDNS config: root:root 0644 (holds only the allowlist, which policy.json already shows). */
+export const COREFILE = `${ETC_DIR}/Corefile`;
 /** Public CA certificate (world-readable) - what NODE_EXTRA_CA_CERTS points at. */
 export const CA_CERT_FILE = `${ETC_DIR}/ca.pem`;
 /**

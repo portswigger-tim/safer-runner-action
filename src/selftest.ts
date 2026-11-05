@@ -2,14 +2,20 @@
  * Runtime self-tests, run on every job right after the firewall is in place. They prove on
  * the live runner that (1) the SNI-level check actually fires (not just the Host check -
  * the P0 spike once had SNI enforcement silently off for a whole run) and (2) the proxy
- * repoints: it ignores the IP the client dialled and connects to the name instead.
+ * repoints: it ignores the IP the client dialled and connects to the name instead; and (3) the
+ * resolver applies exact-FQDN semantics: a random subdomain of an exact entry is refused on
+ * the runner (enforce) and labelled in the DNS log.
  */
 
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
-import { FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from './constants';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import { DNS_LOG, FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from './constants';
 import { FlowRecord, flowLogSize, ipOf, readFlowLog } from './flowlog';
-import type { Mode } from './policy';
+import { probe } from './dns';
+import { parseDnsLog } from './parsers/dns-parser';
+import { compilePattern, matchesAny, type Mode } from './policy';
 
 export interface SelfTestResult {
   name: string;
@@ -70,8 +76,44 @@ export async function repointSelfTest(): Promise<SelfTestResult> {
   };
 }
 
-export async function runSelfTests(mode: Mode): Promise<SelfTestResult[]> {
-  const results = [await sniBlockSelfTest(mode), await repointSelfTest()];
+/** Preferred parent for the DNS probe: exact in the GitHub list, under no wildcard. */
+const DNS_PROBE_PARENT = 'objects.githubusercontent.com';
+
+/**
+ * A fresh name under an exact allowlist entry that no pattern allows - what a step would use to
+ * tunnel data through an allowlisted zone. Null if every exact entry sits under a wildcard.
+ */
+export function dnsProbeName(allow: string[], rand = crypto.randomBytes(6).toString('hex')): string | null {
+  const compiled = allow.map(compilePattern);
+  const exact = allow.filter(p => !p.includes('*'));
+  const parents = [...exact.filter(p => p === DNS_PROBE_PARENT), ...exact];
+  for (const parent of parents) {
+    const name = `srst-${rand}.${parent}`;
+    if (!matchesAny(name, compiled)) return name;
+  }
+  return null;
+}
+
+export async function dnsExactSelfTest(mode: Mode, name: string | null): Promise<SelfTestResult> {
+  if (!name) return { name: 'dns-exact', ok: true, detail: 'no exact allowlist entry to probe (skipped)' };
+  const want = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
+  const answer = await probe(name);
+  let logged = false;
+  for (let i = 0; i < 15 && !logged; i++) {
+    const log = fs.existsSync(DNS_LOG) ? fs.readFileSync(DNS_LOG, 'utf8') : '';
+    logged = parseDnsLog(log).some(q => q.name === name && q.verdict === want);
+    if (!logged) await new Promise(r => setTimeout(r, 200));
+  }
+  const ok = logged && (mode === 'analyze' || answer === 'NXDOMAIN');
+  return {
+    name: 'dns-exact',
+    ok,
+    detail: `${name} -> ${answer}; DNS log ${logged ? `labels it ${want}` : `has no ${want} line`}`
+  };
+}
+
+export async function runSelfTests(mode: Mode, dnsName: string | null): Promise<SelfTestResult[]> {
+  const results = [await sniBlockSelfTest(mode), await repointSelfTest(), await dnsExactSelfTest(mode, dnsName)];
   for (const t of results) {
     (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
   }

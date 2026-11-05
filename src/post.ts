@@ -1,17 +1,16 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
+import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
 import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
-import { parseAllowedDomains } from './config/dns-config-builder';
-import { parseDnsLogs } from './parsers/dns-parser';
-import { buildReport, parseDnsRebind, parseFirewallLog, summarizeContainers, summarizeFlows } from './report';
+import { readRefusedNames } from './parsers/dns-parser';
+import { buildReport, parseFirewallLog, summarizeContainers, summarizeFlows } from './report';
 import { containerAddresses } from './docker';
 import { type SelfTestWindow, withoutSelfTests } from './selftest';
 import { readSudoUsage } from './sudo';
 import { SystemValidator } from './validation';
-import type { Mode } from './policy';
+import { parseAllowedDomains, type Mode } from './policy';
 
 interface SetupMarker {
   mode: Mode;
@@ -19,6 +18,18 @@ interface SetupMarker {
   dockerRetained?: boolean;
   /** flow-log byte range the setup self-tests wrote */
   selfTestWindow?: SelfTestWindow;
+  /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
+  dnsSelfTestName?: string;
+}
+
+/** allow + passthrough from the root-owned policy the proxy and the resolver were built from. */
+function readPolicyPatterns(): string[] | undefined {
+  try {
+    const p = JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8')) as { allow?: string[]; passthrough?: string[] };
+    return [...(p.allow ?? []), ...(p.passthrough ?? [])];
+  } catch {
+    return undefined;
+  }
 }
 
 function readSetupMarker(): SetupMarker | null {
@@ -55,9 +66,7 @@ async function run(): Promise<void> {
     const hosts = summarizeFlows(records);
     const firewall = fs.existsSync(FIREWALL_LOG) ? parseFirewallLog(fs.readFileSync(FIREWALL_LOG, 'utf8')) : [];
     const containers = summarizeContainers(records, firewall, await containerAddresses());
-    const dns = await parseDnsLogs(DNS_LOG);
-    const dnsRefused = Array.from(new Set(dns.filter(d => /NXDOMAIN|blocked/i.test(d.status)).map(d => d.domain)));
-    const dnsRebind = fs.existsSync(DNS_LOG) ? parseDnsRebind(fs.readFileSync(DNS_LOG, 'utf8')) : [];
+    const dnsRefused = readRefusedNames(DNS_LOG).filter(n => n !== marker.dnsSelfTestName);
     let selfTests = [];
     try {
       selfTests = JSON.parse(fs.readFileSync(SELFTEST_FILE, 'utf8'));
@@ -88,7 +97,7 @@ async function run(): Promise<void> {
       hosts,
       firewall,
       dnsRefused,
-      dnsRebind,
+      allowPatterns: readPolicyPatterns(),
       // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
       userDomains: [
         ...parseAllowedDomains(core.getInput('allowed-domains')),

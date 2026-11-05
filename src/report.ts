@@ -212,15 +212,14 @@ const DENYLISTED = new Set(['sni-denied', 'host-denied']);
 const NO_NAME = new Set(['no-sni', 'ip-literal-sni', 'ip-literal-host', 'no-host']);
 
 /**
- * `upstream-unresolved` is only called an attack when dnsmasq logged that it dropped the
- * name's answer as a DNS-rebind (a private address); otherwise it is just a name that did
- * not resolve - calling a typo an attack would cost the report its credibility.
+ * An internal-address attempt is one the proxy's upstream IP guard refused (it logs the
+ * address). The resolver does no DNS-rebind filtering, so `upstream-unresolved` is just a name
+ * that did not resolve - calling a typo an attack would cost the report its credibility.
  */
-export function categorize(h: HostSummary, rebind: ReadonlySet<string> = new Set()): Category {
+export function categorize(h: HostSummary): Category {
   const r = h.reasons;
   if (r.some(x => FRONTING.has(x))) return 'fronting';
   if (r.includes('upstream-ip-forbidden')) return 'internal';
-  if (r.includes('upstream-unresolved') && rebind.has(h.name)) return 'internal';
   if (r.some(x => NOT_LISTED.has(x) || DENYLISTED.has(x))) return 'not-allowed';
   if (r.includes('upstream-unresolved')) return 'unresolved';
   if (r.length > 0 && r.every(x => NO_NAME.has(x))) return 'no-name';
@@ -258,13 +257,6 @@ export function addressClass(ip: string): string {
   if (/^f[cd]/.test(v6)) return 'private, ULA';
   if (v6.startsWith('ff')) return 'multicast';
   return 'internal';
-}
-
-/** dnsmasq: "possible DNS-rebind attack detected: <name>" (stop-dns-rebind, enforce mode). */
-export function parseDnsRebind(text: string): string[] {
-  const out = new Set<string>();
-  for (const m of text.matchAll(/possible DNS-rebind attack detected: (\S+)/g)) out.add(m[1].toLowerCase());
-  return Array.from(out);
 }
 
 const PORT_NAMES: Record<string, string> = {
@@ -498,6 +490,90 @@ export function containerSection(containers: ContainerSummary[], mode: Mode): st
   return md + '</details>\n\n';
 }
 
+// ---------------------------------------------------------------- DNS: subdomains of exact entries
+
+export interface SubdomainRefusals {
+  /** the exact allowlist entry the refused names sit under */
+  parent: string;
+  names: string[];
+}
+
+/**
+ * Refused lookups for names under an EXACT allowlist entry (`<x>.example.com` with only
+ * `example.com` listed): the new exact-by-default semantics at work, and the place a step
+ * would try to tunnel data through an allowlisted zone. Grouped by the longest exact parent;
+ * names the allowlist would accept, or whose `*.parent` is already listed (so the risky-subdomain
+ * denylist refused them), are left out.
+ */
+export function exactSubdomainRefusals(refused: string[], allowPatterns: string[]): SubdomainRefusals[] {
+  const compiled = compileUserPatterns(allowPatterns);
+  const exact = allowPatterns.filter(p => !p.includes('*')).map(p => p.toLowerCase());
+  const wild = new Set(allowPatterns.filter(p => p.startsWith('*.')).map(p => p.slice(2).toLowerCase()));
+  const groups = new Map<string, string[]>();
+  for (const raw of refused) {
+    const name = raw.toLowerCase();
+    if (matchesAny(name, compiled)) continue;
+    const parent = exact.filter(p => name.endsWith('.' + p) && !wild.has(p)).sort((a, b) => b.length - a.length)[0];
+    if (!parent) continue;
+    const list = groups.get(parent) ?? [];
+    if (!list.includes(name)) list.push(name);
+    groups.set(parent, list);
+  }
+  return Array.from(groups, ([parent, names]) => ({ parent, names })).sort(
+    (a, b) => b.names.length - a.names.length || a.parent.localeCompare(b.parent)
+  );
+}
+
+/**
+ * Labels a user would recognise and that can't carry data (a fixed vocabulary). Anything else
+ * left of the allowlisted parent is shown only as its length: the public job summary must not
+ * become the channel the resolver just closed.
+ */
+const BENIGN_LABELS = new Set([
+  'www',
+  'api',
+  'cdn',
+  'static',
+  'assets',
+  'img',
+  'images',
+  'media',
+  'm',
+  'mail',
+  'docs',
+  'auth',
+  'login',
+  'registry',
+  'download',
+  'downloads',
+  'files',
+  'objects',
+  'raw',
+  'gist',
+  'pkg',
+  'pkgs',
+  'npm',
+  'upload',
+  'uploads',
+  'app',
+  'apps',
+  'dev',
+  'test',
+  'staging',
+  'prod',
+  'beta',
+  'mirror',
+  'mirrors',
+  'repo',
+  'repos'
+]);
+
+export function redactSubdomain(name: string, parent: string): string {
+  const prefix = name.slice(0, name.length - parent.length - 1);
+  const labels = prefix.split('.').map(l => (BENIGN_LABELS.has(l) ? l : `‹${l.length} chars›`));
+  return `${labels.join('.')}.${parent}`;
+}
+
 // ---------------------------------------------------------------- report
 
 export interface ReportInput {
@@ -511,9 +587,13 @@ export interface ReportInput {
   job: string;
   hosts: HostSummary[];
   firewall: FirewallEvent[];
+  /** names the resolver refused (enforce) / would refuse (analyze); the setup self-test excluded */
   dnsRefused: string[];
-  /** names dnsmasq dropped as a possible DNS-rebind (their answer was a private address) */
-  dnsRebind?: string[];
+  /**
+   * The full policy (allow + passthrough patterns, GitHub's included): lets refused lookups
+   * under an exact entry be told apart and given a `*.parent` hint. Undefined: no split.
+   */
+  allowPatterns?: string[];
   /**
    * The job's own `allowed-domains` + `passthrough-domains` patterns. Allowed traffic to
    * anything else matched the GitHub list (allow = GitHub ∪ user), so it is shown as GitHub
@@ -535,11 +615,11 @@ const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0
  * addresses, IPs, the risky-subdomain denylist or the self-test - and only well-formed
  * hostnames (they are pasted into YAML).
  */
-export function suggestedAllowlist(hosts: HostSummary[], rebind: ReadonlySet<string> = new Set()): string[] {
+export function suggestedAllowlist(hosts: HostSummary[]): string[] {
   return Array.from(
     new Set(
       hosts
-        .filter(h => DENIED.has(h.verdict) && categorize(h, rebind) === 'not-allowed')
+        .filter(h => DENIED.has(h.verdict) && categorize(h) === 'not-allowed')
         .filter(h => h.reasons.some(r => NOT_LISTED.has(r)) && !h.reasons.some(r => DENYLISTED.has(r)))
         .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid'))
         .map(h => h.name)
@@ -608,8 +688,7 @@ function internalCell(h: HostSummary, verb: string): string {
     const ips = h.upstreamIps.map(ip => `${code(ip)} (${addressClass(ip)})`).join(', ');
     return `🕳️ **Internal address** → ${ips}, ${verb}`;
   }
-  // the address itself is not logged by dnsmasq: say only what was measured
-  return `🕳️ **Internal address** — DNS answer dropped by DNS-rebind protection`;
+  return `🕳️ **Internal address**, ${verb}`;
 }
 
 const NO_NAME_TEXT: Record<string, string> = {
@@ -643,7 +722,6 @@ export function buildReport(input: ReportInput): string {
   const { mode } = input;
   const enforce = mode === 'enforce';
   const advisory = enforce && input.sudoRetained === true;
-  const rebind = new Set((input.dnsRebind ?? []).map(n => n.toLowerCase()));
   const dnsRefused = new Set(input.dnsRefused.map(n => n.toLowerCase()));
   const blockedWord = enforce ? 'blocked' : 'would be blocked';
 
@@ -657,7 +735,7 @@ export function buildReport(input: ReportInput): string {
     'no-name': [],
     other: []
   };
-  for (const h of denied) groups[categorize(h, rebind)].push(h);
+  for (const h of denied) groups[categorize(h)].push(h);
   const byTries = (a: HostSummary, b: HostSummary) => b.tries - a.tries || a.name.localeCompare(b.name);
   for (const g of Object.values(groups)) g.sort(byTries);
   const bypass = [...groups.fronting, ...groups.internal];
@@ -678,7 +756,9 @@ export function buildReport(input: ReportInput): string {
   // container firewall events are reported in the container section, with their source
   const fw = firewallSummary(input.firewall.filter(e => !CONTAINER_PREFIXES.has(e.prefix)));
   const sudoRan = input.sudo?.ran.length ?? 0;
-  const suggest = suggestedAllowlist(denied, rebind);
+  const suggest = suggestedAllowlist(denied);
+  const subdomains = input.allowPatterns ? exactSubdomainRefusals(input.dnsRefused, input.allowPatterns) : [];
+  const inSubdomainGroup = new Set(subdomains.flatMap(g => g.names));
 
   // ---- title + chips
   let md = `## 🛡️ Safer Runner — egress${advisory ? ' — enforce (ADVISORY — sudo retained, not an enforced boundary)' : ''}\n\n`;
@@ -835,9 +915,7 @@ export function buildReport(input: ReportInput): string {
   if (bypass.length) {
     md += section('🚨 Bypass attempts', bypass, ['Host', 'What happened', 'Tries'], h => [
       code(h.name),
-      categorize(h, rebind) === 'fronting'
-        ? frontingCell(h, enforce ? '' : 'not blocked (analyze)')
-        : internalCell(h, verb),
+      categorize(h) === 'fronting' ? frontingCell(h, enforce ? '' : 'not blocked (analyze)') : internalCell(h, verb),
       String(h.tries)
     ]);
   }
@@ -854,6 +932,29 @@ export function buildReport(input: ReportInput): string {
       md += 'If the job needs them, add them (review each one first):\n\n';
       md += codeBlock('yaml', 'allowed-domains: |\n' + suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
     }
+  }
+  if (subdomains.length) {
+    const total = subdomains.reduce((a, g) => a + g.names.length, 0);
+    md += `### 🔎 Subdomains of exact entries (${total}) — DNS ${enforce ? 'refused' : 'would refuse'}\n\n`;
+    md +=
+      'A bare allowlist entry means that name only. These lookups were for names under one, so ' +
+      `they were ${enforce ? 'answered NXDOMAIN on the runner and never sent upstream' : 'logged (enforce answers them NXDOMAIN on the runner)'}.` +
+      ' Names are redacted: a refused lookup can carry data.\n\n';
+    const { shown, note } = capped(subdomains);
+    md += table(
+      ['Allowlisted as', 'Refused lookups', 'Examples', 'If the job needs them'],
+      [':--', '--:', ':--', ':--'],
+      shown.map(g => [
+        code(g.parent),
+        String(g.names.length),
+        g.names
+          .slice(0, 3)
+          .map(n => code(redactSubdomain(n, g.parent)))
+          .join(', ') + (g.names.length > 3 ? ', …' : ''),
+        `add ${code('*.' + g.parent)}`
+      ])
+    );
+    md += note + '\n\n';
   }
   if (groups.unresolved.length) {
     md += section('❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
@@ -932,11 +1033,11 @@ export function buildReport(input: ReportInput): string {
     diag.push('nothing outside the proxy');
   }
   if (input.dnsRefused.length) {
-    diag.push(plural(input.dnsRefused.length, 'DNS refusal'));
-    const shownAbove = new Set(denied.map(h => h.name));
+    diag.push(plural(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
+    const shownAbove = new Set([...denied.map(h => h.name), ...inSubdomainGroup]);
     const rest = input.dnsRefused.filter(d => !shownAbove.has(d.toLowerCase()));
     const { shown, note } = capped(rest);
-    body += `**DNS refused** (${input.dnsRefused.length}): `;
+    body += `**DNS ${enforce ? 'refused' : 'would refuse'}** (${input.dnsRefused.length}): `;
     body += rest.length
       ? shown.map(code).join(', ') + note
       : 'all of them are listed with their blocked connection above';

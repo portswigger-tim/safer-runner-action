@@ -1,5 +1,5 @@
 /**
- * v2 iptables: force 80/443 through the proxy, force all DNS through dnsmasq, and (enforce)
+ * v2 iptables: force 80/443 through the proxy, force all DNS through the resolver (CoreDNS), and (enforce)
  * deny everything else. Rulesets are generated as iptables-restore text (pure functions,
  * unit-tested) and applied atomically with `iptables-restore --noflush` into chains we own,
  * jumped to from position 1 of OUTPUT, so the image's own rules are left alone.
@@ -30,7 +30,7 @@ export interface FirewallOptions {
   proxyUid: number;
   dnsUid: number;
   proxyPort: number;
-  /** Upstream DNS servers dnsmasq forwards to (the only :53 egress allowed). */
+  /** Upstream DNS servers the resolver forwards to (the only :53 egress allowed). */
   dnsServers: string[];
   /** Proxy listener for container traffic (DNATed from the bridges); the addon classifies by it. */
   containerProxyPort: number;
@@ -45,7 +45,7 @@ const LOCAL_BRIDGES = ['docker0', 'br-+'];
 const RFC1918 = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
 
 /**
- * nat OUTPUT: send DNS to dnsmasq and 80/443 to the proxy. Exempt: the proxy and dnsmasq
+ * nat OUTPUT: send DNS to the resolver and 80/443 to the proxy. Exempt: the proxy and the resolver
  * uids (their own upstream connections), loopback, local bridges and the Azure platform IPs.
  */
 export function buildNatRules(o: FirewallOptions): string {
@@ -56,7 +56,7 @@ export function buildNatRules(o: FirewallOptions): string {
     `-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`,
     `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`,
     // Every resolver, whatever address it is aimed at (8.8.8.8, 168.63.129.16, GitHub's
-    // 127.0.0.100 egress resolver...), is answered by our dnsmasq (fixes C1/M4).
+    // 127.0.0.100 egress resolver...), is answered by our resolver (fixes C1/M4).
     `-A ${c} -p udp --dport 53 -j REDIRECT --to-ports 53`,
     `-A ${c} -p tcp --dport 53 -j REDIRECT --to-ports 53`,
     `-A ${c} -d 127.0.0.0/8 -j RETURN`,
@@ -74,7 +74,7 @@ export function buildNatRules(o: FirewallOptions): string {
 function commonFilterAllows(c: string): string[] {
   return [
     `-A ${c} -o lo -j RETURN`,
-    // REDIRECTed packets (to the proxy / dnsmasq): after nat OUTPUT the destination is
+    // REDIRECTed packets (to the proxy / the resolver): after nat OUTPUT the destination is
     // 127.0.0.1, but `-o` still reports the ORIGINAL route (e.g. eth0), so `-o lo` alone
     // never matches them. A 127/8 destination cannot leave the host.
     `-A ${c} -d 127.0.0.0/8 -j RETURN`,
@@ -88,7 +88,7 @@ function commonFilterAllows(c: string): string[] {
 
 /**
  * filter OUTPUT.
- * - enforce: allow lo, the proxy uid on 80/443, dnsmasq's uid to its upstream servers on 53,
+ * - enforce: allow lo, the proxy uid on 80/443, the resolver's uid to its upstream servers on 53,
  *   the Azure platform; reject everything else. A hole in the REDIRECT therefore still
  *   fails closed, and so does any non-80/443 egress.
  * - analyze: allow everything, but reject QUIC (UDP/443) so HTTP/3 clients fall back to TCP
@@ -153,7 +153,7 @@ export function buildIp6FilterRules(o: FirewallOptions): string {
 
 /**
  * nat PREROUTING for traffic containers send off their bridge (docker0, user networks): DNS
- * to dnsmasq and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
+ * to the resolver and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
  * route_localnet). Container -> host services and container <-> container (bridged traffic
  * traverses PREROUTING once Docker loads br_netfilter) are left alone; anything they don't
  * cover falls through to the DOCKER-USER chain below.
@@ -191,7 +191,7 @@ function containerForwardTail(c: string, o: FirewallOptions, icmpReject: string)
 
 /**
  * filter DOCKER-USER: everything a container forwards off-host that the DNAT did not send to
- * the proxy or dnsmasq. enforce rejects it (so a hole in the DNAT still fails closed), analyze
+ * the proxy or the resolver. enforce rejects it (so a hole in the DNAT still fails closed), analyze
  * logs it. DOCKER-USER, not FORWARD: Docker re-inserts its FORWARD jumps ahead of ours on
  * every restart, but never touches DOCKER-USER.
  */
