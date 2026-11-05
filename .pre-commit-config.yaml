@@ -1,0 +1,67 @@
+# Local git hooks for safer-runner-action.
+#
+# These run on `git commit` and keep the three things that must never drift in
+# sync with the source: formatting, tests, and the committed `dist/` bundles
+# (GitHub Actions runs `dist/*/index.js`, not the TypeScript).
+#
+# One-time setup:
+#     pip install pre-commit        # or: pipx install pre-commit
+#     pre-commit install
+#
+# Run against everything on demand:  pre-commit run --all-files
+# Bypass in a genuine emergency:     git commit --no-verify
+#
+# Note: `npm run package` is the authoritative *clean* build (clean + format +
+# test + build). These hooks do the same checks incrementally so a normal commit
+# doesn't pay for a full clean each time.
+
+minimum_pre_commit_version: '3.5.0'
+
+repos:
+  - repo: local
+    hooks:
+      # 1. Formatting — Prettier rewrites staged TS; if it changes anything the
+      #    commit stops so you can review and re-stage.
+      - id: prettier
+        name: prettier (format src/**/*.ts)
+        entry: npx prettier --write
+        language: system
+        files: ^src/.*\.ts$
+
+      # 2. Types — fast type check across the project (no emit).
+      - id: typecheck
+        name: tsc --noEmit
+        entry: npx tsc --noEmit
+        language: system
+        pass_filenames: false
+        files: \.ts$
+
+      # 3. Tests — jest + the Python proxy-policy tests.
+      - id: tests
+        name: jest + python tests
+        entry: npm test
+        language: system
+        pass_filenames: false
+        files: \.(ts|py)$
+
+      # 4. dist/ in sync — rebuild the three ncc bundles and fail if the result
+      #    differs from what's committed, so src and dist never diverge.
+      #    On failure: `git add dist` and commit again.
+      - id: build-dist
+        name: rebuild dist and verify it is in sync
+        entry: >-
+          bash -c '
+            set -e
+            npm run build
+            npm run build:pre
+            npm run build:post
+            if ! git diff --quiet -- dist; then
+              echo
+              echo "dist/ was rebuilt and differs from the commit."
+              echo "Run: git add dist   then commit again."
+              exit 1
+            fi
+          '
+        language: system
+        pass_filenames: false
+        files: ^(src/.*\.ts|package\.json|package-lock\.json|tsconfig\.json)$
