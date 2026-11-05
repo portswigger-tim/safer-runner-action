@@ -189,14 +189,43 @@ export function filterInternalSudoCommands(commands: SudoCommand[], internalComm
     if (cmd.denied) {
       return true;
     }
-    // Only system binaries are treated as internal - a same-named binary elsewhere is still reported
-    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
-    if (!match) {
-      return true;
-    }
-    const key = cmd.args ? `${match[1]} ${cmd.args}` : match[1];
-    return !internal.has(key);
+    return !isInternal(cmd, internal);
   });
+}
+
+/**
+ * Whether a (successful) command is one of the action's own. System binaries match by
+ * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
+ * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
+ */
+function isInternal(cmd: SudoCommand, internal: Set<string>): boolean {
+  const withArgs = (c: string) => (cmd.args ? `${c} ${cmd.args}` : c);
+  const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+  if (match) {
+    return internal.has(withArgs(match[1]));
+  }
+  return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
+}
+
+export interface SudoUsage {
+  /** commands the workflow ran with sudo */
+  ran: SudoCommand[];
+  /** commands sudo refused (classic sudo only - sudo-rs does not log refusals) */
+  refused: SudoCommand[];
+  /** commands the action ran itself (setup, validation, teardown) */
+  internal: SudoCommand[];
+}
+
+/** Split parsed sudo log entries by who ran them and whether they were allowed. */
+export function classifySudoCommands(commands: SudoCommand[], internalCommands: string[]): SudoUsage {
+  const internal = new Set(internalCommands);
+  const usage: SudoUsage = { ran: [], refused: [], internal: [] };
+  for (const cmd of commands) {
+    if (cmd.denied) usage.refused.push(cmd);
+    else if (isInternal(cmd, internal)) usage.internal.push(cmd);
+    else usage.ran.push(cmd);
+  }
+  return usage;
 }
 
 /**

@@ -6,12 +6,18 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { parseSudoLogsFromString, filterInternalSudoCommands, type SudoCommand } from './parsers/sudo-parser';
+import {
+  parseSudoLogsFromString,
+  filterInternalSudoCommands,
+  classifySudoCommands,
+  type SudoCommand,
+  type SudoUsage
+} from './parsers/sudo-parser';
 import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
 import { TEARDOWN_BIN, VALIDATION_STATE_FILE } from './constants';
 
 // Re-export SudoCommand type for convenience
-export type { SudoCommand } from './parsers/sudo-parser';
+export type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
 
 // Constants
 export const RUNNER_USERNAME = 'runner';
@@ -304,6 +310,21 @@ export function parseSudoLogs(logFile: string): SudoCommand[] {
     core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
     return [];
   }
+}
+
+/**
+ * Read the sudo log and split it into the workflow's own commands, refused attempts and the
+ * action's own commands (so the report never counts the action's sudo as the workflow's).
+ */
+export function readSudoUsage(logFile: string): SudoUsage {
+  try {
+    if (fs.existsSync(logFile)) {
+      return classifySudoCommands(parseSudoLogsFromString(fs.readFileSync(logFile, 'utf-8')), INTERNAL_SUDO_COMMANDS);
+    }
+  } catch (error) {
+    core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+  }
+  return { ran: [], refused: [], internal: [] };
 }
 
 /**

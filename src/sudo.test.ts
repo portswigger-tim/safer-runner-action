@@ -19,6 +19,7 @@ import {
   applyCustomSudoConfig,
   disableSudoForRunner,
   parseSudoLogs,
+  readSudoUsage,
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_SUDOERS_FILE,
   SUDO_LOGGING_RSYSLOG_FILE
@@ -356,6 +357,59 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
 
     it('returns empty array for missing file', () => {
       expect(parseSudoLogs(path.join(dir, 'missing.log'))).toEqual([]);
+    });
+  });
+
+  describe('readSudoUsage (report attribution)', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'safer-runner-sudo-'));
+    });
+    afterEach(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    // Real enforce job (v2.0.0-beta.2 suite, ubuntu-latest): the summary said "Workflow executed 4
+    // sudo commands". Teardown is the action's own post step; the other three were the
+    // workflow's attempts, all refused because enforce removed sudo.
+    it('attributes the post-step teardown to the action and refused attempts to the workflow', () => {
+      const log = path.join(dir, 'sudo.log');
+      const pwd = 'PWD=/home/runner/work/x/x';
+      fs.writeFileSync(
+        log,
+        [
+          `Nov  4 19:17:12 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/cat /etc/dnsmasq.conf`,
+          `Nov  4 19:17:13 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner`,
+          `Nov  4 19:17:35 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/true`,
+          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/journalctl -u safer-runner-proxy --no-pager`,
+          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/sbin/iptables-save`,
+          `Nov  4 19:20:30 : runner : ${pwd} ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown`
+        ].join('\n') + '\n'
+      );
+      const u = readSudoUsage(log);
+      expect(u.ran).toEqual([]);
+      expect(u.refused.map(c => c.command)).toEqual([
+        '/usr/bin/true',
+        '/usr/bin/journalctl',
+        '/usr/sbin/iptables-save'
+      ]);
+      expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv', '/opt/safer-runner/bin/teardown']);
+      // and the legacy filter no longer reports teardown as workflow usage
+      expect(parseSudoLogs(log).map(c => c.command)).not.toContain('/opt/safer-runner/bin/teardown');
+    });
+
+    it('only matches the teardown helper by its exact root-owned path', () => {
+      const log = path.join(dir, 'sudo.log');
+      fs.writeFileSync(
+        log,
+        'Nov  4 19:20:30 : runner : PWD=/ ; USER=root ; COMMAND=/home/runner/opt/safer-runner/bin/teardown\n' +
+          'Nov  4 19:20:31 : runner : PWD=/ ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown --evil\n'
+      );
+      expect(readSudoUsage(log).ran).toHaveLength(2);
+    });
+
+    it('is empty for a missing file', () => {
+      expect(readSudoUsage(path.join(dir, 'missing.log'))).toEqual({ ran: [], refused: [], internal: [] });
     });
   });
 
