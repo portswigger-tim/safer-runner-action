@@ -149,6 +149,55 @@ untouched — no body inspection required. SSH pushes are already blocked (only 
 proxied). Matching the POST path alone is enough; the discovery request's `service=` lives
 in the query string, but blocking the POST is what stops the push.
 
+## Built-in platform write endpoints (GitHub)
+
+Locking a GitHub host down — `api.github.com: { "*": GET, HEAD }`, or a default-deny filter on
+`github.com` — can break the Actions machinery and first-party actions that legitimately `POST`:
+OIDC token requests, the cache service, code-scanning / SARIF upload, artifact and attestation
+services, and so on. A user who filters a GitHub host without enumerating every endpoint the
+platform needs would break their own job.
+
+So the action ships a curated **built-in allow list of platform-required write endpoints** (host +
+method + path suffix), applied as *specific* rules that win over a read-only baseline
+(most-specific wins). It is the write-side analogue of the generated GitHub **domains** list
+(`github-domains.generated.ts`) and `RISKY_GITHUB_SUBDOMAINS` — a known, reviewed, updatable set.
+
+Design intent:
+
+- **Conservative scope — platform only.** Include only writes the platform or first-party actions
+  genuinely require, never workflow-chosen writes (creating releases, pushing repos, posting
+  statuses). Those are the exfil surface and stay user-controlled — that is the whole point of
+  the feature.
+- **Applied only when a GitHub host is filtered**, so it never changes behaviour for jobs that
+  don't use `http-filter`.
+- **Visible and overridable.** The report shows "N platform endpoints auto-allowed," and a toggle
+  (e.g. `allow-github-platform-writes: false`, default on) lets a strict user turn it off and
+  allowlist by hand.
+- **Built empirically from the proxy flow log.** A clean run in the real-runner suite captures
+  `proxy-flows.jsonl`; the built-in list is derived from the non-GET requests a baseline job
+  actually makes, and reuses the same `endsWith` suffix matching as the report reducer. From one
+  analyze run (checkout + clone + artifact + cache + logs) the platform writes were:
+    - `results-receiver.actions.githubusercontent.com` — `POST /twirp/…` (step logs,
+      `WorkflowStepUpdateService/WorkflowStepsUpdate` = step status updates, artifact
+      create / finalize).
+    - `productionresultssa*.blob.core.windows.net` — `PUT /actions-results/…` (artifact and log
+      blob uploads).
+
+  Notably **nothing** was written to `api.github.com` or `github.com` (the `github.com` POSTs were
+  `git-upload-pack` *fetches* — reads), and the hosted-compute **watchdog** ping is a *passthrough*
+  (SNI-only) host, so it cannot be path-filtered and is moot here. So locking `api.github.com` to
+  read-only is safe out of the box; the built-in list mainly protects a user who filters a
+  results / artifact / storage host.
+- **One sample is a seed, not the whole set.** Other job shapes add writes this run did not
+  exercise — OIDC token requests, `actions/cache` reserve/commit, and code-scanning **SARIF
+  upload** (an `api.github.com` write that *would* break a naive read-only `api.github.com` filter
+  on a scanning job). Sample those job types and grow the list; the toggle and the report's
+  "N auto-allowed" line keep it honest.
+
+Open: default-on when filtering a GitHub host (ergonomic; keeps the platform working) versus
+opt-in (strict by default). Leaning default-on-and-visible — without it, `http-filter` on a
+GitHub host is a footgun — with the toggle for a hard lockdown.
+
 ## Analyze vs enforce, and the report
 
 - **analyze:** log a `WOULD_BLOCK` for each method/path that enforce would refuse, so you
