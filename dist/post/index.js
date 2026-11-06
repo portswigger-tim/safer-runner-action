@@ -3296,34 +3296,40 @@ async function startProxy(o, timeoutMs = 90000) {
  * A blocked name can be the payload: `<encoded secret>.attacker.example`. Blocking the lookup
  * or connection is pointless if the report then publishes the name. GitHub already masks the
  * literal value of a registered secret in logs and summaries, so what gets through is an
- * ENCODED form - hex, base32, base64 - which in a DNS label looks like a long run of
- * `[a-z0-9_-]` with almost no vowels and a sprinkle of digits. Words don't. This complements
- * GitHub's masking; it doesn't replace it.
+ * ENCODED form - hex, base32, base64 - which in a DNS label looks like a run of `[a-z0-9_-]`
+ * with almost no vowels and a sprinkle of digits. Words don't. This complements GitHub's
+ * masking; it doesn't replace it.
  *
- * Rules, per label, everything left of the zone:
- *  - the zone is always shown: the registrable domain (last two labels, three under a
- *    multi-part public suffix) or a longer caller-given suffix (e.g. the allowlisted parent).
- *    The user still sees which zone to act on; only payload-looking labels are hidden.
- *  - a label of LONG_LABEL_LEN+ chars is redacted (DNS-tunnel chunks run to the 63-char limit);
- *    one under ENCODED_MIN_LEN (ignoring `-`/`_`) is shown. In between it is redacted to
- *    `‹N chars›` when it is all hex, or its letters have fewer than MAX_VOWEL_RATIO vowels, or it
- *    has MIN_DIGIT_RUNS+ separate runs of digits, or (tie-breaker, ENTROPY_MIN_LEN+) Shannon
- *    entropy of ENTROPY_BITS+ bits per char. Charset and length are the primary signals.
+ * Every label of a blocked name is checked, the registrable domain and the TLD included. Only a
+ * caller-given suffix (the allowlisted parent, from the job's own configuration) is shown as is.
+ * Per label:
+ *  - LONG_LABEL_LEN+ chars: redacted (DNS-tunnel chunks run to the 63-char limit);
+ *  - SHORT_HEX_LEN+ chars (ignoring `-`/`_`) of digits, or of hex with a digit: redacted;
+ *  - under ENCODED_MIN_LEN: shown;
+ *  - otherwise redacted when it is all hex, or its letters have fewer than MAX_VOWEL_RATIO
+ *    vowels, or it has MIN_DIGIT_RUNS+ separate runs of digits, or (tie-breaker,
+ *    ENTROPY_MIN_LEN+) Shannon entropy of ENTROPY_BITS+ bits per char.
+ * A redacted label, or a run of them, prints as REDACTED: no length, so the shape of the
+ * hidden part carries nothing either.
  *
- * Measured on random data: hex of any length 12+ and anything 40+ chars, 100%; base32 of 20
- * bytes (32 chars) 99.6%; 12-byte base64 (16 chars) ~72%; 9-byte base64 (12 chars) ~43%. Short
- * labels carry little each, and a stricter rule starts hiding real hostnames
- * (`runnerghubwus31`, `microsoftonline`). A best-effort filter, not a guarantee.
+ * Measured on random data: hex of 8+ chars (6+ with a digit) and anything 40+ chars, 100%; base32/base64 of 8-12
+ * chars ~55-65%, 16 chars ~75%, 24 chars ~93%. A stricter rule starts hiding real hostnames
+ * (`runnerghubwus31`, `microsoftonline`). This is a best-effort filter that keeps long encoded
+ * values out of the report; it can't stop a step that deliberately spreads data over many
+ * short or word-like names, and it doesn't apply to the raw logs on the runner
+ * (`proxy-flows.jsonl` and the DNS/firewall logs are unredacted).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ENTROPY_BITS = exports.ENTROPY_MIN_LEN = exports.LONG_LABEL_LEN = exports.MIN_DIGIT_RUNS = exports.MAX_VOWEL_RATIO = exports.ENCODED_MIN_LEN = exports.HEX_MIN_LEN = void 0;
+exports.REDACTED = exports.ENTROPY_BITS = exports.ENTROPY_MIN_LEN = exports.LONG_LABEL_LEN = exports.MIN_DIGIT_RUNS = exports.MAX_VOWEL_RATIO = exports.ENCODED_MIN_LEN = exports.SHORT_HEX_LEN = exports.HEX_MIN_LEN = void 0;
 exports.shannonBits = shannonBits;
 exports.looksEncoded = looksEncoded;
 exports.redactName = redactName;
 exports.needsRedaction = needsRedaction;
-exports.HEX_MIN_LEN = 12;
-/** labels shorter than this (after dropping `-`/`_`) are always shown: too short to carry much */
-exports.ENCODED_MIN_LEN = 12;
+exports.HEX_MIN_LEN = 8;
+/** digits, or hex with at least one digit, from this length (`a1b2c3`, `482913`) */
+exports.SHORT_HEX_LEN = 6;
+/** labels shorter than this (after dropping `-`/`_`) are shown unless SHORT_HEX_LEN catches them */
+exports.ENCODED_MIN_LEN = 8;
 /** words have about 40% vowels among their letters; random base32/64 about 20% */
 exports.MAX_VOWEL_RATIO = 0.25;
 /** separate runs of digits inside a label (`a1b22c3`): encodings scatter them, names don't */
@@ -3331,28 +3337,7 @@ exports.MIN_DIGIT_RUNS = 3;
 exports.LONG_LABEL_LEN = 40;
 exports.ENTROPY_MIN_LEN = 20;
 exports.ENTROPY_BITS = 4.0;
-/** Second-level labels under which the registrable domain has three labels (co.uk, com.au...). */
-const MULTI_PART_SUFFIXES = new Set([
-    'co.uk',
-    'org.uk',
-    'ac.uk',
-    'gov.uk',
-    'com.au',
-    'net.au',
-    'org.au',
-    'co.nz',
-    'co.jp',
-    'ne.jp',
-    'co.za',
-    'com.br',
-    'com.cn',
-    'co.in',
-    'co.kr',
-    'com.mx',
-    'com.tr',
-    'com.sg',
-    'com.hk'
-]);
+exports.REDACTED = '‹redacted›';
 function shannonBits(s) {
     const counts = new Map();
     for (const ch of s)
@@ -3368,9 +3353,11 @@ function looksEncoded(label) {
     if (l.length >= exports.LONG_LABEL_LEN)
         return true;
     const core = l.replace(/[-_]/g, '');
+    if (core.length >= exports.SHORT_HEX_LEN && /^[0-9a-f]+$/.test(core) && /[0-9]/.test(core))
+        return true;
     if (core.length < exports.ENCODED_MIN_LEN)
         return false;
-    if (/^[0-9a-f]+$/.test(core))
+    if (core.length >= exports.HEX_MIN_LEN && /^[0-9a-f]+$/.test(core))
         return true;
     const letters = core.replace(/[^a-z]/g, '');
     const vowels = letters.replace(/[^aeiouy]/g, '').length;
@@ -3380,24 +3367,22 @@ function looksEncoded(label) {
         return true;
     return core.length >= exports.ENTROPY_MIN_LEN && shannonBits(core) >= exports.ENTROPY_BITS;
 }
-function zoneLabels(labels) {
-    if (labels.length >= 3 && MULTI_PART_SUFFIXES.has(labels.slice(-2).join('.')))
-        return 3;
-    return Math.min(2, labels.length);
-}
 /**
- * `name` with every payload-looking label left of the zone replaced by `‹N chars›`.
- * `keepSuffix`: a longer suffix that is always shown (it must be a suffix of name).
+ * `name` with every payload-looking label replaced by REDACTED (a run of them by one).
+ * `keepSuffix`: a trusted suffix that is always shown (it must be a suffix of name).
  */
 function redactName(name, keepSuffix) {
     const n = name.toLowerCase();
     const labels = n.split('.');
-    let keep = zoneLabels(labels);
-    if (keepSuffix && (n === keepSuffix || n.endsWith('.' + keepSuffix))) {
-        keep = Math.max(keep, keepSuffix.split('.').length);
+    const keep = keepSuffix && (n === keepSuffix || n.endsWith('.' + keepSuffix)) ? keepSuffix.split('.').length : 0;
+    const out = [];
+    for (const l of labels.slice(0, labels.length - keep)) {
+        if (!looksEncoded(l))
+            out.push(l);
+        else if (out[out.length - 1] !== exports.REDACTED)
+            out.push(exports.REDACTED);
     }
-    const head = labels.slice(0, labels.length - keep).map(l => (looksEncoded(l) ? `‹${l.length} chars›` : l));
-    return [...head, ...labels.slice(labels.length - keep)].join('.');
+    return [...out, ...labels.slice(labels.length - keep)].join('.');
 }
 /** True when redactName would hide part of the name (never paste such a name into YAML). */
 function needsRedaction(name) {

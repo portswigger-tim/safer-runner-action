@@ -885,9 +885,9 @@ describe('DNS: subdomains of exact entries', () => {
 
   it('redacts payload-looking labels, keeps the allowlisted parent and ordinary labels', () => {
     expect(blockedName('www.example.com', 'example.com')).toBe('www.example.com');
-    expect(blockedName('aghvsbg8gd29ybgq.api.example.com', 'example.com')).toBe('‹16 chars›.api.example.com');
+    expect(blockedName('aghvsbg8gd29ybgq.api.example.com', 'example.com')).toBe('‹redacted›.api.example.com');
     expect(blockedName('0dd2149bb6f23853.objects.githubusercontent.com', 'objects.githubusercontent.com')).toBe(
-      '‹16 chars›.objects.githubusercontent.com'
+      '‹redacted›.objects.githubusercontent.com'
     );
     expect(blockedName('1.2.3.4')).toBe('1.2.3.4');
   });
@@ -903,7 +903,7 @@ describe('DNS: subdomains of exact entries', () => {
     });
     expect(md).toContain('### 🔎 Subdomains of exact entries (2) — DNS refused');
     expect(md).toContain(
-      '| `objects.githubusercontent.com` | 1 | `‹23 chars›.objects.githubusercontent.com` | add `*.objects.githubusercontent.com` |'
+      '| `objects.githubusercontent.com` | 1 | `‹redacted›.objects.githubusercontent.com` | add `*.objects.githubusercontent.com` |'
     );
     expect(md).toContain('| `example.com` | 1 | `www.example.com` | add `*.example.com` |');
     expect(md.toLowerCase()).not.toContain(secret.toLowerCase());
@@ -932,12 +932,19 @@ describe('DNS: subdomains of exact entries', () => {
     const md = buildReport({
       ...base,
       mode: 'enforce',
-      hosts: [h(`${secret}.attacker.com`, 'sni-not-allowed'), h('ok.attacker.com', 'sni-not-allowed')],
+      hosts: [
+        h(`${secret}.attacker.com`, 'sni-not-allowed'),
+        h('cdn.a1b2c3d4e5.com', 'sni-not-allowed'),
+        h('ok.attacker.com', 'sni-not-allowed')
+      ],
       dnsRefused: [`${secret}.evil.example.net`]
     });
     expect(md).not.toContain(secret);
-    expect(md).toContain('`‹20 chars›.attacker.com`');
-    expect(md).toContain('`‹20 chars›.evil.example.net`');
+    expect(md).toContain('`‹redacted›.attacker.com`');
+    expect(md).toContain('`‹redacted›.evil.example.net`');
+    // the registrable domain is not exempt
+    expect(md).toContain('`cdn.‹redacted›.com`');
+    expect(md).not.toContain('a1b2c3d4e5');
     expect(md).toContain('allowed-domains: |\n  ok.attacker.com\n```');
   });
 
