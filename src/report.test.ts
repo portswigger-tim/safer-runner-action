@@ -261,7 +261,7 @@ describe('Option R layout', () => {
       '## 🛡️ Safer Runner — egress — enforce (ADVISORY — docker retained, not an enforced boundary)'
     );
     expect(lines[2]).toBe(
-      '<kbd>⚠️ ENFORCE · ADVISORY</kbd> <kbd>⚠️ docker retained</kbd> <kbd>🧪 self-tests 2/2</kbd>'
+      '<kbd>⚠️ ENFORCE · ADVISORY</kbd> <kbd>⚠️ docker retained</kbd> <kbd>🔎 no config change seen (advisory)</kbd> <kbd>🧪 self-tests 2/2</kbd>'
     );
     expect(md).toContain(
       '> [!CAUTION]\n> **Bypass attempts to 4 hosts were blocked** — 2 Host/SNI spoofs and 2 names that point at internal addresses.'
@@ -386,7 +386,7 @@ describe('Option R layout', () => {
       integrity: { status: 'verified', body: '' }
     });
     expect(out).not.toContain('[!');
-    expect(out).toContain('<kbd>✅ boundary intact</kbd>');
+    expect(out).toContain('<kbd>✅ controls applied at setup</kbd> <kbd>🔎 no config change seen (advisory)</kbd>');
     expect(out).toContain('**✅ Nothing blocked.** 2 hosts · 2 requests · 2.0 KiB through the proxy.');
     // outside <details>: title, chips, verdict line, one small table
     const visible = out
@@ -620,7 +620,23 @@ describe('enforce labelling (review H2)', () => {
     );
     expect(md).toContain('> [!WARNING]');
     expect(md).toContain('<kbd>⚠️ ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo retained</kbd>');
-    expect(md).not.toContain('boundary intact');
+    expect(md).not.toContain('controls applied at setup');
+  });
+
+  it.each([
+    ['unavailable', '❔ config unverified'],
+    [undefined, '❔ config unverified'],
+    ['tampered', '🚨 config tampered'],
+    ['verified', '🔎 no config change seen (advisory)']
+  ] as const)('shows the post-run tamper check (%s) as its own chip, never as an intact boundary', (status, chip) => {
+    const md = buildReport({
+      ...base,
+      mode: 'enforce',
+      sudoRetained: false,
+      integrity: status ? { status, body: '' } : undefined
+    });
+    expect(md).toContain(`<kbd>✅ controls applied at setup</kbd> <kbd>${chip}</kbd>`);
+    expect(md).not.toContain('intact');
   });
 
   it('labels enforce with sudo removed as plain enforce', () => {

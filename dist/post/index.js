@@ -3899,6 +3899,17 @@ function suggestedAllowlist(hosts) {
         .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid') && !(0, redact_1.needsRedaction)(h.name))
         .map(h => h.name)));
 }
+/**
+ * The post-run tamper check as a chip. It is advisory (ADVISORY_REPORT_NOTE), and a check that
+ * could not run is unknown, never a pass.
+ */
+function integrityChip(status) {
+    if (status === 'tampered')
+        return '🚨 config tampered';
+    if (status === 'verified')
+        return '🔎 no config change seen (advisory)';
+    return '❔ config unverified';
+}
 /** What made enforce advisory: 'sudo', 'docker', 'sudo and docker', or '' (a boundary). */
 function retained(sudoRetained, dockerRetained) {
     return [sudoRetained ? 'sudo' : '', dockerRetained ? 'docker' : ''].filter(Boolean).join(' and ');
@@ -4033,14 +4044,13 @@ function buildReport(input) {
     let md = `## 🛡️ Safer Runner — egress${advisory ? ` — enforce (ADVISORY — ${advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
     const chips = [advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
     if (enforce) {
-        const weak = [];
         if (input.sudoRetained)
-            weak.push('⚠️ sudo retained');
+            chips.push('⚠️ sudo retained');
         if (input.dockerRetained)
-            weak.push('⚠️ docker retained');
-        if (tampered)
-            weak.push('🚨 config tampered');
-        chips.push(...(weak.length ? weak : ['✅ boundary intact']));
+            chips.push('⚠️ docker retained');
+        if (!input.sudoRetained && !input.dockerRetained)
+            chips.push('✅ controls applied at setup');
+        chips.push(integrityChip(input.integrity?.status));
     }
     else {
         chips.push(denied.length ? `${plural(denied.length, 'host')} would be blocked` : 'nothing would be blocked');
