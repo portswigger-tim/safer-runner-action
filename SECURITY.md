@@ -34,7 +34,7 @@ have a security report and need a private contact. Put no details in it.
 
 | Version            | Supported                    |
 | ------------------ | ---------------------------- |
-| v2 (latest beta)   | Yes                          |
+| v2 (latest v2.x.y) | Yes                          |
 | v1 (latest v1.x.y) | Yes, security fixes          |
 | Older tags         | No - update to the latest    |
 
@@ -47,9 +47,9 @@ have a security report and need a private contact. Put no details in it.
 - The build and release path: anything that would let a release contain code that isn't in
   this repository's reviewed source.
 
-Known, documented limitations (see "Limitations" in the [README](README.md)), such as
+Known, documented limitations (see [Limitations](docs/LIMITATIONS.md)), such as
 exfiltration through domains you have allowlisted, are not vulnerabilities on their own.
 
 ## Verifying releases
 
-See [Verifying this action](README.md#verifying-this-action-supply-chain) in the README.
+See [Verifying this action](docs/VERIFYING.md).

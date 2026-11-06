@@ -1,9 +1,9 @@
 # v2 DNS: CoreDNS, exact-FQDN allowlist (built)
 
-Status: **built** on branch `v2` (after v2.0.0-beta.4). It replaces dnsmasq. The design was settled
-by two spikes:
-- `spike/dns-exact-fqdn-coredns` (`docs/DNS-exact-fqdn-coredns-spike.md`)
-- `spike/dns-coredns-replace-vs-front` (`docs/spikes/dns-coredns/REPLACE-vs-FRONT.md`).
+Status: **shipped in v2.0.0** (built after v2.0.0-beta.4). It replaces dnsmasq. The design was
+settled by two spikes, kept on branches that are not part of `main`:
+- `spike/dns-exact-fqdn-coredns`
+- `spike/dns-coredns-replace-vs-front`
 
 ## What changed
 
@@ -48,7 +48,10 @@ by two spikes:
 - **No DNS-rebinding protection outside the proxy.** Every proxied flow is guarded by the proxy's IP check. A process that dials loopback, a docker bridge or IMDS:80 by name gets nothing it couldn't get by IP literal: those are exempt by design. The residual is browser-style rebinding of a local service inside the job, which is outside the egress threat model.
 - The allowlisted apex itself is a tiny side channel: query type, 0x20 case variation, timing.
 
-## Release note (draft)
+## Release note (as drafted for v2.0.0)
+
+> The "Subdomains of exact entries" report section mentioned here was removed in v2.1.0 (see
+> *Pieces* above). The shipped release notes are in [RELEASE-NOTES.md](RELEASE-NOTES.md).
 
 > **Breaking: the allowlist is now exact by default, and DNS enforces it.** In beta.1–4 an
 > `allowed-domains` entry such as `docker.io` also allowed every subdomain (`registry-1.docker.io`),
