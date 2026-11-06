@@ -1,5 +1,28 @@
 # v2 release notes
 
+## v2.2.1
+
+Hardening for the `http-filter` feature in v2.2.0. No input changes; drop-in.
+
+- **Tighter path matching.** On `github.com`, git paths are matched with or without the `.git`
+  suffix and case-insensitively for the owner/repo, and repeated slashes, `;`-parameters and
+  encoded path-traversal forms are refused — so a deny rule cannot be slipped by an alternate
+  spelling. To deny a repository's writes, name the endpoint — `owner/repo/git-receive-pack:
+  NONE` — rather than `owner/repo/*` (a longer-literal allow elsewhere can otherwise outrank a
+  short wildcard deny).
+- **The job summary no longer prints refused request paths.** A blocked request is shown by host,
+  method and reason only (the path as `‹path hidden›`), and a non-standard method as `INVALID`, so
+  a crafted path or method cannot carry data into the public summary. To learn what to allow, run
+  the host in `analyze` without its `http-filter` entry and use the suggested filter.
+- **The built-in GitHub platform allowlist is split into essential and optional.** Job lease and
+  completion, OIDC, the live-log stream and log metadata are always allowed, so filtering a GitHub
+  host never hangs the job. Artifact, cache, step-status and stored-log traffic are optional and
+  yield to an explicit user rule. An explicit `NONE` on `results-receiver.actions.githubusercontent.com`
+  or the `productionresultssa*.blob.core.windows.net` storage host can therefore drop that job's
+  stored logs, step summary, status, artifacts and cache — the job still completes.
+- **`pre` fails closed on an invalid `http-filter`.** In `enforce`, a malformed filter now fails
+  the job at setup rather than continuing.
+
 ## v2.2.0
 
 New: **`http-filter`** — restrict an allowlisted host by HTTP method and path. No changes to
