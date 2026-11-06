@@ -1941,7 +1941,7 @@ function parseHttpFilter(raw) {
         if (!rules.length) {
             throw new Error(`${where}: '${key}' has no path rules (write "*": NONE to refuse every request)`);
         }
-        const compiled = new Map();
+        const compiled = [];
         for (const r of rules) {
             let path;
             try {
@@ -1950,9 +1950,7 @@ function parseHttpFilter(raw) {
             catch (e) {
                 throw new Error(`${r.where}: ${e.message}`);
             }
-            if (compiled.has(path))
-                throw new Error(`${r.where}: duplicate path pattern '${r.key}' for '${key}'`);
-            compiled.set(path, parseMethods(r.value, `${r.where} '${r.key}'`));
+            compiled.push({ path, methods: parseMethods(r.value, `${r.where} '${r.key}'`), where: r.where, key: r.key });
         }
         for (const entry of (0, policy_1.expandPattern)(unquote(key))) {
             let host;
@@ -1964,7 +1962,16 @@ function parseHttpFilter(raw) {
             }
             if (out.has(host))
                 throw new Error(`${where}: '${host}' is listed more than once`);
-            out.set(host, { host, rules: Array.from(compiled, ([path, methods]) => ({ path, methods })) });
+            // on a git host, spellings of one repository path are the same pattern (see GIT_HOSTS)
+            const identity = policy_1.GIT_HOSTS.includes(host) ? policy_1.gitPatternKey : (p) => p;
+            const seen = new Set();
+            for (const r of compiled) {
+                const id = identity(r.path);
+                if (seen.has(id))
+                    throw new Error(`${r.where}: duplicate path pattern '${r.key}' for '${host}'`);
+                seen.add(id);
+            }
+            out.set(host, { host, rules: compiled.map(({ path, methods }) => ({ path, methods })) });
         }
     }
     return Array.from(out.values());
@@ -2419,12 +2426,18 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
 exports.GITHUB_PLATFORM_ENDPOINTS = [
     // results service RPCs: step logs, step status (WorkflowStepsUpdate), artifact + cache
     { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'] },
+    // runner live-log stream (websocket upgrade)
+    { host: 'results-receiver.actions.githubusercontent.com', path: '/_ws/ingest.sock', methods: ['GET'] },
     // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
     // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
     { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-results/*', methods: ['GET', 'HEAD', 'PUT'] },
     { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-cache/*', methods: ['GET', 'HEAD', 'PUT'] },
     // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
-    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] }
+    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
+    // job lease renewal (/<n>/renewjob) - refusing it ends the job
+    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
+    // job completion, sent through the proxy after the last post step
+    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
 ];
 /**
  * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
@@ -2934,7 +2947,7 @@ function generateSudoersConfig(commands, username = 'runner') {
  * the request path without its query string, percent-decoded once.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MAX_PATH_PATTERN = exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = exports.CONTAINER_TLS = void 0;
+exports.GIT_HOSTS = exports.MAX_PATH_PATTERN = exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = exports.CONTAINER_TLS = void 0;
 exports.normHost = normHost;
 exports.isIpLiteral = isIpLiteral;
 exports.parseAllowedDomains = parseAllowedDomains;
@@ -2943,6 +2956,7 @@ exports.expandPattern = expandPattern;
 exports.compilePattern = compilePattern;
 exports.matchesAny = matchesAny;
 exports.validatePathPattern = validatePathPattern;
+exports.gitPatternKey = gitPatternKey;
 exports.patternsOverlap = patternsOverlap;
 exports.isDangerouslyBroad = isDangerouslyBroad;
 exports.buildHttpFilter = buildHttpFilter;
@@ -3067,6 +3081,23 @@ function validatePathPattern(pattern) {
         throw new Error(`'**' is not supported (a lone '*' segment already spans any depth): '${pattern}'`);
     }
     return p;
+}
+/**
+ * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
+ * case-insensitive and .git is optional, so the addon matches paths there case-insensitively
+ * and with or without ".git" on each segment. Mirrors GIT_HOSTS in proxy/policy_core.py.
+ */
+exports.GIT_HOSTS = ['github.com'];
+function stripGit(seg) {
+    return seg.endsWith('.git') && seg.length > 4 ? seg.slice(0, -4) : seg;
+}
+/** Identity of a path pattern on a git host: two patterns with one key are duplicates. */
+function gitPatternKey(pattern) {
+    const p = validatePathPattern(pattern).toLowerCase();
+    return p
+        .split('/')
+        .map(s => (stripGit(s) === '*' ? s : stripGit(s)))
+        .join('/');
 }
 /**
  * Whether two domain patterns can match a common name (approximate: each is tried against a
