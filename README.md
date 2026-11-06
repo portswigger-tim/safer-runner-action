@@ -49,7 +49,8 @@ and suggests an `allowed-domains` block.
 
 The summary leads with a verdict and groups blocked traffic by cause: **bypass attempts**
 (Host/SNI mismatch, or an allowlisted name resolving to an internal address) first, then
-hosts **not on the allowlist** (with YAML to paste), then traffic with **no hostname**.
+hosts **not on the allowlist** (with YAML to paste), then requests refused by
+[`http-filter`](#http-path-and-method-filtering-http-filter), then traffic with **no hostname**.
 Allowed traffic is split into the job's own hosts and GitHub platform traffic (collapsed),
 and self-tests, non-proxied packets, DNS refusals, sudo use and the config check sit in one
 collapsed **Diagnostics** section. Totals count only traffic that was actually allowed, and
@@ -82,6 +83,124 @@ entries (`*.x`, `.x`) remain a DNS channel to that zone **by design** — use th
 you trust, and prefer exact names. GitHub's own wildcards are the three `api.github.com/meta`
 lists (`*.github.com`, `*.githubapp.com`, `*.actions.githubusercontent.com`).
 
+## HTTP path and method filtering (`http-filter`)
+
+`allowed-domains` controls *where* a job can connect. It does not control *what* the job does
+there. A job that can reach `github.com` can push to any repository. A job that can reach
+`registry.npmjs.org` can publish a package. `http-filter` closes this gap on the hosts you name:
+on those hosts, the proxy allows only the methods and paths you list.
+
+```yaml
+with:
+  mode: enforce
+  allowed-domains: |
+    registry.npmjs.org
+    pypi.org
+    files.pythonhosted.org
+  http-filter: |
+    registry.npmjs.org:
+      "*": GET, HEAD                               # npm install: yes. npm publish (PUT): no
+    pypi.org:
+      "*": GET, HEAD
+    files.pythonhosted.org:
+      "*": GET, HEAD
+    github.com:
+      "*": "*"                                     # baseline: allow everything
+      "*/git-receive-pack": NONE                   # refuse all pushes...
+      "myorg/*/git-receive-pack": "*"              # ...except to repositories in myorg
+```
+
+The value is a map: host → (path pattern → allowed methods).
+
+### Rules
+
+1. **A filter only removes access.** It applies only to a host the job can already reach. A
+   filter on a host that is not allowed has no effect: the host stays blocked, and the action
+   warns.
+2. **Naming a host makes it an allowlist.** On a filtered host, a request passes only if a rule
+   matches its path **and** lists its method. The proxy refuses every other request to that
+   host (HTTP 403).
+3. **The most specific path wins.** `myorg/*/git-receive-pack` overrides `*/git-receive-pack`,
+   which overrides `*`. Use this to make exceptions.
+4. **Methods:** a comma list (`GET, HEAD`); `*` or `ALL` for any method; `NONE` (or an empty
+   list) to refuse a path. `NONE` lets you remove one path from a `"*": "*"` baseline.
+5. **One glob: `*`, the same as in `allowed-domains`.** In a path, `/` plays the part of `.` in
+   a name. A `*` on its own spans any depth: `*/git-receive-pack` matches
+   `owner/repo.git/git-receive-pack`. A `*` inside a segment matches within that segment only
+   (`v*`). There is no `**`.
+6. Methods ignore case. Paths do not. The query string is ignored.
+
+### Examples
+
+**Make a host read-only.** Package registries, container registries and REST APIs separate
+reads from writes by method: installs and pulls use `GET`/`HEAD`, publishes and pushes use
+`PUT`/`POST`/`PATCH`. One line per host blocks the write and keeps the job working:
+
+```yaml
+http-filter: |
+  registry.npmjs.org:
+    "*": GET, HEAD         # npm install: yes. npm publish: no
+  ghcr.io:
+    "*": GET, HEAD         # docker pull: yes. docker push: no
+  api.github.com:
+    "*": GET, HEAD         # no API writes
+```
+
+**Allow git pushes to some repositories only.** git fetch and git push both use `POST`, so a
+method rule cannot tell them apart. The path can: a push ends in `git-receive-pack`, a fetch in
+`git-upload-pack`.
+
+```yaml
+http-filter: |
+  github.com:
+    "*": "*"
+    "*/git-receive-pack": NONE                   # refuse all pushes...
+    "portswigger-tim/*/git-receive-pack": "*"    # ...except to this org (most specific wins)
+```
+
+To refuse all pushes, remove the last line. SSH pushes are already blocked (only ports 80 and
+443 go through the proxy).
+
+### GitHub platform endpoints
+
+When you filter a GitHub host, the runner and first-party actions still need some endpoints:
+step logs and status, the cache and artifact services, and the OIDC token request. The action
+adds these from a built-in list. Each entry names one exact host, path and method; the entries
+are more specific than your rules, so they win. The list is explicit. It is **not** a blanket
+`"*": GET, HEAD` rule, which would trust much more than the platform uses.
+
+- The list applies only when you filter a GitHub host. Jobs without `http-filter` do not change.
+- It holds only what the platform needs. Writes the workflow chooses stay yours to allow. For
+  example, code-scanning SARIF upload is not in the list: a job that uploads SARIF adds
+  `"*/code-scanning/sarifs": POST` on `api.github.com`.
+- The job summary shows how many platform endpoints the action added. Set
+  `allow-github-platform: false` to turn the list off and allow the endpoints yourself.
+
+### In the job summary
+
+- **Analyze** refuses nothing. The summary lists each request your filter *would* refuse:
+  method and path, with parts that look like encoded data redacted.
+- **Enforce** refuses those requests and lists them, each with a rule to add if the job needs it.
+- Both modes suggest an `http-filter` built from the job's traffic. Reads collapse to one
+  `"*": GET, HEAD` line per host. Writes keep their paths, with ids and hashes replaced by `*`.
+  git push and fetch stay pinned to the repositories the job used. Analyze always shows the
+  suggestion; enforce shows it when the filter refused a request. Review it before you use it:
+  the action never applies it.
+
+### Limits
+
+- **Intercepted HTTPS and plain HTTP only.** The proxy checks `passthrough-domains` hosts and
+  container HTTPS by name only, so it cannot see their paths. A filter on a passthrough host
+  has no effect, and the action warns.
+- **No body or query inspection.** A filter limits where and how a job can write. It cannot stop
+  data hidden inside an allowed write to an allowed path, or a small amount in a path. It is not
+  a data boundary.
+- **Uploads to a separate storage host.** git LFS objects, and some registries' uploads, go to
+  a different host from the one you filtered. Filter that host too, or leave it off
+  `allowed-domains`.
+
+Design and rationale: [docs/DESIGN-L7-path-method.md](docs/DESIGN-L7-path-method.md).
+
 ## What enforce mode does
 
 | Traffic | Result |
@@ -111,6 +230,8 @@ random name under an exact allowlist entry. In enforce mode the job fails if any
 | `dns-servers` | `9.9.9.9 149.112.112.112` (Quad9) | Upstream resolvers CoreDNS forwards allowlisted names to: IP addresses, space/comma/newline separated. The first is the primary, the rest are tried in order. Empty = the default |
 | `disable-sudo` | follows `mode` | `enforce` removes the runner's sudo after setup; `analyze` keeps it. Set `true`/`false` to override; keeping sudo in enforce labels the job **ADVISORY** |
 | `docker` | follows `mode` | `enforce` removes docker access (`remove-group`); `analyze` keeps it (`keep`). `keep`: leave docker alone. `remove-group`: take the runner out of the docker group and lock the socket to root. `stop`: stop and disable the docker daemon. In enforce, `keep` makes the job **ADVISORY**, and a removal that doesn't take effect fails the job |
+| `http-filter` | | Per host: path pattern → allowed methods. On a filtered host, everything not listed is refused. See [HTTP path and method filtering](#http-path-and-method-filtering-http-filter) |
+| `allow-github-platform` | `true` | When a GitHub host is filtered, allow the exact endpoints the runner and first-party actions need (logs, cache, artifacts, OIDC). `false`: allow them yourself |
 | `fail-on-tampering` | follows `mode` | `enforce` fails the job (post step) if the safer-runner configuration changed during the job; `analyze` never breaks a build. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`). Advisory: see [Limitations](#limitations-read-these) |
 
 An explicit value always wins; leaving one unset follows the mode. The proxy's ports (a free pair in
@@ -261,8 +382,9 @@ files that control the pipeline, and more), see
   (those addresses are reachable directly by design), but a browser-style rebinding attack on a
   local service inside the job is not prevented.
 - **Allowlisted hosts are full-capability channels.** If `github.com` is allowed, a malicious
-  step can push data to a repository it controls. v2 narrows egress to names; it can't judge
-  what a request does.
+  step can push data to a repository it controls. `allowed-domains` narrows egress to names; it
+  can't judge what a request does. Use [`http-filter`](#http-path-and-method-filtering-http-filter)
+  to make a host read-only or to limit its writes to named paths.
 - **Only TCP 80/443 is proxied.** In enforce, other ports are rejected, including SSH
   (`git@github.com`).
 - **Containers are a boundary only when docker is removed** (which enforce does). With

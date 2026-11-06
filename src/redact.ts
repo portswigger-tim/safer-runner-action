@@ -79,3 +79,22 @@ export function redactName(name: string): string {
 export function needsRedaction(name: string): boolean {
   return redactName(name) !== name.toLowerCase();
 }
+
+/** A URL path segment that looks like encoded data: any `.`-separated part checked as a label is. */
+export function segmentLooksEncoded(segment: string): boolean {
+  return segment.split('.').some(looksEncoded);
+}
+
+/**
+ * `path` with every payload-looking segment replaced by REDACTED (a run of them by one), for
+ * printing a refused request: a path, like a hostname, can be the data a step tried to send.
+ * The query string is never shown (the proxy already drops it from the flow log).
+ */
+export function redactPath(path: string): string {
+  const out: string[] = [];
+  for (const s of path.split('?', 1)[0].split('/')) {
+    if (!segmentLooksEncoded(s)) out.push(s);
+    else if (out[out.length - 1] !== REDACTED) out.push(REDACTED);
+  }
+  return out.join('/');
+}

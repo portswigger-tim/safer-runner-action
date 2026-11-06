@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { REDACTED, looksEncoded, needsRedaction, redactName } from './redact';
+import { REDACTED, looksEncoded, needsRedaction, redactName, redactPath, segmentLooksEncoded } from './redact';
 
 const b32 = (b: Buffer) => {
   const A = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -92,5 +92,33 @@ describe('redactName', () => {
       expect(needsRedaction(n)).toBe(false);
     }
     expect(needsRedaction('0dd2149bb6f23853.example.org')).toBe(true);
+  });
+});
+
+describe('redactPath', () => {
+  it('hides payload-looking segments, a run of them as one marker, and never shows the query', () => {
+    expect(redactPath('/evil/c2VjcmV0LXRva2VuLTEyMzQ1Njc4.git/git-receive-pack')).toBe(
+      `/evil/${REDACTED}/git-receive-pack`
+    );
+    expect(redactPath('/up/0dd2149bb6f23853/f4crg4pntvrqdozj/x')).toBe(`/up/${REDACTED}/x`);
+    expect(redactPath('/upload?token=0dd2149bb6f23853')).toBe('/upload');
+  });
+
+  it('checks each dot-separated part of a segment, like the labels of a name', () => {
+    expect(segmentLooksEncoded('notes.0dd2149bb6f23853.txt')).toBe(true);
+    expect(redactPath('/files/notes.0dd2149bb6f23853.txt')).toBe(`/files/${REDACTED}`);
+  });
+
+  it('leaves ordinary paths alone', () => {
+    for (const p of [
+      '/',
+      '/myorg/safer-runner-action.git/info/refs',
+      '/myorg/app.git/git-upload-pack',
+      '/repos/o/r/issues/12/comments',
+      '/twirp/results.services.receiver.v1.ResultsService/WorkflowStepsUpdate',
+      '/simple/requests/'
+    ]) {
+      expect(redactPath(p)).toBe(p);
+    }
   });
 });

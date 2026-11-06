@@ -6,7 +6,7 @@
 import { ipOf, type FlowRecord } from './flowlog';
 import { compilePattern, expandPattern, isIpLiteral, matchesAny, type Mode } from './policy';
 import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
-import { needsRedaction, redactName } from './redact';
+import { needsRedaction, redactName, redactPath, segmentLooksEncoded } from './redact';
 
 export interface HostSummary {
   name: string;
@@ -205,7 +205,7 @@ export function parseFirewallLog(text: string): FirewallEvent[] {
 // ---------------------------------------------------------------- classification
 
 /** Why a host was blocked, most severe first. A host goes in its most severe category only. */
-export type Category = 'fronting' | 'internal' | 'not-allowed' | 'unresolved' | 'no-name' | 'other';
+export type Category = 'fronting' | 'internal' | 'not-allowed' | 'filtered' | 'unresolved' | 'no-name' | 'other';
 
 const FRONTING = new Set(['host-sni-mismatch', 'authority-host-mismatch']);
 const NOT_LISTED = new Set(['sni-not-allowed', 'host-not-allowed']);
@@ -222,6 +222,7 @@ export function categorize(h: HostSummary): Category {
   if (r.some(x => FRONTING.has(x))) return 'fronting';
   if (r.includes('upstream-ip-forbidden')) return 'internal';
   if (r.some(x => NOT_LISTED.has(x) || DENYLISTED.has(x))) return 'not-allowed';
+  if (r.some(x => FILTER_REASONS.has(x))) return 'filtered';
   if (r.includes('upstream-unresolved')) return 'unresolved';
   if (r.length > 0 && r.every(x => NO_NAME.has(x))) return 'no-name';
   return 'other';
@@ -507,6 +508,279 @@ export function containerSection(containers: ContainerSummary[], mode: Mode): st
   return md + '</details>\n\n';
 }
 
+// ---------------------------------------------------------------- http-filter
+
+/** Flow-log reasons for a request the http-filter refused (proxy/policy_core.py). */
+const FILTER_REASONS = new Set(['method-not-allowed', 'path-not-allowed']);
+const FILTER_REASON_TEXT: Record<string, string> = {
+  'method-not-allowed': 'method not allowed on this path',
+  'path-not-allowed': 'path not allowed'
+};
+/** Not the exfil surface: in a suggestion they collapse to one `"*"` line per host. */
+const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
+const METHOD_ORDER = [...READ_METHODS, 'POST', 'PUT', 'PATCH', 'DELETE'];
+
+/**
+ * Endpoints a suggestion keeps path-specific, matched on the end of the path, with the methods
+ * they use. On these a read and a write share a method (git fetch and push are both POST), so
+ * folding them into a host's method baseline would re-open the write everywhere. Seeded with
+ * the git pack URLs; add more as they come up (registry blob uploads, PyPI `legacy`, ...). A
+ * missing entry only makes a suggestion looser, never wrong at enforcement: the user reviews it.
+ */
+export const SENSITIVE_PATH_SUFFIXES: readonly { suffix: string; methods: readonly string[] }[] = [
+  { suffix: 'git-receive-pack', methods: ['POST'] },
+  { suffix: 'git-upload-pack', methods: ['POST'] }
+];
+
+/**
+ * Hosts the built-in platform allowlist covers (step logs, artifacts, caches, OIDC). Left out of
+ * the suggestion, which describes the job's own traffic.
+ */
+const PLATFORM_HOSTS = ['*.actions.githubusercontent.com', 'productionresultssa*.blob.core.windows.net'];
+/** Distinct literals kept at one path position (same prefix); more than this become `*`. */
+const MAX_PINNED = 3;
+/** Path segments safe to paste into YAML and Markdown as they are; anything else is templated. */
+const SAFE_SEGMENT = /^[A-Za-z0-9._~@+-]+$/;
+
+export interface FilterBlock {
+  /** redacted like any refused name */
+  host: string;
+  method: string;
+  /** redacted path (src/redact.ts), no query string */
+  path: string;
+  reason: string;
+  verdict: string;
+  tries: number;
+}
+
+export interface HttpFilterRule {
+  /** path pattern as written in `http-filter` (no leading `/`; `*` spans any depth) */
+  path: string;
+  /** allowed methods; empty = NONE */
+  methods: string[];
+}
+
+export interface HttpFilterSuggestion {
+  hosts: { host: string; rules: HttpFilterRule[] }[];
+  /** requests the suggestion was built from */
+  requests: number;
+  rules: number;
+  /** sensitive write endpoints kept path-specific */
+  specific: number;
+  /** a write rule had to start with `*`: generalised heavily, review it */
+  coarse: boolean;
+}
+
+export interface HttpFilterReport {
+  /** requests the filter refused (enforce) or would refuse (analyze) */
+  blocks: FilterBlock[];
+  /** rules that would let the refused requests through, if the job needs them */
+  fixes: HttpFilterSuggestion;
+  /** a whole `http-filter` from the job's observed traffic (level B: read/write split) */
+  suggestion: HttpFilterSuggestion;
+}
+
+interface ObservedRequest {
+  host: string;
+  method: string;
+  segs: string[];
+}
+
+function isFilterBlock(r: FlowRecord): boolean {
+  return DENIED.has(r.verdict) && FILTER_REASONS.has(r.reason ?? '');
+}
+
+function pathSegments(path: string): string[] {
+  return path.split('?', 1)[0].split('/').filter(Boolean);
+}
+
+/** Numeric, hex/UUID or otherwise payload-looking (redact.ts): becomes `*` in a suggestion. */
+function isVariableSegment(segment: string): boolean {
+  return /^\d+$/.test(segment) || !SAFE_SEGMENT.test(segment) || segmentLooksEncoded(segment);
+}
+
+function sensitiveSuffixOf(segs: string[]): (typeof SENSITIVE_PATH_SUFFIXES)[number] | undefined {
+  const p = segs.join('/');
+  return SENSITIVE_PATH_SUFFIXES.find(s => p === s.suffix || p.endsWith(`/${s.suffix}`));
+}
+
+function methodRank(m: string): number {
+  const i = METHOD_ORDER.indexOf(m);
+  return i < 0 ? METHOD_ORDER.length : i;
+}
+
+function sortMethods(methods: Iterable<string>): string[] {
+  return [...methods].sort((a, b) => methodRank(a) - methodRank(b) || a.localeCompare(b));
+}
+
+/**
+ * Template paths: a payload-looking segment becomes `*`, and so does every literal at a position
+ * where more than MAX_PINNED distinct ones follow the same prefix. The last `keep` segments of
+ * a path (its sensitive suffix) stay literal. A run of `*` merges into one: a standalone `*`
+ * spans any depth.
+ */
+function templatePaths(paths: { segs: string[]; keep: number }[]): string[] {
+  const out = paths.map(p => p.segs.map((s, i) => (i < p.segs.length - p.keep && isVariableSegment(s) ? '*' : s)));
+  const free = (i: number, d: number) => d < out[i].length - paths[i].keep && out[i][d] !== '*';
+  const depth = Math.max(0, ...out.map(s => s.length));
+  for (let d = 0; d < depth; d++) {
+    const seen = new Map<string, Set<string>>();
+    out.forEach((s, i) => {
+      if (!free(i, d)) return;
+      const k = s.slice(0, d).join('/');
+      seen.set(k, (seen.get(k) ?? new Set()).add(s[d]));
+    });
+    out.forEach((s, i) => {
+      if (free(i, d) && seen.get(s.slice(0, d).join('/'))!.size > MAX_PINNED) s[d] = '*';
+    });
+  }
+  return out.map(s => s.filter((x, i) => x !== '*' || s[i - 1] !== '*').join('/') || '/');
+}
+
+/**
+ * One host's rules. With `collapseReads`, reads become a single `"*"` line and only writes are
+ * templated (level B); without it every request gets a templated rule (the fixes for refused
+ * requests). Sensitive endpoints are templated on their own, so the repos actually written to
+ * stay pinned; and when a broader write rule could also match one, a `NONE` rule for it keeps
+ * the write closed elsewhere (the method-boundary trap).
+ */
+function hostRules(
+  reqs: ObservedRequest[],
+  collapseReads: boolean
+): { rules: HttpFilterRule[]; specific: number; coarse: boolean } {
+  const byPath = new Map<string, Set<string>>();
+  const add = (path: string, methods: Iterable<string>) => {
+    const set = byPath.get(path) ?? new Set<string>();
+    for (const m of methods) set.add(m);
+    byPath.set(path, set);
+  };
+  const reads = new Set<string>();
+  const plain: ObservedRequest[] = [];
+  const sensitive: { r: ObservedRequest; keep: number }[] = [];
+  for (const r of reqs) {
+    const s = sensitiveSuffixOf(r.segs);
+    if (collapseReads && READ_METHODS.includes(r.method)) reads.add(r.method);
+    else if (s) sensitive.push({ r, keep: s.suffix.split('/').length });
+    else plain.push(r);
+  }
+  if (reads.size) add('*', ['GET', 'HEAD', ...reads]);
+  templatePaths(plain.map(r => ({ segs: r.segs, keep: 0 }))).forEach((p, i) => add(p, [plain[i].method]));
+  const pinned = new Set<string>();
+  templatePaths(sensitive.map(s => ({ segs: s.r.segs, keep: s.keep }))).forEach((p, i) => {
+    add(p, [sensitive[i].r.method]);
+    pinned.add(p);
+  });
+
+  const guards: string[] = [];
+  for (const s of SENSITIVE_PATH_SUFFIXES) {
+    const guard = `*/${s.suffix}`;
+    if (byPath.has(guard)) continue;
+    const opens = [...byPath].some(
+      ([p, ms]) =>
+        !pinned.has(p) &&
+        (p === '*' || p.endsWith('/*')) &&
+        (sensitive.length > 0 || p.startsWith('*')) &&
+        s.methods.some(m => ms.has(m))
+    );
+    if (opens) guards.push(guard);
+  }
+
+  const rest = [...byPath.keys()].filter(p => p !== '*').sort();
+  const rules: HttpFilterRule[] = [
+    ...(byPath.has('*') ? [{ path: '*', methods: sortMethods(byPath.get('*')!) }] : []),
+    ...guards.map(path => ({ path, methods: [] })),
+    ...rest.map(path => ({ path, methods: sortMethods(byPath.get(path)!) }))
+  ];
+  const coarse = rules.some(r => r.path.startsWith('*') && r.methods.some(m => !READ_METHODS.includes(m)));
+  return { rules, specific: pinned.size, coarse };
+}
+
+function suggest(reqs: ObservedRequest[], collapseReads: boolean): HttpFilterSuggestion {
+  const byHost = new Map<string, ObservedRequest[]>();
+  for (const r of reqs) byHost.set(r.host, [...(byHost.get(r.host) ?? []), r]);
+  const out: HttpFilterSuggestion = { hosts: [], requests: reqs.length, rules: 0, specific: 0, coarse: false };
+  for (const host of [...byHost.keys()].sort()) {
+    const h = hostRules(byHost.get(host)!, collapseReads);
+    out.hosts.push({ host, rules: h.rules });
+    out.rules += h.rules.length;
+    out.specific += h.specific;
+    out.coarse ||= h.coarse;
+  }
+  return out;
+}
+
+/**
+ * Intercepted requests (the only ones with a method and path) to well-formed names, never on a
+ * connection the upstream IP guard refused. `refused`: only the http-filter's refusals; else only
+ * what the policy allowed. A refusal never goes into the suggestion (that would quietly undo the
+ * user's own filter): it gets its own reviewed rule (`fixes`).
+ */
+function observedRequests(records: FlowRecord[], refused: boolean): ObservedRequest[] {
+  const conns = assignConnections(records);
+  const out: ObservedRequest[] = [];
+  records.forEach((r, i) => {
+    if ((r.ev !== 'https' && r.ev !== 'http') || !r.verdict || conns[i]?.refused) return;
+    if (refused ? !isFilterBlock(r) : DENIED.has(r.verdict)) return;
+    if (!r.host || typeof r.method !== 'string' || typeof r.path !== 'string') return;
+    const host = r.host.toLowerCase();
+    const method = r.method.toUpperCase();
+    if (!/^[A-Z]{1,20}$/.test(method) || !HOSTNAME.test(host) || needsRedaction(host)) return;
+    out.push({ host, method, segs: pathSegments(r.path) });
+  });
+  return out;
+}
+
+/**
+ * The http-filter part of the report: refused requests (method + redacted path), the rules that
+ * would let them through, and a suggested `http-filter` built from observed traffic as
+ * observe → split reads from writes → template writes → union methods (design: "Suggested
+ * http-filter (report)"). Advisory: never applied.
+ */
+export function summarizeHttpFilter(records: FlowRecord[]): HttpFilterReport {
+  const byKey = new Map<string, FilterBlock>();
+  for (const r of records) {
+    if ((r.ev !== 'https' && r.ev !== 'http') || !isFilterBlock(r)) continue;
+    const b: FilterBlock = {
+      host: blockedName(r.host || r.sni || '(no host)'),
+      method: String(r.method ?? '?'),
+      path: redactPath(String(r.path ?? '')),
+      reason: r.reason as string,
+      verdict: r.verdict as string,
+      tries: 0
+    };
+    const key = [b.host, b.method, b.path, b.reason].join(' ');
+    const row = byKey.get(key) ?? b;
+    row.tries++;
+    byKey.set(key, row);
+  }
+  const platform = compileUserPatterns(PLATFORM_HOSTS);
+  return {
+    blocks: [...byKey.values()].sort((a, b) => b.tries - a.tries || a.host.localeCompare(b.host)),
+    fixes: suggest(observedRequests(records, true), false),
+    suggestion: suggest(
+      observedRequests(records, false).filter(r => !matchesAny(r.host, platform)),
+      true
+    )
+  };
+}
+
+/** The suggestion as the `http-filter` input. Paths and methods are pre-checked (SAFE_SEGMENT). */
+export function httpFilterYaml(s: HttpFilterSuggestion): string {
+  const hosts = s.hosts.map(
+    h =>
+      `  ${h.host}:\n` +
+      h.rules.map(r => `    "${r.path}": ${r.methods.length ? r.methods.join(', ') : 'NONE'}`).join('\n')
+  );
+  return 'http-filter: |\n' + hosts.join('\n');
+}
+
+function compressionText(s: HttpFilterSuggestion): string {
+  return (
+    `collapsed ${plural(s.requests, 'request')} → ${plural(s.rules, 'rule')} (level B)` +
+    (s.specific ? `; ${plural(s.specific, 'write endpoint')} kept specific` : '')
+  );
+}
+
 // ---------------------------------------------------------------- report
 
 export interface ReportInput {
@@ -532,6 +806,10 @@ export interface ReportInput {
   userDomains?: string[];
   selfTests: { name: string; ok: boolean; detail: string }[];
   integrity?: { status: 'verified' | 'tampered' | 'unavailable'; body: string };
+  /** requests refused by `http-filter` and the suggested filter (summarizeHttpFilter) */
+  httpFilter?: HttpFilterReport;
+  /** GitHub platform endpoints the built-in list auto-allowed on filtered hosts (policy.json) */
+  platformEndpoints?: number;
   /** per-container egress (P2); empty / undefined: no container traffic */
   containers?: ContainerSummary[];
   extraSections?: string[];
@@ -689,6 +967,7 @@ export function buildReport(input: ReportInput): string {
     fronting: [],
     internal: [],
     'not-allowed': [],
+    filtered: [],
     unresolved: [],
     'no-name': [],
     other: []
@@ -715,6 +994,11 @@ export function buildReport(input: ReportInput): string {
   const fw = firewallSummary(input.firewall.filter(e => !CONTAINER_PREFIXES.has(e.prefix)));
   const sudoRan = input.sudo?.ran.length ?? 0;
   const suggest = suggestedAllowlist(denied);
+  const filterBlocks = input.httpFilter?.blocks ?? [];
+  const filtered = filterBlocks.length
+    ? filterBlocks.reduce((a, b) => a + b.tries, 0)
+    : groups.filtered.reduce((a, h) => a + h.requests, 0);
+  const hostsDenied = denied.length - groups.filtered.length;
 
   // ---- title + chips
   let md = `## 🛡️ Safer Runner — egress${advisory ? ` — enforce (ADVISORY — ${advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
@@ -725,7 +1009,9 @@ export function buildReport(input: ReportInput): string {
     if (!input.sudoRetained && !input.dockerRetained) chips.push('✅ controls applied at setup');
     chips.push(integrityChip(input.integrity?.status));
   } else {
-    chips.push(denied.length ? `${plural(denied.length, 'host')} would be blocked` : 'nothing would be blocked');
+    if (hostsDenied) chips.push(`${plural(hostsDenied, 'host')} would be blocked`);
+    if (filtered) chips.push(`${plural(filtered, 'request')} the http-filter would refuse`);
+    if (!hostsDenied && !filtered) chips.push('nothing would be blocked');
   }
   if (input.selfTests.length) {
     chips.push(`${selfFailed.length ? '❌' : '🧪'} self-tests ${selfOk}/${input.selfTests.length}`);
@@ -785,11 +1071,13 @@ export function buildReport(input: ReportInput): string {
       '\n\n';
   }
 
-  if (enforce && !bypass.length && groups['not-allowed'].length) {
-    md +=
-      '> [!IMPORTANT]\n' +
-      `> **${plural(groups['not-allowed'].length, 'host')} not on the allowlist ${groups['not-allowed'].length === 1 ? 'was' : 'were'} blocked.** ` +
-      'If this job failed, this is probably why — see below.\n\n';
+  if (enforce && !bypass.length && (groups['not-allowed'].length || filtered)) {
+    const n = groups['not-allowed'].length;
+    const what: string[] = [];
+    if (n) what.push(`${plural(n, 'host')} not on the allowlist ${n === 1 ? 'was' : 'were'} blocked`);
+    if (filtered)
+      what.push(`${plural(filtered, 'request')} ${filtered === 1 ? 'was' : 'were'} refused by \`http-filter\``);
+    md += '> [!IMPORTANT]\n' + `> **${what.join('; ')}.** If this job failed, this is probably why — see below.\n\n`;
   }
 
   if (!enforce && (suggest.length || sudoRan)) {
@@ -831,6 +1119,9 @@ export function buildReport(input: ReportInput): string {
         '🚫 **Not on allowlist**',
         `**${groups['not-allowed'].length} ${blockedWord}** — ${nameList(groups['not-allowed'])}`
       ]);
+    }
+    if (groups.filtered.length || filterBlocks.length) {
+      rows.push(['🔒 **HTTP filter**', `${plural(filtered, 'request')} ${blockedWord} — ${nameList(groups.filtered)}`]);
     }
     if (groups.unresolved.length) {
       rows.push([
@@ -889,6 +1180,47 @@ export function buildReport(input: ReportInput): string {
       md += 'If the job needs them, add them (review each one first):\n\n';
       md += codeBlock('yaml', 'allowed-domains: |\n' + suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
     }
+  }
+  if (filterBlocks.length) {
+    const { shown, note } = capped(filterBlocks);
+    md += `### 🔒 Refused by \`http-filter\` (${filterBlocks.length})${suffix}\n\n`;
+    md += table(
+      ['Host', 'Request', 'Why', 'Tries'],
+      [':--', ':--', ':--', '--:'],
+      shown.map(b => [
+        code(b.host),
+        `${code(b.method)} ${code(b.path)}`,
+        FILTER_REASON_TEXT[b.reason] ?? code(b.reason),
+        String(b.tries)
+      ])
+    );
+    md += note + '\n\n';
+  } else if (groups.filtered.length) {
+    md += section('🔒 Refused by `http-filter`', groups.filtered, ['Host', 'Reason', 'Tries'], h => [
+      code(blockedName(h.name)),
+      h.reasons.map(r => FILTER_REASON_TEXT[r] ?? code(r)).join(' · '),
+      String(h.tries)
+    ]);
+  }
+  const fixes = input.httpFilter?.fixes;
+  if (fixes?.hosts.length) {
+    md +=
+      `If the job needs ${filterBlocks.length === 1 ? 'it' : 'them'}, add ${fixes.rules === 1 ? 'this rule' : 'these rules'} to \`http-filter\` ` +
+      '(review each one first: a write is how data leaves):\n\n';
+    md += codeBlock('yaml', httpFilterYaml(fixes)) + '\n\n';
+  }
+  const sug = input.httpFilter?.suggestion;
+  if (sug?.hosts.length && (!enforce || filtered)) {
+    md += `<details${filtered && !enforce ? ' open' : ''}>\n<summary>🧰 <b>Suggested <code>http-filter</code></b> — ${compressionText(sug)}</summary>\n\n`;
+    md +=
+      "<sub>Advisory, built from this job's intercepted traffic — never applied for you. Reads collapse to one " +
+      '`"*"` line per host; write paths keep their structure, with ids and hashes as `*`; git push and fetch stay ' +
+      'pinned to the repos this job used. GitHub platform hosts are left out (the built-in platform allowlist covers ' +
+      'them). Add each host to `allowed-domains` too: a filter never grants access.</sub>\n\n';
+    if (sug.coarse) {
+      md += '**⚠️ Coarse — review.** A write rule had to start with `*`, so it allows that write on any path.\n\n';
+    }
+    md += codeBlock('yaml', httpFilterYaml(sug)) + '\n\n</details>\n\n';
   }
   if (groups.unresolved.length) {
     md += section('❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
@@ -969,6 +1301,12 @@ export function buildReport(input: ReportInput): string {
     body += note + '\n\n';
   } else {
     diag.push('nothing bypassed the proxy');
+  }
+  if (input.platformEndpoints) {
+    diag.push(`${plural(input.platformEndpoints, 'platform endpoint')} auto-allowed`);
+    body +=
+      `**http-filter** — ${plural(input.platformEndpoints, 'GitHub platform endpoint')} auto-allowed on filtered ` +
+      'hosts by the built-in platform allowlist (`allow-github-platform: false` turns it off)\n\n';
   }
   if (input.dnsRefused.length) {
     diag.push(plural(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
