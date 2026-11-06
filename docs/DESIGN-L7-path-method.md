@@ -135,6 +135,59 @@ in the query string, but blocking the POST is what stops the push.
   blocked request (method + redacted path) in the egress report with a suggested rule to
   add if the job genuinely needs it.
 
+## Suggested `http-filter` (report)
+
+The report should propose an `http-filter` from observed traffic, the way it already suggests
+`allowed-domains`. The goal is a short, reviewable suggestion that encodes *intent* — "reads
+open, writes only here" — not a dump of every URL seen. The method is observe → compress →
+suggest, per host:
+
+1. **Split reads from writes.** Reads (`GET`/`HEAD`/`OPTIONS`) are not the exfil surface;
+   writes are. So reads **collapse to one line** — `"**": GET, HEAD` — and effort goes into
+   the writes.
+2. **Template the write paths, don't list them.** Build a trie of the write paths and replace
+   *variable* segments with `*`, keeping structural literals. "Variable" = numeric, hex/UUID,
+   or high-cardinality at that position — exactly what `redact.ts`'s payload-looking-label
+   detector already finds, so it is reused. (Bonus: the suggestion then never echoes ids or
+   hashes, so reduction is also a redaction win.)
+3. **Union the methods** per templated path.
+
+Worked example — a job that clones one repo, pushes to another, and reads the API (8 distinct
+requests) reduces to about five lines:
+
+```yaml
+http-filter:
+  api.github.com:
+    "**": GET, HEAD                       # all API traffic was reads
+    "repos/*/*/statuses/*": POST          # the one write kind seen (sha templated)
+  github.com:
+    "**": "*"
+    "*/git-receive-pack": NONE            # block pushes generally…
+    "myorg/app/git-receive-pack": "*"     # …except where this job actually pushed
+```
+
+### The method-boundary trap
+
+Do not collapse across a method boundary where a read and a write **share** a method. On
+`github.com` both fetch and push are `POST` (`git-upload-pack` vs `git-receive-pack`), so a
+naive `"**": GET, POST` would silently re-open pushes everywhere. The reducer keeps a small
+set of **known-sensitive endpoints** (git `git-receive-pack`, release/asset uploads) always
+path-separable, and **pins the owner/repo actually written to** (templating to `*` only when
+several are seen). Otherwise the "reduction" quietly defeats the feature.
+
+### Granularity
+
+Emit at a chosen level, and show the compression so a reviewer can judge it:
+
+- **A — host method posture:** `host: { "**": <union of methods> }`. One line per host; loosest.
+- **B — read/write split (default):** reads collapsed, writes templated shallow (the example above).
+- **C — templated paths:** every path templated, depth-capped. Most precise, more lines.
+
+Prefer the tightest level that still covers observed traffic. Head it with the compression
+("collapsed 142 requests → 5 rules (level B); 1 write endpoint kept specific"), show it in
+analyze (building the filter is the point) and on enforce blocks, and flag *"suggestion is
+coarse — review"* when it had to generalize heavily. It is advisory — never auto-applied.
+
 ## Limitations (restated for the record)
 
 - **Intercepted HTTPS + plain HTTP only.** A push from inside a container, or any
