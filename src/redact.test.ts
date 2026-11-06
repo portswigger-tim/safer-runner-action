@@ -1,5 +1,16 @@
 import * as crypto from 'crypto';
-import { REDACTED, looksEncoded, needsRedaction, redactName, redactPath, segmentLooksEncoded } from './redact';
+import {
+  CUSTOM_METHOD,
+  MAX_PATH_SEGMENTS,
+  REDACTED,
+  looksEncoded,
+  methodLabel,
+  needsRedaction,
+  pathSegmentShown,
+  redactName,
+  redactPath,
+  segmentLooksEncoded
+} from './redact';
 
 const b32 = (b: Buffer) => {
   const A = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -109,6 +120,20 @@ describe('redactPath', () => {
     expect(redactPath('/files/notes.0dd2149bb6f23853.txt')).toBe(`/files/${REDACTED}`);
   });
 
+  it('hides short chunks a hostname label would keep: hex, digit runs, unusual characters', () => {
+    for (const seg of ['a1f3', 'cafe', 'dead-beef', 'v123', 'x9y8z7', 'a%20b', 'a;b', 'x'.repeat(65), '..']) {
+      expect(pathSegmentShown(seg)).toBe(false);
+    }
+    expect(redactPath('/up/a1f3/9c2e/cafe/x')).toBe(`/up/${REDACTED}/x`);
+  });
+
+  it(`shows at most ${MAX_PATH_SEGMENTS} segments`, () => {
+    const words = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel', 'india', 'juliet'];
+    expect(redactPath('/' + words.join('/') + '/')).toBe(
+      '/' + words.slice(0, MAX_PATH_SEGMENTS).join('/') + `/${REDACTED}`
+    );
+  });
+
   it('leaves ordinary paths alone', () => {
     for (const p of [
       '/',
@@ -120,5 +145,20 @@ describe('redactPath', () => {
     ]) {
       expect(redactPath(p)).toBe(p);
     }
+  });
+});
+
+describe('methodLabel', () => {
+  it('shows standard methods and a fixed word for any other token', () => {
+    expect(['get', 'POST', 'Patch', 'OPTIONS', 'TRACE', 'CONNECT'].map(methodLabel)).toEqual([
+      'GET',
+      'POST',
+      'PATCH',
+      'OPTIONS',
+      'TRACE',
+      'CONNECT'
+    ]);
+    for (const m of ['A1B2C3D4E5F6', 'PROPFIND', '', undefined, 'GET ']) expect(methodLabel(m)).toBe(CUSTOM_METHOD);
+    expect(CUSTOM_METHOD).toBe('INVALID');
   });
 });

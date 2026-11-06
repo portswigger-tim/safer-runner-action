@@ -4,9 +4,18 @@
  */
 
 import { ipOf, type FlowRecord } from './flowlog';
-import { compilePattern, expandPattern, isIpLiteral, matchesAny, type Mode } from './policy';
+import {
+  GIT_HOSTS,
+  compilePattern,
+  expandPattern,
+  gitPatternKey,
+  isIpLiteral,
+  matchesAny,
+  validatePathPattern,
+  type Mode
+} from './policy';
 import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
-import { needsRedaction, redactName, redactPath, segmentLooksEncoded } from './redact';
+import { STANDARD_METHODS, methodLabel, needsRedaction, pathSegmentShown, redactName, redactPath } from './redact';
 
 export interface HostSummary {
   name: string;
@@ -539,12 +548,13 @@ export const SENSITIVE_PATH_SUFFIXES: readonly { suffix: string; methods: readon
 const PLATFORM_HOSTS = ['*.actions.githubusercontent.com', 'productionresultssa*.blob.core.windows.net'];
 /** Distinct literals kept at one path position (same prefix); more than this become `*`. */
 const MAX_PINNED = 3;
-/** Path segments safe to paste into YAML and Markdown as they are; anything else is templated. */
-const SAFE_SEGMENT = /^[A-Za-z0-9._~@+-]+$/;
+/** proxy/policy.py MAX_PATH_LOG: a logged path this long may have been cut short */
+const PATH_LOG_MAX = 256;
 
 export interface FilterBlock {
   /** redacted like any refused name */
   host: string;
+  /** a standard method, or an opaque label for any other (src/redact.ts) */
   method: string;
   /** redacted path (src/redact.ts), no query string */
   path: string;
@@ -583,29 +593,114 @@ export interface HttpFilterReport {
 interface ObservedRequest {
   host: string;
   method: string;
-  segs: string[];
+  /** the path forms the engine matches (canonical_path: decoded, then relaxed), no leading `/` */
+  forms: string[];
+  /** each form as segments to template; `''` (an empty or cut-off segment) always becomes `*` */
+  shapes: string[][];
 }
 
 function isFilterBlock(r: FlowRecord): boolean {
   return DENIED.has(r.verdict) && FILTER_REASONS.has(r.reason ?? '');
 }
 
-function pathSegments(path: string): string[] {
-  return path.split('?', 1)[0].split('/').filter(Boolean);
+/**
+ * The forms of a logged request path the engine matches (proxy/policy_core.py canonical_path):
+ * decoded once without the leading `/`, and relaxed (no `;params` or trailing `/`). Undefined
+ * when the engine refuses the path whatever the rules say. A path cut short in the log keeps
+ * only its decoded form, its last segment unknown.
+ */
+function pathForms(path: string, git: boolean): { forms: string[]; shapes: string[][] } | undefined {
+  const truncated = path.length >= PATH_LOG_MAX;
+  let raw = path.split('?', 1)[0].split('#', 1)[0];
+  if (raw.startsWith('/')) raw = raw.slice(1);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    decoded = raw;
+  }
+  if (/[\\\x00-\x1f\x7f]/.test(decoded) || /%(?:2e|2f|5c)/i.test(decoded)) return undefined;
+  if (decoded.split('/').some(s => s === '.' || s === '..')) return undefined;
+  let relaxed = decoded
+    .split('/')
+    .map(s => s.split(';', 1)[0])
+    .join('/')
+    .replace(/\/+$/, '');
+  if (git) [decoded, relaxed] = [decoded.toLowerCase(), relaxed.toLowerCase()];
+  const forms = truncated || relaxed === decoded ? [decoded] : [decoded, relaxed];
+  const shapes = forms.map(f => (f === '' ? [] : f.split('/').map(s => (git ? stripGit(s) : s))));
+  if (truncated && shapes[0].length) shapes[0][shapes[0].length - 1] = '';
+  return { forms, shapes };
 }
 
 /**
- * Numeric, hex/UUID or otherwise payload-looking (redact.ts): becomes `*` in a suggestion. So do
- * dot segments, which the engine refuses in a pattern.
+ * Numeric, empty, or not printable as a path segment (redact.ts pathSegmentShown: encoded-looking,
+ * unusual characters, dot segments): becomes `*` in a suggestion.
  */
 function isVariableSegment(segment: string): boolean {
-  return (
-    /^\d+$/.test(segment) ||
-    segment === '.' ||
-    segment === '..' ||
-    !SAFE_SEGMENT.test(segment) ||
-    segmentLooksEncoded(segment)
-  );
+  return /^\d+$/.test(segment) || !pathSegmentShown(segment);
+}
+
+/** `*`, or the segment itself; `name;params` keeps its name (`name*`), as the engine also matches it without them. */
+function templateSegment(segment: string): string {
+  if (!isVariableSegment(segment)) return segment;
+  const name = segment.split(';', 1)[0];
+  return segment.includes(';') && name && !isVariableSegment(name) ? `${name}*` : '*';
+}
+
+/** policy.ts stripGit: on a git host `repo` and `repo.git` are one segment. */
+function stripGit(segment: string): string {
+  return segment.endsWith('.git') && segment.length > 4 ? segment.slice(0, -4) : segment;
+}
+
+/** proxy/policy_core.py compile_path_pattern, for checking a suggestion before it is shown. */
+function pathRegex(pattern: string, git: boolean): RegExp {
+  const p = validatePathPattern(pattern);
+  const parts = (git ? p.toLowerCase() : p).split('/').map(s => {
+    if (s === '*') return '.*';
+    const lit = (git ? stripGit(s) : s).replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
+    return git ? `${lit}(?:\\.git)?` : lit;
+  });
+  return new RegExp(`^${parts.join('/')}$`);
+}
+
+/** proxy/policy_core.py PathRule.specificity: literal characters, then segments, then fewer `*`. */
+function pathSpecificity(pattern: string, git: boolean): number[] {
+  const key = git ? gitPatternKey(pattern) : validatePathPattern(pattern);
+  return [key.replace(/\*/g, '').length, key.split('/').length - 1, -(key.match(/\*/g) ?? []).length];
+}
+
+function compareSpecificity(a: number[], b: number[]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/**
+ * Make the rules allow every observed request in each of its forms, as the engine decides
+ * (proxy/policy_core.py _decide_rules: the most specific matching rules win and every tied winner
+ * must allow the method): a winner that lacks the method gets it, and a NONE guard that would
+ * refuse an observed request is dropped. The round-trip test in report.test.ts runs the result
+ * through the real parser and matcher.
+ */
+function settleRules(byPath: Map<string, Set<string>>, reqs: ObservedRequest[], git: boolean): void {
+  for (let pass = 0; pass < 8; pass++) {
+    const rules = [...byPath.keys()].map(p => ({ p, rx: pathRegex(p, git), spec: pathSpecificity(p, git) }));
+    let changed = false;
+    for (const r of reqs) {
+      for (const form of r.forms) {
+        const hits = rules.filter(x => byPath.has(x.p) && x.rx.test(form));
+        if (!hits.length) continue;
+        const best = hits.reduce((a, b) => (compareSpecificity(a.spec, b.spec) >= 0 ? a : b)).spec;
+        for (const w of hits.filter(x => compareSpecificity(x.spec, best) === 0)) {
+          const ms = byPath.get(w.p)!;
+          if (ms.size === 0) byPath.delete(w.p);
+          else if (ms.has(r.method)) continue;
+          else ms.add(r.method);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) return;
+  }
 }
 
 function sensitiveSuffixOf(segs: string[]): (typeof SENSITIVE_PATH_SUFFIXES)[number] | undefined {
@@ -629,7 +724,7 @@ function sortMethods(methods: Iterable<string>): string[] {
  * spans any depth.
  */
 function templatePaths(paths: { segs: string[]; keep: number }[]): string[] {
-  const out = paths.map(p => p.segs.map((s, i) => (i < p.segs.length - p.keep && isVariableSegment(s) ? '*' : s)));
+  const out = paths.map(p => p.segs.map((s, i) => (i < p.segs.length - p.keep ? templateSegment(s) : s)));
   const free = (i: number, d: number) => d < out[i].length - paths[i].keep && out[i][d] !== '*';
   const depth = Math.max(0, ...out.map(s => s.length));
   for (let d = 0; d < depth; d++) {
@@ -655,7 +750,8 @@ function templatePaths(paths: { segs: string[]; keep: number }[]): string[] {
  */
 function hostRules(
   reqs: ObservedRequest[],
-  collapseReads: boolean
+  collapseReads: boolean,
+  git: boolean
 ): { rules: HttpFilterRule[]; specific: number; coarse: boolean } {
   const byPath = new Map<string, Set<string>>();
   const add = (path: string, methods: Iterable<string>) => {
@@ -664,19 +760,24 @@ function hostRules(
     byPath.set(path, set);
   };
   const reads = new Set<string>();
-  const plain: ObservedRequest[] = [];
-  const sensitive: { r: ObservedRequest; keep: number }[] = [];
+  const plain: { method: string; segs: string[] }[] = [];
+  const sensitive: { method: string; segs: string[]; keep: number }[] = [];
   for (const r of reqs) {
-    const s = sensitiveSuffixOf(r.segs);
-    if (collapseReads && READ_METHODS.includes(r.method)) reads.add(r.method);
-    else if (s) sensitive.push({ r, keep: s.suffix.split('/').length });
-    else plain.push(r);
+    if (collapseReads && READ_METHODS.includes(r.method)) {
+      reads.add(r.method);
+      continue;
+    }
+    for (const segs of r.shapes) {
+      const s = sensitiveSuffixOf(segs);
+      if (s) sensitive.push({ method: r.method, segs, keep: s.suffix.split('/').length });
+      else plain.push({ method: r.method, segs });
+    }
   }
   if (reads.size) add('*', ['GET', 'HEAD', ...reads]);
   templatePaths(plain.map(r => ({ segs: r.segs, keep: 0 }))).forEach((p, i) => add(p, [plain[i].method]));
   const pinned = new Set<string>();
-  templatePaths(sensitive.map(s => ({ segs: s.r.segs, keep: s.keep }))).forEach((p, i) => {
-    add(p, [sensitive[i].r.method]);
+  templatePaths(sensitive).forEach((p, i) => {
+    add(p, [sensitive[i].method]);
     pinned.add(p);
   });
 
@@ -692,6 +793,12 @@ function hostRules(
     }
   }
   for (const g of guards) byPath.set(g, new Set());
+  // reads are allowed anywhere on the host, so a more specific write rule must not refuse them
+  // (the pack endpoints excepted: git only ever POSTs to them)
+  if (reads.size) {
+    for (const [p, ms] of byPath) if (ms.size && !pinned.has(p)) ['GET', 'HEAD', ...reads].forEach(m => ms.add(m));
+  }
+  settleRules(byPath, reqs, git);
 
   const rest = [...byPath.keys()].filter(p => p !== '*').sort();
   const rules: HttpFilterRule[] = [
@@ -699,7 +806,7 @@ function hostRules(
     ...rest.map(path => ({ path, methods: sortMethods(byPath.get(path)!) }))
   ];
   const coarse = rules.some(r => r.path.startsWith('*') && r.methods.some(m => !READ_METHODS.includes(m)));
-  return { rules, specific: pinned.size, coarse };
+  return { rules, specific: [...pinned].filter(p => byPath.has(p)).length, coarse };
 }
 
 function suggest(reqs: ObservedRequest[], collapseReads: boolean): HttpFilterSuggestion {
@@ -707,7 +814,7 @@ function suggest(reqs: ObservedRequest[], collapseReads: boolean): HttpFilterSug
   for (const r of reqs) byHost.set(r.host, [...(byHost.get(r.host) ?? []), r]);
   const out: HttpFilterSuggestion = { hosts: [], requests: reqs.length, rules: 0, specific: 0, coarse: false };
   for (const host of [...byHost.keys()].sort()) {
-    const h = hostRules(byHost.get(host)!, collapseReads);
+    const h = hostRules(byHost.get(host)!, collapseReads, GIT_HOSTS.includes(host));
     out.hosts.push({ host, rules: h.rules });
     out.rules += h.rules.length;
     out.specific += h.specific;
@@ -731,8 +838,9 @@ function observedRequests(records: FlowRecord[], refused: boolean): ObservedRequ
     if (!r.host || typeof r.method !== 'string' || typeof r.path !== 'string') return;
     const host = r.host.toLowerCase();
     const method = r.method.toUpperCase();
-    if (!/^[A-Z]{1,20}$/.test(method) || !HOSTNAME.test(host) || needsRedaction(host)) return;
-    out.push({ host, method, segs: pathSegments(r.path) });
+    if (!STANDARD_METHODS.includes(method) || !HOSTNAME.test(host) || needsRedaction(host)) return;
+    const p = pathForms(r.path, GIT_HOSTS.includes(host));
+    if (p) out.push({ host, method, ...p });
   });
   return out;
 }
@@ -749,7 +857,7 @@ export function summarizeHttpFilter(records: FlowRecord[]): HttpFilterReport {
     if ((r.ev !== 'https' && r.ev !== 'http') || !isFilterBlock(r)) continue;
     const b: FilterBlock = {
       host: blockedName(r.host || r.sni || '(no host)'),
-      method: String(r.method ?? '?'),
+      method: methodLabel(r.method),
       path: redactPath(String(r.path ?? '')),
       reason: r.reason as string,
       verdict: r.verdict as string,
@@ -771,7 +879,7 @@ export function summarizeHttpFilter(records: FlowRecord[]): HttpFilterReport {
   };
 }
 
-/** The suggestion as the `http-filter` input. Paths and methods are pre-checked (SAFE_SEGMENT). */
+/** The suggestion as the `http-filter` input. Path segments are pre-checked (pathSegmentShown), methods standard. */
 export function httpFilterYaml(s: HttpFilterSuggestion): string {
   const hosts = s.hosts.map(
     h =>
