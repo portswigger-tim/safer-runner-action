@@ -1,7 +1,6 @@
 # Weekly, grouped dependency updates so pinned versions don't rot.
 #
-# - Dependabot reads this file from the DEFAULT branch (main) only; it takes effect once v2 is
-#   merged there. Until then nothing runs.
+# - Dependabot reads this file from the DEFAULT branch (main) only.
 # - npm updates change the bundled dist/: CI fails on the PR until someone runs
 #   `npm run package` and commits dist/. That is intended - review the bundle diff.
 # - github-actions updates keep the full-SHA pins (and their `# vX.Y.Z` comments) current.
