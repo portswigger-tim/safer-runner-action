@@ -179,7 +179,10 @@ are more specific than your rules, so they win. The list is explicit. It is **no
 ### In the job summary
 
 - **Analyze** refuses nothing. The summary lists each request your filter *would* refuse:
-  method and path, with parts that look like encoded data redacted.
+  method and path, with parts that look like encoded data redacted. A method that is not a
+  standard HTTP method shows as `INVALID`. Only the first 8 path segments show.
+- Suggested rules contain only standard methods. A path that ends in `/` gets two rules
+  (`"legacy": POST` and `"legacy/*": POST`), because a pattern cannot end in `/`.
 - **Enforce** refuses those requests and lists them, each with a rule to add if the job needs it.
 - Both modes suggest an `http-filter` built from the job's traffic. Reads collapse to one
   `"*": GET, HEAD` line per host. Writes keep their paths, with ids and hashes replaced by `*`.
