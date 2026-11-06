@@ -1,4 +1,8 @@
+import * as core from '@actions/core';
+import * as exec from '@actions/exec';
 import {
+  MISSING_DOCKER_USER_MESSAGE,
+  applyFirewall,
   buildContainerForwardRules,
   buildContainerNatRules,
   buildFilterRules,
@@ -8,6 +12,9 @@ import {
   parseDefaultRouteInterfaces,
   parseDockerSubnets
 } from './firewall';
+
+jest.mock('@actions/core');
+jest.mock('@actions/exec');
 
 const base = {
   proxyUid: 990,
@@ -213,6 +220,54 @@ describe('container rules', () => {
       buildNatRules({ ...base, mode: 'enforce', containers: false })
     );
     expect(buildNatRules({ ...base, mode: 'enforce' })).not.toContain('8081');
+  });
+});
+
+describe('applyFirewall: container hook (C3)', () => {
+  const execMock = exec.exec as jest.MockedFunction<typeof exec.exec>;
+  const restored = () =>
+    execMock.mock.calls
+      .filter(([, args]) => args?.[0] === 'iptables-restore' || args?.[0] === 'ip6tables-restore')
+      .map(([, args, opts]) => `${args?.[0]}\n${opts?.input?.toString()}`)
+      .join('\n');
+  const hooks =
+    (v4: boolean, v6: boolean) =>
+    async (bin: 'iptables' | 'ip6tables'): Promise<boolean> =>
+      bin === 'iptables' ? v4 : v6;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    execMock.mockResolvedValue(0);
+  });
+
+  it('enforce: fails closed before changing anything when DOCKER-USER is missing', async () => {
+    await expect(applyFirewall({ ...base, mode: 'enforce' }, hooks(false, false))).rejects.toThrow(
+      MISSING_DOCKER_USER_MESSAGE
+    );
+    expect(execMock).not.toHaveBeenCalled();
+  });
+
+  it('analyze: warns, applies the host rules and reports no container rules', async () => {
+    const r = await applyFirewall({ ...base, mode: 'analyze' }, hooks(false, false));
+    expect(r).toEqual({ containerRules: false });
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining(MISSING_DOCKER_USER_MESSAGE));
+    expect(restored()).toContain('SAFER_RUNNER_OUT');
+    expect(restored()).not.toContain('SAFER_RUNNER_CFWD');
+  });
+
+  it.each(['enforce', 'analyze'] as const)('%s: applies and reports the container rules when hooked', async mode => {
+    const r = await applyFirewall({ ...base, mode }, hooks(true, false));
+    expect(r).toEqual({ containerRules: true });
+    expect(restored()).toContain('-I DOCKER-USER 1 -i docker0 -j SAFER_RUNNER_CFWD');
+    // no IPv6 DOCKER-USER: hook FORWARD instead
+    expect(restored()).toContain('-I FORWARD 1 -i docker0 -j SAFER_RUNNER_CFWD');
+  });
+
+  it('without docker: no hook lookup, no container rules', async () => {
+    const hasChain = jest.fn(hooks(false, false));
+    const r = await applyFirewall({ ...base, mode: 'enforce', containers: false }, hasChain);
+    expect(r).toEqual({ containerRules: false });
+    expect(hasChain).not.toHaveBeenCalled();
   });
 });
 

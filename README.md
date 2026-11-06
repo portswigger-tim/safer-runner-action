@@ -164,6 +164,10 @@ RUN steps — get the same policy as the host, through the same proxy and DNS fi
   (Azure Storage, `*.blob.core.windows.net` etc.) stay intercepted for containers in enforce,
   so they need the CA there (see Limitations).
 - Host traffic is unchanged: always intercepted.
+- The container rules hook Docker's `DOCKER-USER` iptables chain. If Docker is running without
+  it (started with `iptables: false`, or another firewall backend), enforce **fails setup**
+  rather than leave containers unfiltered; use `docker: stop` if the job doesn't need Docker.
+  Analyze warns and carries on without container monitoring.
 - When Docker already pulled images before the action (any job with `services:`), the action
   restarts `dockerd` once (with `live-restore`, so service containers keep running) so that
   later `docker pull`s trust the CA.

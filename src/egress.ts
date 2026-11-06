@@ -270,11 +270,12 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   }
 
   // 8. Firewall
+  let containerRules = false;
   await timed('Configure firewall', async () => {
     const prefixes = [LOG_PREFIX_DROP, LOG_PREFIX_ANALYZE, LOG_PREFIX_CDROP, LOG_PREFIX_CEGRESS].map(p => p.trim());
     await setupIptablesLogging(FIREWALL_LOG, prefixes, 'v2');
     await detectEgressInterface();
-    await applyFirewall({
+    ({ containerRules } = await applyFirewall({
       mode,
       proxyUid,
       dnsUid: dnsUser.uid,
@@ -282,9 +283,9 @@ export async function runSetup(inputs: Inputs): Promise<void> {
       containerProxyPort: ports.containerPort,
       containers: dockerActive,
       dnsServers
-    });
+    }));
     await killPreexistingConnections();
-    if (dockerActive) await flushContainerConntrack();
+    if (containerRules) await flushContainerConntrack();
     await logFirewall();
   });
 
@@ -314,7 +315,7 @@ export async function runSetup(inputs: Inputs): Promise<void> {
         docker,
         failOnTampering: inputs.failOnTampering,
         containerTls: CONTAINER_TLS,
-        containerRules: dockerActive,
+        containerRules,
         proxyPorts: [ports.port, ports.containerPort],
         selfTestWindow,
         dnsSelfTestName,
