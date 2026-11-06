@@ -38,7 +38,7 @@ by two spikes:
 - Report: a new **Subdomains of exact entries** section groups the refused names by their exact parent and suggests `add *.parent`.
 - Every blocked name in the summary and job log goes through `src/redact.ts`: the subdomain section, the DNS-refused diagnostics, blocked SNI/Host rows, fronting SNIs and container rows.
   - Labels that look *encoded* (hex, base32/64) are shown as `‹redacted›`, without their length; a run of them is one marker. Every label is checked, the registrable domain and TLD included; only a trusted suffix (the allowlisted parent) is always kept. Charset and length are the primary signal (short hex/digit runs, vowel ratio, digit runs), with Shannon entropy as a tie-breaker. The constants are tunable.
-  - It is best effort: short or word-like labels get through part of the time. The raw logs under `/var/log/safer-runner/` (`proxy-flows.jsonl`, the DNS and firewall logs) are not redacted and are not meant to be published.
+  - It is best effort, not a guarantee: short or word-like labels get through part of the time, so data shaped to avoid the filter can reach the summary whole and recoverable, even through a single refused name. The raw logs under `/var/log/safer-runner/` (`proxy-flows.jsonl`, the DNS and firewall logs) are not redacted and are not meant to be published.
   - This complements GitHub's own masking, which only catches a secret's literal value. A refused lookup can carry data, and the public summary must not become the channel the resolver just closed.
   - Names that need redaction are never pasted into a suggested `allowed-domains` block.
 

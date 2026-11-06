@@ -937,7 +937,7 @@ export function buildReport(input: ReportInput): string {
     md +=
       'A bare allowlist entry means that name only. These lookups were for names under one, so ' +
       `they were ${enforce ? 'answered NXDOMAIN on the runner and never sent upstream' : 'logged (enforce answers them NXDOMAIN on the runner)'}.` +
-      ' Payload-looking labels are redacted: a refused lookup can carry data.\n\n';
+      ' Payload-looking labels are redacted (best effort, not a guarantee): a refused lookup can carry data.\n\n';
     const { shown, note } = capped(subdomains);
     md += table(
       ['Allowlisted as', 'Refused lookups', 'Examples', 'If the job needs them'],

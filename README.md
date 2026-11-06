@@ -243,10 +243,12 @@ can send data; these limit what that dependency can reach in the first place:
   so the summary and job log also hide hostname labels that look *encoded* (hex and digit runs of
   6+ characters; base32/64-looking labels of 8+: few vowels, scattered digits) as `‹redacted›`,
   without their length. Every label is checked, the domain and TLD included; only the
-  allowlisted parent from your own configuration is always shown. This keeps long encoded values
-  out of the report, but short or word-like labels are caught only part of the time, so a step
-  that deliberately spreads data over many refused names can still get some of it into the
-  summary. The raw logs on the runner (`/var/log/safer-runner/`, including `proxy-flows.jsonl`)
+  allowlisted parent from your own configuration is always shown. This keeps obviously encoded
+  values out of the report, but it is **not a guarantee**: short or word-like labels are caught
+  only part of the time, so a step that shapes its data to avoid the filter can get an
+  **entire** secret into the summary and job log in recoverable form, even through a single
+  refused hostname. Treat the summary of a job that ran untrusted code as able to contain
+  anything that code could read. The raw logs on the runner (`/var/log/safer-runner/`, including `proxy-flows.jsonl`)
   are **not** redacted: don't upload them as artifacts from a public repository.
 - **No DNS-rebinding protection for clients outside the proxy.** The resolver returns internal
   answers as-is; the proxy refuses them for all proxied traffic. A process that dials a

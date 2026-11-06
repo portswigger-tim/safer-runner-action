@@ -31,9 +31,12 @@ What this does and doesn't affect:
 
 ## Proposal: a root-owned supervisor with signed statements
 
-1. **Install.** `pre` (root, before any job step runs) copies a small verifier into a
-   root-owned path such as `/usr/local/libexec/safer-runner/`. It starts the verifier as a
-   systemd unit, like the proxy and resolver units.
+1. **Install.** The step that completes setup (normally `pre`, as root, before any job step
+   runs; `main` when `pre` did not) copies a small verifier into a root-owned path such as
+   `/usr/local/libexec/safer-runner/`. It starts the verifier as a systemd unit, like the proxy
+   and resolver units. The supervisor never reads action inputs itself. It takes the mode and
+   settings from the root-owned setup marker that setup already writes, so it doesn't depend
+   on which step ran setup or on what that step could read.
 2. **Key.** At setup the supervisor generates an ephemeral Ed25519 key, stored root-only (0600),
    the same pattern as the CA key. `pre` prints the public key's fingerprint in its own log.
    Later steps can't rewrite an earlier step's log, so the fingerprint is authentic.
@@ -47,8 +50,9 @@ What this does and doesn't affect:
    statement, checks it against the fingerprint from the `pre` log via the API, and fails if
    the statement is missing, invalid or reports tampering. This makes the verdict mean
    something, because the follow-on job runs outside the job it checks.
-6. **Optional fail-closed in enforce.** When tampering is detected, the supervisor could stop
-   the job out of band rather than wait for the post step. This is crude, so weigh it
+6. **Optional fail-closed in enforce.** When tampering is detected, and the setup marker
+   records enforce with `fail-on-tampering`, the supervisor could stop the job out of band
+   rather than wait for the post step. This is crude, so weigh it
    separately.
 
 ## Limits

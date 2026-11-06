@@ -20,12 +20,13 @@
  * A redacted label, or a run of them, prints as REDACTED: no length, so the shape of the
  * hidden part carries nothing either.
  *
- * Measured on random data: hex of 8+ chars (6+ with a digit) and anything 40+ chars, 100%; base32/base64 of 8-12
- * chars ~55-65%, 16 chars ~75%, 24 chars ~93%. A stricter rule starts hiding real hostnames
- * (`runnerghubwus31`, `microsoftonline`). This is a best-effort filter that keeps long encoded
- * values out of the report; it can't stop a step that deliberately spreads data over many
- * short or word-like names, and it doesn't apply to the raw logs on the runner
- * (`proxy-flows.jsonl` and the DNS/firewall logs are unredacted).
+ * Measured on random data: hex of 8+ chars (6+ with a digit) and anything 40+ chars, 100%;
+ * base32/base64 of 8-12 chars ~55-65%, 16 chars ~75%, 24 chars ~93%. A stricter rule starts
+ * hiding real hostnames (`runnerghubwus31`, `microsoftonline`). This is a best-effort filter
+ * that keeps obviously encoded values out of the report, not a guarantee: data shaped to avoid
+ * it (short or word-like labels) can get through whole and recoverable, even in a single name.
+ * It doesn't apply to the raw logs on the runner (`proxy-flows.jsonl` and the DNS/firewall
+ * logs are unredacted).
  */
 
 export const HEX_MIN_LEN = 8;
