@@ -14,7 +14,7 @@ import {
   type Mode
 } from './policy';
 import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
-import { STANDARD_METHODS, methodLabel, needsRedaction, pathSegmentShown, redactName, redactPath } from './redact';
+import { PATH_HIDDEN, STANDARD_METHODS, methodLabel, needsRedaction, pathSegmentShown, redactName } from './redact';
 
 export interface HostSummary {
   name: string;
@@ -555,8 +555,6 @@ export interface FilterBlock {
   host: string;
   /** a standard method, or an opaque label for any other (src/redact.ts) */
   method: string;
-  /** redacted path (src/redact.ts), no query string */
-  path: string;
   reason: string;
   verdict: string;
   tries: number;
@@ -583,8 +581,6 @@ export interface HttpFilterSuggestion {
 export interface HttpFilterReport {
   /** requests the filter refused (enforce) or would refuse (analyze) */
   blocks: FilterBlock[];
-  /** rules that would let the refused requests through, if the job needs them */
-  fixes: HttpFilterSuggestion;
   /** a whole `http-filter` from the job's observed traffic (level B: read/write split) */
   suggestion: HttpFilterSuggestion;
 }
@@ -807,15 +803,13 @@ function templatePaths(paths: { segs: string[]; keep: number }[]): string[] {
 }
 
 /**
- * One host's rules. With `collapseReads`, reads become a single `"*"` line and only writes are
- * templated (level B); without it every request gets a templated rule (the fixes for refused
- * requests). Sensitive endpoints are templated on their own, so the repos actually written to
+ * One host's rules: reads become a single `"*"` line and only writes are templated (level B).
+ * Sensitive endpoints are templated on their own, so the repos actually written to
  * stay pinned; and when a broader write rule could also match one, a `NONE` rule under that
  * rule's prefix keeps the write closed elsewhere (the method-boundary trap).
  */
 function hostRules(
   reqs: ObservedRequest[],
-  collapseReads: boolean,
   git: boolean
 ): { rules: HttpFilterRule[]; specific: number; coarse: boolean } {
   const byPath = new Map<string, Set<string>>();
@@ -828,7 +822,7 @@ function hostRules(
   const plain: { method: string; segs: string[] }[] = [];
   const sensitive: { method: string; segs: string[]; keep: number }[] = [];
   for (const r of reqs) {
-    if (collapseReads && READ_METHODS.includes(r.method)) {
+    if (READ_METHODS.includes(r.method)) {
       reads.add(r.method);
       continue;
     }
@@ -874,12 +868,12 @@ function hostRules(
   return { rules, specific: [...pinned].filter(p => byPath.has(p)).length, coarse };
 }
 
-function suggest(reqs: ObservedRequest[], collapseReads: boolean): HttpFilterSuggestion {
+function suggest(reqs: ObservedRequest[]): HttpFilterSuggestion {
   const byHost = new Map<string, ObservedRequest[]>();
   for (const r of reqs) byHost.set(r.host, [...(byHost.get(r.host) ?? []), r]);
   const out: HttpFilterSuggestion = { hosts: [], requests: reqs.length, rules: 0, specific: 0, coarse: false };
   for (const host of [...byHost.keys()].sort()) {
-    const h = hostRules(byHost.get(host)!, collapseReads, GIT_HOSTS.includes(host));
+    const h = hostRules(byHost.get(host)!, GIT_HOSTS.includes(host));
     out.hosts.push({ host, rules: h.rules });
     out.rules += h.rules.length;
     out.specific += h.specific;
@@ -889,17 +883,17 @@ function suggest(reqs: ObservedRequest[], collapseReads: boolean): HttpFilterSug
 }
 
 /**
- * Intercepted requests (the only ones with a method and path) to well-formed names, never on a
- * connection the upstream IP guard refused. `refused`: only the http-filter's refusals; else only
- * what the policy allowed, less what the built-in platform list allowed (`filter: platform`). A refusal never goes into the suggestion (that would quietly undo the
- * user's own filter): it gets its own reviewed rule (`fixes`).
+ * Allowed intercepted requests (the only ones with a method and path) to well-formed names, never
+ * on a connection the upstream IP guard refused, less what the built-in platform list allowed
+ * (`filter: platform`). A refused request never goes into a suggestion: that would quietly undo
+ * the user's own filter, and its path was chosen by whoever sent it.
  */
-function observedRequests(records: FlowRecord[], refused: boolean): ObservedRequest[] {
+function observedRequests(records: FlowRecord[]): ObservedRequest[] {
   const conns = assignConnections(records);
   const out: ObservedRequest[] = [];
   records.forEach((r, i) => {
     if ((r.ev !== 'https' && r.ev !== 'http') || !r.verdict || conns[i]?.refused) return;
-    if (refused ? !isFilterBlock(r) : DENIED.has(r.verdict) || r.filter === 'platform') return;
+    if (DENIED.has(r.verdict) || r.filter === 'platform') return;
     if (!r.host || typeof r.method !== 'string' || typeof r.path !== 'string') return;
     const host = r.host.toLowerCase();
     const method = r.method.toUpperCase();
@@ -911,8 +905,9 @@ function observedRequests(records: FlowRecord[], refused: boolean): ObservedRequ
 }
 
 /**
- * The http-filter part of the report: refused requests (method + redacted path), the rules that
- * would let them through, and a suggested `http-filter` built from observed traffic as
+ * The http-filter part of the report: refused requests (host, method and why; never the path,
+ * which the sender chose and can carry data whatever its shape), and a suggested `http-filter`
+ * built from allowed traffic as
  * observe → split reads from writes → template writes → union methods (design: "Suggested
  * http-filter (report)"). Advisory: never applied.
  */
@@ -923,12 +918,11 @@ export function summarizeHttpFilter(records: FlowRecord[]): HttpFilterReport {
     const b: FilterBlock = {
       host: blockedName(r.host || r.sni || '(no host)'),
       method: methodLabel(r.method),
-      path: redactPath(String(r.path ?? '')),
       reason: r.reason as string,
       verdict: r.verdict as string,
       tries: 0
     };
-    const key = [b.host, b.method, b.path, b.reason].join(' ');
+    const key = [b.host, b.method, b.reason].join(' ');
     const row = byKey.get(key) ?? b;
     row.tries++;
     byKey.set(key, row);
@@ -936,11 +930,7 @@ export function summarizeHttpFilter(records: FlowRecord[]): HttpFilterReport {
   const platform = compileUserPatterns(PLATFORM_HOSTS);
   return {
     blocks: [...byKey.values()].sort((a, b) => b.tries - a.tries || a.host.localeCompare(b.host)),
-    fixes: suggest(observedRequests(records, true), false),
-    suggestion: suggest(
-      observedRequests(records, false).filter(r => !matchesAny(r.host, platform)),
-      true
-    )
+    suggestion: suggest(observedRequests(records).filter(r => !matchesAny(r.host, platform)))
   };
 }
 
@@ -1369,25 +1359,23 @@ export function buildReport(input: ReportInput): string {
       [':--', ':--', ':--', '--:'],
       shown.map(b => [
         code(b.host),
-        `${code(b.method)} ${code(b.path)}`,
+        `${code(b.method)} ${PATH_HIDDEN}`,
         FILTER_REASON_TEXT[b.reason] ?? code(b.reason),
         String(b.tries)
       ])
     );
     md += note + '\n\n';
+    md +=
+      '<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. ' +
+      "If the job needs one of these requests, run it in analyze mode without that host's `http-filter` entry: " +
+      'the suggested `http-filter` then covers it. Review the rule before you add it: a write is how data ' +
+      'leaves.</sub>\n\n';
   } else if (groups.filtered.length) {
     md += section('🔒 Refused by `http-filter`', groups.filtered, ['Host', 'Reason', 'Tries'], h => [
       code(blockedName(h.name)),
       h.reasons.map(r => FILTER_REASON_TEXT[r] ?? code(r)).join(' · '),
       String(h.tries)
     ]);
-  }
-  const fixes = input.httpFilter?.fixes;
-  if (fixes?.hosts.length) {
-    md +=
-      `If the job needs ${filterBlocks.length === 1 ? 'it' : 'them'}, add ${fixes.rules === 1 ? 'this rule' : 'these rules'} to \`http-filter\` ` +
-      '(review each one first: a write is how data leaves):\n\n';
-    md += codeBlock('yaml', httpFilterYaml(fixes)) + '\n\n';
   }
   const sug = input.httpFilter?.suggestion;
   if (sug?.hosts.length && (!enforce || filtered)) {

@@ -1147,12 +1147,11 @@ describe('http-filter', () => {
     ];
     const hf = summarizeHttpFilter(recs);
 
-    it('groups refusals by host, method and redacted path', () => {
+    it('groups refusals by host, method and reason (the path is never kept)', () => {
       expect(hf.blocks).toEqual([
         {
           host: 'github.com',
           method: 'POST',
-          path: '/evil/‹redacted›/git-receive-pack',
           reason: 'path-not-allowed',
           verdict: 'BLOCK',
           tries: 2
@@ -1160,7 +1159,6 @@ describe('http-filter', () => {
         {
           host: 'registry.npmjs.org',
           method: 'PUT',
-          path: '/lodash',
           reason: 'method-not-allowed',
           verdict: 'BLOCK',
           tries: 1
@@ -1168,21 +1166,22 @@ describe('http-filter', () => {
       ]);
     });
 
-    it('offers a templated rule per refusal (a push stays pinned, the payload is not echoed)', () => {
-      expect(rulesFor(hf.fixes, 'github.com')).toEqual({ 'evil/*/git-receive-pack': 'POST' });
-      expect(rulesFor(hf.fixes, 'registry.npmjs.org')).toEqual({ lodash: 'PUT' });
+    it('never turns a refusal into a rule', () => {
+      expect(rulesFor(hf.suggestion, 'github.com')).toEqual({ 'myorg/app/git-upload-pack': 'POST' });
+      expect(rulesFor(hf.suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
     });
 
-    it('enforce: lists refusals with the fix, then the suggested filter, and never the raw path', () => {
+    it('enforce: lists refusals without their path, then the suggested filter', () => {
       const md = buildReport({ ...base, mode: 'enforce', hosts: summarizeFlows(recs), httpFilter: hf });
       expect(md).not.toContain(secret);
       expect(md).toContain('> **3 requests were refused by `http-filter`.** If this job failed');
       expect(md).toContain('| 🔒 **HTTP filter** | 3 requests blocked — `github.com`, `registry.npmjs.org` |');
       expect(md).toContain('### 🔒 Refused by `http-filter` (2)\n');
-      expect(md).toContain('| `github.com` | `POST` `/evil/‹redacted›/git-receive-pack` | path not allowed | 2 |');
-      expect(md).toContain('| `registry.npmjs.org` | `PUT` `/lodash` | method not allowed on this path | 1 |');
-      expect(md).toContain('If the job needs them, add these rules to `http-filter`');
-      expect(md).toContain('"evil/*/git-receive-pack": POST');
+      expect(md).not.toContain('evil');
+      expect(md).toContain('| `github.com` | `POST` ‹path hidden› | path not allowed | 2 |');
+      expect(md).toContain('| `registry.npmjs.org` | `PUT` ‹path hidden› | method not allowed on this path | 1 |');
+      expect(md).toContain('The path of a refused request is never shown');
+      expect(md).not.toContain('add these rules');
       expect(md).toContain(
         '🧰 <b>Suggested <code>http-filter</code></b> — collapsed 2 requests → 2 rules (level B); 1 write endpoint kept specific'
       );
@@ -1205,7 +1204,7 @@ describe('http-filter', () => {
   });
 
   describe('what a refused request can show', () => {
-    it('labels a non-standard method instead of printing it, in the table and the fixes', () => {
+    it('labels a non-standard method instead of printing it', () => {
       const token = 'A1B2C3D4E5F6';
       const recs = [
         refused('api.example.com', token, '/x', 'BLOCK', 'method-not-allowed'),
@@ -1217,23 +1216,41 @@ describe('http-filter', () => {
         ['INVALID', 2],
         ['DELETE', 1]
       ]);
-      expect(rulesFor(hf.fixes, 'api.example.com')).toEqual({ x: 'DELETE' });
-      // never suggested either, allowed or refused: only standard methods go into a rule
+      // never suggested either: only standard methods go into a rule
       const allowed = summarizeHttpFilter([
         req('api.example.com', token, '/y'),
         req('api.example.com', 'PROPFIND', '/z')
       ]);
       expect(allowed.suggestion.hosts).toEqual([]);
-      expect(httpFilterYaml(hf.fixes) + httpFilterYaml(allowed.suggestion)).not.toMatch(/INVALID|A1B2|PROPFIND/);
+      expect(httpFilterYaml(allowed.suggestion)).not.toMatch(/INVALID|A1B2|PROPFIND/);
       const md = buildReport({ ...base, mode: 'enforce', hosts: summarizeFlows(recs), httpFilter: hf });
       expect(md).not.toMatch(/A1B2C3D4E5F6/i);
-      expect(md).toContain('| `api.example.com` | `INVALID` `/x` | method not allowed on this path | 2 |');
+      expect(md).toContain('| `api.example.com` | `INVALID` ‹path hidden› | method not allowed on this path | 2 |');
     });
 
-    it('hides short encoded chunks of a refused path, in the table and the fixes', () => {
-      const hf = summarizeHttpFilter([refused('api.example.com', 'POST', '/up/a1f3/9c2e/cafe/x')]);
-      expect(hf.blocks[0].path).toBe('/up/‹redacted›/x');
-      expect(httpFilterYaml(hf.fixes)).not.toMatch(/a1f3|9c2e|cafe/);
+    it('never shows a refused path, in the summary, the job log or any rule', () => {
+      // hex of a secret, one byte per segment: every segment on its own looks harmless
+      const chunks = '/73/65/63/72/65/74';
+      const recs = [
+        req('api.example.com', 'GET', '/status'),
+        refused('api.example.com', 'POST', chunks),
+        refused('api.example.com', 'POST', `/up${chunks}`),
+        refused('api.example.com', 'PUT', '/plain/words/only')
+      ];
+      const hf = summarizeHttpFilter(recs);
+      // grouped without the path, so neither its text nor how many distinct ones there were shows
+      expect(hf.blocks).toEqual([
+        { host: 'api.example.com', method: 'POST', reason: 'path-not-allowed', verdict: 'BLOCK', tries: 2 },
+        { host: 'api.example.com', method: 'PUT', reason: 'path-not-allowed', verdict: 'BLOCK', tries: 1 }
+      ]);
+      // everything post.ts logs a refusal from
+      expect(JSON.stringify(hf)).not.toMatch(/73|65|63|72|74|plain|words/);
+      for (const mode of ['enforce', 'analyze'] as const) {
+        const md = buildReport({ ...base, mode, hosts: summarizeFlows(recs), httpFilter: hf });
+        expect(md).toContain('| `api.example.com` | `POST` ‹path hidden› | path not allowed | 2 |');
+        expect(md).not.toMatch(/73\/65|\b74\b|plain|words/);
+      }
+      expect(rulesFor(hf.suggestion, 'api.example.com')).toEqual({ '*': 'GET, HEAD' });
     });
   });
 
@@ -1345,12 +1362,6 @@ describe('http-filter', () => {
           { host: 'pypi.org', method: 'POST', path: '/simple/requests/' }
         ])
       ).toEqual(['block:method-not-allowed', 'block:method-not-allowed', 'block:method-not-allowed']);
-    });
-
-    it('the rules offered for refused requests let exactly those through', () => {
-      const recs = traffic.map(([host, method, p, logged]) => refused(host, method, logged ?? p));
-      const got = engine(asPolicy(summarizeHttpFilter(recs).fixes), sent);
-      expect(sent.filter((_, i) => got[i] !== 'allow:allowed')).toEqual([]);
     });
   });
 
