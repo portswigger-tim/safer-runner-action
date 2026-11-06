@@ -8,6 +8,7 @@ import {
   buildReport,
   containerSection,
   humanBytes,
+  httpFilterYaml,
   modeLabel,
   blockedName,
   type HostSummary,
@@ -15,7 +16,9 @@ import {
   suggestedAllowlist,
   summarizeContainers,
   summarizeFlows,
-  type FirewallEvent
+  summarizeHttpFilter,
+  type FirewallEvent,
+  type HttpFilterSuggestion
 } from './report';
 
 const log = [
@@ -953,5 +956,242 @@ describe('blocked names and DNS refusals', () => {
     const md = buildReport({ ...base, mode: 'analyze', dnsRefused: ['www.example.com'] });
     expect(md).toContain('1 DNS lookup enforce would refuse');
     expect(md).toContain('**DNS would refuse** (1): `www.example.com`');
+  });
+});
+
+describe('http-filter', () => {
+  let port = 40000;
+  /** an intercepted request, on its own client connection */
+  const req = (host: string, method: string, path: string, extra: Partial<FlowRecord> = {}): FlowRecord => ({
+    ts: 0,
+    ev: 'https',
+    verdict: 'ALLOW',
+    reason: 'allowed',
+    layer: 'http',
+    host,
+    sni: host,
+    method,
+    path,
+    status: 200,
+    client: `10.1.0.4:${port++}`,
+    ...extra
+  });
+  const refused = (host: string, method: string, path: string, verdict = 'BLOCK', reason = 'path-not-allowed') =>
+    req(host, method, path, { verdict: verdict as FlowRecord['verdict'], reason, status: 403 });
+  const rulesFor = (s: HttpFilterSuggestion, host: string) =>
+    Object.fromEntries((s.hosts.find(h => h.host === host)?.rules ?? []).map(r => [r.path, r.methods.join(', ')]));
+  const base = { job: 'j', firewall: [], dnsRefused: [], selfTests: [] };
+
+  describe('suggested http-filter (level B)', () => {
+    it('collapses a read-only host to one line', () => {
+      const recs = [
+        ...Array.from({ length: 30 }, (_, i) => req('registry.npmjs.org', 'GET', `/pkg-${i}`)),
+        req('registry.npmjs.org', 'HEAD', '/lodash')
+      ];
+      const { suggestion } = summarizeHttpFilter(recs);
+      expect(rulesFor(suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
+      expect(suggestion).toMatchObject({ requests: 31, rules: 1, specific: 0, coarse: false });
+    });
+
+    it('splits reads from writes and templates the write paths (ids never echoed)', () => {
+      const recs = [
+        req('api.github.com', 'GET', '/repos/o/r'),
+        req('api.github.com', 'OPTIONS', '/repos/o/r'),
+        req('api.github.com', 'POST', '/repos/o/r/issues/123/comments'),
+        req('api.github.com', 'POST', '/repos/o/r/issues/456/comments'),
+        req('api.github.com', 'PATCH', '/repos/o/r/issues/123/comments'),
+        req('api.github.com', 'PUT', '/repos/o/r/contents/550e8400-e29b-41d4-a716-446655440000')
+      ];
+      const { suggestion } = summarizeHttpFilter(recs);
+      expect(rulesFor(suggestion, 'api.github.com')).toEqual({
+        '*': 'GET, HEAD, OPTIONS',
+        'repos/o/r/contents/*': 'PUT',
+        'repos/o/r/issues/*/comments': 'POST, PATCH'
+      });
+      const yaml = httpFilterYaml(suggestion);
+      expect(yaml).not.toMatch(/123|456|550e8400/);
+    });
+
+    it('templates a position only when it has many distinct values', () => {
+      const few = summarizeHttpFilter(['a', 'b'].map(x => req('uploads.example.com', 'PUT', `/files/${x}`)));
+      expect(rulesFor(few.suggestion, 'uploads.example.com')).toEqual({ 'files/a': 'PUT', 'files/b': 'PUT' });
+      const many = summarizeHttpFilter(['a', 'b', 'c', 'd'].map(x => req('uploads.example.com', 'PUT', `/files/${x}`)));
+      expect(rulesFor(many.suggestion, 'uploads.example.com')).toEqual({ 'files/*': 'PUT' });
+    });
+
+    it('keeps a git push path-specific, pinned to the repo written to (not folded into a method baseline)', () => {
+      const recs = [
+        req('github.com', 'GET', '/myorg/app.git/info/refs'),
+        req('github.com', 'POST', '/myorg/app.git/git-upload-pack'),
+        req('github.com', 'POST', '/myorg/app.git/git-receive-pack'),
+        req('github.com', 'POST', '/other/lib.git/git-upload-pack')
+      ];
+      const { suggestion } = summarizeHttpFilter(recs);
+      expect(rulesFor(suggestion, 'github.com')).toEqual({
+        '*': 'GET, HEAD',
+        'myorg/app.git/git-receive-pack': 'POST',
+        'myorg/app.git/git-upload-pack': 'POST',
+        'other/lib.git/git-upload-pack': 'POST'
+      });
+      expect(suggestion.specific).toBe(3);
+      expect(suggestion.coarse).toBe(false);
+    });
+
+    it('templates pushed-to repos only when several are seen, and then says it is coarse', () => {
+      const owners = ['a', 'b', 'c', 'd'];
+      const { suggestion } = summarizeHttpFilter(
+        owners.map(o => req('github.com', 'POST', `/${o}/${o}-repo.git/git-receive-pack`))
+      );
+      expect(rulesFor(suggestion, 'github.com')).toEqual({ '*/git-receive-pack': 'POST' });
+      expect(suggestion.coarse).toBe(true);
+    });
+
+    it('method-boundary trap: a broad POST rule never re-opens pushes on a host that pushes', () => {
+      const recs = [
+        req('github.com', 'POST', '/myorg/app.git/git-receive-pack'),
+        // a write whose only segment is an id: templates to "*"
+        req('github.com', 'POST', '/0dd2149bb6f23853')
+      ];
+      const { suggestion } = summarizeHttpFilter(recs);
+      expect(rulesFor(suggestion, 'github.com')).toEqual({
+        '*': 'POST',
+        '*/git-receive-pack': '',
+        '*/git-upload-pack': '',
+        'myorg/app.git/git-receive-pack': 'POST'
+      });
+      expect(httpFilterYaml(suggestion)).toContain('"*/git-receive-pack": NONE');
+      expect(suggestion.coarse).toBe(true);
+    });
+
+    it('adds no NONE rule where nothing broad could match a pack path', () => {
+      const recs = [
+        req('api.github.com', 'POST', '/repos/o/r/issues'),
+        req('github.com', 'POST', '/myorg/app.git/git-receive-pack')
+      ];
+      const { suggestion } = summarizeHttpFilter(recs);
+      expect(rulesFor(suggestion, 'api.github.com')).toEqual({ 'repos/o/r/issues': 'POST' });
+      expect(rulesFor(suggestion, 'github.com')).toEqual({ 'myorg/app.git/git-receive-pack': 'POST' });
+    });
+
+    it('leaves out refused requests, GitHub platform hosts, refused connections and unsafe names', () => {
+      const recs: FlowRecord[] = [
+        req('registry.npmjs.org', 'GET', '/lodash'),
+        refused('registry.npmjs.org', 'PUT', '/lodash'),
+        req('results-receiver.actions.githubusercontent.com', 'POST', '/twirp/x.Svc/Method'),
+        req('productionresultssa1.blob.core.windows.net', 'PUT', '/actions-results/abc'),
+        req('0dd2149bb6f23853abcdef.example.com', 'POST', '/x'),
+        { ts: 0, ev: 'tls', verdict: 'INTERCEPT', reason: 'allowed', sni: 'meta.example.com', client: '10.1.0.4:1' },
+        req('meta.example.com', 'POST', '/x', { client: '10.1.0.4:1' }),
+        {
+          ts: 0,
+          ev: 'upstream',
+          verdict: 'BLOCK',
+          reason: 'upstream-ip-forbidden',
+          host: 'meta.example.com',
+          dst: '169.254.169.254:443',
+          client: '10.1.0.4:1'
+        }
+      ];
+      const { suggestion } = summarizeHttpFilter(recs);
+      expect(suggestion.hosts.map(h => h.host)).toEqual(['registry.npmjs.org']);
+      expect(rulesFor(suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
+    });
+
+    it('never pastes a segment that could break the YAML', () => {
+      const { suggestion } = summarizeHttpFilter([
+        req('api.example.com', 'POST', '/a"b/x'),
+        req('api.example.com', 'POST', '/c:d#e/y')
+      ]);
+      expect(rulesFor(suggestion, 'api.example.com')).toEqual({ '*/x': 'POST', '*/y': 'POST' });
+    });
+  });
+
+  describe('refused requests', () => {
+    const secret = 'c2VjcmV0LXRva2VuLTEyMzQ1Njc4';
+    const recs = [
+      req('registry.npmjs.org', 'GET', '/lodash'),
+      req('github.com', 'POST', '/myorg/app.git/git-upload-pack'),
+      refused('github.com', 'POST', `/evil/${secret}.git/git-receive-pack`),
+      refused('github.com', 'POST', `/evil/${secret}.git/git-receive-pack`),
+      refused('registry.npmjs.org', 'PUT', '/lodash', 'BLOCK', 'method-not-allowed')
+    ];
+    const hf = summarizeHttpFilter(recs);
+
+    it('groups refusals by host, method and redacted path', () => {
+      expect(hf.blocks).toEqual([
+        {
+          host: 'github.com',
+          method: 'POST',
+          path: '/evil/‹redacted›/git-receive-pack',
+          reason: 'path-not-allowed',
+          verdict: 'BLOCK',
+          tries: 2
+        },
+        {
+          host: 'registry.npmjs.org',
+          method: 'PUT',
+          path: '/lodash',
+          reason: 'method-not-allowed',
+          verdict: 'BLOCK',
+          tries: 1
+        }
+      ]);
+    });
+
+    it('offers a templated rule per refusal (a push stays pinned, the payload is not echoed)', () => {
+      expect(rulesFor(hf.fixes, 'github.com')).toEqual({ 'evil/*/git-receive-pack': 'POST' });
+      expect(rulesFor(hf.fixes, 'registry.npmjs.org')).toEqual({ lodash: 'PUT' });
+    });
+
+    it('enforce: lists refusals with the fix, then the suggested filter, and never the raw path', () => {
+      const md = buildReport({ ...base, mode: 'enforce', hosts: summarizeFlows(recs), httpFilter: hf });
+      expect(md).not.toContain(secret);
+      expect(md).toContain('> **3 requests were refused by `http-filter`.** If this job failed');
+      expect(md).toContain('| 🔒 **HTTP filter** | 3 requests blocked — `github.com`, `registry.npmjs.org` |');
+      expect(md).toContain('### 🔒 Refused by `http-filter` (2)\n');
+      expect(md).toContain('| `github.com` | `POST` `/evil/‹redacted›/git-receive-pack` | path not allowed | 2 |');
+      expect(md).toContain('| `registry.npmjs.org` | `PUT` `/lodash` | method not allowed on this path | 1 |');
+      expect(md).toContain('If the job needs them, add these rules to `http-filter`');
+      expect(md).toContain('"evil/*/git-receive-pack": POST');
+      expect(md).toContain(
+        '🧰 <b>Suggested <code>http-filter</code></b> — collapsed 2 requests → 2 rules (level B); 1 write endpoint kept specific'
+      );
+      expect(md.indexOf('Refused by `http-filter`')).toBeLessThan(md.indexOf('Suggested <code>http-filter'));
+    });
+
+    it('analyze: says the filter would refuse them, not that hosts would be blocked', () => {
+      const wb = recs.map(r => (r.verdict === 'BLOCK' ? { ...r, verdict: 'WOULD_BLOCK' as const, status: 200 } : r));
+      const md = buildReport({
+        ...base,
+        mode: 'analyze',
+        hosts: summarizeFlows(wb),
+        httpFilter: summarizeHttpFilter(wb)
+      });
+      expect(md).toContain('<kbd>3 requests the http-filter would refuse</kbd>');
+      expect(md).not.toContain('would be blocked</kbd>');
+      expect(md).toContain('### 🔒 Refused by `http-filter` (2) — would be blocked');
+      expect(md).toContain('<details open>\n<summary>🧰 <b>Suggested <code>http-filter</code>');
+    });
+  });
+
+  it('analyze: suggests a filter even when none is configured; enforce only on a refusal', () => {
+    const recs = [req('registry.npmjs.org', 'GET', '/lodash'), req('pypi.org', 'GET', '/simple/requests/')];
+    const httpFilter = summarizeHttpFilter(recs);
+    const hosts = summarizeFlows(recs);
+    const analyze = buildReport({ ...base, mode: 'analyze', hosts, httpFilter });
+    expect(analyze).toContain(
+      '<details>\n<summary>🧰 <b>Suggested <code>http-filter</code></b> — collapsed 2 requests → 2 rules (level B)</summary>'
+    );
+    expect(analyze).toContain(
+      'http-filter: |\n  pypi.org:\n    "*": GET, HEAD\n  registry.npmjs.org:\n    "*": GET, HEAD'
+    );
+    expect(analyze).toContain('**✅ Nothing would be blocked.**');
+    expect(buildReport({ ...base, mode: 'enforce', hosts, httpFilter })).not.toContain('Suggested <code>http-filter');
+  });
+
+  it('shows the platform endpoints the built-in list auto-allowed', () => {
+    const md = buildReport({ ...base, mode: 'enforce', hosts: [], platformEndpoints: 7 });
+    expect(md).toMatch(/<summary>🔧 <b>Diagnostics<\/b> — .*7 platform endpoints auto-allowed/);
+    expect(md).toContain('`allow-github-platform: false` turns it off');
   });
 });
