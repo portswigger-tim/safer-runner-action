@@ -184,17 +184,21 @@ platform uses.
 ### In the job summary
 
 - **Analyze** refuses nothing. The summary lists each request your filter *would* refuse:
-  method and path, with parts that look like encoded data redacted. A method that is not a
-  standard HTTP method shows as `INVALID`. Only the first 8 path segments show.
+  the host, the method and the reason.
+- **Enforce** refuses those requests and lists them in the same way.
+- The summary and the job log never show the path of a refused request. The sender chose
+  that path, and it can carry data. A method that is not a standard HTTP method shows as
+  `INVALID`.
+- To allow a refused request that the job needs, remove that host's `http-filter` entry and
+  run the job in analyze mode. The suggested `http-filter` then includes the request.
+- Both modes suggest an `http-filter` built from the requests that were allowed. Reads
+  collapse to one `"*": GET, HEAD` line per host. Writes keep their paths, with ids and
+  hashes replaced by `*`. git push and fetch stay pinned to the repositories the job used.
+  Analyze always shows the suggestion; enforce shows it when the filter refused a request.
+  Review it before you use it: the action never applies it.
 - Suggested rules contain only standard methods. A path that ends in `/` gets two rules
   (`"legacy": POST` and `"legacy/*": POST`), because a pattern cannot end in `/`. A path
   with `//` gets the rule for the same path with a single `/`.
-- **Enforce** refuses those requests and lists them, each with a rule to add if the job needs it.
-- Both modes suggest an `http-filter` built from the job's traffic. Reads collapse to one
-  `"*": GET, HEAD` line per host. Writes keep their paths, with ids and hashes replaced by `*`.
-  git push and fetch stay pinned to the repositories the job used. Analyze always shows the
-  suggestion; enforce shows it when the filter refused a request. Review it before you use it:
-  the action never applies it.
 
 ### Limits
 

@@ -96,8 +96,6 @@ export function methodLabel(method: unknown): string {
   return STANDARD_METHODS.includes(m) ? m : CUSTOM_METHOD;
 }
 
-/** A printed path shows at most this many segments; the rest is one REDACTED. */
-export const MAX_PATH_SEGMENTS = 8;
 /** digits in one shown path segment (`v1`, `issues/12`); more could be a number someone chose */
 export const MAX_SEGMENT_DIGITS = 2;
 export const MAX_SEGMENT_LEN = 64;
@@ -106,11 +104,11 @@ export const PATH_HEX_LEN = 4;
 const PATH_WORD = /^[A-Za-z0-9._~@+-]+$/;
 
 /**
- * Can this path segment be printed? Stricter than a hostname label: the path of a refused
- * request is chosen by whoever sent it and can hold many short chunks, so a segment is shown
- * only when it is plain characters, not too long, has at most MAX_SEGMENT_DIGITS digits, is not
- * PATH_HEX_LEN+ hex, and no `.`-part of it looks encoded. The same best-effort limit as for names
- * applies: word-like data can still get through.
+ * Can this segment of an allowed request's path be printed (in a suggested rule)? Stricter than
+ * a hostname label: a segment is shown only when it is plain characters, not too long, has at
+ * most MAX_SEGMENT_DIGITS digits, is not PATH_HEX_LEN+ hex, and no `.`-part of it looks encoded.
+ * Best effort, like names: word-like data can still get through. A refused request's path is
+ * never printed at all (PATH_HIDDEN).
  */
 export function pathSegmentShown(segment: string): boolean {
   if (!PATH_WORD.test(segment) || segment.length > MAX_SEGMENT_LEN || segment === '.' || segment === '..') {
@@ -122,18 +120,7 @@ export function pathSegmentShown(segment: string): boolean {
 }
 
 /**
- * `path` for printing a refused request: every segment pathSegmentShown rejects, and everything
- * after the first MAX_PATH_SEGMENTS shown ones, becomes REDACTED (a run of them one marker). The
- * query string is never shown (the proxy already drops it from the flow log).
+ * How the path of a refused request is shown: always this, never the path. Whoever sent the
+ * request chose the path, and no per-segment check stops data split into short chunks.
  */
-export function redactPath(path: string): string {
-  const out: string[] = [];
-  let shown = 0;
-  for (const s of path.split('?', 1)[0].split('/')) {
-    if (shown < MAX_PATH_SEGMENTS && (s === '' || pathSegmentShown(s))) {
-      out.push(s);
-      if (s) shown++;
-    } else if (out[out.length - 1] !== REDACTED) out.push(REDACTED);
-  }
-  return out.join('/');
-}
+export const PATH_HIDDEN = '‹path hidden›';
