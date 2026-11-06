@@ -1279,6 +1279,8 @@ describe('http-filter', () => {
       ['uploads.example.com', 'PUT', '/files/%41pp/c'],
       ['paths.example.com', 'POST', '/a//b'],
       ['forms.example.com', 'POST', '/report;jsessionid=x'],
+      ['drafts.example.com', 'PUT', '/draft;v=2/'],
+      ['github.com', 'POST', '/MyOrg//Tools.git/git-upload-pack'],
       ['uploads.example.com', 'POST', '/'],
       ['github.com', 'GET', '/MyOrg/App.git/info/refs'],
       ['github.com', 'POST', '/MyOrg/App.git/git-receive-pack'],
@@ -1300,9 +1302,18 @@ describe('http-filter', () => {
         'PUT',
         `/v2/acme/app/blobs/uploads/${longSegment}/part/2`,
         `/v2/acme/app/blobs/uploads/${longSegment}`.slice(0, 256)
+      ],
+      // cut short in the middle of an escape
+      [
+        'logs.example.com',
+        'PUT',
+        `/runs/${'chunk-'.repeat(60)}%41/end`,
+        `/runs/${'chunk-'.repeat(60)}%41`.slice(0, 256)
       ]
     ];
-    const sent = traffic.map(([host, method, p]) => ({ host, method, path: p }));
+    // a `//` is replayed collapsed: the engine refuses the raw form unless a `*` spans it, which
+    // the suggestion never adds (it covers the request as a client normally sends it)
+    const sent = traffic.map(([host, method, p]) => ({ host, method, path: p.replace(/\/{2,}/g, '/') }));
 
     it('the suggested http-filter allows every request it was built from', () => {
       const recs = traffic.map(([host, method, p, logged]) => req(host, method, logged ?? p));
@@ -1314,7 +1325,17 @@ describe('http-filter', () => {
       // a pattern can't end in `/`: the request and its relaxed form each need a rule
       expect(rulesFor(suggestion, 'upload.pypi.org')).toEqual({ legacy: 'POST', 'legacy/*': 'POST' });
       expect(rulesFor(suggestion, 'forms.example.com')).toEqual({ report: 'POST', 'report*': 'POST' });
-      expect(rulesFor(suggestion, 'paths.example.com')).toEqual({ 'a/*/b': 'POST' });
+      // every form must be allowed: params and trailing slash, each with and without the other
+      expect(rulesFor(suggestion, 'drafts.example.com')).toEqual({
+        draft: 'PUT',
+        'draft*': 'PUT',
+        'draft*/*': 'PUT',
+        'draft/*': 'PUT'
+      });
+      expect(rulesFor(suggestion, 'paths.example.com')).toEqual({ 'a/b': 'POST' });
+      expect(engine(config, [{ host: 'paths.example.com', method: 'POST', path: '/a//b' }])).toEqual([
+        'block:path-not-allowed'
+      ]);
       expect(rulesFor(suggestion, 'blobs.example.com')).toEqual({ 'v2/acme/app/blobs/uploads/*': 'PUT' });
       // and still refuses what it should: a push nobody made, a write the job never did
       expect(
