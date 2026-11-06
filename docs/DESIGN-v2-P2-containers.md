@@ -1,7 +1,19 @@
 # Safer Runner Action v2 — P2: container egress (C2)
 
-> **Status: BUILT on `v2` (P2 build session, 2026-11-05)** — see "Build outcome" below; the
-> rest of this document is the spike + design it was built from.
+> **Status: shipped in v2.0.0.** The rest of this document is the spike + design it was built
+> from, kept as a record. The "Build outcome" below lists what changed in the build.
+>
+> **Later changes** (the spike text below still uses the old names):
+> - The resolver is **CoreDNS**, not dnsmasq ([DNS-COREDNS.md](DNS-COREDNS.md)). Read "dnsmasq"
+>   below as "the local resolver".
+> - The `container-tls` and `proxy-port` inputs were removed in v2.0.0. Container HTTPS is
+>   always checked by SNI, and ports are always allocated at setup (a free pair in 20000-32766).
+> - The shipped chains are `SAFER_RUNNER_CNAT` (nat PREROUTING) and `SAFER_RUNNER_CFWD`
+>   (hooked from `DOCKER-USER`); the spike's `SR_*` names are not used.
+> - In enforce, a missing `DOCKER-USER` chain fails setup (v2.1.0).
+> - The `disable-docker` input of the spike is now `docker: remove-group` (`docker` input).
+> - `.github/workflows/p2.yml` and the `p2/` harness named below are in the test repo
+>   `portswigger-tim/safer-runner-action-test`, not here.
 >
 > **Build outcome (deviations from the plan, all measured on runners):**
 > - **Source classification = second listener, proven.** mitmproxy runs

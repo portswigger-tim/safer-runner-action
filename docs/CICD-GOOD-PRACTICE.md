@@ -65,4 +65,4 @@ They are defence in depth. Use them alongside the action, not instead of it.
 ---
 
 See the main [README](../README.md) for how to configure the action, and
-[Limitations](../README.md#limitations-read-these) for what it does and does not cover.
+[Limitations](LIMITATIONS.md) for what it does and does not cover.

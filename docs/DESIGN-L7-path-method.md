@@ -1,6 +1,10 @@
 # L7 path + method filtering (`http-filter`)
 
-**Status:** accepted (RFC [#17](https://github.com/portswigger-tim/safer-runner-action/issues/17)). Implementation tracked on the `http-filter` branch.
+**Status:** shipped in v2.2.0 (RFC [#17](https://github.com/portswigger-tim/safer-runner-action/issues/17)), hardened in v2.2.1 ([release notes](RELEASE-NOTES.md)).
+The inputs are `http-filter` and `allow-github-platform` (default `true`). The matcher is `HttpFilter`
+in `proxy/policy_core.py`; the built-in platform list is `GITHUB_PLATFORM_ENDPOINTS` in
+`src/parsers/github-parser.ts`. Where this note and the code differ, the code wins; the sections
+below record the shipped behaviour and the reasoning.
 
 ## Why
 
@@ -32,8 +36,8 @@ not the point.
   it does not inspect bodies, so it cannot stop data smuggled inside an *allowed* write (or
   a small amount in a path/query). Same philosophy as the host allowlist — finer-grained,
   still not a seal.
-- **Not for passthrough/container traffic.** SNI-only connections (`passthrough-domains`,
-  and container HTTPS in enforce) expose no path, so they cannot be filtered until container
+- **Not for passthrough/container traffic.** SNI-only connections (`passthrough-domains`, and
+  container HTTPS to allowlisted names) expose no path, so they cannot be filtered until container
   TLS interception ships.
 
 ## How it layers on `allowed-domains`
@@ -91,8 +95,15 @@ with:
    `owner/repo/git-receive-pack`, just as `*.nip.io` matches `a.b.c.nip.io`), and a `*` inside
    a segment matches within that segment (`pre*`, as in `productionresultssa*`). One behaviour
    across the whole config file.
-5. Methods are matched case-insensitively; paths case-sensitively (URLs are). Matching is
-   on the path; the query string is ignored (sufficient for the git case — see below).
+5. Methods are matched case-insensitively. Paths are matched case-sensitively, except on
+   `github.com`, where owner and repo names are case-insensitive and `.git` is optional
+   (`GIT_HOSTS` in `proxy/policy_core.py`): `org/app/git-receive-pack` also matches
+   `/Org/app.git/git-receive-pack`.
+6. **The path is matched as the server will see it.** The query string is ignored and the
+   path is percent-decoded once. A request is allowed only if *every* equivalent spelling of
+   its path is allowed: `;params` removed, repeated slashes collapsed, trailing slashes removed.
+   A request with a malformed or double-encoded escape, a dot segment (`.` or `..`), a
+   backslash, a fragment or a control character is refused outright.
 
 ### Guardrails
 
@@ -101,6 +112,8 @@ with:
   mistaken belief that a filter grants access.
 - **Passthrough host:** if a filtered host is in `passthrough-domains` (SNI-only), warn
   that it cannot be path-filtered, rather than silently ignoring the rule.
+- **Invalid filter:** a malformed `http-filter` fails setup. In enforce, `pre` fails the job
+  rather than continue without the filter.
 
 ## Worked examples
 
@@ -179,15 +192,17 @@ SARIF):
 
 | host | method | path | what | tier |
 |---|---|---|---|---|
-| `results-receiver.actions.githubusercontent.com` | POST | `/twirp/results.services.receiver.Receiver/*` | step logs, status (`WorkflowStepsUpdate`) | essential |
+| `results-receiver.actions.githubusercontent.com` | POST | `/twirp/results.services.receiver.Receiver/*` | step and job log metadata (`Receiver` service) | essential |
 | `results-receiver.actions.githubusercontent.com` | GET | `/_ws/ingest.sock` | live step-log stream | essential |
 | `run-actions-*-azure-*.actions.githubusercontent.com` | GET | `*/idtoken/*` | OIDC token request | essential |
 | `run-actions-*-azure-*.actions.githubusercontent.com` | POST | `*/renewjob`, `*/completejob` | job lease renewal, job completion | essential |
-| `results-receiver.actions.githubusercontent.com` | POST | `/twirp/*` | artifact, cache RPCs | optional |
+| `results-receiver.actions.githubusercontent.com` | POST | `/twirp/*` | other results RPCs: artifact, cache, and step status (`WorkflowStepUpdateService`) | optional |
 | `productionresultssa*.blob.core.windows.net` | GET, HEAD, PUT | `/actions-results/*`, `/actions-cache/*` | artifact / log / cache blobs | optional |
 
-…plus the reads each service needs (step-log GETs, blob downloads), enumerated the same way — not
-covered by a wildcard.
+Reads are listed the same way: blob downloads are the `GET`/`HEAD` methods of the storage entries,
+and the live-log stream and OIDC are `GET` entries. No wildcard read rule covers them.
+Step status is **optional**, not essential: refusing it loses step status but does not fail or hang
+the job (the same holds for the other optional entries).
 
 Design intent:
 
@@ -198,26 +213,30 @@ Design intent:
 - **Applied only when a GitHub host is filtered**, so jobs that don't use `http-filter` are
   unaffected. The hosted-compute **watchdog** is passthrough (SNI-only) and so is never filtered.
 - **Visible and overridable.** The report shows "N platform endpoints auto-allowed" (the essential
-  tier), a rule of the user's that matches an optional endpoint wins over it, and a toggle
-  (e.g. `allow-github-platform: false`, default on) lets a strict user turn it off and allowlist
+  tier), a rule of the user's that matches an optional endpoint wins over it, and the
+  `allow-github-platform` input (default `true`) lets a strict user set `false` and allowlist
   by hand.
 - **Maintained from observed traffic.** Grow the list by sampling more job shapes; a missing entry
   only breaks that job's platform step (visible, fixable), never enforcement correctness.
 
-Open: default-on when filtering a GitHub host (ergonomic) versus opt-in (strict). Leaning
-default-on-and-visible, with the toggle for a hard lockdown.
+Decided: default-on when filtering a GitHub host (ergonomic) and visible in the report, with
+`allow-github-platform: false` for a hard lockdown.
 
 ## Analyze vs enforce, and the report
 
 - **analyze:** log a `WOULD_BLOCK` for each method/path that enforce would refuse, so you
   can see what a filter would catch before turning it on.
-- **enforce:** block with reason `method-not-allowed` / `path-not-allowed`, and surface the
-  blocked request (method + redacted path) in the egress report with a suggested rule to
-  add if the job genuinely needs it.
+- **enforce:** block with reason `method-not-allowed` / `path-not-allowed`, and list the
+  blocked request in the egress report by host, method and reason. The path is shown as
+  `‹path hidden›` (v2.2.1), so a crafted path cannot carry data into the public summary. To
+  learn what to allow, run the host in `analyze` without its `http-filter` entry and use the
+  suggested filter.
 
 ## Suggested `http-filter` (report)
 
-The report should propose an `http-filter` from observed traffic, the way it already suggests
+<!-- TODO: align after #24 / yaml PR merge: this section describes what the suggester does; where it lives and how it renders the YAML are changing -->
+
+The report proposes an `http-filter` from observed traffic, the way it already suggests
 `allowed-domains`. The goal is a short, reviewable suggestion that encodes *intent* — "reads
 open, writes only here" — not a dump of every URL seen. The method is observe → compress →
 suggest, per host:
@@ -290,15 +309,17 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
 
 ## Implementation sketch
 
-- `proxy/policy_core.py`: a post-host gate. Compile `http-filter` into
+- `proxy/policy_core.py` (`HttpFilter`): a post-host gate. Compile `http-filter` into
   `host → ordered [(pattern, methods)]`, match the request method and path, and return
   allow/deny with a reason. A pure function — unit-testable alongside the existing Python
   tests. Reuse the `allowed-domains` matcher so `*` behaves identically.
-- `src/policy.ts` / `policy.json`: build and carry the compiled rules.
-- `src/inputs.ts`: parse and validate `http-filter`; emit the two guardrail warnings.
-- `src/report.ts`: new blocked-reason rows and the "if the job needs it" suggestion. The
-  suggestion reducer carries the sensitive-endpoint `endsWith` list (seeded with the git pack
-  URLs, expandable) used to keep writes path-specific.
+- `src/policy.ts` / `policy.json`: `buildHttpFilter` compiles the rules, adds the platform
+  endpoints in force, emits the guardrail warnings, and carries the result in `policy.json`.
+- `src/inputs.ts`: parse and validate the `http-filter` input.
+- `src/report.ts`: the blocked-request rows and the suggested filter. The suggestion reducer
+  carries the sensitive-endpoint `endsWith` list (seeded with the git pack URLs, expandable)
+  used to keep writes path-specific.
+<!-- TODO: align after #24 / yaml PR merge: input parsing moves to the yaml library with a strict schema; the suggester moves out of report.ts -->
 
 ## Resolved decisions (RFC [#17](https://github.com/portswigger-tim/safer-runner-action/issues/17))
 

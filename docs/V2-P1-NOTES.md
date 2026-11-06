@@ -1,7 +1,19 @@
 # v2 P1 implementation notes
 
-> **Superseded for DNS:** dnsmasq was replaced by CoreDNS and allowlist entries became exact by
-> default after v2.0.0-beta.4 - see [DNS-COREDNS.md](DNS-COREDNS.md). The dnsmasq notes below are history.
+> **Status:** these are the decisions taken while building P1 (shipped in v2.0.0). They are a
+> record, not a spec. Where the final code differs, the code and `action.yaml` win. What changed
+> since:
+> - **DNS:** dnsmasq was replaced by CoreDNS and allowlist entries became exact by default after
+>   v2.0.0-beta.4 - see [DNS-COREDNS.md](DNS-COREDNS.md). Read "dnsmasq" below as "the resolver".
+>   The dnsmasq rebind filter in decision 19 is gone; the addon's upstream IP guard is the only
+>   rebind defence.
+> - **Inputs:** `sudo-config` (decision 16) and `proxy-port` (decision 14) were removed in v2.0.0.
+>   Sudo is on or off (`disable-sudo`), and the proxy ports are always allocated at setup.
+>   See the migration table in [RELEASE-NOTES.md](RELEASE-NOTES.md).
+> - **Containers:** container egress (listed under "Deferred") shipped in v2.0.0 -
+>   see [DESIGN-v2-P2-containers.md](DESIGN-v2-P2-containers.md).
+> - **Docker:** the docker group is now removed by default in enforce (the `docker` input);
+>   "still kept by default" in decision 16 no longer holds.
 
 Decisions taken while building P1 where [DESIGN-v2.md](DESIGN-v2.md) was silent or left a
 choice open. Each one is a default, not a final answer; revisit in P2/P3.
@@ -14,7 +26,7 @@ choice open. Each one is a default, not a final answer; revisit in P2/P3.
 | `proxy/policy.py` | mitmproxy addon wiring the core in. Pinned to mitmproxy 12.3.1. |
 | `proxy/test-vectors.json` | Matching vectors checked by **both** the Python and the jest tests. |
 | `src/egress.ts` | Setup orchestration (runs in `pre`; `main` only if `pre` didn't complete). |
-| `src/policy.ts` | Builds `policy.json`; TS mirror of the matcher for the report and dnsmasq. |
+| `src/policy.ts` | Builds `policy.json`; TS mirror of the matcher for the report and the resolver config. |
 | `src/proxy.ts` | mitmdump install (sha256-pinned), proxy user, ephemeral CA, systemd unit. |
 | `src/trust.ts` | System store, `GITHUB_ENV` CA variables, Java keystores. |
 | `src/firewall.ts` | iptables / ip6tables rulesets (pure generators + atomic apply). |

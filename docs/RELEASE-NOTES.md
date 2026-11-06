@@ -89,7 +89,8 @@ longer recognises ("Unexpected input"), but does not fail on them, so check your
 | `fail-on-tampering` unset | enforce now fails the job on tampering (analyze still never does). Set `fail-on-tampering: false` to keep the old enforce behaviour |
 
 Final inputs: `mode`, `allowed-domains`, `passthrough-domains`,
-`block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `docker`, `fail-on-tampering`.
+`block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `docker`, `fail-on-tampering` (at v2.0.0;
+`http-filter` and `allow-github-platform` were added in v2.2.0).
 
 ### What each mode does
 
