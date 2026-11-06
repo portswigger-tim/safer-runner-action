@@ -53,7 +53,9 @@ inputs:
       every equivalent spelling of its path is (`;params`, repeated and trailing slashes). On
       github.com, paths match case-insensitively and with or without `.git`
       (`org/app/git-receive-pack` also matches `/Org/app.git/git-receive-pack`). It never grants access: a host not
-      in allowed-domains stays unreachable. See docs/DESIGN-L7-path-method.md.
+      in allowed-domains stays unreachable. The value is strict YAML (or JSON): a duplicate host or
+      path, or any other shape, fails the step; put a key or value that starts with `*` in quotes.
+      See docs/DESIGN-L7-path-method.md.
     required: false
     default: ''
   allow-github-platform:

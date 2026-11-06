@@ -262,14 +262,14 @@ describe('parseHttpFilter', () => {
     ['no rules', 'github.com:\n', /no path rules/],
     ['empty inline', 'github.com: {}', /no path rules/],
     ['value instead of rules', 'github.com: GET', /following lines/],
-    ['nested list', 'github.com:\n  "*":\n    - GET', /key: value|indentation/],
+    ['nested list', 'github.com:\n  "*":\n    - [GET]', /string or a list/],
     ['inconsistent indent', 'github.com:\n  "*": GET\n    "a": GET', /inconsistent indentation/],
-    ['dedent below the host level', '  github.com:\n    "*": GET\nother.com:\n  "*": GET', /unexpected indentation/],
+    ['dedent below the host level', '  github.com:\n    "*": GET\nother.com:\n  "*": GET', /line 3: .*indentation/],
     ['rule with no host', '  "*": GET', /following lines/],
     ['tabs', 'github.com:\n\t"*": GET', /tabs/],
     ['bad host', 'not a host:\n  "*": GET', /key: value|domain/],
     ['IP host', '1.2.3.4:\n  "*": GET', /IP literals/],
-    ['too-broad host', '*.com:\n  "*": GET', /too broad/],
+    ['too-broad host', '"*.com":\n  "*": GET', /too broad/],
     ['duplicate host', 'github.com:\n  "*": GET\nGITHUB.COM:\n  "*": GET', /more than once/],
     ['duplicate path', 'github.com:\n  "/a": GET\n  "a": PUT', /duplicate path/],
     ['git: .git spelling', 'github.com:\n  "org/app/x": GET\n  "org/app.git/x": PUT', /duplicate path/],
@@ -278,9 +278,102 @@ describe('parseHttpFilter', () => {
     ['encoded path', 'github.com:\n  "@s%2f*": GET', /invalid path pattern/],
     ['dot segment', 'github.com:\n  "a/../b": GET', /segment/],
     ['bad method', 'github.com:\n  "*": GET, PO ST!', /not an HTTP method/],
-    ['bad JSON', '{"github.com": ', /invalid JSON/],
-    ['JSON list', '{"github.com": ["GET"]}', /object of path/],
+    ['bad JSON', '{"github.com": ', /line 1: Flow map must end with a \}/],
+    ['JSON list', '{"github.com": ["GET"]}', /following lines/],
     ['JSON number', '{"github.com": {"*": 1}}', /string or a list/]
+  ])('rejects %s', (_name, raw, err) => {
+    expect(() => parseHttpFilter(raw)).toThrow(err);
+  });
+});
+
+describe('parseHttpFilter: strict YAML (fails closed)', () => {
+  it('continues the methods of an inline rule over each comma, for every rule', () => {
+    expect(parseHttpFilter('example.org: { "*": GET, HEAD, "/x/*": PUT, HEAD }')).toEqual([
+      {
+        host: 'example.org',
+        rules: [
+          { path: '*', methods: ['GET', 'HEAD'] },
+          { path: 'x/*', methods: ['PUT', 'HEAD'] }
+        ]
+      }
+    ]);
+  });
+
+  it('decodes YAML escapes in keys before it checks them', () => {
+    expect(parseHttpFilter('"\\u0041PI.github.com":\n  "org/app\\x2Dx": GET\n  \'it\'\'s\': PUT')).toEqual([
+      {
+        host: 'api.github.com',
+        rules: [
+          { path: 'org/app-x', methods: ['GET'] },
+          { path: "it's", methods: ['PUT'] }
+        ]
+      }
+    ]);
+    // a decoded character is checked like a written one
+    expect(() => parseHttpFilter('github.com:\n  "a\\nb": GET')).toThrow(/path pattern/);
+    expect(() => parseHttpFilter('github.com:\n  "a\\x2f..\\x2fb": GET')).toThrow(/segment/);
+  });
+
+  it('keeps a key as written: never a number or another YAML type', () => {
+    expect(parseHttpFilter('github.com:\n  v1.0: GET\n  404: PUT\n  true: POST')[0].rules).toEqual([
+      { path: 'v1.0', methods: ['GET'] },
+      { path: '404', methods: ['PUT'] },
+      { path: 'true', methods: ['POST'] }
+    ]);
+  });
+
+  it('reads a YAML null or nothing as NONE, and accepts a block list of methods', () => {
+    expect(parseHttpFilter('github.com:\n  a: null\n  b: ~\n  c:\n  d:\n    - get\n    - HEAD')[0].rules).toEqual([
+      { path: 'a', methods: [] },
+      { path: 'b', methods: [] },
+      { path: 'c', methods: [] },
+      { path: 'd', methods: ['GET', 'HEAD'] }
+    ]);
+  });
+
+  it.each([
+    // duplicates: an error, never last-wins
+    [
+      'duplicate host',
+      'github.com:\n  "*": GET\ngithub.com:\n  "*": "*"',
+      /line 3: host 'github.com' is listed more than once/
+    ],
+    ['duplicate path', 'github.com:\n  "*": GET\n  "*": "*"', /line 3: path pattern '\*' is listed more than once/],
+    ['duplicate inline path', 'github.com: { "*": GET, "*": "*" }', /listed more than once/],
+    ['duplicate quoted/bare path', "github.com:\n  a/b: GET\n  'a/b': PUT", /listed more than once/],
+    ['JSON duplicate path', '{"github.com": {"*": "GET", "*": "*"}}', /path pattern '\*' is listed more than once/],
+    [
+      'JSON duplicate host',
+      '{"github.com": {"*": "GET"}, "github.com": {"*": "*"}}',
+      /host 'github.com' is listed more than once/
+    ],
+    // structure other than host -> { path -> methods }
+    ['top-level list', '- github.com', /expected host names/],
+    ['top-level scalar', 'github.com', /expected host names/],
+    ['host with a list', 'github.com:\n  - "*"', /following lines/],
+    ['nested map', 'github.com:\n  "*":\n    GET: x', /string or a list/],
+    ['list of lists', 'github.com: { "*": [[GET]] }', /string or a list/],
+    ['boolean methods', 'github.com:\n  "*": true', /string or a list/],
+    ['number methods', 'github.com:\n  "*": 1', /string or a list/],
+    ['complex key', 'github.com:\n  ? [a, b]\n  : GET', /host name or a path pattern/],
+    ['explicit key with no value', 'github.com:\n  ? "*"', /line 2: expected "path": METHODS/],
+    ['continuation first', 'github.com: { HEAD, "*": GET }', /expected "path": METHODS/],
+    ['continuation after a list', 'github.com: { "*": [GET], HEAD }', /expected "path": METHODS/],
+    ['continuation after nothing', 'github.com: { "*": , HEAD }', /expected "path": METHODS/],
+    ['explicit key in a flow map', 'github.com: { "*": GET, ? HEAD }', /expected "path": METHODS/],
+    ['anchor and alias', 'a.com: &r { "*": GET }\nb.com: *r', /anchors/],
+    ['tag', 'github.com:\n  "*": !!str GET', /tags/],
+    ['unknown tag', 'github.com:\n  "*": !x GET', /Unresolved tag/],
+    ['document marker', '---\ngithub.com:\n  "*": GET', /document markers/],
+    ['YAML 1.1 directive', '%YAML 1.1\n---\ngithub.com:\n  "*": on', /document markers/],
+    ['two documents', 'github.com:\n  "*": GET\n---\napi.github.com:\n  "*": GET', /multiple documents/],
+    // malformed YAML
+    ['unquoted * value', 'github.com:\n  "*": *', /line 2: put a key or a value that starts with \* in quotes/],
+    ['unquoted * key', 'github.com:\n  */x: GET', /starts with \* in quotes/],
+    ['unquoted *. host', '*.example.com:\n  "*": GET', /line 1: .*starts with \* in quotes/],
+    ['quoted method then more', 'github.com:\n  "*": "GET", HEAD', /line 2: .*\[GET, HEAD\]/],
+    ['unclosed quote', 'github.com:\n  "*: GET', /http-filter line \d+:/],
+    ['unclosed flow map', 'github.com: { "*": GET', /http-filter line 1:/]
   ])('rejects %s', (_name, raw, err) => {
     expect(() => parseHttpFilter(raw)).toThrow(err);
   });
