@@ -23,7 +23,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: portswigger-tim/safer-runner-action@v2.1.0 # pin an exact version or SHA — v2 has no moving @v2 tag
+      - uses: portswigger-tim/safer-runner-action@v2.2.0 # pin an exact version or SHA — v2 has no moving @v2 tag
         with:
           mode: enforce
           allowed-domains: |
@@ -307,7 +307,7 @@ of it would own your runner. Treat it like any other privileged dependency.
 `@v2` tag. Keep the version in a comment so Dependabot or Renovate can update it:
 
 ```yaml
-- uses: portswigger-tim/safer-runner-action@2144c6d9686bbb40c891abc71d0cd2e0447ae22a # v2.1.0
+- uses: portswigger-tim/safer-runner-action@fa725fbe05270f62fe9947ed0f3c0c1af2d89ff0 # v2.2.0
 ```
 
 **Check the build provenance** of the commit you pin. Releases from the
