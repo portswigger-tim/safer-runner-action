@@ -169,10 +169,17 @@ adds these from a built-in list. Each entry names one exact host, path and metho
 explicit. It is **not** a blanket `"*": GET, HEAD` rule, which would trust much more than the
 platform uses.
 
-- The job's own control plane (step logs and status, job lease and completion, OIDC) is always
-  allowed: the job cannot run without it.
-- The artifact and cache endpoints are allowed only where none of your rules for that host
-  matches the request. A rule of yours that matches, `NONE` included, wins.
+- **Essential** endpoints are always allowed: job lease and completion, OIDC and the runner's
+  live log stream. The job cannot run without them, so a filter never makes a job hang.
+- **Optional** endpoints are allowed only where none of your rules for that host matches the
+  request: artifacts, cache, the stored job logs and step summary, and step-status updates.
+  A rule of yours that matches, `NONE` included, wins.
+- If your rules block optional traffic, the job loses those features but does not fail. For
+  example:
+  - `NONE` on `productionresultssa*.blob.core.windows.net`: the job's logs and step summary
+    are not stored. The job completes and the step results still show.
+  - `NONE` on `results-receiver.actions.githubusercontent.com`: step-status updates,
+    artifacts and cache are refused. The step results still show correctly.
 
 - The list applies only when you filter a GitHub host. Jobs without `http-filter` do not change.
 - It holds only what the platform needs. Writes the workflow chooses stay yours to allow. For
