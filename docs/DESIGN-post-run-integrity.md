@@ -34,9 +34,11 @@ What this does and doesn't affect:
 1. **Install.** The step that completes setup (normally `pre`, as root, before any job step
    runs; `main` when `pre` did not) copies a small verifier into a root-owned path such as
    `/usr/local/libexec/safer-runner/`. It starts the verifier as a systemd unit, like the proxy
-   and resolver units. The supervisor never reads action inputs itself. It takes the mode and
-   settings from the root-owned setup marker that setup already writes, so it doesn't depend
-   on which step ran setup or on what that step could read.
+   and resolver units. It takes the mode and settings from the root-owned setup marker that
+   setup already writes, rather than from action inputs. That gives one source of truth
+   whichever step ran setup. (`pre` does receive the action's `with:` inputs. It runs before
+   `actions/checkout`, so the repository's files aren't there yet; the supervisor needs nothing
+   from them.)
 2. **Key.** At setup the supervisor generates an ephemeral Ed25519 key, stored root-only (0600),
    the same pattern as the CA key. `pre` prints the public key's fingerprint in its own log.
    Later steps can't rewrite an earlier step's log, so the fingerprint is authentic.

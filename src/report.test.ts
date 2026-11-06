@@ -9,7 +9,6 @@ import {
   containerSection,
   humanBytes,
   modeLabel,
-  exactSubdomainRefusals,
   blockedName,
   type HostSummary,
   parseFirewallLog,
@@ -885,62 +884,32 @@ describe('container egress (P2)', () => {
   });
 });
 
-describe('DNS: subdomains of exact entries', () => {
-  const allow = [
-    'github.com',
-    '*.github.com',
-    'objects.githubusercontent.com',
-    'example.com',
-    'pypi.org',
-    '*.pypi.org'
-  ];
-
-  it('groups refused names under their exact parent; skips unlisted, wildcarded and allowed names', () => {
-    expect(
-      exactSubdomainRefusals(
-        [
-          'aGVsbG8gd29ybGQ.objects.githubusercontent.com',
-          'www.example.com',
-          'x.y.example.com',
-          'example.org',
-          'gist.github.com', // *.github.com is listed: refused by the risky denylist, not exactness
-          'files.pypi.org',
-          'evilexample.com'
-        ],
-        allow
-      )
-    ).toEqual([
-      { parent: 'example.com', names: ['www.example.com', 'x.y.example.com'] },
-      { parent: 'objects.githubusercontent.com', names: ['agvsbg8gd29ybgq.objects.githubusercontent.com'] }
-    ]);
-  });
-
-  it('redacts payload-looking labels, keeps the allowlisted parent and ordinary labels', () => {
-    expect(blockedName('www.example.com', 'example.com')).toBe('www.example.com');
-    expect(blockedName('aghvsbg8gd29ybgq.api.example.com', 'example.com')).toBe('‹redacted›.api.example.com');
-    expect(blockedName('0dd2149bb6f23853.objects.githubusercontent.com', 'objects.githubusercontent.com')).toBe(
+describe('blocked names and DNS refusals', () => {
+  it('redacts payload-looking labels and keeps ordinary ones', () => {
+    expect(blockedName('www.example.com')).toBe('www.example.com');
+    expect(blockedName('aghvsbg8gd29ybgq.api.example.com')).toBe('‹redacted›.api.example.com');
+    expect(blockedName('0dd2149bb6f23853.objects.githubusercontent.com')).toBe(
       '‹redacted›.objects.githubusercontent.com'
     );
     expect(blockedName('1.2.3.4')).toBe('1.2.3.4');
   });
 
-  const base = { job: 'j', hosts: [], firewall: [], selfTests: [], allowPatterns: allow };
+  const base = { job: 'j', hosts: [], firewall: [], selfTests: [] };
 
-  it('enforce: a section with the *.parent hint, redacted names, and no secret in the summary', () => {
+  it('enforce: refused subdomains of allowlisted names are listed in the DNS diagnostics only, redacted', () => {
     const secret = 'c2VjcmV0LXRva2VuLTEyMzQ';
     const md = buildReport({
       ...base,
       mode: 'enforce',
       dnsRefused: [`${secret.toLowerCase()}.objects.githubusercontent.com`, 'www.example.com', 'example.org']
     });
-    expect(md).toContain('### 🔎 Subdomains of exact entries (2) — DNS refused');
-    expect(md).toContain(
-      '| `objects.githubusercontent.com` | 1 | `‹redacted›.objects.githubusercontent.com` | add `*.objects.githubusercontent.com` |'
-    );
-    expect(md).toContain('| `example.com` | 1 | `www.example.com` | add `*.example.com` |');
+    expect(md).not.toContain('Subdomains of exact entries');
+    expect(md).not.toContain('`*.');
     expect(md.toLowerCase()).not.toContain(secret.toLowerCase());
-    // the rest stays in the DNS diagnostics, unredacted (an unlisted name is what the user must add)
-    expect(md).toContain('**DNS refused** (3): `example.org`');
+    const diagnostics = md.match(/<details>[\s\S]*<\/details>/)?.[0] ?? '';
+    expect(diagnostics).toContain(
+      '**DNS refused** (3): `‹redacted›.objects.githubusercontent.com`, `www.example.com`, `example.org`'
+    );
   });
 
   it('redacts encoded labels in every blocked-name display, and never suggests such a name', () => {
@@ -982,14 +951,7 @@ describe('DNS: subdomains of exact entries', () => {
 
   it('analyze: says what enforce would do', () => {
     const md = buildReport({ ...base, mode: 'analyze', dnsRefused: ['www.example.com'] });
-    expect(md).toContain('### 🔎 Subdomains of exact entries (1) — DNS would refuse');
     expect(md).toContain('1 DNS lookup enforce would refuse');
-  });
-
-  it('no section without the policy or without such names', () => {
-    expect(buildReport({ ...base, mode: 'enforce', dnsRefused: ['example.org'] })).not.toContain('🔎');
-    expect(
-      buildReport({ ...base, allowPatterns: undefined, mode: 'enforce', dnsRefused: ['www.example.com'] })
-    ).not.toContain('🔎');
+    expect(md).toContain('**DNS would refuse** (1): `www.example.com`');
   });
 });

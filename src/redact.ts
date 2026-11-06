@@ -8,9 +8,8 @@
  * with almost no vowels and a sprinkle of digits. Words don't. This complements GitHub's
  * masking; it doesn't replace it.
  *
- * Every label of a blocked name is checked, the registrable domain and the TLD included. Only a
- * caller-given suffix (the allowlisted parent, from the job's own configuration) is shown as is.
- * Per label:
+ * Every label of a blocked name is checked, the registrable domain and the TLD included. Per
+ * label:
  *  - LONG_LABEL_LEN+ chars: redacted (DNS-tunnel chunks run to the 63-char limit);
  *  - SHORT_HEX_LEN+ chars (ignoring `-`/`_`) of digits, or of hex with a digit: redacted;
  *  - under ENCODED_MIN_LEN: shown;
@@ -66,20 +65,14 @@ export function looksEncoded(label: string): boolean {
   return core.length >= ENTROPY_MIN_LEN && shannonBits(core) >= ENTROPY_BITS;
 }
 
-/**
- * `name` with every payload-looking label replaced by REDACTED (a run of them by one).
- * `keepSuffix`: a trusted suffix that is always shown (it must be a suffix of name).
- */
-export function redactName(name: string, keepSuffix?: string): string {
-  const n = name.toLowerCase();
-  const labels = n.split('.');
-  const keep = keepSuffix && (n === keepSuffix || n.endsWith('.' + keepSuffix)) ? keepSuffix.split('.').length : 0;
+/** `name` with every payload-looking label replaced by REDACTED (a run of them by one). */
+export function redactName(name: string): string {
   const out: string[] = [];
-  for (const l of labels.slice(0, labels.length - keep)) {
+  for (const l of name.toLowerCase().split('.')) {
     if (!looksEncoded(l)) out.push(l);
     else if (out[out.length - 1] !== REDACTED) out.push(REDACTED);
   }
-  return [...out, ...labels.slice(labels.length - keep)].join('.');
+  return out.join('.');
 }
 
 /** True when redactName would hide part of the name (never paste such a name into YAML). */

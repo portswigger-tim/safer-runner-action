@@ -2827,16 +2827,6 @@ const sudo_1 = __nccwpck_require__(1279);
 const validation_1 = __nccwpck_require__(8449);
 const policy_1 = __nccwpck_require__(2224);
 const inputs_1 = __nccwpck_require__(6107);
-/** allow + passthrough from the root-owned policy the proxy and the resolver were built from. */
-function readPolicyPatterns() {
-    try {
-        const p = JSON.parse(fs.readFileSync(constants_1.POLICY_FILE, 'utf8'));
-        return [...(p.allow ?? []), ...(p.passthrough ?? [])];
-    }
-    catch {
-        return undefined;
-    }
-}
 function readSetupMarker() {
     try {
         return JSON.parse(fs.readFileSync(egress_1.SETUP_MARKER, 'utf8'));
@@ -2910,7 +2900,6 @@ async function run() {
             hosts,
             firewall,
             dnsRefused,
-            allowPatterns: readPolicyPatterns(),
             // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
             userDomains: [
                 ...(0, policy_1.parseAllowedDomains)(core.getInput('allowed-domains')),
@@ -3300,9 +3289,8 @@ async function startProxy(o, timeoutMs = 90000) {
  * with almost no vowels and a sprinkle of digits. Words don't. This complements GitHub's
  * masking; it doesn't replace it.
  *
- * Every label of a blocked name is checked, the registrable domain and the TLD included. Only a
- * caller-given suffix (the allowlisted parent, from the job's own configuration) is shown as is.
- * Per label:
+ * Every label of a blocked name is checked, the registrable domain and the TLD included. Per
+ * label:
  *  - LONG_LABEL_LEN+ chars: redacted (DNS-tunnel chunks run to the 63-char limit);
  *  - SHORT_HEX_LEN+ chars (ignoring `-`/`_`) of digits, or of hex with a digit: redacted;
  *  - under ENCODED_MIN_LEN: shown;
@@ -3368,22 +3356,16 @@ function looksEncoded(label) {
         return true;
     return core.length >= exports.ENTROPY_MIN_LEN && shannonBits(core) >= exports.ENTROPY_BITS;
 }
-/**
- * `name` with every payload-looking label replaced by REDACTED (a run of them by one).
- * `keepSuffix`: a trusted suffix that is always shown (it must be a suffix of name).
- */
-function redactName(name, keepSuffix) {
-    const n = name.toLowerCase();
-    const labels = n.split('.');
-    const keep = keepSuffix && (n === keepSuffix || n.endsWith('.' + keepSuffix)) ? keepSuffix.split('.').length : 0;
+/** `name` with every payload-looking label replaced by REDACTED (a run of them by one). */
+function redactName(name) {
     const out = [];
-    for (const l of labels.slice(0, labels.length - keep)) {
+    for (const l of name.toLowerCase().split('.')) {
         if (!looksEncoded(l))
             out.push(l);
         else if (out[out.length - 1] !== exports.REDACTED)
             out.push(exports.REDACTED);
     }
-    return [...out, ...labels.slice(labels.length - keep)].join('.');
+    return out.join('.');
 }
 /** True when redactName would hide part of the name (never paste such a name into YAML). */
 function needsRedaction(name) {
@@ -3413,7 +3395,6 @@ exports.blockedName = blockedName;
 exports.statusSummary = statusSummary;
 exports.summarizeContainers = summarizeContainers;
 exports.containerSection = containerSection;
-exports.exactSubdomainRefusals = exactSubdomainRefusals;
 exports.suggestedAllowlist = suggestedAllowlist;
 exports.modeLabel = modeLabel;
 exports.buildReport = buildReport;
@@ -3710,8 +3691,8 @@ function nameList(hosts) {
  * A refused name as printed: payload-looking labels redacted (src/redact.ts), because a blocked
  * name can be the data a step tried to send. IP literals are shown as they are.
  */
-function blockedName(name, keepSuffix) {
-    return (0, policy_1.isIpLiteral)(name) || name.startsWith('(') ? name : (0, redact_1.redactName)(name, keepSuffix);
+function blockedName(name) {
+    return (0, policy_1.isIpLiteral)(name) || name.startsWith('(') ? name : (0, redact_1.redactName)(name);
 }
 function displayName(h) {
     return h.name.replace(/^\(no name\) /, '');
@@ -3860,32 +3841,6 @@ function containerSection(containers, mode) {
                 'from a step on the runner, or give the container the CA (`/etc/safer-runner/ca.pem`).\n\n';
     }
     return md + '</details>\n\n';
-}
-/**
- * Refused lookups for names under an EXACT allowlist entry (`<x>.example.com` with only
- * `example.com` listed): the new exact-by-default semantics at work, and the place a step
- * would try to tunnel data through an allowlisted zone. Grouped by the longest exact parent;
- * names the allowlist would accept, or whose `*.parent` is already listed (so the risky-subdomain
- * denylist refused them), are left out.
- */
-function exactSubdomainRefusals(refused, allowPatterns) {
-    const compiled = compileUserPatterns(allowPatterns);
-    const exact = allowPatterns.filter(p => !p.includes('*')).map(p => p.toLowerCase());
-    const wild = new Set(allowPatterns.filter(p => p.startsWith('*.')).map(p => p.slice(2).toLowerCase()));
-    const groups = new Map();
-    for (const raw of refused) {
-        const name = raw.toLowerCase();
-        if ((0, policy_1.matchesAny)(name, compiled))
-            continue;
-        const parent = exact.filter(p => name.endsWith('.' + p) && !wild.has(p)).sort((a, b) => b.length - a.length)[0];
-        if (!parent)
-            continue;
-        const list = groups.get(parent) ?? [];
-        if (!list.includes(name))
-            list.push(name);
-        groups.set(parent, list);
-    }
-    return Array.from(groups, ([parent, names]) => ({ parent, names })).sort((a, b) => b.names.length - a.names.length || a.parent.localeCompare(b.parent));
 }
 const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)+$/;
 /**
@@ -4039,8 +3994,6 @@ function buildReport(input) {
     const fw = firewallSummary(input.firewall.filter(e => !CONTAINER_PREFIXES.has(e.prefix)));
     const sudoRan = input.sudo?.ran.length ?? 0;
     const suggest = suggestedAllowlist(denied);
-    const subdomains = input.allowPatterns ? exactSubdomainRefusals(input.dnsRefused, input.allowPatterns) : [];
-    const inSubdomainGroup = new Set(subdomains.flatMap(g => g.names));
     // ---- title + chips
     let md = `## 🛡️ Safer Runner — egress${advisory ? ` — enforce (ADVISORY — ${advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
     const chips = [advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
@@ -4206,25 +4159,6 @@ function buildReport(input) {
             md += codeBlock('yaml', 'allowed-domains: |\n' + suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
         }
     }
-    if (subdomains.length) {
-        const total = subdomains.reduce((a, g) => a + g.names.length, 0);
-        md += `### 🔎 Subdomains of exact entries (${total}) — DNS ${enforce ? 'refused' : 'would refuse'}\n\n`;
-        md +=
-            'A bare allowlist entry means that name only. These lookups were for names under one, so ' +
-                `they were ${enforce ? 'answered NXDOMAIN on the runner and never sent upstream' : 'logged (enforce answers them NXDOMAIN on the runner)'}.` +
-                ' Payload-looking labels are redacted (best effort, not a guarantee): a refused lookup can carry data.\n\n';
-        const { shown, note } = capped(subdomains);
-        md += table(['Allowlisted as', 'Refused lookups', 'Examples', 'If the job needs them'], [':--', '--:', ':--', ':--'], shown.map(g => [
-            code(g.parent),
-            String(g.names.length),
-            g.names
-                .slice(0, 3)
-                .map(n => code(blockedName(n, g.parent)))
-                .join(', ') + (g.names.length > 3 ? ', …' : ''),
-            `add ${code('*.' + g.parent)}`
-        ]));
-        md += note + '\n\n';
-    }
     if (groups.unresolved.length) {
         md += section('❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
             code(blockedName(h.name)),
@@ -4302,7 +4236,7 @@ function buildReport(input) {
     }
     if (input.dnsRefused.length) {
         diag.push(plural(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
-        const shownAbove = new Set([...denied.map(h => h.name), ...inSubdomainGroup]);
+        const shownAbove = new Set(denied.map(h => h.name));
         const rest = input.dnsRefused.filter(d => !shownAbove.has(d.toLowerCase()));
         const { shown, note } = capped(rest);
         body += `**DNS ${enforce ? 'refused' : 'would refuse'}** (${input.dnsRefused.length}): `;

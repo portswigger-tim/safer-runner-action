@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
+import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
 import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
 import { readRefusedNames } from './parsers/dns-parser';
@@ -25,16 +25,6 @@ interface SetupMarker {
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
   dnsSelfTestName?: string;
-}
-
-/** allow + passthrough from the root-owned policy the proxy and the resolver were built from. */
-function readPolicyPatterns(): string[] | undefined {
-  try {
-    const p = JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8')) as { allow?: string[]; passthrough?: string[] };
-    return [...(p.allow ?? []), ...(p.passthrough ?? [])];
-  } catch {
-    return undefined;
-  }
 }
 
 function readSetupMarker(): SetupMarker | null {
@@ -112,7 +102,6 @@ async function run(): Promise<void> {
       hosts,
       firewall,
       dnsRefused,
-      allowPatterns: readPolicyPatterns(),
       // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
       userDomains: [
         ...parseAllowedDomains(core.getInput('allowed-domains')),

@@ -72,9 +72,8 @@ The same patterns drive the proxy **and** DNS, so the two never disagree:
 
 > [!TIP]
 > To allow a name **and** its subdomains, write it as `.example.com` — a bare entry is that name
-> only. In analyze mode, and in enforce when something is refused, the summary's **Subdomains of
-> exact entries** section lists the lookups an exact entry blocks and suggests the `*.parent`
-> entry to add.
+> only. Lookups an exact entry refuses are listed under **Diagnostics → DNS refused** in the
+> summary. Add a subdomain only after checking that the job really needs it.
 
 Why: DNS answers for every name under an allowlisted zone used to be forwarded upstream, so
 `<secret>.allowed.example` carried data to whoever runs that zone's name servers. Now a name
@@ -242,8 +241,7 @@ can send data; these limit what that dependency can reach in the first place:
   (`<base64 secret>.attacker.example`). GitHub already masks a registered secret's literal value,
   so the summary and job log also hide hostname labels that look *encoded* (hex and digit runs of
   6+ characters; base32/64-looking labels of 8+: few vowels, scattered digits) as `‹redacted›`,
-  without their length. Every label is checked, the domain and TLD included; only the
-  allowlisted parent from your own configuration is always shown. This keeps obviously encoded
+  without their length. Every label is checked, the domain and TLD included. This keeps obviously encoded
   values out of the report, but it is **not a guarantee**: short or word-like labels are caught
   only part of the time, so a step that shapes its data to avoid the filter can get an
   **entire** secret into the summary and job log in recoverable form, even through a single

@@ -76,13 +76,6 @@ describe('redactName', () => {
     expect(redactName('k7xq2zbm.attacker.example')).toBe(`${REDACTED}.attacker.example`);
   });
 
-  it('keeps a trusted caller-given suffix (the allowlisted parent) as is', () => {
-    expect(redactName('c2vjcmv0lxrva2vulteymzq.objects.githubusercontent.com', 'objects.githubusercontent.com')).toBe(
-      `${REDACTED}.objects.githubusercontent.com`
-    );
-    expect(redactName('x.a1b2c3d4.example', 'a1b2c3d4.example')).toBe('x.a1b2c3d4.example');
-  });
-
   it('leaves ordinary names alone (lower-cased)', () => {
     expect(redactName('Registry-1.Docker.io')).toBe('registry-1.docker.io');
     expect(redactName('hosted-compute-watchdog-prod-iad-01.githubapp.com')).toBe(
