@@ -152,10 +152,10 @@ in the query string, but blocking the POST is what stops the push.
 ## Built-in platform write endpoints (GitHub)
 
 Locking a GitHub host down — `api.github.com: { "*": GET, HEAD }`, or a default-deny filter on
-`github.com` — can break the Actions machinery and first-party actions that legitimately `POST`:
-OIDC token requests, the cache service, code-scanning / SARIF upload, artifact and attestation
-services, and so on. A user who filters a GitHub host without enumerating every endpoint the
-platform needs would break their own job.
+`github.com` — can break the Actions machinery and first-party actions that legitimately write:
+step logs and status updates, the cache and artifact services, and code-scanning SARIF upload.
+A user who filters a GitHub host without enumerating every endpoint the platform needs would
+break their own job.
 
 So the action ships a curated **built-in allow list of platform-required write endpoints** (host +
 method + path suffix), applied as *specific* rules that win over a read-only baseline
@@ -173,26 +173,30 @@ Design intent:
 - **Visible and overridable.** The report shows "N platform endpoints auto-allowed," and a toggle
   (e.g. `allow-github-platform-writes: false`, default on) lets a strict user turn it off and
   allowlist by hand.
-- **Built empirically from the proxy flow log.** A clean run in the real-runner suite captures
-  `proxy-flows.jsonl`; the built-in list is derived from the non-GET requests a baseline job
-  actually makes, and reuses the same `endsWith` suffix matching as the report reducer. From one
-  analyze run (checkout + clone + artifact + cache + logs) the platform writes were:
-    - `results-receiver.actions.githubusercontent.com` — `POST /twirp/…` (step logs,
-      `WorkflowStepUpdateService/WorkflowStepsUpdate` = step status updates, artifact
-      create / finalize).
-    - `productionresultssa*.blob.core.windows.net` — `PUT /actions-results/…` (artifact and log
-      blob uploads).
+- **Built empirically from the proxy flow log.** The list is derived from the non-GET requests
+  real jobs make, captured in `proxy-flows.jsonl`, and reuses the same `endsWith` suffix matching
+  as the report reducer. Two analyze runs — a baseline job (checkout + clone + artifact) and a job
+  exercising **OIDC + `actions/cache` + SARIF** — give the full platform-write surface:
 
-  Notably **nothing** was written to `api.github.com` or `github.com` (the `github.com` POSTs were
-  `git-upload-pack` *fetches* — reads), and the hosted-compute **watchdog** ping is a *passthrough*
-  (SNI-only) host, so it cannot be path-filtered and is moot here. So locking `api.github.com` to
-  read-only is safe out of the box; the built-in list mainly protects a user who filters a
-  results / artifact / storage host.
-- **One sample is a seed, not the whole set.** Other job shapes add writes this run did not
-  exercise — OIDC token requests, `actions/cache` reserve/commit, and code-scanning **SARIF
-  upload** (an `api.github.com` write that *would* break a naive read-only `api.github.com` filter
-  on a scanning job). Sample those job types and grow the list; the toggle and the report's
-  "N auto-allowed" line keep it honest.
+  | host | write | covers |
+  |---|---|---|
+  | `results-receiver.actions.githubusercontent.com` | `POST /twirp/*` | step logs, step status (`WorkflowStepUpdateService/WorkflowStepsUpdate`), `ArtifactService/*`, `CacheService/*` |
+  | `productionresultssa*.blob.core.windows.net` | `PUT /actions-results/*`, `PUT /actions-cache/*` | artifact, log and cache blob uploads |
+
+  These are the universal platform-machinery writes → the built-in auto-allow set. Everything on
+  `results-receiver` is `POST /twirp/*`; the blob writes are `PUT` under `/actions-results/` and
+  `/actions-cache/`.
+- **Reads that look like writes, and passthrough, need nothing.** The `github.com` POSTs are
+  `git-upload-pack` *fetches* (reads); **OIDC** is a `GET` to
+  `run-actions-*-azure-*.actions.githubusercontent.com`; the hosted-compute **watchdog** is
+  *passthrough* (SNI-only, unfilterable). All are fine under a read-only filter with no entry. So
+  locking `api.github.com` read-only is safe out of the box.
+- **SARIF is workflow-chosen, not platform — document, don't auto-allow.** Code-scanning upload is
+  `POST /repos/*/*/code-scanning/sarifs` on `api.github.com`. It is opt-in per job, so it stays out
+  of the platform-only auto-allow set; instead the docs name it as the carve-out a scanning job
+  adds when locking `api.github.com` down:
+  `api.github.com: { "*": GET, HEAD, "*/code-scanning/sarifs": POST }`. This keeps the
+  `api.github.com` write surface user-controlled — the whole point of the feature.
 
 Open: default-on when filtering a GitHub host (ergonomic; keeps the platform working) versus
 opt-in (strict by default). Leaning default-on-and-visible — without it, `http-filter` on a
