@@ -4,19 +4,25 @@
 
 ## Why
 
-v2 narrows egress to a set of allowlisted host names. It cannot judge *what* a request
-does once the host is allowed, so an allowlisted host is a full-capability channel: a
-malicious step can push stolen data to an attacker-owned repository on `github.com`, or
-write it through `api.github.com`, and both pass the host check honestly. This is the
-residual called out in the security review.
+v2 narrows egress to a set of allowlisted host *names*. It cannot judge *what* a request
+does once the host is allowed, so **every allowlisted host is a full-capability channel** —
+and the hosts a CI job must allow are exactly the trusted places you can also *write* to:
 
-Because the proxy TLS-terminates intercepted HTTPS, it already sees the request method,
-path, Host and headers. `http-filter` is one more gate after the host check: on a host you
-choose, allow only the methods and paths you name.
+- `github.com` — a step can `git push` stolen data to an attacker-controlled repo.
+- `registry.npmjs.org` — `npm publish` (an HTTP `PUT`) ships a package out.
+- `pypi.org` / `upload.pypi.org` — a `twine upload` (`POST`) ships one out.
+- `ghcr.io`, `registry-1.docker.io` — a `docker push` writes blobs out.
+- `api.github.com` and REST APIs generally — a `POST`/`PUT` writes data out.
 
-The headline use case: **restrict `git push` to known repositories** — deny the
-`git-receive-pack` path except for an allowlisted owner/repo — while clones, fetches and
-API reads keep working.
+All of these pass the host check honestly. This is the residual the security review called out:
+domain allowlisting controls *where* a job can talk, not *what it does there*.
+
+Because the proxy TLS-terminates intercepted HTTPS, it already sees the request method, path,
+Host and headers. `http-filter` is one more gate after the host check: on a host you choose,
+allow only the methods and paths you name. The common shape is "make this trusted host
+**read-only**" — installs and pulls (`GET`) yes, publishes and pushes (`PUT`/`POST`) no — which
+blocks exfil to the very hosts you have to trust. It is a general mechanism; GitHub is one case,
+not the point.
 
 ## Scope and non-goals
 
@@ -54,14 +60,20 @@ at DNS/SNI.
 ```yaml
 with:
   mode: enforce
-  allowed-domains: github.com api.github.com
+  allowed-domains: |
+    registry.npmjs.org pypi.org files.pythonhosted.org
+    github.com api.github.com
   http-filter: |
+    registry.npmjs.org:
+      "*": GET, HEAD                               # install yes, npm publish (PUT) no
+    pypi.org:
+      "*": GET, HEAD                               # metadata reads only
+    api.github.com:
+      "*": GET, HEAD                               # API read-only
     github.com:
-      "**": "*"                                    # baseline: allow everything
+      "*": "*"                                     # baseline: allow everything
       "*/git-receive-pack": NONE                   # deny all pushes…
       "portswigger-tim/*/git-receive-pack": "*"    # …except our org
-    api.github.com:
-      "**": GET, HEAD                              # API is read-only
 ```
 
 ### Conventions
@@ -69,13 +81,16 @@ with:
 1. **Naming a host makes it an allowlist.** Within a filtered host a request is allowed
    only if a rule matches its path *and* lists its method; anything unmatched is denied.
 2. **Most-specific path wins.** `portswigger-tim/*/git-receive-pack` overrides the broader
-   `*/git-receive-pack`, which overrides `**`. This is what makes carve-outs possible.
+   `*/git-receive-pack`, which overrides `*`. This is what makes carve-outs possible.
 3. **Method tokens:** a comma list (`GET, POST`), `*` or `ALL` for any method, and `NONE`
    (equivalently an empty list) to deny a path. `NONE` is what lets you subtract one path
-   from a `**: "*"` baseline.
-4. **Globbing:** `*` matches within a path segment; `**` matches across `/`. git needs
-   across-segment matching (`*/git-receive-pack` spans `owner/repo`), so use `**` or a
-   greedy `*`; `**` is documented to avoid surprise.
+   from a `"*": "*"` baseline.
+4. **One glob — the same `*` as `allowed-domains`.** There is no separate `**`. `*` works for
+   paths exactly as it does for host names, with `/` in a path playing the role of `.` in a
+   host: a standalone `*` segment spans any depth (`*/git-receive-pack` matches
+   `owner/repo/git-receive-pack`, just as `*.nip.io` matches `a.b.c.nip.io`), and a `*` inside
+   a segment matches within that segment (`pre*`, as in `productionresultssa*`). One behaviour
+   across the whole config file.
 5. Methods are matched case-insensitively; paths case-sensitively (URLs are). Matching is
    on the path; the query string is ignored (sufficient for the git case — see below).
 
@@ -89,31 +104,38 @@ with:
 
 ## Worked examples
 
-**API read-only — blocks API-based exfil (create repo, upload, issues, …):**
+### Make a trusted host read-only (the common case)
+
+For package registries, container registries and REST APIs, read and write are cleanly
+separated by method — installs/pulls are `GET`/`HEAD`, publishes/pushes are `PUT`/`POST`/`PATCH`.
+So one line per host blocks exfil while leaving the job working:
+
 ```yaml
 http-filter: |
-  api.github.com:
-    "**": GET, HEAD
+  registry.npmjs.org:   { "*": GET, HEAD }   # npm install yes, npm publish no
+  pypi.org:             { "*": GET, HEAD }    # pip reads metadata; upload.pypi.org not allowed at all
+  files.pythonhosted.org: { "*": GET, HEAD }  # wheels/sdists download only
+  ghcr.io:              { "*": GET, HEAD }     # docker pull yes, docker push no
+  api.github.com:       { "*": GET, HEAD }     # no API writes (create repo, upload, issues…)
 ```
 
-**Block all git pushes, keep clones/fetches/reads:**
+### Pin writes to specific repos (the hard case: git)
+
+git is the one protocol here where a read and a write share a method — both `git-upload-pack`
+(fetch) and `git-receive-pack` (push) are `POST` — so you cannot separate them by method; you
+separate them by **path**:
+
 ```yaml
 http-filter: |
   github.com:
-    "**": "*"
-    "*/git-receive-pack": NONE
+    "*": "*"
+    "*/git-receive-pack": NONE                   # block pushes generally…
+    "portswigger-tim/*/git-receive-pack": "*"    # …except our org (most-specific wins)
 ```
 
-**Push only to our org (the headline case):**
-```yaml
-http-filter: |
-  github.com:
-    "**": "*"
-    "*/git-receive-pack": NONE
-    "portswigger-tim/*/git-receive-pack": "*"
-```
+To block *all* pushes, drop the last line.
 
-## Why this maps cleanly to git
+## How git maps to paths
 
 git over HTTPS is a fixed path scheme:
 
@@ -143,8 +165,9 @@ open, writes only here" — not a dump of every URL seen. The method is observe 
 suggest, per host:
 
 1. **Split reads from writes.** Reads (`GET`/`HEAD`/`OPTIONS`) are not the exfil surface;
-   writes are. So reads **collapse to one line** — `"**": GET, HEAD` — and effort goes into
-   the writes.
+   writes are. So reads **collapse to one line** — `"*": GET, HEAD` — and effort goes into
+   the writes. For most hosts (npm, PyPI, registries, APIs) a job only reads, so the whole
+   suggestion for that host is that single line.
 2. **Template the write paths, don't list them.** Build a trie of the write paths and replace
    *variable* segments with `*`, keeping structural literals. "Variable" = numeric, hex/UUID,
    or high-cardinality at that position — exactly what `redact.ts`'s payload-looking-label
@@ -152,34 +175,35 @@ suggest, per host:
    hashes, so reduction is also a redaction win.)
 3. **Union the methods** per templated path.
 
-Worked example — a job that clones one repo, pushes to another, and reads the API (8 distinct
-requests) reduces to about five lines:
+Worked example — a job that reads npm + the API, and pushes to one repo, reduces to a few lines:
 
 ```yaml
 http-filter:
+  registry.npmjs.org:
+    "*": GET, HEAD                        # install only
   api.github.com:
-    "**": GET, HEAD                       # all API traffic was reads
-    "repos/*/*/statuses/*": POST          # the one write kind seen (sha templated)
+    "*": GET, HEAD                        # all API traffic was reads
   github.com:
-    "**": "*"
+    "*": "*"
     "*/git-receive-pack": NONE            # block pushes generally…
     "myorg/app/git-receive-pack": "*"     # …except where this job actually pushed
 ```
 
 ### The method-boundary trap
 
-Do not collapse across a method boundary where a read and a write **share** a method. On
-`github.com` both fetch and push are `POST` (`git-upload-pack` vs `git-receive-pack`), so a
-naive `"**": GET, POST` would silently re-open pushes everywhere. The reducer keeps a small
-set of **known-sensitive endpoints** (git `git-receive-pack`, release/asset uploads) always
-path-separable, and **pins the owner/repo actually written to** (templating to `*` only when
-several are seen). Otherwise the "reduction" quietly defeats the feature.
+For most hosts read and write differ by method, so reduction is safe and trivial. The trap is a
+host where they **share** a method: on `github.com` both fetch and push are `POST`, so a naive
+`"*": GET, POST` would silently re-open pushes everywhere. The reducer keeps a small set of
+**known-sensitive endpoints** (git `git-receive-pack`, registry blob/manifest uploads, release
+asset uploads) always path-separable, and **pins the owner/repo actually written to**
+(templating to `*` only when several are seen). Otherwise the "reduction" quietly defeats the
+feature.
 
 ### Granularity
 
 Emit at a chosen level, and show the compression so a reviewer can judge it:
 
-- **A — host method posture:** `host: { "**": <union of methods> }`. One line per host; loosest.
+- **A — host method posture:** `host: { "*": <union of methods> }`. One line per host; loosest.
 - **B — read/write split (default):** reads collapsed, writes templated shallow (the example above).
 - **C — templated paths:** every path templated, depth-capped. Most precise, more lines.
 
@@ -190,10 +214,11 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
 
 ## Limitations (restated for the record)
 
-- **Intercepted HTTPS + plain HTTP only.** A push from inside a container, or any
+- **Intercepted HTTPS + plain HTTP only.** A write from inside a container, or to any
   `passthrough-domains` host, is not filtered until container interception ships.
-- **git-LFS:** the pointer negotiation hits the API, but the object bytes go to a separate
-  storage host — an LFS push is a gap unless that host is intercepted.
+- **git-LFS / large uploads:** the pointer negotiation hits the API, but the object bytes go
+  to a separate storage host — an LFS push is a gap unless that host is intercepted. The same
+  applies to any registry that redirects uploads to a separate storage backend.
 - **No body or query inspection** — a filter narrows the blast radius; it cannot stop data
   hidden inside an allowed write to an allowed path.
 - **Path-scheme upkeep:** the matcher must tolerate the optional `.git` suffix and HTTP/2
@@ -205,15 +230,18 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
 - `proxy/policy_core.py`: a post-host gate. Compile `http-filter` into
   `host → ordered [(pattern, methods)]`, match the request method and path, and return
   allow/deny with a reason. A pure function — unit-testable alongside the existing Python
-  tests.
+  tests. Reuse the `allowed-domains` matcher so `*` behaves identically.
 - `src/policy.ts` / `policy.json`: build and carry the compiled rules.
 - `src/inputs.ts`: parse and validate `http-filter`; emit the two guardrail warnings.
 - `src/report.ts`: new blocked-reason rows and the "if the job needs it" suggestion.
 
-## Open questions
+## Resolved decisions (RFC [#17](https://github.com/portswigger-tim/safer-runner-action/issues/17))
 
-- Keep a GitHub-aware convenience input (for example `write-repos: owner/repo`) as sugar
-  that expands into the `git-receive-pack` rules above, or expose only the general
-  `http-filter`? The general form already covers the case; sugar is optional polish.
-- Auto-allow the running workflow's own repository (`$GITHUB_REPOSITORY`) for pushes, so
-  "push to self" needs no configuration.
+- **General-purpose, not GitHub-specific.** `http-filter` applies to every host (npm, PyPI,
+  container registries, any REST API), so **no** GitHub-only convenience input (e.g.
+  `write-repos`) — the general form already covers git, and sugar for one host would not fit
+  a general mechanism.
+- **No auto-allow of `$GITHUB_REPOSITORY`.** Writes must be listed explicitly; nothing is
+  opened implicitly.
+- **Report default granularity: B (read/write split).**
+- **One glob.** `*` behaves exactly as in `allowed-domains` (`/` ↔ `.`); there is no `**`.
