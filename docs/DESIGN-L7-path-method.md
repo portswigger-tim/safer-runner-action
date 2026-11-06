@@ -193,11 +193,16 @@ http-filter:
 
 For most hosts read and write differ by method, so reduction is safe and trivial. The trap is a
 host where they **share** a method: on `github.com` both fetch and push are `POST`, so a naive
-`"*": GET, POST` would silently re-open pushes everywhere. The reducer keeps a small set of
-**known-sensitive endpoints** (git `git-receive-pack`, registry blob/manifest uploads, release
-asset uploads) always path-separable, and **pins the owner/repo actually written to**
-(templating to `*` only when several are seen). Otherwise the "reduction" quietly defeats the
-feature.
+`"*": GET, POST` would silently re-open pushes everywhere.
+
+The reducer recognises these by a simple **path-suffix (`endsWith`) list** — start minimal,
+seeded with the captured git pack URLs (`git-receive-pack`, `git-upload-pack`), and expand it
+over time (registry blob/manifest uploads, PyPI `/legacy/`, …). A request whose path ends with a
+listed suffix is kept **path-specific** rather than folded into the host's method baseline, and
+the reducer **pins the owner/repo actually written to** (templating to `*` only when several are
+seen). Keeping the list short and growing it as new sensitive endpoints come up is fine — a
+missing suffix only makes a suggestion looser, never wrong at enforcement time (the user still
+reviews it). Without this, the "reduction" would quietly defeat the feature.
 
 ### Granularity
 
@@ -233,7 +238,9 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
   tests. Reuse the `allowed-domains` matcher so `*` behaves identically.
 - `src/policy.ts` / `policy.json`: build and carry the compiled rules.
 - `src/inputs.ts`: parse and validate `http-filter`; emit the two guardrail warnings.
-- `src/report.ts`: new blocked-reason rows and the "if the job needs it" suggestion.
+- `src/report.ts`: new blocked-reason rows and the "if the job needs it" suggestion. The
+  suggestion reducer carries the sensitive-endpoint `endsWith` list (seeded with the git pack
+  URLs, expandable) used to keep writes path-specific.
 
 ## Resolved decisions (RFC [#17](https://github.com/portswigger-tim/safer-runner-action/issues/17))
 
