@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="Safer Runner Action — hostname-based egress control for GitHub Actions runners">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1b2a"/>
+      <stop offset="0.55" stop-color="#132a3f"/>
+      <stop offset="1" stop-color="#0a1622"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3ddc97"/>
+      <stop offset="1" stop-color="#2bb3c0"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b3a52"/>
+      <stop offset="1" stop-color="#11293c"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="320" rx="20" fill="url(#bg)"/>
+  <rect x="2" y="2" width="1276" height="316" rx="18" fill="none" stroke="#1f3b52" stroke-width="2"/>
+
+  <!-- network / egress motif -->
+  <g opacity="0.5" stroke="#2bb3c0" stroke-width="2" fill="none">
+    <circle cx="1080" cy="80" r="6" fill="#2bb3c0"/>
+    <circle cx="1180" cy="150" r="6" fill="#2bb3c0"/>
+    <circle cx="1060" cy="230" r="6" fill="#2bb3c0"/>
+    <circle cx="1170" cy="265" r="6" fill="#2bb3c0"/>
+    <path d="M300 160 H1080" stroke-dasharray="2 10" stroke-width="2" opacity="0.4"/>
+    <path d="M1080 80 L1180 150 L1060 230 L1170 265"/>
+  </g>
+  <!-- blocked node -->
+  <g opacity="0.9">
+    <circle cx="950" cy="250" r="10" fill="none" stroke="#ff6b6b" stroke-width="3"/>
+    <path d="M943 243 L957 257 M957 243 L943 257" stroke="#ff6b6b" stroke-width="3"/>
+  </g>
+
+  <!-- shield + lock -->
+  <g transform="translate(96 72)">
+    <path d="M88 0 L168 28 V96 C168 150 132 180 88 196 C44 180 8 150 8 96 V28 Z"
+          fill="url(#shield)" stroke="url(#accent)" stroke-width="4"/>
+    <rect x="58" y="92" width="60" height="50" rx="8" fill="#0d1b2a" stroke="url(#accent)" stroke-width="4"/>
+    <path d="M70 92 V74 a18 18 0 0 1 36 0 V92" fill="none" stroke="url(#accent)" stroke-width="6"/>
+    <circle cx="88" cy="112" r="7" fill="#3ddc97"/>
+    <rect x="85" y="116" width="6" height="16" rx="3" fill="#3ddc97"/>
+  </g>
+
+  <!-- text -->
+  <g font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <text x="320" y="138" font-size="62" font-weight="700" fill="#f4f8fb">Safer Runner Action</text>
+    <text x="322" y="188" font-size="27" font-weight="400" fill="#9fc6d6">Hostname-based egress control for GitHub Actions runners</text>
+    <g transform="translate(322 214)">
+      <rect x="0" y="0" width="186" height="34" rx="17" fill="#13314a" stroke="#285a6e" stroke-width="1.5"/>
+      <text x="93" y="23" font-size="17" font-weight="600" fill="#3ddc97" text-anchor="middle">TLS-terminating proxy</text>
+      <rect x="200" y="0" width="150" height="34" rx="17" fill="#13314a" stroke="#285a6e" stroke-width="1.5"/>
+      <text x="275" y="23" font-size="17" font-weight="600" fill="#7fe3c0" text-anchor="middle">default-deny DNS</text>
+      <rect x="364" y="0" width="166" height="34" rx="17" fill="#13314a" stroke="#285a6e" stroke-width="1.5"/>
+      <text x="447" y="23" font-size="17" font-weight="600" fill="#9fdcea" text-anchor="middle">fail-closed firewall</text>
+    </g>
+  </g>
+</svg>
