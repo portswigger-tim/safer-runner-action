@@ -35,9 +35,10 @@ by two spikes:
   - These names are never forwarded. A subdomain of one is still refused.
 - `src/parsers/dns-parser.ts` is about 20 lines.
 - Self-test `dns-exact`: at setup, a random name under an exact entry must get `BLOCK` + NXDOMAIN in enforce, or `WOULD_BLOCK` in analyze.
-- Report: a new **Subdomains of exact entries** section groups the refused names by their exact parent and suggests `add *.parent`.
-- Every blocked name in the summary and job log goes through `src/redact.ts`: the subdomain section, the DNS-refused diagnostics, blocked SNI/Host rows, fronting SNIs and container rows.
-  - Labels that look *encoded* (hex, base32/64) are shown as `‹N chars›`; the zone is always kept. Charset and length are the primary signal (vowel ratio, digit runs, hex), with Shannon entropy as a tie-breaker. The constants are tunable.
+- Report: refused lookups, including names under an exact entry, are listed under **Diagnostics → DNS refused**. (A separate **Subdomains of exact entries** section with an `add *.parent` hint shipped in beta.5. It was removed after v2.0.0: it repeated the DNS-refused list, and the hint could suggest allowing exactly the lookups an exact entry is there to refuse.)
+- Every blocked name in the summary and job log goes through `src/redact.ts`: the DNS-refused diagnostics, blocked SNI/Host rows, fronting SNIs and container rows.
+  - Labels that look *encoded* (hex, base32/64) are shown as `‹redacted›`, without their length; a run of them is one marker. Every label is checked, the registrable domain and TLD included. Charset and length are the primary signal (short hex/digit runs, vowel ratio, digit runs), with Shannon entropy as a tie-breaker. The constants are tunable.
+  - It is best effort, not a guarantee: short or word-like labels get through part of the time, so data shaped to avoid the filter can reach the summary whole and recoverable, even through a single refused name. The raw logs under `/var/log/safer-runner/` (`proxy-flows.jsonl`, the DNS and firewall logs) are not redacted and are not meant to be published.
   - This complements GitHub's own masking, which only catches a secret's literal value. A refused lookup can carry data, and the public summary must not become the channel the resolver just closed.
   - Names that need redaction are never pasted into a suggested `allowed-domains` block.
 

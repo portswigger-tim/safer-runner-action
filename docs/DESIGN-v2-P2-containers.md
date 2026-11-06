@@ -209,6 +209,9 @@ Notes, all observed:
   restart, ahead of ours. `DOCKER-USER` is the chain Docker promises to leave alone. Run 3
   confirmed the jumps and contents survive `systemctl restart docker`. If Docker is not running
   at setup (`stop-docker`), skip the container rules; Docker can't start without root anyway.
+  If Docker is running but `DOCKER-USER` is missing (Docker's iptables integration off, or a
+  non-iptables backend), enforce fails setup before any rule is applied; analyze warns and
+  applies only the host rules. The setup marker's `containerRules` records what was applied.
 - **IPv6:** container IPv6 is off by default (no `--ipv6` networks were tested). Mirror the
   `DOCKER-USER` REJECT in ip6tables so an IPv6-enabled user network fails closed. *Not run on a
   runner; cheap to add.*

@@ -72,9 +72,8 @@ The same patterns drive the proxy **and** DNS, so the two never disagree:
 
 > [!TIP]
 > To allow a name **and** its subdomains, write it as `.example.com` — a bare entry is that name
-> only. In analyze mode, and in enforce when something is refused, the summary's **Subdomains of
-> exact entries** section lists the lookups an exact entry blocks and suggests the `*.parent`
-> entry to add.
+> only. Lookups an exact entry refuses are listed under **Diagnostics → DNS refused** in the
+> summary. Add a subdomain only after checking that the job really needs it.
 
 Why: DNS answers for every name under an allowlisted zone used to be forwarded upstream, so
 `<secret>.allowed.example` carried data to whoever runs that zone's name servers. Now a name
@@ -112,7 +111,7 @@ random name under an exact allowlist entry. In enforce mode the job fails if any
 | `dns-servers` | `9.9.9.9 149.112.112.112` (Quad9) | Upstream resolvers CoreDNS forwards allowlisted names to: IP addresses, space/comma/newline separated. The first is the primary, the rest are tried in order. Empty = the default |
 | `disable-sudo` | follows `mode` | `enforce` removes the runner's sudo after setup; `analyze` keeps it. Set `true`/`false` to override; keeping sudo in enforce labels the job **ADVISORY** |
 | `docker` | follows `mode` | `enforce` removes docker access (`remove-group`); `analyze` keeps it (`keep`). `keep`: leave docker alone. `remove-group`: take the runner out of the docker group and lock the socket to root. `stop`: stop and disable the docker daemon. In enforce, `keep` makes the job **ADVISORY**, and a removal that doesn't take effect fails the job |
-| `fail-on-tampering` | follows `mode` | `enforce` fails the job (post step) if the safer-runner configuration changed during the job; `analyze` never breaks a build. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`) |
+| `fail-on-tampering` | follows `mode` | `enforce` fails the job (post step) if the safer-runner configuration changed during the job; `analyze` never breaks a build. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`). Advisory: see [Limitations](#limitations-read-these) |
 
 An explicit value always wins; leaving one unset follows the mode. The proxy's ports (a free pair in
 20000–32766, picked at setup) and its streaming threshold are internal; HTTPS from containers
@@ -164,6 +163,10 @@ RUN steps — get the same policy as the host, through the same proxy and DNS fi
   (Azure Storage, `*.blob.core.windows.net` etc.) stay intercepted for containers in enforce,
   so they need the CA there (see Limitations).
 - Host traffic is unchanged: always intercepted.
+- The container rules hook Docker's `DOCKER-USER` iptables chain. If Docker is running without
+  it (started with `iptables: false`, or another firewall backend), enforce **fails setup**
+  rather than leave containers unfiltered; use `docker: stop` if the job doesn't need Docker.
+  Analyze warns and carries on without container monitoring.
 - When Docker already pulled images before the action (any job with `services:`), the action
   restarts `dockerd` once (with `live-restore`, so service containers keep running) so that
   later `docker pull`s trust the CA.
@@ -222,6 +225,12 @@ can send data; these limit what that dependency can reach in the first place:
 - **`disable-sudo: false` or `docker: keep` makes enforce advisory.** Any step with root can
   remove the proxy and firewall, and docker group membership is root-equivalent. Both are
   removed by enforce; the summary labels the job ADVISORY when either was kept.
+- **The job summary and the tamper check are advisory.** They come from the post step, which
+  runs as the runner user from the action's files on the runner, and the job's own steps can
+  modify those. A malicious step could alter or suppress the summary, the tamper check and
+  `fail-on-tampering`. Treat them as a tripwire and a record, not tamper-proof evidence. The
+  egress controls themselves (proxy, DNS, firewall, sudo and docker removal) are root-owned and
+  don't depend on the post step. See [docs/DESIGN-post-run-integrity.md](docs/DESIGN-post-run-integrity.md).
 - **Allowlisted names that resolve to internal addresses are refused.** That includes hosted
   runners with Azure private networking that reach private services by name. Such names
   can't be allowlisted in enforce yet.
@@ -230,9 +239,15 @@ can send data; these limit what that dependency can reach in the first place:
   aren't.
 - **Blocked names are redacted, best effort.** A refused name can be the payload
   (`<base64 secret>.attacker.example`). GitHub already masks a registered secret's literal value,
-  so the summary and job log hide hostname labels that look *encoded* (hex, base32/64: long, few
-  vowels, scattered digits) as `‹N chars›`, always keeping the zone (`attacker.example`) visible.
-  It complements GitHub's masking. Short encoded labels (≈12–16 chars) are caught only part of the time.
+  so the summary and job log also hide hostname labels that look *encoded* (hex and digit runs of
+  6+ characters; base32/64-looking labels of 8+: few vowels, scattered digits) as `‹redacted›`,
+  without their length. Every label is checked, the domain and TLD included. This keeps obviously encoded
+  values out of the report, but it is **not a guarantee**: short or word-like labels are caught
+  only part of the time, so a step that shapes its data to avoid the filter can get an
+  **entire** secret into the summary and job log in recoverable form, even through a single
+  refused hostname. Treat the summary of a job that ran untrusted code as able to contain
+  anything that code could read. The raw logs on the runner (`/var/log/safer-runner/`, including `proxy-flows.jsonl`)
+  are **not** redacted: don't upload them as artifacts from a public repository.
 - **No DNS-rebinding protection for clients outside the proxy.** The resolver returns internal
   answers as-is; the proxy refuses them for all proxied traffic. A process that dials a
   loopback, docker-bridge or IMDS address by name gets no more than it could by IP literal

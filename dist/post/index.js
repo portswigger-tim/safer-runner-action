@@ -997,11 +997,12 @@ async function runSetup(inputs) {
         }
     }
     // 8. Firewall
+    let containerRules = false;
     await timed('Configure firewall', async () => {
         const prefixes = [constants_1.LOG_PREFIX_DROP, constants_1.LOG_PREFIX_ANALYZE, constants_1.LOG_PREFIX_CDROP, constants_1.LOG_PREFIX_CEGRESS].map(p => p.trim());
         await (0, setup_1.setupIptablesLogging)(constants_1.FIREWALL_LOG, prefixes, 'v2');
         await (0, firewall_1.detectEgressInterface)();
-        await (0, firewall_1.applyFirewall)({
+        ({ containerRules } = await (0, firewall_1.applyFirewall)({
             mode,
             proxyUid,
             dnsUid: dnsUser.uid,
@@ -1009,9 +1010,9 @@ async function runSetup(inputs) {
             containerProxyPort: ports.containerPort,
             containers: dockerActive,
             dnsServers
-        });
+        }));
         await (0, firewall_1.killPreexistingConnections)();
-        if (dockerActive)
+        if (containerRules)
             await (0, firewall_1.flushContainerConntrack)();
         await (0, firewall_1.logFirewall)();
     });
@@ -1040,7 +1041,7 @@ async function runSetup(inputs) {
             docker,
             failOnTampering: inputs.failOnTampering,
             containerTls: policy_1.CONTAINER_TLS,
-            containerRules: dockerActive,
+            containerRules,
             proxyPorts: [ports.port, ports.containerPort],
             selfTestWindow,
             dnsSelfTestName,
@@ -1112,6 +1113,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MISSING_DOCKER_USER_MESSAGE = void 0;
 exports.buildNatRules = buildNatRules;
 exports.buildFilterRules = buildFilterRules;
 exports.buildIp6FilterRules = buildIp6FilterRules;
@@ -1384,27 +1386,39 @@ async function chainExists(bin, chain) {
     });
     return rc === 0;
 }
+exports.MISSING_DOCKER_USER_MESSAGE = 'Docker is running but the DOCKER-USER chain is missing (Docker started with iptables disabled, or a ' +
+    'firewall backend other than iptables), so the container egress rules cannot be applied';
 /**
  * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
  * table; IPv6 last. The proxy must already be listening.
+ *
+ * Returns whether the container rules were applied. enforce fails closed instead of running
+ * with containers outside the rules: it throws before anything is changed.
  */
-async function applyFirewall(o) {
+async function applyFirewall(o, hasChain = chainExists) {
+    let containerRules = false;
+    let ip6Hook = 'FORWARD';
+    if (o.containers) {
+        if (await hasChain('iptables', constants_1.DOCKER_USER_CHAIN)) {
+            containerRules = true;
+            if (await hasChain('ip6tables', constants_1.DOCKER_USER_CHAIN))
+                ip6Hook = constants_1.DOCKER_USER_CHAIN;
+        }
+        else if (o.mode === 'enforce') {
+            throw new Error(`${exports.MISSING_DOCKER_USER_MESSAGE}. Use docker: stop, or mode: analyze.`);
+        }
+        else {
+            core.warning(`${exports.MISSING_DOCKER_USER_MESSAGE}: container egress is not monitored`);
+        }
+    }
     await removeFirewall();
     // REDIRECT to 127.0.0.1 of packets that were routed to another interface
     await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
     let v4 = buildNatRules(o) + buildFilterRules(o);
     let v6 = buildIp6FilterRules(o);
-    if (o.containers) {
-        if (!(await chainExists('iptables', constants_1.DOCKER_USER_CHAIN))) {
-            // Docker is running but has not set up its chains (iptables: false?): nothing forwards
-            // through DOCKER-USER, so there is nothing to hook. Say so rather than fail open silently.
-            core.warning('Docker is running but the DOCKER-USER chain is missing: container egress rules not applied');
-        }
-        else {
-            v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
-            const hook = (await chainExists('ip6tables', constants_1.DOCKER_USER_CHAIN)) ? constants_1.DOCKER_USER_CHAIN : 'FORWARD';
-            v6 += buildIp6ContainerForwardRules(o, hook);
-        }
+    if (containerRules) {
+        v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
+        v6 += buildIp6ContainerForwardRules(o, ip6Hook);
     }
     await restore('iptables-restore', v4);
     const rc6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
@@ -1417,6 +1431,7 @@ async function applyFirewall(o) {
             throw new Error(msg);
         core.warning(msg);
     }
+    return { containerRules };
 }
 /** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
 function parseDockerSubnets(json) {
@@ -2812,16 +2827,6 @@ const sudo_1 = __nccwpck_require__(1279);
 const validation_1 = __nccwpck_require__(8449);
 const policy_1 = __nccwpck_require__(2224);
 const inputs_1 = __nccwpck_require__(6107);
-/** allow + passthrough from the root-owned policy the proxy and the resolver were built from. */
-function readPolicyPatterns() {
-    try {
-        const p = JSON.parse(fs.readFileSync(constants_1.POLICY_FILE, 'utf8'));
-        return [...(p.allow ?? []), ...(p.passthrough ?? [])];
-    }
-    catch {
-        return undefined;
-    }
-}
 function readSetupMarker() {
     try {
         return JSON.parse(fs.readFileSync(egress_1.SETUP_MARKER, 'utf8'));
@@ -2895,7 +2900,6 @@ async function run() {
             hosts,
             firewall,
             dnsRefused,
-            allowPatterns: readPolicyPatterns(),
             // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
             userDomains: [
                 ...(0, policy_1.parseAllowedDomains)(core.getInput('allowed-domains')),
@@ -3281,34 +3285,40 @@ async function startProxy(o, timeoutMs = 90000) {
  * A blocked name can be the payload: `<encoded secret>.attacker.example`. Blocking the lookup
  * or connection is pointless if the report then publishes the name. GitHub already masks the
  * literal value of a registered secret in logs and summaries, so what gets through is an
- * ENCODED form - hex, base32, base64 - which in a DNS label looks like a long run of
- * `[a-z0-9_-]` with almost no vowels and a sprinkle of digits. Words don't. This complements
- * GitHub's masking; it doesn't replace it.
+ * ENCODED form - hex, base32, base64 - which in a DNS label looks like a run of `[a-z0-9_-]`
+ * with almost no vowels and a sprinkle of digits. Words don't. This complements GitHub's
+ * masking; it doesn't replace it.
  *
- * Rules, per label, everything left of the zone:
- *  - the zone is always shown: the registrable domain (last two labels, three under a
- *    multi-part public suffix) or a longer caller-given suffix (e.g. the allowlisted parent).
- *    The user still sees which zone to act on; only payload-looking labels are hidden.
- *  - a label of LONG_LABEL_LEN+ chars is redacted (DNS-tunnel chunks run to the 63-char limit);
- *    one under ENCODED_MIN_LEN (ignoring `-`/`_`) is shown. In between it is redacted to
- *    `‹N chars›` when it is all hex, or its letters have fewer than MAX_VOWEL_RATIO vowels, or it
- *    has MIN_DIGIT_RUNS+ separate runs of digits, or (tie-breaker, ENTROPY_MIN_LEN+) Shannon
- *    entropy of ENTROPY_BITS+ bits per char. Charset and length are the primary signals.
+ * Every label of a blocked name is checked, the registrable domain and the TLD included. Per
+ * label:
+ *  - LONG_LABEL_LEN+ chars: redacted (DNS-tunnel chunks run to the 63-char limit);
+ *  - SHORT_HEX_LEN+ chars (ignoring `-`/`_`) of digits, or of hex with a digit: redacted;
+ *  - under ENCODED_MIN_LEN: shown;
+ *  - otherwise redacted when it is all hex, or its letters have fewer than MAX_VOWEL_RATIO
+ *    vowels, or it has MIN_DIGIT_RUNS+ separate runs of digits, or (tie-breaker,
+ *    ENTROPY_MIN_LEN+) Shannon entropy of ENTROPY_BITS+ bits per char.
+ * A redacted label, or a run of them, prints as REDACTED: no length, so the shape of the
+ * hidden part carries nothing either.
  *
- * Measured on random data: hex of any length 12+ and anything 40+ chars, 100%; base32 of 20
- * bytes (32 chars) 99.6%; 12-byte base64 (16 chars) ~72%; 9-byte base64 (12 chars) ~43%. Short
- * labels carry little each, and a stricter rule starts hiding real hostnames
- * (`runnerghubwus31`, `microsoftonline`). A best-effort filter, not a guarantee.
+ * Measured on random data: hex of 8+ chars (6+ with a digit) and anything 40+ chars, 100%;
+ * base32/base64 of 8-12 chars ~55-65%, 16 chars ~75%, 24 chars ~93%. A stricter rule starts
+ * hiding real hostnames (`runnerghubwus31`, `microsoftonline`). This is a best-effort filter
+ * that keeps obviously encoded values out of the report, not a guarantee: data shaped to avoid
+ * it (short or word-like labels) can get through whole and recoverable, even in a single name.
+ * It doesn't apply to the raw logs on the runner (`proxy-flows.jsonl` and the DNS/firewall
+ * logs are unredacted).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ENTROPY_BITS = exports.ENTROPY_MIN_LEN = exports.LONG_LABEL_LEN = exports.MIN_DIGIT_RUNS = exports.MAX_VOWEL_RATIO = exports.ENCODED_MIN_LEN = exports.HEX_MIN_LEN = void 0;
+exports.REDACTED = exports.ENTROPY_BITS = exports.ENTROPY_MIN_LEN = exports.LONG_LABEL_LEN = exports.MIN_DIGIT_RUNS = exports.MAX_VOWEL_RATIO = exports.ENCODED_MIN_LEN = exports.SHORT_HEX_LEN = exports.HEX_MIN_LEN = void 0;
 exports.shannonBits = shannonBits;
 exports.looksEncoded = looksEncoded;
 exports.redactName = redactName;
 exports.needsRedaction = needsRedaction;
-exports.HEX_MIN_LEN = 12;
-/** labels shorter than this (after dropping `-`/`_`) are always shown: too short to carry much */
-exports.ENCODED_MIN_LEN = 12;
+exports.HEX_MIN_LEN = 8;
+/** digits, or hex with at least one digit, from this length (`a1b2c3`, `482913`) */
+exports.SHORT_HEX_LEN = 6;
+/** labels shorter than this (after dropping `-`/`_`) are shown unless SHORT_HEX_LEN catches them */
+exports.ENCODED_MIN_LEN = 8;
 /** words have about 40% vowels among their letters; random base32/64 about 20% */
 exports.MAX_VOWEL_RATIO = 0.25;
 /** separate runs of digits inside a label (`a1b22c3`): encodings scatter them, names don't */
@@ -3316,28 +3326,7 @@ exports.MIN_DIGIT_RUNS = 3;
 exports.LONG_LABEL_LEN = 40;
 exports.ENTROPY_MIN_LEN = 20;
 exports.ENTROPY_BITS = 4.0;
-/** Second-level labels under which the registrable domain has three labels (co.uk, com.au...). */
-const MULTI_PART_SUFFIXES = new Set([
-    'co.uk',
-    'org.uk',
-    'ac.uk',
-    'gov.uk',
-    'com.au',
-    'net.au',
-    'org.au',
-    'co.nz',
-    'co.jp',
-    'ne.jp',
-    'co.za',
-    'com.br',
-    'com.cn',
-    'co.in',
-    'co.kr',
-    'com.mx',
-    'com.tr',
-    'com.sg',
-    'com.hk'
-]);
+exports.REDACTED = '‹redacted›';
 function shannonBits(s) {
     const counts = new Map();
     for (const ch of s)
@@ -3353,9 +3342,11 @@ function looksEncoded(label) {
     if (l.length >= exports.LONG_LABEL_LEN)
         return true;
     const core = l.replace(/[-_]/g, '');
+    if (core.length >= exports.SHORT_HEX_LEN && /^[0-9a-f]+$/.test(core) && /[0-9]/.test(core))
+        return true;
     if (core.length < exports.ENCODED_MIN_LEN)
         return false;
-    if (/^[0-9a-f]+$/.test(core))
+    if (core.length >= exports.HEX_MIN_LEN && /^[0-9a-f]+$/.test(core))
         return true;
     const letters = core.replace(/[^a-z]/g, '');
     const vowels = letters.replace(/[^aeiouy]/g, '').length;
@@ -3365,24 +3356,16 @@ function looksEncoded(label) {
         return true;
     return core.length >= exports.ENTROPY_MIN_LEN && shannonBits(core) >= exports.ENTROPY_BITS;
 }
-function zoneLabels(labels) {
-    if (labels.length >= 3 && MULTI_PART_SUFFIXES.has(labels.slice(-2).join('.')))
-        return 3;
-    return Math.min(2, labels.length);
-}
-/**
- * `name` with every payload-looking label left of the zone replaced by `‹N chars›`.
- * `keepSuffix`: a longer suffix that is always shown (it must be a suffix of name).
- */
-function redactName(name, keepSuffix) {
-    const n = name.toLowerCase();
-    const labels = n.split('.');
-    let keep = zoneLabels(labels);
-    if (keepSuffix && (n === keepSuffix || n.endsWith('.' + keepSuffix))) {
-        keep = Math.max(keep, keepSuffix.split('.').length);
+/** `name` with every payload-looking label replaced by REDACTED (a run of them by one). */
+function redactName(name) {
+    const out = [];
+    for (const l of name.toLowerCase().split('.')) {
+        if (!looksEncoded(l))
+            out.push(l);
+        else if (out[out.length - 1] !== exports.REDACTED)
+            out.push(exports.REDACTED);
     }
-    const head = labels.slice(0, labels.length - keep).map(l => (looksEncoded(l) ? `‹${l.length} chars›` : l));
-    return [...head, ...labels.slice(labels.length - keep)].join('.');
+    return out.join('.');
 }
 /** True when redactName would hide part of the name (never paste such a name into YAML). */
 function needsRedaction(name) {
@@ -3402,6 +3385,7 @@ function needsRedaction(name) {
  * DENIED first and in full; anything that has to be cut is said so explicitly (review M6).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ADVISORY_REPORT_NOTE = void 0;
 exports.summarizeFlows = summarizeFlows;
 exports.parseFirewallLog = parseFirewallLog;
 exports.categorize = categorize;
@@ -3411,7 +3395,6 @@ exports.blockedName = blockedName;
 exports.statusSummary = statusSummary;
 exports.summarizeContainers = summarizeContainers;
 exports.containerSection = containerSection;
-exports.exactSubdomainRefusals = exactSubdomainRefusals;
 exports.suggestedAllowlist = suggestedAllowlist;
 exports.modeLabel = modeLabel;
 exports.buildReport = buildReport;
@@ -3690,6 +3673,13 @@ function capped(rows) {
         note: `\n\n**+${rows.length - MAX_ROWS} more not shown here** - the full list is in the post step's job log.`
     };
 }
+/**
+ * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
+ * the action's files on the runner, which the job's own steps can write to. Say so in the report.
+ */
+exports.ADVISORY_REPORT_NOTE = '<sub>The tamper check and this summary come from the post step, which runs as the runner user from ' +
+    "files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls " +
+    "themselves are root-owned and don't depend on it.</sub>";
 function plural(n, one, many = `${one}s`) {
     return `${n} ${n === 1 ? one : many}`;
 }
@@ -3701,8 +3691,8 @@ function nameList(hosts) {
  * A refused name as printed: payload-looking labels redacted (src/redact.ts), because a blocked
  * name can be the data a step tried to send. IP literals are shown as they are.
  */
-function blockedName(name, keepSuffix) {
-    return (0, policy_1.isIpLiteral)(name) || name.startsWith('(') ? name : (0, redact_1.redactName)(name, keepSuffix);
+function blockedName(name) {
+    return (0, policy_1.isIpLiteral)(name) || name.startsWith('(') ? name : (0, redact_1.redactName)(name);
 }
 function displayName(h) {
     return h.name.replace(/^\(no name\) /, '');
@@ -3852,32 +3842,6 @@ function containerSection(containers, mode) {
     }
     return md + '</details>\n\n';
 }
-/**
- * Refused lookups for names under an EXACT allowlist entry (`<x>.example.com` with only
- * `example.com` listed): the new exact-by-default semantics at work, and the place a step
- * would try to tunnel data through an allowlisted zone. Grouped by the longest exact parent;
- * names the allowlist would accept, or whose `*.parent` is already listed (so the risky-subdomain
- * denylist refused them), are left out.
- */
-function exactSubdomainRefusals(refused, allowPatterns) {
-    const compiled = compileUserPatterns(allowPatterns);
-    const exact = allowPatterns.filter(p => !p.includes('*')).map(p => p.toLowerCase());
-    const wild = new Set(allowPatterns.filter(p => p.startsWith('*.')).map(p => p.slice(2).toLowerCase()));
-    const groups = new Map();
-    for (const raw of refused) {
-        const name = raw.toLowerCase();
-        if ((0, policy_1.matchesAny)(name, compiled))
-            continue;
-        const parent = exact.filter(p => name.endsWith('.' + p) && !wild.has(p)).sort((a, b) => b.length - a.length)[0];
-        if (!parent)
-            continue;
-        const list = groups.get(parent) ?? [];
-        if (!list.includes(name))
-            list.push(name);
-        groups.set(parent, list);
-    }
-    return Array.from(groups, ([parent, names]) => ({ parent, names })).sort((a, b) => b.names.length - a.names.length || a.parent.localeCompare(b.parent));
-}
 const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)+$/;
 /**
  * Names refused only because they're not on the allowlist - never fronting, internal
@@ -3890,6 +3854,17 @@ function suggestedAllowlist(hosts) {
         .filter(h => h.reasons.some(r => NOT_LISTED.has(r)) && !h.reasons.some(r => DENYLISTED.has(r)))
         .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid') && !(0, redact_1.needsRedaction)(h.name))
         .map(h => h.name)));
+}
+/**
+ * The post-run tamper check as a chip. It is advisory (ADVISORY_REPORT_NOTE), and a check that
+ * could not run is unknown, never a pass.
+ */
+function integrityChip(status) {
+    if (status === 'tampered')
+        return '🚨 config tampered';
+    if (status === 'verified')
+        return '🔎 no config change seen (advisory)';
+    return '❔ config unverified';
 }
 /** What made enforce advisory: 'sudo', 'docker', 'sudo and docker', or '' (a boundary). */
 function retained(sudoRetained, dockerRetained) {
@@ -4019,20 +3994,17 @@ function buildReport(input) {
     const fw = firewallSummary(input.firewall.filter(e => !CONTAINER_PREFIXES.has(e.prefix)));
     const sudoRan = input.sudo?.ran.length ?? 0;
     const suggest = suggestedAllowlist(denied);
-    const subdomains = input.allowPatterns ? exactSubdomainRefusals(input.dnsRefused, input.allowPatterns) : [];
-    const inSubdomainGroup = new Set(subdomains.flatMap(g => g.names));
     // ---- title + chips
     let md = `## 🛡️ Safer Runner — egress${advisory ? ` — enforce (ADVISORY — ${advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
     const chips = [advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
     if (enforce) {
-        const weak = [];
         if (input.sudoRetained)
-            weak.push('⚠️ sudo retained');
+            chips.push('⚠️ sudo retained');
         if (input.dockerRetained)
-            weak.push('⚠️ docker retained');
-        if (tampered)
-            weak.push('🚨 config tampered');
-        chips.push(...(weak.length ? weak : ['✅ boundary intact']));
+            chips.push('⚠️ docker retained');
+        if (!input.sudoRetained && !input.dockerRetained)
+            chips.push('✅ controls applied at setup');
+        chips.push(integrityChip(input.integrity?.status));
     }
     else {
         chips.push(denied.length ? `${plural(denied.length, 'host')} would be blocked` : 'nothing would be blocked');
@@ -4187,25 +4159,6 @@ function buildReport(input) {
             md += codeBlock('yaml', 'allowed-domains: |\n' + suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
         }
     }
-    if (subdomains.length) {
-        const total = subdomains.reduce((a, g) => a + g.names.length, 0);
-        md += `### 🔎 Subdomains of exact entries (${total}) — DNS ${enforce ? 'refused' : 'would refuse'}\n\n`;
-        md +=
-            'A bare allowlist entry means that name only. These lookups were for names under one, so ' +
-                `they were ${enforce ? 'answered NXDOMAIN on the runner and never sent upstream' : 'logged (enforce answers them NXDOMAIN on the runner)'}.` +
-                ' Payload-looking labels are redacted: a refused lookup can carry data.\n\n';
-        const { shown, note } = capped(subdomains);
-        md += table(['Allowlisted as', 'Refused lookups', 'Examples', 'If the job needs them'], [':--', '--:', ':--', ':--'], shown.map(g => [
-            code(g.parent),
-            String(g.names.length),
-            g.names
-                .slice(0, 3)
-                .map(n => code(blockedName(n, g.parent)))
-                .join(', ') + (g.names.length > 3 ? ', …' : ''),
-            `add ${code('*.' + g.parent)}`
-        ]));
-        md += note + '\n\n';
-    }
     if (groups.unresolved.length) {
         md += section('❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
             code(blockedName(h.name)),
@@ -4283,7 +4236,7 @@ function buildReport(input) {
     }
     if (input.dnsRefused.length) {
         diag.push(plural(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
-        const shownAbove = new Set([...denied.map(h => h.name), ...inSubdomainGroup]);
+        const shownAbove = new Set(denied.map(h => h.name));
         const rest = input.dnsRefused.filter(d => !shownAbove.has(d.toLowerCase()));
         const { shown, note } = capped(rest);
         body += `**DNS ${enforce ? 'refused' : 'would refuse'}** (${input.dnsRefused.length}): `;
@@ -4316,8 +4269,9 @@ function buildReport(input) {
     if (input.integrity) {
         const s = input.integrity.status;
         diag.push(s === 'verified' ? 'config unchanged ✓' : s === 'tampered' ? 'config CHANGED ⚠️' : 'config: no baseline');
-        body += `**Config file tamper check** — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
+        body += `**Config file tamper check** (advisory) — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
         body += input.integrity.body + '\n\n';
+        body += `${exports.ADVISORY_REPORT_NOTE}\n\n`;
     }
     for (const s of input.extraSections ?? [])
         if (s)

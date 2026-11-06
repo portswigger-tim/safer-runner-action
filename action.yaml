@@ -64,6 +64,8 @@ inputs:
       Override whether the post step fails the job when the security configuration changed during
       the job. `enforce` fails it (a subverted control should fail the job); `analyze` never
       breaks a build. Leave unset to follow the mode (unset and `false` are not the same).
+      The check runs in the post step, from files the job's own steps can modify, so it is an
+      advisory tripwire rather than tamper-proof assurance.
     required: false
 
 runs:

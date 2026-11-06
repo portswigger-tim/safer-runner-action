@@ -319,26 +319,41 @@ async function chainExists(bin: 'iptables' | 'ip6tables', chain: string): Promis
   return rc === 0;
 }
 
+export const MISSING_DOCKER_USER_MESSAGE =
+  'Docker is running but the DOCKER-USER chain is missing (Docker started with iptables disabled, or a ' +
+  'firewall backend other than iptables), so the container egress rules cannot be applied';
+
 /**
  * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
  * table; IPv6 last. The proxy must already be listening.
+ *
+ * Returns whether the container rules were applied. enforce fails closed instead of running
+ * with containers outside the rules: it throws before anything is changed.
  */
-export async function applyFirewall(o: FirewallOptions): Promise<void> {
+export async function applyFirewall(
+  o: FirewallOptions,
+  hasChain: typeof chainExists = chainExists
+): Promise<{ containerRules: boolean }> {
+  let containerRules = false;
+  let ip6Hook = 'FORWARD';
+  if (o.containers) {
+    if (await hasChain('iptables', DOCKER_USER_CHAIN)) {
+      containerRules = true;
+      if (await hasChain('ip6tables', DOCKER_USER_CHAIN)) ip6Hook = DOCKER_USER_CHAIN;
+    } else if (o.mode === 'enforce') {
+      throw new Error(`${MISSING_DOCKER_USER_MESSAGE}. Use docker: stop, or mode: analyze.`);
+    } else {
+      core.warning(`${MISSING_DOCKER_USER_MESSAGE}: container egress is not monitored`);
+    }
+  }
   await removeFirewall();
   // REDIRECT to 127.0.0.1 of packets that were routed to another interface
   await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
   let v4 = buildNatRules(o) + buildFilterRules(o);
   let v6 = buildIp6FilterRules(o);
-  if (o.containers) {
-    if (!(await chainExists('iptables', DOCKER_USER_CHAIN))) {
-      // Docker is running but has not set up its chains (iptables: false?): nothing forwards
-      // through DOCKER-USER, so there is nothing to hook. Say so rather than fail open silently.
-      core.warning('Docker is running but the DOCKER-USER chain is missing: container egress rules not applied');
-    } else {
-      v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
-      const hook = (await chainExists('ip6tables', DOCKER_USER_CHAIN)) ? DOCKER_USER_CHAIN : 'FORWARD';
-      v6 += buildIp6ContainerForwardRules(o, hook);
-    }
+  if (containerRules) {
+    v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
+    v6 += buildIp6ContainerForwardRules(o, ip6Hook);
   }
   await restore('iptables-restore', v4);
   const rc6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
@@ -350,6 +365,7 @@ export async function applyFirewall(o: FirewallOptions): Promise<void> {
     if (o.mode === 'enforce') throw new Error(msg);
     core.warning(msg);
   }
+  return { containerRules };
 }
 
 /** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
