@@ -44,7 +44,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: portswigger-tim/safer-runner-action@v2.2.1 # pin an exact version or SHA — no moving @v2 tag
+      - uses: portswigger-tim/safer-runner-action@v2.3.0 # pin an exact version or SHA — no moving @v2 tag
         with:
           mode: enforce
           allowed-domains: |
