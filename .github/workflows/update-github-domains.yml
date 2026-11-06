@@ -27,7 +27,7 @@ jobs:
   regenerate:
     runs-on: ubuntu-latest
     env:
-      BASE: v2
+      BASE: main
       BRANCH: chore/update-github-domains
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,11 +68,11 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -C "$BRANCH"
           git add src/parsers/github-domains.generated.ts dist
-          git commit -m "v2: regenerate GitHub domains from api.github.com/meta"
+          git commit -m "chore: regenerate GitHub domains from api.github.com/meta"
           git push --force origin "$BRANCH"
           if [ -z "$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json number -q '.[].number')" ]; then
             gh pr create --base "$BASE" --head "$BRANCH" \
-              --title "v2: regenerate GitHub domains from api.github.com/meta" \
+              --title "chore: regenerate GitHub domains from api.github.com/meta" \
               --body "Automated refresh of the offline GitHub allowlist (src/parsers/github-domains.generated.ts) from \`api.github.com/meta\` \`.domains.actions\`.
 
           **Review before merging:** every added entry becomes allowed in enforce mode when the live meta fetch fails. Check new wildcards (\`*.x\` = a DNS channel to that zone) and new \`productionresultssa*\` accounts.
