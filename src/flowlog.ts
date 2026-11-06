@@ -9,7 +9,8 @@ export interface FlowRecord {
   ev: string;
   verdict?: 'INTERCEPT' | 'PASSTHROUGH' | 'ALLOW' | 'BLOCK' | 'WOULD_BLOCK';
   reason?: string;
-  layer?: 'sni' | 'http';
+  /** sni: TLS name check; http: Host or http-filter check; ip: the upstream IP guard (proxy/policy.py) */
+  layer?: 'sni' | 'http' | 'ip';
   sni?: string | null;
   host?: string | null;
   method?: string;

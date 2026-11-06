@@ -42,7 +42,7 @@ repos:
         entry: npm test
         language: system
         pass_filenames: false
-        files: \.(ts|py)$
+        files: (\.(ts|py)|^proxy/test-vectors\.json)$
 
       # 4. dist/ in sync — rebuild the three ncc bundles and fail if the result
       #    differs from what's committed, so src and dist never diverge.

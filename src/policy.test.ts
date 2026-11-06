@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -66,6 +67,38 @@ describe('buildPolicyConfig', () => {
     passthroughDomains: '',
     blockRiskySubdomains: true
   };
+
+  it('writes policy.json the addon accepts (proxy/policy_core.py validate_config, fails closed otherwise)', () => {
+    const { config } = buildPolicyConfig({
+      ...base,
+      allowedDomains: 'registry.npmjs.org\n*.actions.githubusercontent.com',
+      httpFilter: [
+        { host: 'github.com', rules: [{ path: 'myorg/app/git-receive-pack', methods: ['POST'] }] },
+        { host: '*.actions.githubusercontent.com', rules: [{ path: '*', methods: ['GET', 'HEAD'] }] }
+      ],
+      allowGithubPlatform: true
+    });
+    expect(config.http_filter.platform.length).toBeGreaterThan(0);
+    const load = (cfg: unknown) =>
+      spawnSync(
+        'python3',
+        [
+          '-I',
+          '-c',
+          'import json, sys; sys.path.insert(0, sys.argv[1]); import policy_core as pc; ' +
+            'c = json.load(sys.stdin); pc.validate_config(c); pc.selftest(pc.Policy.from_config(c))',
+          path.join(__dirname, '..', 'proxy')
+        ],
+        { input: JSON.stringify(cfg), encoding: 'utf8' }
+      );
+    const run = load(config);
+    expect(run.stderr).toBe('');
+    expect(run.status).toBe(0);
+    // and a writer the addon does not know is refused
+    const other = load({ ...config, version: 2 });
+    expect(other.status).not.toBe(0);
+    expect(other.stderr).toContain('PolicyError');
+  });
 
   it('always includes the mandatory passthrough set', () => {
     const { config } = buildPolicyConfig({ ...base, passthroughDomains: 'other.example.com' });

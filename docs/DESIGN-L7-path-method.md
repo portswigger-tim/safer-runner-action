@@ -228,9 +228,10 @@ suggest, per host:
    suggestion for that host is that single line.
 2. **Template the write paths, don't list them.** Build a trie of the write paths and replace
    *variable* segments with `*`, keeping structural literals. "Variable" = numeric, hex/UUID,
-   or high-cardinality at that position — exactly what `redact.ts`'s payload-looking-label
-   detector already finds, so it is reused. (Bonus: the suggestion then never echoes ids or
-   hashes, so reduction is also a redaction win.)
+   or high-cardinality at that position — the same payload-looking-label check that redacts
+   refused names, with a stricter rule for path segments (`proxy/suggest.py`
+   `path_segment_shown`). (Bonus: the suggestion then never echoes ids or hashes, so
+   reduction is also a redaction win.)
 3. **Union the methods** per templated path.
 
 Worked example — a job that reads npm + the API, and pushes to one repo, reduces to a few lines:
@@ -296,9 +297,14 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
   tests. Reuse the `allowed-domains` matcher so `*` behaves identically.
 - `src/policy.ts` / `policy.json`: build and carry the compiled rules.
 - `src/inputs.ts`: parse and validate `http-filter`; emit the two guardrail warnings.
-- `src/report.ts`: new blocked-reason rows and the "if the job needs it" suggestion. The
-  suggestion reducer carries the sensitive-endpoint `endsWith` list (seeded with the git pack
-  URLs, expandable) used to keep writes path-specific.
+- `src/report.ts`: new blocked-reason rows, and renders the "if the job needs it" suggestion.
+- `proxy/suggest.py`: builds the suggestion next to the matcher (it reuses `path_forms`,
+  `PathGlob` and specificity from `policy_core.py`, so there is no second copy of the matching
+  to drift). It holds the path-segment redaction and the sensitive-endpoint `endsWith` list
+  (seeded with the git pack URLs, expandable) used to keep writes path-specific. The post step
+  runs it (`src/suggest.ts`); if it fails, the report renders without a suggestion.
+  `proxy/test-vectors.json` "suggest" pins its output and the round trip (suggestion →
+  `http-filter` input → `policy.json` → matcher allows every request it came from).
 
 ## Resolved decisions (RFC [#17](https://github.com/portswigger-tim/safer-runner-action/issues/17))
 

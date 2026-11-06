@@ -4,17 +4,9 @@
  */
 
 import { ipOf, type FlowRecord } from './flowlog';
-import {
-  GIT_HOSTS,
-  compilePattern,
-  expandPattern,
-  isIpLiteral,
-  matchesAny,
-  validatePathPattern,
-  type Mode
-} from './policy';
+import { compilePattern, expandPattern, isIpLiteral, matchesAny, type Mode } from './policy';
 import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
-import { PATH_HIDDEN, STANDARD_METHODS, methodLabel, needsRedaction, pathSegmentShown, redactName } from './redact';
+import { PATH_HIDDEN, methodLabel, needsRedaction, redactName } from './redact';
 
 export interface HostSummary {
   name: string;
@@ -142,7 +134,7 @@ export function summarizeFlows(records: FlowRecord[]): HostSummary[] {
     if ((RANK[r.verdict as string] ?? 0) > (RANK[h.verdict] ?? 0)) h.verdict = r.verdict as string;
     if (denied) {
       addUnique(h.reasons, r.reason);
-      addUnique(h.layers, r.layer as string);
+      addUnique(h.layers, r.layer);
     }
     const isConnRecord = r.ev === 'tls' || r.ev === 'upstream';
     if (isConnRecord) seenConns.get(h)!.add(conn);
@@ -524,31 +516,6 @@ const FILTER_REASON_TEXT: Record<string, string> = {
   'method-not-allowed': 'method not allowed on this path',
   'path-not-allowed': 'path not allowed'
 };
-/** Not the exfil surface: in a suggestion they collapse to one `"*"` line per host. */
-const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
-const METHOD_ORDER = [...READ_METHODS, 'POST', 'PUT', 'PATCH', 'DELETE'];
-
-/**
- * Endpoints a suggestion keeps path-specific, matched on the end of the path, with the methods
- * they use. On these a read and a write share a method (git fetch and push are both POST), so
- * folding them into a host's method baseline would re-open the write everywhere. Seeded with
- * the git pack URLs; add more as they come up (registry blob uploads, PyPI `legacy`, ...). A
- * missing entry only makes a suggestion looser, never wrong at enforcement: the user reviews it.
- */
-export const SENSITIVE_PATH_SUFFIXES: readonly { suffix: string; methods: readonly string[] }[] = [
-  { suffix: 'git-receive-pack', methods: ['POST'] },
-  { suffix: 'git-upload-pack', methods: ['POST'] }
-];
-
-/**
- * Hosts the built-in platform allowlist covers (step logs, artifacts, caches, OIDC). Left out of
- * the suggestion, which describes the job's own traffic.
- */
-const PLATFORM_HOSTS = ['*.actions.githubusercontent.com', 'productionresultssa*.blob.core.windows.net'];
-/** Distinct literals kept at one path position (same prefix); more than this become `*`. */
-const MAX_PINNED = 3;
-/** proxy/policy.py MAX_PATH_LOG: a logged path this long may have been cut short */
-const PATH_LOG_MAX = 256;
 
 export interface FilterBlock {
   /** redacted like any refused name */
@@ -581,325 +548,39 @@ export interface HttpFilterSuggestion {
 export interface HttpFilterReport {
   /** requests the filter refused (enforce) or would refuse (analyze) */
   blocks: FilterBlock[];
-  /** a whole `http-filter` from the job's observed traffic (level B: read/write split) */
-  suggestion: HttpFilterSuggestion;
+  /** a whole `http-filter` from the job's observed traffic (level B: read/write split); undefined: none built */
+  suggestion?: HttpFilterSuggestion;
 }
 
-interface ObservedRequest {
+/** An allowed request as logged, for the suggester (proxy/suggest.py checks and templates it). */
+export interface AllowedRequest {
   host: string;
   method: string;
-  /** the path forms the engine decides (path_forms) that the suggestion covers, no leading `/` */
-  forms: string[];
-  /** each form as segments to template; `''` (an empty or cut-off segment) always becomes `*` */
-  shapes: string[][];
+  path: string;
 }
+
+/** Builds the suggestion from the allowed requests (src/suggest.ts); undefined: none. */
+export type Suggester = (requests: AllowedRequest[]) => HttpFilterSuggestion | undefined;
 
 function isFilterBlock(r: FlowRecord): boolean {
   return DENIED.has(r.verdict) && FILTER_REASONS.has(r.reason ?? '');
 }
 
 /**
- * Numeric, empty, or not printable as a path segment (redact.ts pathSegmentShown: encoded-looking,
- * unusual characters, dot segments): becomes `*` in a suggestion.
+ * Allowed intercepted requests (the only ones with a method and path), never on a connection the
+ * upstream IP guard refused, less what the built-in platform list allowed (`filter: platform`).
+ * A refused request never goes into a suggestion: that would quietly undo the user's own filter,
+ * and its path was chosen by whoever sent it. Names, methods and paths are checked by the
+ * suggester itself.
  */
-function isVariableSegment(segment: string): boolean {
-  return /^\d+$/.test(segment) || !pathSegmentShown(segment);
-}
-
-/** `*`, or the segment itself; `name;params` keeps its name (`name*`), as the engine also matches it without them. */
-function templateSegment(segment: string): string {
-  if (!isVariableSegment(segment)) return segment;
-  const name = segment.split(';', 1)[0];
-  return segment.includes(';') && name && !isVariableSegment(name) ? `${name}*` : '*';
-}
-
-/** policy.ts stripGit: on a git host `repo` and `repo.git` are one segment. */
-function stripGit(segment: string): string {
-  return segment.endsWith('.git') && segment.length > 4 ? segment.slice(0, -4) : segment;
-}
-
-// The engine's path matching, mirrored to check a suggestion before it is shown. It MUST track
-// proxy/policy_core.py (path_forms, PathGlob, _decide_form): when that changes, change this too.
-// The round-trip test in report.test.ts runs every suggestion through the real parser and addon,
-// so drift fails there.
-
-/** proxy/policy_core.py MAX_PATH_SEGMENTS: a longer path is refused */
-const ENGINE_MAX_SEGMENTS = 256;
-
-function gitPath(path: string): string {
-  return path.toLowerCase().split('/').map(stripGit).join('/');
-}
-
-/**
- * The forms of a logged request path the engine decides (path_forms): decoded once without the
- * leading `/`, then every combination of `;params` removed, repeated slashes collapsed and
- * trailing slashes removed (and, on a git host, its spelling canonicalised). A request is allowed
- * only if every form is. Undefined when the engine refuses the path whatever the rules say.
- *
- * Only the covered forms are returned (`forms`), each also as segments (`shapes`): those with no
- * empty segment before the last one. A `//` in a path is not reproduced (that would take a `*`
- * spanning segments): the suggestion covers the collapsed request, as a client normally sends
- * it. A path cut short in the log ends in an unknown segment (`''`, so `*`).
- */
-function pathForms(path: string, git: boolean): { forms: string[]; shapes: string[][] } | undefined {
-  const truncated = path.length >= PATH_LOG_MAX;
-  let raw = path.split('?', 1)[0];
-  if (truncated) raw = raw.replace(/%[0-9a-fA-F]?$/, '');
-  if (raw.includes('#') || /%(?![0-9a-fA-F]{2})/.test(raw)) return undefined;
-  if (raw.startsWith('/')) raw = raw.slice(1);
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    return undefined;
-  }
-  if (/[\\\x00-\x1f\x7f]/.test(decoded) || /%[0-9a-fA-F]{2}/.test(decoded)) return undefined;
-  let forms = [decoded];
-  const relax = [
-    (f: string) =>
-      f
-        .split('/')
-        .map(x => x.split(';', 1)[0])
-        .join('/'),
-    (f: string) => f.replace(/\/{2,}/g, '/').replace(/^\/+/, ''),
-    (f: string) => f.replace(/\/+$/, '')
-  ];
-  for (const r of relax) forms = forms.concat(forms.map(r));
-  if (git) forms = forms.map(gitPath);
-  forms = [...new Set(forms)];
-  for (const f of forms) {
-    const segs = f.split('/');
-    if (segs.length > ENGINE_MAX_SEGMENTS || segs.some(x => x === '.' || x === '..')) return undefined;
-  }
-  // only the covered forms are settled: widening a rule for a `//` form would open far more
-  const covered = forms.filter(f => f.split('/').slice(0, -1).every(Boolean));
-  const shapes = covered
-    .map(f => (f === '' ? [] : f.split('/')))
-    .map(segs => (truncated && segs.length ? [...segs.slice(0, -1), ''] : segs));
-  return { forms: covered, shapes };
-}
-
-/** A compiled pattern (PathGlob): `null` is a `*` segment (one or more segments), else the parts around in-segment `*`. */
-type PathGlob = (string[] | null)[];
-
-function pathGlob(pattern: string, git: boolean): PathGlob {
-  const p = validatePathPattern(pattern);
-  return (git ? p.toLowerCase() : p).split('/').map(s => (s === '*' ? null : (git ? stripGit(s) : s).split('*')));
-}
-
-/** PathGlob._segment_matches: greedy, no backtracking */
-function segmentMatches(parts: string[], s: string): boolean {
-  if (parts.length === 1) return s === parts[0];
-  const first = parts[0];
-  const last = parts[parts.length - 1];
-  if (s.length < first.length + last.length || !s.startsWith(first) || !s.endsWith(last)) return false;
-  let i = first.length;
-  const end = s.length - last.length;
-  for (const mid of parts.slice(1, -1)) {
-    const j = s.slice(0, end).indexOf(mid, i);
-    if (j < 0) return false;
-    i = j + mid.length;
-  }
-  return true;
-}
-
-/** PathGlob.match */
-function globMatches(glob: PathGlob, path: string): boolean {
-  let states = new Set([0]);
-  for (const s of path.split('/')) {
-    const next = new Set<number>();
-    for (const k of states) {
-      const seg = glob[k];
-      if (k < glob.length && (seg === null || segmentMatches(seg, s))) next.add(k + 1);
-      if (k > 0 && glob[k - 1] === null) next.add(k);
-    }
-    if (!next.size) return false;
-    states = next;
-  }
-  return states.has(glob.length);
-}
-
-/** PathGlob.specificity: literal characters, then segments, then fewer spans, then fewer `*` */
-function globSpecificity(glob: PathGlob): number[] {
-  const parts = glob.filter((s): s is string[] => s !== null);
-  const spans = glob.length - parts.length;
-  const lit = parts.reduce((n, s) => n + s.join('').length, 0) + glob.length - 1;
-  const stars = parts.reduce((n, s) => n + s.length - 1, 0) + spans;
-  return [lit, glob.length, -spans, -stars];
-}
-
-function compareSpecificity(a: number[], b: number[]): number {
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
-  return 0;
-}
-
-/**
- * Make the rules allow every observed request in each of its forms, as the engine decides
- * (_decide_form: the most specific matching rules win and every tied winner must allow the
- * method): a winner that lacks the method gets it, and a NONE guard that would refuse an observed
- * request is dropped.
- */
-function settleRules(byPath: Map<string, Set<string>>, reqs: ObservedRequest[], git: boolean): void {
-  for (let pass = 0; pass < 8; pass++) {
-    const rules = [...byPath.keys()].map(p => {
-      const glob = pathGlob(p, git);
-      return { p, glob, spec: globSpecificity(glob) };
-    });
-    let changed = false;
-    for (const r of reqs) {
-      for (const form of r.forms) {
-        const hits = rules.filter(x => byPath.has(x.p) && globMatches(x.glob, form));
-        if (!hits.length) continue;
-        const best = hits.reduce((a, b) => (compareSpecificity(a.spec, b.spec) >= 0 ? a : b)).spec;
-        for (const w of hits.filter(x => compareSpecificity(x.spec, best) === 0)) {
-          const ms = byPath.get(w.p)!;
-          if (ms.size === 0) byPath.delete(w.p);
-          else if (ms.has(r.method)) continue;
-          else ms.add(r.method);
-          changed = true;
-        }
-      }
-    }
-    if (!changed) return;
-  }
-}
-
-function sensitiveSuffixOf(segs: string[]): (typeof SENSITIVE_PATH_SUFFIXES)[number] | undefined {
-  const p = segs.join('/');
-  return SENSITIVE_PATH_SUFFIXES.find(s => p === s.suffix || p.endsWith(`/${s.suffix}`));
-}
-
-function methodRank(m: string): number {
-  const i = METHOD_ORDER.indexOf(m);
-  return i < 0 ? METHOD_ORDER.length : i;
-}
-
-function sortMethods(methods: Iterable<string>): string[] {
-  return [...methods].sort((a, b) => methodRank(a) - methodRank(b) || a.localeCompare(b));
-}
-
-/**
- * Template paths: a payload-looking segment becomes `*`, and so does every literal at a position
- * where more than MAX_PINNED distinct ones follow the same prefix. The last `keep` segments of
- * a path (its sensitive suffix) stay literal. A run of `*` merges into one: a standalone `*`
- * spans any depth.
- */
-function templatePaths(paths: { segs: string[]; keep: number }[]): string[] {
-  const out = paths.map(p => p.segs.map((s, i) => (i < p.segs.length - p.keep ? templateSegment(s) : s)));
-  const free = (i: number, d: number) => d < out[i].length - paths[i].keep && out[i][d] !== '*';
-  const depth = Math.max(0, ...out.map(s => s.length));
-  for (let d = 0; d < depth; d++) {
-    const seen = new Map<string, Set<string>>();
-    out.forEach((s, i) => {
-      if (!free(i, d)) return;
-      const k = s.slice(0, d).join('/');
-      seen.set(k, (seen.get(k) ?? new Set()).add(s[d]));
-    });
-    out.forEach((s, i) => {
-      if (free(i, d) && seen.get(s.slice(0, d).join('/'))!.size > MAX_PINNED) s[d] = '*';
-    });
-  }
-  return out.map(s => s.filter((x, i) => x !== '*' || s[i - 1] !== '*').join('/') || '/');
-}
-
-/**
- * One host's rules: reads become a single `"*"` line and only writes are templated (level B).
- * Sensitive endpoints are templated on their own, so the repos actually written to
- * stay pinned; and when a broader write rule could also match one, a `NONE` rule under that
- * rule's prefix keeps the write closed elsewhere (the method-boundary trap).
- */
-function hostRules(
-  reqs: ObservedRequest[],
-  git: boolean
-): { rules: HttpFilterRule[]; specific: number; coarse: boolean } {
-  const byPath = new Map<string, Set<string>>();
-  const add = (path: string, methods: Iterable<string>) => {
-    const set = byPath.get(path) ?? new Set<string>();
-    for (const m of methods) set.add(m);
-    byPath.set(path, set);
-  };
-  const reads = new Set<string>();
-  const plain: { method: string; segs: string[] }[] = [];
-  const sensitive: { method: string; segs: string[]; keep: number }[] = [];
-  for (const r of reqs) {
-    if (READ_METHODS.includes(r.method)) {
-      reads.add(r.method);
-      continue;
-    }
-    for (const segs of r.shapes) {
-      const s = sensitiveSuffixOf(segs);
-      if (s) sensitive.push({ method: r.method, segs, keep: s.suffix.split('/').length });
-      else plain.push({ method: r.method, segs });
-    }
-  }
-  if (reads.size) add('*', ['GET', 'HEAD', ...reads]);
-  templatePaths(plain.map(r => ({ segs: r.segs, keep: 0 }))).forEach((p, i) => add(p, [plain[i].method]));
-  const pinned = new Set<string>();
-  templatePaths(sensitive).forEach((p, i) => {
-    add(p, [sensitive[i].method]);
-    pinned.add(p);
-  });
-
-  // A rule ending in `*` also matches `<its prefix>/.../<suffix>`. The guard sits under that same
-  // prefix, so it always has more literal characters (the engine's "most specific") than the
-  // rule it narrows, and fewer than a pinned repo.
-  const guards: string[] = [];
-  for (const [p, ms] of [...byPath]) {
-    if (pinned.has(p) || !(p === '*' || p.endsWith('/*')) || !(sensitive.length > 0 || p.startsWith('*'))) continue;
-    for (const s of SENSITIVE_PATH_SUFFIXES) {
-      const guard = `${p}/${s.suffix}`;
-      if (s.methods.some(m => ms.has(m)) && !byPath.has(guard) && !guards.includes(guard)) guards.push(guard);
-    }
-  }
-  for (const g of guards) byPath.set(g, new Set());
-  // reads are allowed anywhere on the host, so a more specific write rule must not refuse them
-  // (the pack endpoints excepted: git only ever POSTs to them)
-  if (reads.size) {
-    for (const [p, ms] of byPath) if (ms.size && !pinned.has(p)) ['GET', 'HEAD', ...reads].forEach(m => ms.add(m));
-  }
-  settleRules(byPath, reqs, git);
-
-  const rest = [...byPath.keys()].filter(p => p !== '*').sort();
-  const rules: HttpFilterRule[] = [
-    ...(byPath.has('*') ? [{ path: '*', methods: sortMethods(byPath.get('*')!) }] : []),
-    ...rest.map(path => ({ path, methods: sortMethods(byPath.get(path)!) }))
-  ];
-  const coarse = rules.some(r => r.path.startsWith('*') && r.methods.some(m => !READ_METHODS.includes(m)));
-  return { rules, specific: [...pinned].filter(p => byPath.has(p)).length, coarse };
-}
-
-function suggest(reqs: ObservedRequest[]): HttpFilterSuggestion {
-  const byHost = new Map<string, ObservedRequest[]>();
-  for (const r of reqs) byHost.set(r.host, [...(byHost.get(r.host) ?? []), r]);
-  const out: HttpFilterSuggestion = { hosts: [], requests: reqs.length, rules: 0, specific: 0, coarse: false };
-  for (const host of [...byHost.keys()].sort()) {
-    const h = hostRules(byHost.get(host)!, GIT_HOSTS.includes(host));
-    out.hosts.push({ host, rules: h.rules });
-    out.rules += h.rules.length;
-    out.specific += h.specific;
-    out.coarse ||= h.coarse;
-  }
-  return out;
-}
-
-/**
- * Allowed intercepted requests (the only ones with a method and path) to well-formed names, never
- * on a connection the upstream IP guard refused, less what the built-in platform list allowed
- * (`filter: platform`). A refused request never goes into a suggestion: that would quietly undo
- * the user's own filter, and its path was chosen by whoever sent it.
- */
-function observedRequests(records: FlowRecord[]): ObservedRequest[] {
+export function allowedRequests(records: FlowRecord[]): AllowedRequest[] {
   const conns = assignConnections(records);
-  const out: ObservedRequest[] = [];
+  const out: AllowedRequest[] = [];
   records.forEach((r, i) => {
     if ((r.ev !== 'https' && r.ev !== 'http') || !r.verdict || conns[i]?.refused) return;
     if (DENIED.has(r.verdict) || r.filter === 'platform') return;
-    if (!r.host || typeof r.method !== 'string' || typeof r.path !== 'string') return;
-    const host = r.host.toLowerCase();
-    const method = r.method.toUpperCase();
-    if (!STANDARD_METHODS.includes(method) || !HOSTNAME.test(host) || needsRedaction(host)) return;
-    const p = pathForms(r.path, GIT_HOSTS.includes(host));
-    if (p) out.push({ host, method, ...p });
+    if (typeof r.host !== 'string' || !r.host || typeof r.method !== 'string' || typeof r.path !== 'string') return;
+    out.push({ host: r.host, method: r.method, path: r.path });
   });
   return out;
 }
@@ -907,11 +588,11 @@ function observedRequests(records: FlowRecord[]): ObservedRequest[] {
 /**
  * The http-filter part of the report: refused requests (host, method and why; never the path,
  * which the sender chose and can carry data whatever its shape), and a suggested `http-filter`
- * built from allowed traffic as
- * observe → split reads from writes → template writes → union methods (design: "Suggested
- * http-filter (report)"). Advisory: never applied.
+ * built by `suggest` from allowed traffic (proxy/suggest.py: observe → split reads from writes →
+ * template writes → union methods; design: "Suggested http-filter (report)"). Advisory: never
+ * applied. Without `suggest`, no suggestion.
  */
-export function summarizeHttpFilter(records: FlowRecord[]): HttpFilterReport {
+export function summarizeHttpFilter(records: FlowRecord[], suggest?: Suggester): HttpFilterReport {
   const byKey = new Map<string, FilterBlock>();
   for (const r of records) {
     if ((r.ev !== 'https' && r.ev !== 'http') || !isFilterBlock(r)) continue;
@@ -927,14 +608,13 @@ export function summarizeHttpFilter(records: FlowRecord[]): HttpFilterReport {
     row.tries++;
     byKey.set(key, row);
   }
-  const platform = compileUserPatterns(PLATFORM_HOSTS);
   return {
     blocks: [...byKey.values()].sort((a, b) => b.tries - a.tries || a.host.localeCompare(b.host)),
-    suggestion: suggest(observedRequests(records).filter(r => !matchesAny(r.host, platform)))
+    suggestion: suggest?.(allowedRequests(records))
   };
 }
 
-/** The suggestion as the `http-filter` input. Path segments are pre-checked (pathSegmentShown), methods standard. */
+/** The suggestion as the `http-filter` input. Names, path segments and methods are checked (proxy/suggest.py, src/suggest.ts). */
 export function httpFilterYaml(s: HttpFilterSuggestion): string {
   const hosts = s.hosts.map(
     h =>

@@ -530,6 +530,66 @@ def is_selftest_probe(host, method, path, dst):
     return ip == SELFTEST_BOGUS_IP and (norm_host(host), (method or "").upper(), path) == SELFTEST_PROBE
 
 
+# policy.json is written by src/policy.ts (PolicyConfig) and read here: the version both sides
+# agree on, and the keys and types it holds. Anything else is refused, so a writer and reader
+# that disagree fail closed (the proxy does not start) instead of enforcing a guess.
+CONFIG_VERSION = 1
+_CONFIG_KEYS = {
+    "version": int,
+    "mode": str,
+    "allow": list,
+    "passthrough": list,
+    "deny": list,
+    "flow_log": str,
+    "container_tls": str,
+    "container_port": int,
+    "http_filter": dict,
+}
+_HTTP_FILTER_KEYS = {
+    "hosts": list,
+    "allow_github_platform": bool,
+    "platform": list,
+    "platform_auto_allowed": int,
+    "platform_optional": int,
+}
+
+
+def _check_keys(obj, keys, where):
+    if not isinstance(obj, dict):
+        raise PolicyError(f"{where}: not an object")
+    missing = sorted(set(keys) - set(obj))
+    unknown = sorted(set(obj) - set(keys))
+    if missing or unknown:
+        raise PolicyError(f"{where}: missing keys {missing}, unknown keys {unknown}")
+    for k, t in keys.items():
+        # bool is an int in Python: never accept one for the other
+        if not isinstance(obj[k], t) or (t is int and isinstance(obj[k], bool)):
+            raise PolicyError(f"{where}: {k!r} must be {t.__name__}")
+
+
+def validate_config(cfg):
+    """Check policy.json against the contract with src/policy.ts, or raise PolicyError."""
+    _check_keys(cfg, _CONFIG_KEYS, "policy.json")
+    if cfg["version"] != CONFIG_VERSION:
+        raise PolicyError(f"policy.json: version {cfg['version']} is not {CONFIG_VERSION}")
+    for k in ("allow", "passthrough", "deny"):
+        if not all(isinstance(p, str) for p in cfg[k]):
+            raise PolicyError(f"policy.json: {k!r} must be a list of strings")
+    if not cfg["flow_log"]:
+        raise PolicyError("policy.json: empty flow_log")
+    if not 0 < cfg["container_port"] < 65536:
+        raise PolicyError("policy.json: container_port out of range")
+    hf = cfg["http_filter"]
+    _check_keys(hf, _HTTP_FILTER_KEYS, "policy.json http_filter")
+    for h in hf["hosts"]:
+        _check_keys(h, {"host": str, "rules": list}, "policy.json http_filter host")
+        for r in h["rules"]:
+            _check_keys(r, {"path": str, "methods": list}, "policy.json http_filter rule")
+    for e in hf["platform"]:
+        _check_keys(e, {"host": str, "path": str, "methods": list, "essential": bool}, "policy.json platform entry")
+    return cfg
+
+
 class Policy:
     """Hostname policy. ``mode`` is 'enforce' or 'analyze'."""
 
@@ -566,6 +626,7 @@ class Policy:
     def load(cls, path):
         with open(path) as f:
             cfg = json.load(f)
+        validate_config(cfg)
         return cls.from_config(cfg), cfg
 
     @property

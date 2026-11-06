@@ -104,5 +104,1352 @@
     {"host": "blob.core.windows.net", "expect": false},
     {"host": "github.com", "expect": false},
     {"host": "pkg-containers.githubusercontent.com", "expect": false}
+  ],
+  "redact_comment": "Redaction of what the report prints from the job's traffic. Labels: src/redact.ts looksEncoded (refused names) and proxy/suggest.py looks_encoded (names in a suggestion) must agree; both run these. Path segments (proxy/suggest.py path_segment_shown, checked by proxy/suggest_test.py) are stricter: a hidden one becomes * in a suggestion. standard_methods: the only methods a report or suggestion names.",
+  "redact": {
+    "encoded_labels": [
+      "aghvsbg8gd29ybgq",
+      "c2vjcmv0lxrva2vulteymzq",
+      "0dd2149bb6f23853",
+      "f4crg4pntvrqdozj",
+      "s8b3a61a77489531d88e8",
+      "ghp1234567890abcdefabcdefabcdef12345678",
+      "ahvsbg8tc2vjcmv0lxrva2vu",
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "a1b2c3",
+      "482913",
+      "k7xq2zbm",
+      "Bd5f2A"
+    ],
+    "plain_labels": [
+      "www",
+      "api",
+      "pipelines1",
+      "registry-1",
+      "hosted-compute-watchdog-prod-iad-01",
+      "productionresultssa31",
+      "pipelinesghubeus10",
+      "runnerghubwus31",
+      "results-receiver",
+      "run-actions-3-azure-eastus",
+      "github-registry-files",
+      "microsoftonline",
+      "s3-us-west-2",
+      "prod-eastus2-01",
+      "cloudfront",
+      "dead",
+      "release-assets",
+      "jsdelivr",
+      "ec2",
+      "com",
+      "a1b2c"
+    ],
+    "shown_segments": [
+      "myorg",
+      "safer-runner-action.git",
+      "git-upload-pack",
+      "issues",
+      "12",
+      "results.services.receiver.v1.ResultsService",
+      "requests",
+      "~user",
+      "a+b",
+      "q@r"
+    ],
+    "hidden_segments": [
+      "c2VjcmV0LXRva2VuLTEyMzQ1Njc4",
+      "notes.0dd2149bb6f23853.txt",
+      "0dd2149bb6f23853",
+      "a1f3",
+      "cafe",
+      "dead-beef",
+      "v123",
+      "x9y8z7",
+      "a%20b",
+      "a;b",
+      "a\"b",
+      "c:d",
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "..",
+      ".",
+      ""
+    ],
+    "standard_methods": [
+      "GET",
+      "HEAD",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+      "TRACE",
+      "CONNECT"
+    ]
+  },
+  "suggest_comment": "Suggested http-filter (proxy/suggest.py): allowed requests -> expected suggestion. proxy/suggest_test.py checks the output and the round trip (suggestion -> policy.json -> policy_core allows every request in replay, or in requests, and refuses every request in refuse); src/report.test.ts renders each expected suggestion as YAML, reads it back as the action reads the input, and checks the policy it builds with the same engine.",
+  "suggest": [
+    {
+      "name": "a read-only host collapses to one line",
+      "requests": [
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-0"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-1"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-2"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-3"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-4"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-5"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-6"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-7"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-8"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-9"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-10"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-11"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-12"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-13"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-14"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-15"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-16"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-17"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-18"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-19"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-20"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-21"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-22"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-23"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-24"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-25"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-26"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-27"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-28"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/pkg-29"
+        },
+        {
+          "host": "registry.npmjs.org",
+          "method": "HEAD",
+          "path": "/lodash"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "registry.npmjs.org",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "GET",
+                  "HEAD"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 31,
+        "rules": 1,
+        "specific": 0,
+        "coarse": false
+      }
+    },
+    {
+      "name": "reads split from writes; write paths templated, ids never echoed",
+      "requests": [
+        {
+          "host": "api.github.com",
+          "method": "GET",
+          "path": "/repos/o/r"
+        },
+        {
+          "host": "api.github.com",
+          "method": "OPTIONS",
+          "path": "/repos/o/r"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/123/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/456/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "PATCH",
+          "path": "/repos/o/r/issues/123/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "PUT",
+          "path": "/repos/o/r/contents/550e8400-e29b-41d4-a716-446655440000"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "api.github.com",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "GET",
+                  "HEAD",
+                  "OPTIONS"
+                ]
+              },
+              {
+                "path": "repos/o/r/contents/*",
+                "methods": [
+                  "GET",
+                  "HEAD",
+                  "OPTIONS",
+                  "PUT"
+                ]
+              },
+              {
+                "path": "repos/o/r/issues/*/comments",
+                "methods": [
+                  "GET",
+                  "HEAD",
+                  "OPTIONS",
+                  "POST",
+                  "PATCH"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 6,
+        "rules": 3,
+        "specific": 0,
+        "coarse": false
+      }
+    },
+    {
+      "name": "a few literals at one position stay pinned",
+      "requests": [
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/a"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/b"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "uploads.example.com",
+            "rules": [
+              {
+                "path": "files/a",
+                "methods": [
+                  "PUT"
+                ]
+              },
+              {
+                "path": "files/b",
+                "methods": [
+                  "PUT"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 2,
+        "rules": 2,
+        "specific": 0,
+        "coarse": false
+      }
+    },
+    {
+      "name": "more than MAX_PINNED literals at one position become *",
+      "requests": [
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/a"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/b"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/c"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/d"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "uploads.example.com",
+            "rules": [
+              {
+                "path": "files/*",
+                "methods": [
+                  "PUT"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 4,
+        "rules": 1,
+        "specific": 0,
+        "coarse": false
+      }
+    },
+    {
+      "name": "git push and fetch stay pinned to the repos used (one spelling per repo on github.com)",
+      "requests": [
+        {
+          "host": "github.com",
+          "method": "GET",
+          "path": "/myorg/app.git/info/refs"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/app.git/git-upload-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/app.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/other/lib.git/git-upload-pack"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "github.com",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "GET",
+                  "HEAD"
+                ]
+              },
+              {
+                "path": "myorg/app/git-receive-pack",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "myorg/app/git-upload-pack",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "other/lib/git-upload-pack",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 4,
+        "rules": 4,
+        "specific": 3,
+        "coarse": false
+      }
+    },
+    {
+      "name": "many pushed-to repos are templated, and the suggestion says it is coarse",
+      "requests": [
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/a/a-repo.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/b/b-repo.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/c/c-repo.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/d/d-repo.git/git-receive-pack"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "github.com",
+            "rules": [
+              {
+                "path": "*/git-receive-pack",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 4,
+        "rules": 1,
+        "specific": 1,
+        "coarse": true
+      }
+    },
+    {
+      "name": "method-boundary trap: a broad POST rule never re-opens pushes",
+      "requests": [
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/app.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/0dd2149bb6f23853"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "github.com",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "*/git-receive-pack",
+                "methods": []
+              },
+              {
+                "path": "*/git-upload-pack",
+                "methods": []
+              },
+              {
+                "path": "myorg/app/git-receive-pack",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 2,
+        "rules": 4,
+        "specific": 1,
+        "coarse": true
+      }
+    },
+    {
+      "name": "the NONE guard sits under the broad rule, so it outranks it",
+      "requests": [
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/app.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/a"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/b"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/c"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/d"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "github.com",
+            "rules": [
+              {
+                "path": "myorg/*",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "myorg/*/git-receive-pack",
+                "methods": []
+              },
+              {
+                "path": "myorg/*/git-upload-pack",
+                "methods": []
+              },
+              {
+                "path": "myorg/app/git-receive-pack",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 5,
+        "rules": 4,
+        "specific": 1,
+        "coarse": false
+      }
+    },
+    {
+      "name": "no NONE guard where nothing broad could match a pack path",
+      "requests": [
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/app.git/git-receive-pack"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "api.github.com",
+            "rules": [
+              {
+                "path": "repos/o/r/issues",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "github.com",
+            "rules": [
+              {
+                "path": "myorg/app/git-receive-pack",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 2,
+        "rules": 2,
+        "specific": 1,
+        "coarse": false
+      }
+    },
+    {
+      "name": "encoded-looking names and GitHub platform hosts are left out",
+      "requests": [
+        {
+          "host": "registry.npmjs.org",
+          "method": "GET",
+          "path": "/lodash"
+        },
+        {
+          "host": "results-receiver.actions.githubusercontent.com",
+          "method": "POST",
+          "path": "/twirp/x.Svc/Method"
+        },
+        {
+          "host": "productionresultssa1.blob.core.windows.net",
+          "method": "PUT",
+          "path": "/actions-results/abc"
+        },
+        {
+          "host": "0dd2149bb6f23853abcdef.example.com",
+          "method": "POST",
+          "path": "/x"
+        },
+        {
+          "host": "Bad_Host",
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "host": "Registry.NPMJS.org",
+          "method": "get",
+          "path": "/x"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "registry.npmjs.org",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "GET",
+                  "HEAD"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 2,
+        "rules": 1,
+        "specific": 0,
+        "coarse": false
+      }
+    },
+    {
+      "name": "a segment that could break the YAML or the engine is never pasted",
+      "requests": [
+        {
+          "host": "api.example.com",
+          "method": "POST",
+          "path": "/a\"b/x"
+        },
+        {
+          "host": "api.example.com",
+          "method": "POST",
+          "path": "/c:d/y"
+        },
+        {
+          "host": "api.example.com",
+          "method": "POST",
+          "path": "/../z"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "api.example.com",
+            "rules": [
+              {
+                "path": "*/x",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "*/y",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 2,
+        "rules": 2,
+        "specific": 0,
+        "coarse": true
+      }
+    },
+    {
+      "name": "only standard methods go into a rule",
+      "requests": [
+        {
+          "host": "api.example.com",
+          "method": "A1B2C3D4E5F6",
+          "path": "/y"
+        },
+        {
+          "host": "api.example.com",
+          "method": "PROPFIND",
+          "path": "/z"
+        }
+      ],
+      "expect": {
+        "hosts": [],
+        "requests": 0,
+        "rules": 0,
+        "specific": 0,
+        "coarse": false
+      }
+    },
+    {
+      "name": "path segments that look like data become *",
+      "requests": [
+        {
+          "host": "api.example.com",
+          "method": "PUT",
+          "path": "/notes.0dd2149bb6f23853.txt/x"
+        },
+        {
+          "host": "api.example.com",
+          "method": "PUT",
+          "path": "/cafe/y"
+        },
+        {
+          "host": "api.example.com",
+          "method": "PUT",
+          "path": "/v123/z"
+        },
+        {
+          "host": "api.example.com",
+          "method": "PUT",
+          "path": "/c2VjcmV0LXRva2VuLTEyMzQ1Njc4/w"
+        },
+        {
+          "host": "api.example.com",
+          "method": "PUT",
+          "path": "/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/v"
+        },
+        {
+          "host": "api.example.com",
+          "method": "PUT",
+          "path": "/issues/12/u"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "api.example.com",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "PUT"
+                ]
+              },
+              {
+                "path": "issues/*/u",
+                "methods": [
+                  "PUT"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 6,
+        "rules": 2,
+        "specific": 0,
+        "coarse": true
+      }
+    },
+    {
+      "name": "round trip: trailing slash, ;params, //, escapes, git spellings, paths cut short in the log",
+      "requests": [
+        {
+          "host": "upload.pypi.org",
+          "method": "POST",
+          "path": "/legacy/"
+        },
+        {
+          "host": "pypi.org",
+          "method": "GET",
+          "path": "/simple/requests/"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/a%2Fb/c"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/%41pp/c"
+        },
+        {
+          "host": "paths.example.com",
+          "method": "POST",
+          "path": "/a//b"
+        },
+        {
+          "host": "forms.example.com",
+          "method": "POST",
+          "path": "/report;jsessionid=x"
+        },
+        {
+          "host": "drafts.example.com",
+          "method": "PUT",
+          "path": "/draft;v=2/"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/MyOrg//Tools.git/git-upload-pack"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "POST",
+          "path": "/"
+        },
+        {
+          "host": "github.com",
+          "method": "GET",
+          "path": "/MyOrg/App.git/info/refs"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/MyOrg/App.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/app/git-upload-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/App/git-upload-pack"
+        },
+        {
+          "host": "api.github.com",
+          "method": "GET",
+          "path": "/repos/o/r/issues/1/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/1/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/2/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/3/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/4/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/5/comments"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/a/repo/git-receive-pack"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/b/repo/git-receive-pack"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/c/repo/git-receive-pack"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/d/repo/git-receive-pack"
+        },
+        {
+          "host": "blobs.example.com",
+          "method": "PUT",
+          "path": "/v2/acme/app/blobs/uploads/session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-sessi"
+        },
+        {
+          "host": "logs.example.com",
+          "method": "PUT",
+          "path": "/runs/chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chun"
+        }
+      ],
+      "replay": [
+        {
+          "host": "upload.pypi.org",
+          "method": "POST",
+          "path": "/legacy/"
+        },
+        {
+          "host": "pypi.org",
+          "method": "GET",
+          "path": "/simple/requests/"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/a%2Fb/c"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "PUT",
+          "path": "/files/%41pp/c"
+        },
+        {
+          "host": "paths.example.com",
+          "method": "POST",
+          "path": "/a/b"
+        },
+        {
+          "host": "forms.example.com",
+          "method": "POST",
+          "path": "/report;jsessionid=x"
+        },
+        {
+          "host": "drafts.example.com",
+          "method": "PUT",
+          "path": "/draft;v=2/"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/MyOrg/Tools.git/git-upload-pack"
+        },
+        {
+          "host": "uploads.example.com",
+          "method": "POST",
+          "path": "/"
+        },
+        {
+          "host": "github.com",
+          "method": "GET",
+          "path": "/MyOrg/App.git/info/refs"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/MyOrg/App.git/git-receive-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/app/git-upload-pack"
+        },
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/myorg/App/git-upload-pack"
+        },
+        {
+          "host": "api.github.com",
+          "method": "GET",
+          "path": "/repos/o/r/issues/1/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/1/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/2/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/3/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/4/comments"
+        },
+        {
+          "host": "api.github.com",
+          "method": "POST",
+          "path": "/repos/o/r/issues/5/comments"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/a/repo/git-receive-pack"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/b/repo/git-receive-pack"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/c/repo/git-receive-pack"
+        },
+        {
+          "host": "codeberg.org",
+          "method": "POST",
+          "path": "/d/repo/git-receive-pack"
+        },
+        {
+          "host": "blobs.example.com",
+          "method": "PUT",
+          "path": "/v2/acme/app/blobs/uploads/session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-session-/part/2"
+        },
+        {
+          "host": "logs.example.com",
+          "method": "PUT",
+          "path": "/runs/chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-chunk-%41/end"
+        }
+      ],
+      "refuse": [
+        {
+          "host": "github.com",
+          "method": "POST",
+          "path": "/other/repo.git/git-receive-pack"
+        },
+        {
+          "host": "upload.pypi.org",
+          "method": "PUT",
+          "path": "/legacy/"
+        },
+        {
+          "host": "pypi.org",
+          "method": "POST",
+          "path": "/simple/requests/"
+        },
+        {
+          "host": "paths.example.com",
+          "method": "POST",
+          "path": "/a//b"
+        }
+      ],
+      "expect": {
+        "hosts": [
+          {
+            "host": "api.github.com",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "GET",
+                  "HEAD"
+                ]
+              },
+              {
+                "path": "repos/o/r/issues/*/comments",
+                "methods": [
+                  "GET",
+                  "HEAD",
+                  "POST"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "blobs.example.com",
+            "rules": [
+              {
+                "path": "v2/acme/app/blobs/uploads/*",
+                "methods": [
+                  "PUT"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "codeberg.org",
+            "rules": [
+              {
+                "path": "*/repo/git-receive-pack",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "drafts.example.com",
+            "rules": [
+              {
+                "path": "draft",
+                "methods": [
+                  "PUT"
+                ]
+              },
+              {
+                "path": "draft*",
+                "methods": [
+                  "PUT"
+                ]
+              },
+              {
+                "path": "draft*/*",
+                "methods": [
+                  "PUT"
+                ]
+              },
+              {
+                "path": "draft/*",
+                "methods": [
+                  "PUT"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "forms.example.com",
+            "rules": [
+              {
+                "path": "report",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "report*",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "github.com",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "GET",
+                  "HEAD"
+                ]
+              },
+              {
+                "path": "myorg/app/git-receive-pack",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "myorg/app/git-upload-pack",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "myorg/tools/git-upload-pack",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "logs.example.com",
+            "rules": [
+              {
+                "path": "runs/*",
+                "methods": [
+                  "PUT"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "paths.example.com",
+            "rules": [
+              {
+                "path": "a/b",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "pypi.org",
+            "rules": [
+              {
+                "path": "*",
+                "methods": [
+                  "GET",
+                  "HEAD"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "upload.pypi.org",
+            "rules": [
+              {
+                "path": "legacy",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "legacy/*",
+                "methods": [
+                  "POST"
+                ]
+              }
+            ]
+          },
+          {
+            "host": "uploads.example.com",
+            "rules": [
+              {
+                "path": "/",
+                "methods": [
+                  "POST"
+                ]
+              },
+              {
+                "path": "files/App/c",
+                "methods": [
+                  "PUT"
+                ]
+              },
+              {
+                "path": "files/a/b/c",
+                "methods": [
+                  "PUT"
+                ]
+              }
+            ]
+          }
+        ],
+        "requests": 25,
+        "rules": 22,
+        "specific": 4,
+        "coarse": true
+      }
+    }
   ]
 }
