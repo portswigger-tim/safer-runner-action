@@ -2417,9 +2417,12 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
  * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
  * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
  * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
- * is on) only on a host the job filters. Essential entries (step logs and status, job lease
- * and completion, OIDC) always apply; the rest (artifact and cache services and storage)
- * yield to any rule of the job's that matches the request.
+ * is on) only on a host the job filters. Essential entries always apply: step/job log
+ * metadata RPCs, the live-log stream, job lease renewal and completion, and OIDC. The rest
+ * yield to any matching rule of the job's: step-status updates, the artifact and cache
+ * services, and all blob storage (artifacts, cache, and the job's stored logs + step summary).
+ * Blocking that optional traffic loses those features but does not fail or hang the job
+ * (verified on real runners).
  *
  * EXPLICIT (host, path, methods) only, reads included - never a blanket "*": GET, HEAD, which
  * would trust far more than the platform uses. Workflow-chosen writes (e.g. SARIF upload) are
@@ -2427,7 +2430,7 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
  * flow log); a missing entry only breaks that job's platform step, never enforcement.
  */
 exports.GITHUB_PLATFORM_ENDPOINTS = [
-    // results service RPCs the runner itself makes: step + job log metadata, step status (WorkflowStepsUpdate)
+    // results service RPCs the runner itself makes: step + job log metadata (Receiver service)
     {
         host: 'results-receiver.actions.githubusercontent.com',
         path: '/twirp/results.services.receiver.Receiver/*',
@@ -2462,7 +2465,8 @@ exports.GITHUB_PLATFORM_ENDPOINTS = [
         methods: ['POST'],
         essential: true
     },
-    // other results service RPCs: artifact and cache services (actions/upload-artifact, actions/cache)
+    // other results service RPCs (optional - a matching user rule wins): artifact and cache
+    // services (actions/upload-artifact, actions/cache) AND step-status (WorkflowStepUpdateService)
     { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'], essential: false },
     // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
     // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
