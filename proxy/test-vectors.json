@@ -60,7 +60,7 @@
     {"pattern": "@scope/*", "path": "/@scope%2fpkg", "expect": true},
     {"pattern": "v2/*/blobs/*", "path": "/v2/org/img/blobs/sha256:abc", "expect": true}
   ],
-  "git_comment": "Paths on a git host (GIT_HOSTS: github.com): case-insensitive, and each segment matches with or without a .git suffix, so every spelling of a repository gets the same verdict. git_pattern_keys: two patterns with the same key are duplicates on a git host.",
+  "git_comment": "Paths on a git host (GIT_HOSTS: github.com): case-insensitive, and one .git suffix is dropped from every segment of both the path and the pattern, so every spelling of a repository gets the same verdict (and *.git is a one-segment *). git_pattern_keys: two patterns with the same key are duplicates on a git host.",
   "git_hosts": ["github.com"],
   "git_path_match": [
     {"pattern": "org/repo/git-receive-pack", "path": "/org/repo/git-receive-pack", "expect": true},
@@ -77,7 +77,10 @@
     {"pattern": "org/repo/git-receive-pack", "path": "/org/repo.gitx/git-receive-pack", "expect": false},
     {"pattern": "org/repo/git-receive-pack", "path": "/org/repo.git.git/git-receive-pack", "expect": false},
     {"pattern": "org/repo/git-receive-pack", "path": "/other/repo.git/git-receive-pack", "expect": false},
-    {"pattern": "*/git-receive-pack", "path": "/a/b.git/GIT-RECEIVE-PACK", "expect": true}
+    {"pattern": "*/git-receive-pack", "path": "/a/b.git/GIT-RECEIVE-PACK", "expect": true},
+    {"pattern": "org/*.git/info/refs", "path": "/org/repo.git/info/refs", "expect": true},
+    {"pattern": "org/repo.g*/git-receive-pack", "path": "/org/repo.git/git-receive-pack", "expect": false},
+    {"pattern": "org/repo/*", "path": "/org/repo.git/", "expect": true}
   ],
   "git_pattern_keys": [
     {"pattern": "org/repo/git-receive-pack", "key": "org/repo/git-receive-pack"},
@@ -90,6 +93,8 @@
   ],
   "invalid_path_patterns": ["a//b", "a/", "a/../b", "./a", "a/./b", "**", "a/**/b", "a?b", "a#b", "a%2fb", "a\\b", "a b", "caf\u00e9"],
   "valid_path_patterns": ["*", "/", "", "/twirp/*", "*/git-receive-pack", "portswigger-tim/*/git-receive-pack", "pre*", "v2/*/blobs/*", "a:b", "@scope/*"],
+  "selftest_comment": "The action's own setup probe (src/selftest.ts repointSelfTest; proxy/policy_core.py is_selftest_probe), exempt from http-filter.",
+  "selftest_probe": {"host": "github.com", "method": "GET", "path": "/robots.txt", "dst_ip": "192.0.2.1"},
   "invalid_patterns": ["", "com", "*", "*.com", "example.*", "1.2.3.4", "exa mple.com", "*.foo-*.example.com", "-bad.example.com"],
   "front_doors": ["*.blob.core.windows.net", "*.dfs.core.windows.net", "*.file.core.windows.net", "*.queue.core.windows.net", "*.table.core.windows.net", "*.web.core.windows.net"],
   "front_door_hosts": [

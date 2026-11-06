@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { readInputs } from './inputs';
+import { parseMode, readInputs } from './inputs';
 import { runSetup } from './egress';
 
 /**
@@ -7,11 +7,16 @@ import { runSetup } from './egress';
  * later actions' own pre-hooks - can run (review H2).
  */
 async function run(): Promise<void> {
-  let mode = 'analyze';
+  let mode: string;
   try {
-    const inputs = readInputs();
-    mode = inputs.mode;
-    await runSetup(inputs);
+    // resolved first and on its own, so a bad value in any other input still fails closed in enforce
+    mode = parseMode(core.getInput('mode'));
+  } catch (error) {
+    core.setFailed(`safer-runner setup failed: ${error}`);
+    return;
+  }
+  try {
+    await runSetup(readInputs());
   } catch (error) {
     if (mode === 'enforce') {
       // Fail closed: never let an enforce-mode job run without the controls.

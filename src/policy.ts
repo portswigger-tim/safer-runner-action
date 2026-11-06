@@ -81,11 +81,14 @@ export interface HttpFilterConfig {
   allow_github_platform: boolean;
   /**
    * Built-in platform endpoints in force: the GITHUB_PLATFORM_ENDPOINTS entries on a filtered
-   * host (path normalised), allowed whatever the host's rules say. [] when the toggle is off.
+   * host (path normalised). Essential ones are allowed whatever the host's rules say, the rest
+   * only where none of the host's rules matches the request. [] when the toggle is off.
    */
   platform: PlatformEndpoint[];
-  /** platform.length, for the report ("N platform endpoints auto-allowed") */
+  /** essential platform entries, for the report ("N platform endpoints auto-allowed") */
   platform_auto_allowed: number;
+  /** the other platform entries: allowed only where none of the job's rules matches */
+  platform_optional: number;
 }
 
 export interface PolicyConfig {
@@ -200,8 +203,10 @@ export function validatePathPattern(pattern: string): string {
 
 /**
  * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
- * case-insensitive and .git is optional, so the addon matches paths there case-insensitively
- * and with or without ".git" on each segment. Mirrors GIT_HOSTS in proxy/policy_core.py.
+ * case-insensitive and .git is optional, so the addon lower-cases paths and patterns there and
+ * drops one ".git" from every segment of both before matching (`*.git` is then a one-segment
+ * `*`, and the suffix never adds to a rule's specificity). Mirrors GIT_HOSTS in
+ * proxy/policy_core.py.
  */
 export const GIT_HOSTS = ['github.com'];
 
@@ -306,14 +311,17 @@ export function buildHttpFilter(
     ? GITHUB_PLATFORM_ENDPOINTS.filter(e => hosts.some(h => patternsOverlap(h.host, e.host))).map(e => ({
         host: validatePattern(e.host),
         path: validatePathPattern(e.path),
-        methods: [...e.methods]
+        methods: [...e.methods],
+        essential: e.essential
       }))
     : [];
+  const essential = platform.filter(e => e.essential).length;
   return {
     hosts,
     allow_github_platform: allowGithubPlatform,
     platform,
-    platform_auto_allowed: platform.length
+    platform_auto_allowed: essential,
+    platform_optional: platform.length - essential
   };
 }
 

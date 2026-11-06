@@ -39,13 +39,21 @@ export interface PlatformEndpoint {
   host: string;
   path: string;
   methods: string[];
+  /**
+   * true: the job's own control plane (it cannot run without it) - allowed on a filtered host
+   * whatever the job's rules say. false: allowed only where none of the job's rules for that
+   * host matches the request, so the job's own rules (a NONE included) always win.
+   */
+  essential: boolean;
 }
 
 /**
  * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
  * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
  * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
- * is on) only on a host the job filters, as allows that win over the job's own rules.
+ * is on) only on a host the job filters. Essential entries (step logs and status, job lease
+ * and completion, OIDC) always apply; the rest (artifact and cache services and storage)
+ * yield to any rule of the job's that matches the request.
  *
  * EXPLICIT (host, path, methods) only, reads included - never a blanket "*": GET, HEAD, which
  * would trust far more than the platform uses. Workflow-chosen writes (e.g. SARIF upload) are
@@ -53,20 +61,57 @@ export interface PlatformEndpoint {
  * flow log); a missing entry only breaks that job's platform step, never enforcement.
  */
 export const GITHUB_PLATFORM_ENDPOINTS: readonly PlatformEndpoint[] = [
-  // results service RPCs: step logs, step status (WorkflowStepsUpdate), artifact + cache
-  { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'] },
+  // results service RPCs the runner itself makes: step + job log metadata, step status (WorkflowStepsUpdate)
+  {
+    host: 'results-receiver.actions.githubusercontent.com',
+    path: '/twirp/results.services.receiver.Receiver/*',
+    methods: ['POST'],
+    essential: true
+  },
   // runner live-log stream (websocket upgrade)
-  { host: 'results-receiver.actions.githubusercontent.com', path: '/_ws/ingest.sock', methods: ['GET'] },
+  {
+    host: 'results-receiver.actions.githubusercontent.com',
+    path: '/_ws/ingest.sock',
+    methods: ['GET'],
+    essential: true
+  },
+  // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
+  {
+    host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+    path: '*/idtoken/*',
+    methods: ['GET'],
+    essential: true
+  },
+  // job lease renewal (/<n>/renewjob) - refusing it ends the job
+  {
+    host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+    path: '*/renewjob',
+    methods: ['POST'],
+    essential: true
+  },
+  // job completion, sent through the proxy after the last post step - refusing it hangs the job
+  {
+    host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+    path: '*/completejob',
+    methods: ['POST'],
+    essential: true
+  },
+  // other results service RPCs: artifact and cache services (actions/upload-artifact, actions/cache)
+  { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'], essential: false },
   // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
   // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
-  { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-results/*', methods: ['GET', 'HEAD', 'PUT'] },
-  { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-cache/*', methods: ['GET', 'HEAD', 'PUT'] },
-  // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
-  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
-  // job lease renewal (/<n>/renewjob) - refusing it ends the job
-  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
-  // job completion, sent through the proxy after the last post step
-  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
+  {
+    host: 'productionresultssa*.blob.core.windows.net',
+    path: '/actions-results/*',
+    methods: ['GET', 'HEAD', 'PUT'],
+    essential: false
+  },
+  {
+    host: 'productionresultssa*.blob.core.windows.net',
+    path: '/actions-cache/*',
+    methods: ['GET', 'HEAD', 'PUT'],
+    essential: false
+  }
 ];
 
 /**

@@ -38,15 +38,15 @@ class Vectors(unittest.TestCase):
     def test_path_vectors(self):
         for v in self.vectors["path_match"]:
             with self.subTest(**v):
-                forms = pc.canonical_path(v["path"])
+                forms = pc.path_forms(v["path"])
                 self.assertIsNotNone(forms)
-                self.assertEqual(bool(pc.compile_path_pattern(v["pattern"]).match(forms[0])), v["expect"])
+                self.assertEqual(pc.compile_path_pattern(v["pattern"]).match(forms[0]), v["expect"])
 
     def test_git_path_vectors(self):
         for v in self.vectors["git_path_match"]:
             with self.subTest(**v):
-                path = pc.canonical_path(v["path"])[0].lower()
-                self.assertEqual(bool(pc.compile_path_pattern(v["pattern"], git=True).match(path)), v["expect"])
+                path = pc.path_forms(v["path"], git=True)[0]
+                self.assertEqual(pc.compile_path_pattern(v["pattern"], git=True).match(path), v["expect"])
 
     def test_git_pattern_keys(self):
         self.assertEqual(list(pc.GIT_HOSTS), self.vectors["git_hosts"])
@@ -247,10 +247,18 @@ GH_FILTER = {
         ]},
     ],
     "platform": [
-        {"host": "results-receiver.actions.githubusercontent.com", "path": "twirp/*", "methods": ["POST"]},
-        {"host": "results-receiver.actions.githubusercontent.com", "path": "_ws/ingest.sock", "methods": ["GET"]},
-        {"host": "run-actions-*-azure-*.actions.githubusercontent.com", "path": "*/idtoken/*", "methods": ["GET"]},
-        {"host": "run-actions-*-azure-*.actions.githubusercontent.com", "path": "*/renewjob", "methods": ["POST"]},
+        {"host": "results-receiver.actions.githubusercontent.com", "path": "twirp/results.services.receiver.Receiver/*",
+         "methods": ["POST"], "essential": True},
+        {"host": "results-receiver.actions.githubusercontent.com", "path": "_ws/ingest.sock", "methods": ["GET"],
+         "essential": True},
+        {"host": "run-actions-*-azure-*.actions.githubusercontent.com", "path": "*/idtoken/*", "methods": ["GET"],
+         "essential": True},
+        {"host": "run-actions-*-azure-*.actions.githubusercontent.com", "path": "*/renewjob", "methods": ["POST"],
+         "essential": True},
+        {"host": "results-receiver.actions.githubusercontent.com", "path": "twirp/*", "methods": ["POST"],
+         "essential": False},
+        {"host": "productionresultssa*.blob.core.windows.net", "path": "actions-results/*",
+         "methods": ["GET", "HEAD", "PUT"], "essential": False},
     ],
 }
 
@@ -336,6 +344,86 @@ class HttpFilter(unittest.TestCase):
                 self.check("github.com", "POST", path, "block", pc.FILTER_PATH, p=p)
         self.check("github.com", "POST", "/org/other.git/git-upload-pack", "allow", rule="*", p=p)
 
+    def test_optional_git_suffix_adds_no_specificity(self):
+        # an exact repo rule beats any wildcard rule that also matches it, whatever the spelling
+        for wild in ("org/*.git/git-receive-pack", "org/*/git-receive-pack", "org/*.GIT/git-receive-pack",
+                     "*/git-receive-pack", "org/a*/git-receive-pack", "org/app.g*/git-receive-pack",
+                     "org/app.git*/git-receive-pack", "org/*p.git/git-receive-pack"):
+            for repo in ("app", "api", "ci", "lib"):
+                cfg = {"hosts": [{"host": "github.com", "rules": [
+                    {"path": "*", "methods": ["GET"]},
+                    {"path": wild, "methods": ["POST"]},
+                    {"path": f"org/{repo}/git-receive-pack", "methods": []},
+                ]}]}
+                p = filtered(cfg=cfg)
+                for path in (f"/org/{repo}/git-receive-pack", f"/org/{repo}.git/git-receive-pack",
+                             f"/ORG/{repo.upper()}.Git/git-receive-pack", f"/org/{repo}.git/git-receive-pack/"):
+                    with self.subTest(wild=wild, path=path):
+                        reason = None if path.endswith("/") else pc.FILTER_PATH  # "*": GET may refuse it first
+                        self.check("github.com", "POST", path, "block", reason, p=p)
+        # ... and an exact allow beats a wildcard deny the same way
+        cfg = {"hosts": [{"host": "github.com", "rules": [
+            {"path": "org/*.git/git-receive-pack", "methods": []},
+            {"path": "org/ci/git-receive-pack", "methods": ["POST"]},
+        ]}]}
+        self.check("github.com", "POST", "/org/ci.git/git-receive-pack", "allow", p=filtered(cfg=cfg))
+        self.check("github.com", "POST", "/org/cd.git/git-receive-pack", "block", p=filtered(cfg=cfg))
+
+    def test_one_segment_star_beats_spanning_star(self):
+        cfg = {"hosts": [{"host": "github.com", "rules": [
+            {"path": "org/*/info/refs", "methods": []},
+            {"path": "org/*.git/info/refs", "methods": ["GET"]},
+        ]}]}
+        p = filtered(cfg=cfg)
+        self.check("github.com", "GET", "/org/app.git/info/refs", "allow", rule="org/*.git/info/refs", p=p)
+        self.check("github.com", "GET", "/org/app/info/refs", "allow", p=p)
+        self.check("github.com", "GET", "/org/a/b/info/refs", "block", pc.FILTER_PATH, "org/*/info/refs", p=p)
+
+    def test_every_path_form_must_be_allowed(self):
+        cfg = {"hosts": [{"host": "github.com", "rules": [
+            {"path": "*", "methods": ["*"]},
+            {"path": "org/secret/*", "methods": []},
+        ]}, {"host": "example.org", "rules": [
+            {"path": "public/*", "methods": ["GET"]},
+        ]}]}
+        p = filtered(cfg=cfg)
+        for path in ("/org//secret.git/git-receive-pack", "//org/secret/git-receive-pack",
+                     "/org///secret/info/refs", "/org/;x/secret/git-receive-pack", "/org;x/secret.git/x",
+                     "/org/secret.git;x/git-receive-pack", "/org/secret;.git/x"):
+            with self.subTest(path=path):
+                self.check("github.com", "POST", path, "block", pc.FILTER_PATH, p=p)
+        for path in ("/org/x/..git/secret/git-receive-pack", "/org/x/...git/x"):  # dot segments once .git is dropped
+            with self.subTest(path=path):
+                self.check("github.com", "POST", path, "block", pc.FILTER_PATH, rule=None, p=p)
+        for path in ("/public/..;/private/secret", "/public/.;/x", "/public/..;x/private", "/public/x/..;/..;/y",
+                     "/public/%2e%2e;/private"):
+            with self.subTest(path=path):
+                self.check("example.org", "GET", path, "block", pc.FILTER_PATH, rule=None, p=p)
+        self.check("example.org", "GET", "/public/a;b/c", "allow", p=p)
+        self.check("example.org", "GET", "/public//a/", "allow", p=p)
+
+    def test_ambiguous_escapes_refused(self):
+        p = filtered()
+        for path in ("/a/b%", "/a/b%2", "/a/b%zz", "/a/%ff", "/a/%c0%ae%c0%ae/b", "/a/%2541", "/a#/../b",
+                     "/a/b%252f", "/" + "a/" * 300):
+            with self.subTest(path=path[:40]):
+                self.check("api.github.com", "GET", path, "block", pc.FILTER_PATH, rule=None, p=p)
+        self.check("api.github.com", "GET", "/a/100%25/caf%C3%A9", "allow", p=p)
+
+    def test_matching_cost_is_bounded(self):
+        import time
+        cfg = {"hosts": [{"host": "example.org", "rules": [
+            {"path": "*/*/*/*/*/*/*/*/end", "methods": ["GET"]},
+            {"path": "a*a*a*a*a*a*a*a*a*a*a*a*b/*", "methods": ["GET"]},
+        ]}]}
+        p = filtered(cfg=cfg)
+        start = time.monotonic()
+        self.check("example.org", "GET", "/" + "x/" * 100 + "nope", "block", pc.FILTER_PATH, p=p)
+        self.check("example.org", "GET", "/" + "x/" * 200 + "end", "allow", p=p)
+        self.check("example.org", "GET", "/" + "a" * 5000 + "/x", "block", pc.FILTER_PATH, p=p)
+        self.check("example.org", "GET", "/" + "/" * 250 + "x", "block", pc.FILTER_PATH, p=p)
+        self.assertLess(time.monotonic() - start, 0.5)
+
     def test_git_folding_only_on_git_hosts(self):
         cfg = {"hosts": [{"host": "example.org", "rules": [
             {"path": "*", "methods": ["*"]},
@@ -389,11 +477,14 @@ class HttpFilter(unittest.TestCase):
 
     def test_platform_endpoints(self):
         rr = "results-receiver.actions.githubusercontent.com"
-        self.check(rr, "POST", "/twirp/results.services.receiver.Receiver/CreateArtifact", "allow",
+        self.check(rr, "POST", "/twirp/results.services.receiver.Receiver/WorkflowStepsUpdate", "allow",
                    rule=pc.FILTER_PLATFORM)
         self.check(rr, "GET", "/twirp/x", "allow", rule="*")  # the user's own rule
         self.check(rr, "PUT", "/twirp/x", "block", pc.FILTER_METHOD)
         self.check(rr, "POST", "/other", "block", pc.FILTER_METHOD)
+        # an optional entry never overrides the user's own matching rule ("*": GET here)
+        self.check(rr, "POST", "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact", "block",
+                   pc.FILTER_METHOD, "*")
         oidc = "run-actions-1-azure-eastus.actions.githubusercontent.com"
         self.check(oidc, "GET", "/40//idtoken/a/b?api-version=2.0", "allow")
         self.check(oidc, "POST", "/40//idtoken/a/b", "block", pc.FILTER_METHOD)
@@ -402,6 +493,30 @@ class HttpFilter(unittest.TestCase):
         self.check(rr, "GET", "/_ws/ingest.sock", "allow", rule=pc.FILTER_PLATFORM)
         # never past an unsafe path
         self.check(rr, "POST", "/twirp/../x", "block", pc.FILTER_PATH)
+
+    def test_optional_platform_entries_yield_to_user_rules(self):
+        blob = "productionresultssa1.blob.core.windows.net"
+        rr = "results-receiver.actions.githubusercontent.com"
+        run = "run-actions-1-azure-eastus.actions.githubusercontent.com"
+        artifact = "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact"
+        deny_all = {"hosts": [{"host": h, "rules": [{"path": "*", "methods": []}]} for h in (blob, rr, run)],
+                    "platform": GH_FILTER["platform"]}
+        p = pc.Policy("enforce", ALLOW + [blob], PASS, DENY, http_filter=pc.HttpFilter.from_config(deny_all))
+        self.check(blob, "PUT", "/actions-results/x/y.zip?sig=1", "block", pc.FILTER_PATH, "*", p=p)
+        self.check(rr, "POST", artifact, "block", pc.FILTER_PATH, "*", p=p)
+        # the job's own control plane is always allowed
+        self.check(rr, "POST", "/twirp/results.services.receiver.Receiver/WorkflowStepsUpdate", "allow",
+                   rule=pc.FILTER_PLATFORM, p=p)
+        self.check(rr, "GET", "/_ws/ingest.sock", "allow", rule=pc.FILTER_PLATFORM, p=p)
+        self.check(run, "POST", "/40/renewjob", "allow", rule=pc.FILTER_PLATFORM, p=p)
+        self.check(run, "GET", "/40//idtoken/a/b?api-version=2.0", "allow", rule=pc.FILTER_PLATFORM, p=p)
+        # where no user rule matches, an optional entry still applies
+        narrow = {"hosts": [{"host": h, "rules": [{"path": "only/*", "methods": ["GET"]}]} for h in (blob, rr)],
+                  "platform": GH_FILTER["platform"]}
+        p = pc.Policy("enforce", ALLOW + [blob], PASS, DENY, http_filter=pc.HttpFilter.from_config(narrow))
+        self.check(blob, "PUT", "/actions-results/x/y.zip", "allow", rule=pc.FILTER_PLATFORM, p=p)
+        self.check(rr, "POST", artifact, "allow", rule=pc.FILTER_PLATFORM, p=p)
+        self.check(blob, "DELETE", "/actions-results/x/y.zip", "block", pc.FILTER_PATH, p=p)
 
     def test_platform_off(self):
         cfg = dict(GH_FILTER, platform=[])
@@ -436,6 +551,7 @@ class HttpFilter(unittest.TestCase):
                        {"host": "A.example.org", "rules": [{"path": "*", "methods": ["GET"]}]}]},
             {"platform": [{"host": "example.org", "path": "*", "methods": ["*"]}]},
             {"platform": [{"host": "example.org", "path": "*", "methods": []}]},
+            {"platform": [{"host": "example.org", "path": "*", "methods": ["GET"], "essential": "yes"}]},
         ]
         for cfg in bad:
             with self.subTest(cfg=cfg):
@@ -452,6 +568,37 @@ class HttpFilter(unittest.TestCase):
     def test_host_glob_unchanged(self):
         # the shared glob compiles host patterns exactly as before
         self.assertEqual(pc.compile_pattern("*.example.com").pattern, r"^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.example\.com$")
+
+
+class SelftestProbe(unittest.TestCase):
+    def test_vector(self):
+        with open(os.path.join(HERE, "test-vectors.json")) as f:
+            v = json.load(f)["selftest_probe"]
+        self.assertEqual(pc.SELFTEST_PROBE, (v["host"], v["method"], v["path"]))
+        self.assertEqual(pc.SELFTEST_BOGUS_IP, v["dst_ip"])
+
+    def test_a_restrictive_filter_would_refuse_it(self):
+        # why the addon skips the filter for the probe: a job's own filter may not allow it
+        cfg = {"hosts": [{"host": "github.com", "rules": [{"path": "myorg/app/*", "methods": ["*"]}]}]}
+        host, method, path = pc.SELFTEST_PROBE
+        self.assertEqual(filtered(cfg=cfg).decide_filter(host, method, path).action, "block")
+        self.assertTrue(pc.is_selftest_probe(host, method, path, pc.SELFTEST_BOGUS_IP + ":443"))
+
+    def test_only_the_exact_probe(self):
+        self.assertTrue(pc.is_selftest_probe("github.com", "GET", "/robots.txt", "192.0.2.1:443"))
+        self.assertTrue(pc.is_selftest_probe("GitHub.com:443", "get", "/robots.txt", "192.0.2.1:80"))
+        for host, method, path, dst in (
+            ("github.com", "GET", "/robots.txt", "140.82.112.3:443"),
+            ("github.com", "GET", "/robots.txt", None),
+            ("github.com", "POST", "/robots.txt", "192.0.2.1:443"),
+            ("github.com", "GET", "/robots.txt?x=1", "192.0.2.1:443"),
+            ("github.com", "GET", "/robots.txt/", "192.0.2.1:443"),
+            ("github.com", "GET", "/org/repo.git/git-receive-pack", "192.0.2.1:443"),
+            ("api.github.com", "GET", "/robots.txt", "192.0.2.1:443"),
+            ("github.com", "GET", "/robots.txt", "192.0.2.10:443"),
+        ):
+            with self.subTest(host=host, method=method, path=path, dst=dst):
+                self.assertFalse(pc.is_selftest_probe(host, method, path, dst))
 
 
 class Config(unittest.TestCase):
