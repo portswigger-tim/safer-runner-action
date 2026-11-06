@@ -302,7 +302,7 @@ exports.SELFTEST_BOGUS_IP = '192.0.2.1';
  *
  * No DNS-rebind filtering: the proxy's upstream-IP guard (server_connect) refuses a strict
  * superset of internal answers and logs the address, and anything outside the proxy can
- * only reach addresses a step could dial by IP anyway (docs/spikes, REPLACE-vs-FRONT §3).
+ * only reach addresses a step could dial by IP anyway. See docs/DNS-COREDNS.md.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
