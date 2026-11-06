@@ -1,5 +1,23 @@
 # v2 release notes
 
+## v2.2.0
+
+New: **`http-filter`** — restrict an allowlisted host by HTTP method and path. No changes to
+existing inputs; drop-in for v2.1.0.
+
+- **`http-filter`** (new input): on a host already in `allowed-domains`, allow only the methods
+  and paths you name — make a package host or API read-only (`"*": GET, HEAD`), or allow
+  `git push` only to specific repos while clones and reads keep working. It is purely subtractive
+  (it never widens access) and applies to intercepted HTTPS and plain HTTP. `*` is the same glob
+  as `allowed-domains`. See the README section and
+  [docs/DESIGN-L7-path-method.md](DESIGN-L7-path-method.md).
+- **`allow-github-platform`** (new input, default `true`): an explicit built-in allowlist that
+  keeps the Actions platform working when you filter a GitHub host — step logs, status, artifact
+  and cache uploads, OIDC, and job lease renewal / completion. Set it `false` for a hard lockdown.
+- The egress report lists requests the filter refused and suggests an `http-filter` to add.
+- On `github.com`, git paths are matched with or without the `.git` suffix and case-insensitively
+  for the owner/repo, so a deny cannot be slipped by spelling. Paths are otherwise case-sensitive.
+
 ## v2.1.0
 
 Security hardening and report accuracy. No input changes — drop-in for v2.0.0.
