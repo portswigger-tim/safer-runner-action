@@ -594,9 +594,18 @@ function pathSegments(path: string): string[] {
   return path.split('?', 1)[0].split('/').filter(Boolean);
 }
 
-/** Numeric, hex/UUID or otherwise payload-looking (redact.ts): becomes `*` in a suggestion. */
+/**
+ * Numeric, hex/UUID or otherwise payload-looking (redact.ts): becomes `*` in a suggestion. So do
+ * dot segments, which the engine refuses in a pattern.
+ */
 function isVariableSegment(segment: string): boolean {
-  return /^\d+$/.test(segment) || !SAFE_SEGMENT.test(segment) || segmentLooksEncoded(segment);
+  return (
+    /^\d+$/.test(segment) ||
+    segment === '.' ||
+    segment === '..' ||
+    !SAFE_SEGMENT.test(segment) ||
+    segmentLooksEncoded(segment)
+  );
 }
 
 function sensitiveSuffixOf(segs: string[]): (typeof SENSITIVE_PATH_SUFFIXES)[number] | undefined {
@@ -641,8 +650,8 @@ function templatePaths(paths: { segs: string[]; keep: number }[]): string[] {
  * One host's rules. With `collapseReads`, reads become a single `"*"` line and only writes are
  * templated (level B); without it every request gets a templated rule (the fixes for refused
  * requests). Sensitive endpoints are templated on their own, so the repos actually written to
- * stay pinned; and when a broader write rule could also match one, a `NONE` rule for it keeps
- * the write closed elsewhere (the method-boundary trap).
+ * stay pinned; and when a broader write rule could also match one, a `NONE` rule under that
+ * rule's prefix keeps the write closed elsewhere (the method-boundary trap).
  */
 function hostRules(
   reqs: ObservedRequest[],
@@ -671,24 +680,22 @@ function hostRules(
     pinned.add(p);
   });
 
+  // A rule ending in `*` also matches `<its prefix>/.../<suffix>`. The guard sits under that same
+  // prefix, so it always has more literal characters (the engine's "most specific") than the
+  // rule it narrows, and fewer than a pinned repo.
   const guards: string[] = [];
-  for (const s of SENSITIVE_PATH_SUFFIXES) {
-    const guard = `*/${s.suffix}`;
-    if (byPath.has(guard)) continue;
-    const opens = [...byPath].some(
-      ([p, ms]) =>
-        !pinned.has(p) &&
-        (p === '*' || p.endsWith('/*')) &&
-        (sensitive.length > 0 || p.startsWith('*')) &&
-        s.methods.some(m => ms.has(m))
-    );
-    if (opens) guards.push(guard);
+  for (const [p, ms] of [...byPath]) {
+    if (pinned.has(p) || !(p === '*' || p.endsWith('/*')) || !(sensitive.length > 0 || p.startsWith('*'))) continue;
+    for (const s of SENSITIVE_PATH_SUFFIXES) {
+      const guard = `${p}/${s.suffix}`;
+      if (s.methods.some(m => ms.has(m)) && !byPath.has(guard) && !guards.includes(guard)) guards.push(guard);
+    }
   }
+  for (const g of guards) byPath.set(g, new Set());
 
   const rest = [...byPath.keys()].filter(p => p !== '*').sort();
   const rules: HttpFilterRule[] = [
     ...(byPath.has('*') ? [{ path: '*', methods: sortMethods(byPath.get('*')!) }] : []),
-    ...guards.map(path => ({ path, methods: [] })),
     ...rest.map(path => ({ path, methods: sortMethods(byPath.get(path)!) }))
   ];
   const coarse = rules.some(r => r.path.startsWith('*') && r.methods.some(m => !READ_METHODS.includes(m)));
@@ -712,7 +719,7 @@ function suggest(reqs: ObservedRequest[], collapseReads: boolean): HttpFilterSug
 /**
  * Intercepted requests (the only ones with a method and path) to well-formed names, never on a
  * connection the upstream IP guard refused. `refused`: only the http-filter's refusals; else only
- * what the policy allowed. A refusal never goes into the suggestion (that would quietly undo the
+ * what the policy allowed, less what the built-in platform list allowed (`filter: platform`). A refusal never goes into the suggestion (that would quietly undo the
  * user's own filter): it gets its own reviewed rule (`fixes`).
  */
 function observedRequests(records: FlowRecord[], refused: boolean): ObservedRequest[] {
@@ -720,7 +727,7 @@ function observedRequests(records: FlowRecord[], refused: boolean): ObservedRequ
   const out: ObservedRequest[] = [];
   records.forEach((r, i) => {
     if ((r.ev !== 'https' && r.ev !== 'http') || !r.verdict || conns[i]?.refused) return;
-    if (refused ? !isFilterBlock(r) : DENIED.has(r.verdict)) return;
+    if (refused ? !isFilterBlock(r) : DENIED.has(r.verdict) || r.filter === 'platform') return;
     if (!r.host || typeof r.method !== 'string' || typeof r.path !== 'string') return;
     const host = r.host.toLowerCase();
     const method = r.method.toUpperCase();

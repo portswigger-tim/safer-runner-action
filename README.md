@@ -195,6 +195,10 @@ are more specific than your rules, so they win. The list is explicit. It is **no
 - **No body or query inspection.** A filter limits where and how a job can write. It cannot stop
   data hidden inside an allowed write to an allowed path, or a small amount in a path. It is not
   a data boundary.
+- **Paths are case-sensitive.** `MyOrg/*/git-receive-pack` does not match a push to `myorg/…`.
+  Write each path exactly as the server uses it. A rule that refuses a path does not cover other
+  spellings of it, so prefer an allowlist (`"*": GET, HEAD` plus the writes you need) to a list of
+  refused paths.
 - **Uploads to a separate storage host.** git LFS objects, and some registries' uploads, go to
   a different host from the one you filtered. Filter that host too, or leave it off
   `allowed-domains`.

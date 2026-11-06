@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
+import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
 import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
 import { readRefusedNames } from './parsers/dns-parser';
@@ -32,6 +32,16 @@ interface SetupMarker {
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
   dnsSelfTestName?: string;
+}
+
+/** GitHub platform endpoints the built-in list allowed on filtered hosts (policy.json, 0644). */
+function readPlatformAutoAllowed(): number | undefined {
+  try {
+    const n = JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8'))?.http_filter?.platform_auto_allowed;
+    return typeof n === 'number' ? n : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readSetupMarker(): SetupMarker | null {
@@ -121,9 +131,8 @@ async function run(): Promise<void> {
       selfTests,
       integrity,
       containers,
-      httpFilter
-      // TODO(http-filter integration): pass platformEndpoints from the count the engine writes to
-      // policy.json (POLICY_FILE) once that field exists.
+      httpFilter,
+      platformEndpoints: readPlatformAutoAllowed()
     });
     await core.summary.addRaw(md).write();
   } catch (error) {

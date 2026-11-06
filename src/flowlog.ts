@@ -23,6 +23,10 @@ export interface FlowRecord {
   repointed?: boolean;
   passthrough?: boolean;
   error?: string;
+  /** http-filter decision on a filtered host: `platform` = allowed by the built-in platform list */
+  filter?: 'allow' | 'platform' | 'block';
+  /** the winning http-filter path pattern; null when none matched or a platform entry allowed it */
+  filter_rule?: string | null;
   /** which proxy listener the connection arrived on (P2); absent in older logs = host */
   source?: 'host' | 'container';
   [key: string]: unknown;
