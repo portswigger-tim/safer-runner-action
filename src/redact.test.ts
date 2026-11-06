@@ -1,5 +1,15 @@
 import * as crypto from 'crypto';
-import { REDACTED, looksEncoded, needsRedaction, redactName, redactPath, segmentLooksEncoded } from './redact';
+import {
+  CUSTOM_METHOD,
+  PATH_HIDDEN,
+  REDACTED,
+  looksEncoded,
+  methodLabel,
+  needsRedaction,
+  pathSegmentShown,
+  redactName,
+  segmentLooksEncoded
+} from './redact';
 
 const b32 = (b: Buffer) => {
   const A = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -95,30 +105,47 @@ describe('redactName', () => {
   });
 });
 
-describe('redactPath', () => {
-  it('hides payload-looking segments, a run of them as one marker, and never shows the query', () => {
-    expect(redactPath('/evil/c2VjcmV0LXRva2VuLTEyMzQ1Njc4.git/git-receive-pack')).toBe(
-      `/evil/${REDACTED}/git-receive-pack`
-    );
-    expect(redactPath('/up/0dd2149bb6f23853/f4crg4pntvrqdozj/x')).toBe(`/up/${REDACTED}/x`);
-    expect(redactPath('/upload?token=0dd2149bb6f23853')).toBe('/upload');
-  });
-
-  it('checks each dot-separated part of a segment, like the labels of a name', () => {
+describe('pathSegmentShown (allowed requests, in a suggested rule)', () => {
+  it('rejects encoded-looking parts, like the labels of a name', () => {
     expect(segmentLooksEncoded('notes.0dd2149bb6f23853.txt')).toBe(true);
-    expect(redactPath('/files/notes.0dd2149bb6f23853.txt')).toBe(`/files/${REDACTED}`);
+    for (const seg of ['c2VjcmV0LXRva2VuLTEyMzQ1Njc4', 'notes.0dd2149bb6f23853.txt', '0dd2149bb6f23853']) {
+      expect(pathSegmentShown(seg)).toBe(false);
+    }
   });
 
-  it('leaves ordinary paths alone', () => {
-    for (const p of [
-      '/',
-      '/myorg/safer-runner-action.git/info/refs',
-      '/myorg/app.git/git-upload-pack',
-      '/repos/o/r/issues/12/comments',
-      '/twirp/results.services.receiver.v1.ResultsService/WorkflowStepsUpdate',
-      '/simple/requests/'
-    ]) {
-      expect(redactPath(p)).toBe(p);
+  it('rejects short chunks a hostname label would keep: hex, digit runs, unusual characters', () => {
+    for (const seg of ['a1f3', 'cafe', 'dead-beef', 'v123', 'x9y8z7', 'a%20b', 'a;b', 'x'.repeat(65), '..', '']) {
+      expect(pathSegmentShown(seg)).toBe(false);
     }
+  });
+
+  it('shows ordinary segments', () => {
+    for (const seg of [
+      'myorg',
+      'safer-runner-action.git',
+      'git-upload-pack',
+      'issues',
+      '12',
+      'results.services.receiver.v1.ResultsService',
+      'requests'
+    ]) {
+      expect(pathSegmentShown(seg)).toBe(true);
+    }
+  });
+});
+
+describe('methodLabel', () => {
+  it('shows standard methods and a fixed word for any other token', () => {
+    expect(['get', 'POST', 'Patch', 'OPTIONS', 'TRACE', 'CONNECT'].map(methodLabel)).toEqual([
+      'GET',
+      'POST',
+      'PATCH',
+      'OPTIONS',
+      'TRACE',
+      'CONNECT'
+    ]);
+    for (const m of ['A1B2C3D4E5F6', 'PROPFIND', '', undefined, 'GET ']) expect(methodLabel(m)).toBe(CUSTOM_METHOD);
+    expect(CUSTOM_METHOD).toBe('INVALID');
+    expect(PATH_HIDDEN).toBe('‹path hidden›');
   });
 });

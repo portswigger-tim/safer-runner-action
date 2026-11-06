@@ -956,7 +956,8 @@ async function runSetup(inputs) {
     core.info(`Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`);
     if (policy.http_filter.hosts.length) {
         core.info(`http-filter: ${policy.http_filter.hosts.length} filtered host(s) [${policy.http_filter.hosts.map(h => h.host).join(', ')}], ` +
-            `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed`);
+            `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed, ` +
+            `${policy.http_filter.platform_optional} more unless a rule of the job's matches`);
     }
     const { dnsServers } = inputs;
     // 2. Install (parallel - both are network-bound)
@@ -2416,7 +2417,12 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
  * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
  * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
  * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
- * is on) only on a host the job filters, as allows that win over the job's own rules.
+ * is on) only on a host the job filters. Essential entries always apply: step/job log
+ * metadata RPCs, the live-log stream, job lease renewal and completion, and OIDC. The rest
+ * yield to any matching rule of the job's: step-status updates, the artifact and cache
+ * services, and all blob storage (artifacts, cache, and the job's stored logs + step summary).
+ * Blocking that optional traffic loses those features but does not fail or hang the job
+ * (verified on real runners).
  *
  * EXPLICIT (host, path, methods) only, reads included - never a blanket "*": GET, HEAD, which
  * would trust far more than the platform uses. Workflow-chosen writes (e.g. SARIF upload) are
@@ -2424,20 +2430,58 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
  * flow log); a missing entry only breaks that job's platform step, never enforcement.
  */
 exports.GITHUB_PLATFORM_ENDPOINTS = [
-    // results service RPCs: step logs, step status (WorkflowStepsUpdate), artifact + cache
-    { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'] },
+    // results service RPCs the runner itself makes: step + job log metadata (Receiver service)
+    {
+        host: 'results-receiver.actions.githubusercontent.com',
+        path: '/twirp/results.services.receiver.Receiver/*',
+        methods: ['POST'],
+        essential: true
+    },
     // runner live-log stream (websocket upgrade)
-    { host: 'results-receiver.actions.githubusercontent.com', path: '/_ws/ingest.sock', methods: ['GET'] },
+    {
+        host: 'results-receiver.actions.githubusercontent.com',
+        path: '/_ws/ingest.sock',
+        methods: ['GET'],
+        essential: true
+    },
+    // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
+    {
+        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+        path: '*/idtoken/*',
+        methods: ['GET'],
+        essential: true
+    },
+    // job lease renewal (/<n>/renewjob) - refusing it ends the job
+    {
+        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+        path: '*/renewjob',
+        methods: ['POST'],
+        essential: true
+    },
+    // job completion, sent through the proxy after the last post step - refusing it hangs the job
+    {
+        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+        path: '*/completejob',
+        methods: ['POST'],
+        essential: true
+    },
+    // other results service RPCs (optional - a matching user rule wins): artifact and cache
+    // services (actions/upload-artifact, actions/cache) AND step-status (WorkflowStepUpdateService)
+    { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'], essential: false },
     // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
     // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
-    { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-results/*', methods: ['GET', 'HEAD', 'PUT'] },
-    { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-cache/*', methods: ['GET', 'HEAD', 'PUT'] },
-    // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
-    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
-    // job lease renewal (/<n>/renewjob) - refusing it ends the job
-    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
-    // job completion, sent through the proxy after the last post step
-    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
+    {
+        host: 'productionresultssa*.blob.core.windows.net',
+        path: '/actions-results/*',
+        methods: ['GET', 'HEAD', 'PUT'],
+        essential: false
+    },
+    {
+        host: 'productionresultssa*.blob.core.windows.net',
+        path: '/actions-cache/*',
+        methods: ['GET', 'HEAD', 'PUT'],
+        essential: false
+    }
 ];
 /**
  * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
@@ -3084,8 +3128,10 @@ function validatePathPattern(pattern) {
 }
 /**
  * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
- * case-insensitive and .git is optional, so the addon matches paths there case-insensitively
- * and with or without ".git" on each segment. Mirrors GIT_HOSTS in proxy/policy_core.py.
+ * case-insensitive and .git is optional, so the addon lower-cases paths and patterns there and
+ * drops one ".git" from every segment of both before matching (`*.git` is then a one-segment
+ * `*`, and the suffix never adds to a rule's specificity). Mirrors GIT_HOSTS in
+ * proxy/policy_core.py.
  */
 exports.GIT_HOSTS = ['github.com'];
 function stripGit(seg) {
@@ -3155,14 +3201,17 @@ function buildHttpFilter(hosts, allowGithubPlatform, reachable, passthrough, war
         ? github_parser_1.GITHUB_PLATFORM_ENDPOINTS.filter(e => hosts.some(h => patternsOverlap(h.host, e.host))).map(e => ({
             host: validatePattern(e.host),
             path: validatePathPattern(e.path),
-            methods: [...e.methods]
+            methods: [...e.methods],
+            essential: e.essential
         }))
         : [];
+    const essential = platform.filter(e => e.essential).length;
     return {
         hosts,
         allow_github_platform: allowGithubPlatform,
         platform,
-        platform_auto_allowed: platform.length
+        platform_auto_allowed: essential,
+        platform_optional: platform.length - essential
     };
 }
 function buildPolicyConfig(opts) {
@@ -3602,7 +3651,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.REPOINT_HOST = void 0;
+exports.REPOINT_PATH = exports.REPOINT_HOST = void 0;
 exports.sniBlockSelfTest = sniBlockSelfTest;
 exports.repointSelfTest = repointSelfTest;
 exports.dnsProbeName = dnsProbeName;
@@ -3619,7 +3668,14 @@ const flowlog_1 = __nccwpck_require__(5422);
 const dns_1 = __nccwpck_require__(8439);
 const dns_parser_1 = __nccwpck_require__(1106);
 const policy_1 = __nccwpck_require__(2224);
+/**
+ * The repoint probe: a bodiless GET of this fixed public file. The addon recognises exactly this
+ * request dialled at SELFTEST_BOGUS_IP (policy_core.is_selftest_probe) and exempts it from
+ * http-filter, so a job's filter on this host cannot fail setup. Checked against
+ * proxy/test-vectors.json "selftest_probe".
+ */
 exports.REPOINT_HOST = 'github.com';
+exports.REPOINT_PATH = '/robots.txt';
 async function curl(args) {
     const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
         ignoreReturnCode: true,
@@ -3653,7 +3709,11 @@ async function sniBlockSelfTest(mode) {
 }
 async function repointSelfTest() {
     const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
-    const r = await curl(['--resolve', `${exports.REPOINT_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`, `https://${exports.REPOINT_HOST}/robots.txt`]);
+    const r = await curl([
+        '--resolve',
+        `${exports.REPOINT_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`,
+        `https://${exports.REPOINT_HOST}${exports.REPOINT_PATH}`
+    ]);
     const rec = await waitFor(from, x => (x.ev === 'https' || x.ev === 'http') && x.host === exports.REPOINT_HOST && (0, flowlog_1.ipOf)(x.dst) === constants_1.SELFTEST_BOGUS_IP);
     const upstream = (0, flowlog_1.ipOf)(rec?.upstream);
     const ok = r.out === '200' && rec !== null && upstream !== '' && upstream !== constants_1.SELFTEST_BOGUS_IP;

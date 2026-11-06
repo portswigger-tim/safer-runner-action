@@ -165,9 +165,21 @@ To refuse all pushes, remove the last line. SSH pushes are already blocked (only
 
 When you filter a GitHub host, the runner and first-party actions still need some endpoints:
 step logs and status, the cache and artifact services, and the OIDC token request. The action
-adds these from a built-in list. Each entry names one exact host, path and method; the entries
-are more specific than your rules, so they win. The list is explicit. It is **not** a blanket
-`"*": GET, HEAD` rule, which would trust much more than the platform uses.
+adds these from a built-in list. Each entry names one exact host, path and method. The list is
+explicit. It is **not** a blanket `"*": GET, HEAD` rule, which would trust much more than the
+platform uses.
+
+- **Essential** endpoints are always allowed: job lease and completion, OIDC and the runner's
+  live log stream. The job cannot run without them, so a filter never makes a job hang.
+- **Optional** endpoints are allowed only where none of your rules for that host matches the
+  request: artifacts, cache, the stored job logs and step summary, and step-status updates.
+  A rule of yours that matches, `NONE` included, wins.
+- If your rules block optional traffic, the job loses those features but does not fail. For
+  example:
+  - `NONE` on `productionresultssa*.blob.core.windows.net`: the job's logs and step summary
+    are not stored. The job completes and the step results still show.
+  - `NONE` on `results-receiver.actions.githubusercontent.com`: step-status updates,
+    artifacts and cache are refused. The step results still show correctly.
 
 - The list applies only when you filter a GitHub host. Jobs without `http-filter` do not change.
 - It holds only what the platform needs. Writes the workflow chooses stay yours to allow. For
@@ -179,13 +191,21 @@ are more specific than your rules, so they win. The list is explicit. It is **no
 ### In the job summary
 
 - **Analyze** refuses nothing. The summary lists each request your filter *would* refuse:
-  method and path, with parts that look like encoded data redacted.
-- **Enforce** refuses those requests and lists them, each with a rule to add if the job needs it.
-- Both modes suggest an `http-filter` built from the job's traffic. Reads collapse to one
-  `"*": GET, HEAD` line per host. Writes keep their paths, with ids and hashes replaced by `*`.
-  git push and fetch stay pinned to the repositories the job used. Analyze always shows the
-  suggestion; enforce shows it when the filter refused a request. Review it before you use it:
-  the action never applies it.
+  the host, the method and the reason.
+- **Enforce** refuses those requests and lists them in the same way.
+- The summary and the job log never show the path of a refused request. The sender chose
+  that path, and it can carry data. A method that is not a standard HTTP method shows as
+  `INVALID`.
+- To allow a refused request that the job needs, remove that host's `http-filter` entry and
+  run the job in analyze mode. The suggested `http-filter` then includes the request.
+- Both modes suggest an `http-filter` built from the requests that were allowed. Reads
+  collapse to one `"*": GET, HEAD` line per host. Writes keep their paths, with ids and
+  hashes replaced by `*`. git push and fetch stay pinned to the repositories the job used.
+  Analyze always shows the suggestion; enforce shows it when the filter refused a request.
+  Review it before you use it: the action never applies it.
+- Suggested rules contain only standard methods. A path that ends in `/` gets two rules
+  (`"legacy": POST` and `"legacy/*": POST`), because a pattern cannot end in `/`. A path
+  with `//` gets the rule for the same path with a single `/`.
 
 ### Limits
 

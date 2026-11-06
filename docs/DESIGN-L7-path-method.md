@@ -159,8 +159,14 @@ break their own job.
 
 So the action ships a curated **built-in platform allowlist** — the analogue of the generated
 GitHub **domains** list (`github-domains.generated.ts`) and `RISKY_GITHUB_SUBDOMAINS`, a known,
-reviewed, updatable set — applied as *specific* rules that win over a user's filter
-(most-specific wins).
+reviewed, updatable set. It has two tiers:
+
+- **Essential** — the job's own control plane (step logs and status, job lease renewal and
+  completion, OIDC): allowed on a filtered host whatever the user's rules say, since the job
+  cannot run without them.
+- **Optional** — the artifact and cache services and their storage: allowed only where none of
+  the user's rules for that host matches the request, so a user's own rule (a `NONE` included)
+  always wins there.
 
 **Trust the platform explicitly — never assume a blanket `"*": GET, HEAD`.** The allowlist names
 the exact `(host, path, method)` the platform uses, reads included: OIDC is a `GET`, and is
@@ -171,11 +177,14 @@ the explicit list stays tight.
 **Observed set** (from the proxy flow log — two analyze runs, including OIDC + `actions/cache` +
 SARIF):
 
-| host | method | path | what |
-|---|---|---|---|
-| `results-receiver.actions.githubusercontent.com` | POST | `/twirp/*` | step logs, status (`WorkflowStepsUpdate`), artifact, cache RPCs |
-| `productionresultssa*.blob.core.windows.net` | PUT | `/actions-results/*`, `/actions-cache/*` | artifact / log / cache blob uploads |
-| `run-actions-*-azure-*.actions.githubusercontent.com` | GET | `*/idtoken/*` | OIDC token request |
+| host | method | path | what | tier |
+|---|---|---|---|---|
+| `results-receiver.actions.githubusercontent.com` | POST | `/twirp/results.services.receiver.Receiver/*` | step logs, status (`WorkflowStepsUpdate`) | essential |
+| `results-receiver.actions.githubusercontent.com` | GET | `/_ws/ingest.sock` | live step-log stream | essential |
+| `run-actions-*-azure-*.actions.githubusercontent.com` | GET | `*/idtoken/*` | OIDC token request | essential |
+| `run-actions-*-azure-*.actions.githubusercontent.com` | POST | `*/renewjob`, `*/completejob` | job lease renewal, job completion | essential |
+| `results-receiver.actions.githubusercontent.com` | POST | `/twirp/*` | artifact, cache RPCs | optional |
+| `productionresultssa*.blob.core.windows.net` | GET, HEAD, PUT | `/actions-results/*`, `/actions-cache/*` | artifact / log / cache blobs | optional |
 
 …plus the reads each service needs (step-log GETs, blob downloads), enumerated the same way — not
 covered by a wildcard.
@@ -188,7 +197,8 @@ Design intent:
   in the built-in set, and a scanning job adds it by hand (`"*/code-scanning/sarifs": POST`).
 - **Applied only when a GitHub host is filtered**, so jobs that don't use `http-filter` are
   unaffected. The hosted-compute **watchdog** is passthrough (SNI-only) and so is never filtered.
-- **Visible and overridable.** The report shows "N platform endpoints auto-allowed," and a toggle
+- **Visible and overridable.** The report shows "N platform endpoints auto-allowed" (the essential
+  tier), a rule of the user's that matches an optional endpoint wins over it, and a toggle
   (e.g. `allow-github-platform: false`, default on) lets a strict user turn it off and allowlist
   by hand.
 - **Maintained from observed traffic.** Grow the list by sampling more job shapes; a missing entry

@@ -5,6 +5,7 @@ import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, 
 import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
 import { readRefusedNames } from './parsers/dns-parser';
+import { PATH_HIDDEN } from './redact';
 import {
   blockedName,
   buildReport,
@@ -104,7 +105,9 @@ async function run(): Promise<void> {
       );
     }
     for (const b of httpFilter.blocks) {
-      core.info(`${b.verdict.padEnd(11)} http-filter ${b.host} ${b.method} ${b.path} tries=${b.tries} ${b.reason}`);
+      core.info(
+        `${b.verdict.padEnd(11)} http-filter ${b.host} ${b.method} ${PATH_HIDDEN} tries=${b.tries} ${b.reason}`
+      );
     }
 
     const integrity = await validator.generateValidationDetails();

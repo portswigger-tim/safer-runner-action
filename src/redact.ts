@@ -85,16 +85,42 @@ export function segmentLooksEncoded(segment: string): boolean {
   return segment.split('.').some(looksEncoded);
 }
 
-/**
- * `path` with every payload-looking segment replaced by REDACTED (a run of them by one), for
- * printing a refused request: a path, like a hostname, can be the data a step tried to send.
- * The query string is never shown (the proxy already drops it from the flow log).
- */
-export function redactPath(path: string): string {
-  const out: string[] = [];
-  for (const s of path.split('?', 1)[0].split('/')) {
-    if (!segmentLooksEncoded(s)) out.push(s);
-    else if (out[out.length - 1] !== REDACTED) out.push(REDACTED);
-  }
-  return out.join('/');
+/** Request methods a report shows by name; any other token is the caller's choice, so it can be the data. */
+export const STANDARD_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT'];
+/** how any other method is shown: a fixed word, never the token itself */
+export const CUSTOM_METHOD = 'INVALID';
+
+/** `method` (upper-cased) when it is a standard one, else CUSTOM_METHOD. */
+export function methodLabel(method: unknown): string {
+  const m = String(method ?? '').toUpperCase();
+  return STANDARD_METHODS.includes(m) ? m : CUSTOM_METHOD;
 }
+
+/** digits in one shown path segment (`v1`, `issues/12`); more could be a number someone chose */
+export const MAX_SEGMENT_DIGITS = 2;
+export const MAX_SEGMENT_LEN = 64;
+/** hex of this length or more (`a1f3`, `cafe`) is not shown in a path */
+export const PATH_HEX_LEN = 4;
+const PATH_WORD = /^[A-Za-z0-9._~@+-]+$/;
+
+/**
+ * Can this segment of an allowed request's path be printed (in a suggested rule)? Stricter than
+ * a hostname label: a segment is shown only when it is plain characters, not too long, has at
+ * most MAX_SEGMENT_DIGITS digits, is not PATH_HEX_LEN+ hex, and no `.`-part of it looks encoded.
+ * Best effort, like names: word-like data can still get through. A refused request's path is
+ * never printed at all (PATH_HIDDEN).
+ */
+export function pathSegmentShown(segment: string): boolean {
+  if (!PATH_WORD.test(segment) || segment.length > MAX_SEGMENT_LEN || segment === '.' || segment === '..') {
+    return false;
+  }
+  if ((segment.match(/[0-9]/g) ?? []).length > MAX_SEGMENT_DIGITS) return false;
+  if (new RegExp(`^[0-9a-f]{${PATH_HEX_LEN},}$`, 'i').test(segment.replace(/[-_.~]/g, ''))) return false;
+  return !segmentLooksEncoded(segment);
+}
+
+/**
+ * How the path of a refused request is shown: always this, never the path. Whoever sent the
+ * request chose the path, and no per-segment check stops data split into short chunks.
+ */
+export const PATH_HIDDEN = '‹path hidden›';

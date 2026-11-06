@@ -268,7 +268,8 @@ describe('buildPolicyConfig: http-filter', () => {
       hosts: [],
       allow_github_platform: true,
       platform: [],
-      platform_auto_allowed: 0
+      platform_auto_allowed: 0,
+      platform_optional: 0
     });
     expect(warnings).toEqual([]);
   });
@@ -283,17 +284,26 @@ describe('buildPolicyConfig: http-filter', () => {
 
   it('auto-allows the platform endpoints on a filtered platform host', () => {
     const { config } = buildPolicyConfig({ ...base, httpFilter: [rule('*.actions.githubusercontent.com')] });
+    const rr = 'results-receiver.actions.githubusercontent.com';
+    const run = 'run-actions-*-azure-*.actions.githubusercontent.com';
     expect(config.http_filter.platform).toEqual([
-      { host: 'results-receiver.actions.githubusercontent.com', path: 'twirp/*', methods: ['POST'] },
-      { host: 'results-receiver.actions.githubusercontent.com', path: '_ws/ingest.sock', methods: ['GET'] },
-      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
-      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
-      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
+      { host: rr, path: 'twirp/results.services.receiver.Receiver/*', methods: ['POST'], essential: true },
+      { host: rr, path: '_ws/ingest.sock', methods: ['GET'], essential: true },
+      { host: run, path: '*/idtoken/*', methods: ['GET'], essential: true },
+      { host: run, path: '*/renewjob', methods: ['POST'], essential: true },
+      { host: run, path: '*/completejob', methods: ['POST'], essential: true },
+      { host: rr, path: 'twirp/*', methods: ['POST'], essential: false }
     ]);
     expect(config.http_filter.platform_auto_allowed).toBe(5);
+    expect(config.http_filter.platform_optional).toBe(1);
 
+    // artifact and cache storage never overrides the job's own rules
     const blob = buildPolicyConfig({ ...base, httpFilter: [rule('productionresultssa1.blob.core.windows.net')] });
-    expect(blob.config.http_filter.platform.map(e => e.path)).toEqual(['actions-results/*', 'actions-cache/*']);
+    expect(blob.config.http_filter.platform.map(e => [e.path, e.essential])).toEqual([
+      ['actions-results/*', false],
+      ['actions-cache/*', false]
+    ]);
+    expect(blob.config.http_filter).toMatchObject({ platform_auto_allowed: 0, platform_optional: 2 });
   });
 
   it('allow-github-platform: false turns them off', () => {
@@ -302,7 +312,12 @@ describe('buildPolicyConfig: http-filter', () => {
       httpFilter: [rule('*.actions.githubusercontent.com')],
       allowGithubPlatform: false
     });
-    expect(config.http_filter).toMatchObject({ allow_github_platform: false, platform: [], platform_auto_allowed: 0 });
+    expect(config.http_filter).toMatchObject({
+      allow_github_platform: false,
+      platform: [],
+      platform_auto_allowed: 0,
+      platform_optional: 0
+    });
   });
 
   it('warns when a filtered host is not allowed (the filter is inert)', () => {
