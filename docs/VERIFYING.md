@@ -9,7 +9,7 @@ Not a tag or branch. Tags can be moved, and there is no moving `@v2` tag. Keep t
 comment so Dependabot or Renovate can update it:
 
 ```yaml
-- uses: portswigger-tim/safer-runner-action@d9772c3c7c5c0f8cd6cb7123e138120b11c12371 # v2.2.1
+- uses: portswigger-tim/safer-runner-action@ebd9bc0bc39df7c9b044ee698cbec5efc201a248 # v2.3.0
 ```
 
 ## Check the build provenance
