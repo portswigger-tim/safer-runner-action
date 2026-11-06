@@ -52,6 +52,9 @@ network egress. Assume they **know safer-runner is present** and will try to byp
 - The job log / artifacts / caches as exfil channels.
 - An attacker who gains and keeps root (can tear down the proxy and rules) — the integrity
   layer is a tripwire, not a control (H3).
+- The post-run report and tamper check as evidence: the post step runs as the runner user from
+  files the job's steps can modify, so they are advisory (see
+  [DESIGN-post-run-integrity.md](DESIGN-post-run-integrity.md)).
 - Cert-pinning clients and long-running pre-started agents that never trust our CA (§5).
 
 ---

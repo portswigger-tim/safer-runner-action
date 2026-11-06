@@ -112,7 +112,7 @@ random name under an exact allowlist entry. In enforce mode the job fails if any
 | `dns-servers` | `9.9.9.9 149.112.112.112` (Quad9) | Upstream resolvers CoreDNS forwards allowlisted names to: IP addresses, space/comma/newline separated. The first is the primary, the rest are tried in order. Empty = the default |
 | `disable-sudo` | follows `mode` | `enforce` removes the runner's sudo after setup; `analyze` keeps it. Set `true`/`false` to override; keeping sudo in enforce labels the job **ADVISORY** |
 | `docker` | follows `mode` | `enforce` removes docker access (`remove-group`); `analyze` keeps it (`keep`). `keep`: leave docker alone. `remove-group`: take the runner out of the docker group and lock the socket to root. `stop`: stop and disable the docker daemon. In enforce, `keep` makes the job **ADVISORY**, and a removal that doesn't take effect fails the job |
-| `fail-on-tampering` | follows `mode` | `enforce` fails the job (post step) if the safer-runner configuration changed during the job; `analyze` never breaks a build. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`) |
+| `fail-on-tampering` | follows `mode` | `enforce` fails the job (post step) if the safer-runner configuration changed during the job; `analyze` never breaks a build. The baseline is stored root-owned (`/etc/safer-runner/validation-state.json`). Advisory: see [Limitations](#limitations-read-these) |
 
 An explicit value always wins; leaving one unset follows the mode. The proxy's ports (a free pair in
 20000–32766, picked at setup) and its streaming threshold are internal; HTTPS from containers
@@ -226,6 +226,12 @@ can send data; these limit what that dependency can reach in the first place:
 - **`disable-sudo: false` or `docker: keep` makes enforce advisory.** Any step with root can
   remove the proxy and firewall, and docker group membership is root-equivalent. Both are
   removed by enforce; the summary labels the job ADVISORY when either was kept.
+- **The job summary and the tamper check are advisory.** They come from the post step, which
+  runs as the runner user from the action's files on the runner, and the job's own steps can
+  modify those. A malicious step could alter or suppress the summary, the tamper check and
+  `fail-on-tampering`. Treat them as a tripwire and a record, not tamper-proof evidence. The
+  egress controls themselves (proxy, DNS, firewall, sudo and docker removal) are root-owned and
+  don't depend on the post step. See [docs/DESIGN-post-run-integrity.md](docs/DESIGN-post-run-integrity.md).
 - **Allowlisted names that resolve to internal addresses are refused.** That includes hosted
   runners with Azure private networking that reach private services by name. Such names
   can't be allowlisted in enforce yet.

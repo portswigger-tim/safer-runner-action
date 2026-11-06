@@ -3402,6 +3402,7 @@ function needsRedaction(name) {
  * DENIED first and in full; anything that has to be cut is said so explicitly (review M6).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ADVISORY_REPORT_NOTE = void 0;
 exports.summarizeFlows = summarizeFlows;
 exports.parseFirewallLog = parseFirewallLog;
 exports.categorize = categorize;
@@ -3690,6 +3691,13 @@ function capped(rows) {
         note: `\n\n**+${rows.length - MAX_ROWS} more not shown here** - the full list is in the post step's job log.`
     };
 }
+/**
+ * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
+ * the action's files on the runner, which the job's own steps can write to. Say so in the report.
+ */
+exports.ADVISORY_REPORT_NOTE = '<sub>The tamper check and this summary come from the post step, which runs as the runner user from ' +
+    "files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls " +
+    "themselves are root-owned and don't depend on it.</sub>";
 function plural(n, one, many = `${one}s`) {
     return `${n} ${n === 1 ? one : many}`;
 }
@@ -4316,8 +4324,9 @@ function buildReport(input) {
     if (input.integrity) {
         const s = input.integrity.status;
         diag.push(s === 'verified' ? 'config unchanged ✓' : s === 'tampered' ? 'config CHANGED ⚠️' : 'config: no baseline');
-        body += `**Config file tamper check** — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
+        body += `**Config file tamper check** (advisory) — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
         body += input.integrity.body + '\n\n';
+        body += `${exports.ADVISORY_REPORT_NOTE}\n\n`;
     }
     for (const s of input.extraSections ?? [])
         if (s)

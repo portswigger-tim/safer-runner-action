@@ -318,6 +318,15 @@ function capped<T>(rows: T[]): { shown: T[]; note: string } {
   };
 }
 
+/**
+ * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
+ * the action's files on the runner, which the job's own steps can write to. Say so in the report.
+ */
+export const ADVISORY_REPORT_NOTE =
+  '<sub>The tamper check and this summary come from the post step, which runs as the runner user from ' +
+  "files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls " +
+  "themselves are root-owned and don't depend on it.</sub>";
+
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -1059,8 +1068,9 @@ export function buildReport(input: ReportInput): string {
   if (input.integrity) {
     const s = input.integrity.status;
     diag.push(s === 'verified' ? 'config unchanged ✓' : s === 'tampered' ? 'config CHANGED ⚠️' : 'config: no baseline');
-    body += `**Config file tamper check** — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
+    body += `**Config file tamper check** (advisory) — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
     body += input.integrity.body + '\n\n';
+    body += `${ADVISORY_REPORT_NOTE}\n\n`;
   }
   for (const s of input.extraSections ?? []) if (s) body += s + '\n\n';
   md += `<details>\n<summary>🔧 <b>Diagnostics</b> — ${diag.join(' · ')}</summary>\n\n${body}</details>\n\n`;

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { parseFlowLog, parseFlowLogWithOffsets, type FlowRecord } from './flowlog';
 import { withoutSelfTests } from './selftest';
 import {
+  ADVISORY_REPORT_NOTE,
   addressClass,
   buildReport,
   containerSection,
@@ -393,6 +394,21 @@ describe('Option R layout', () => {
       .split('\n')
       .filter(l => l.trim() && !l.startsWith('|'));
     expect(visible.length).toBeLessThanOrEqual(5);
+  });
+
+  it('labels the tamper check advisory, in the diagnostics', () => {
+    const out = buildReport({
+      mode: 'enforce',
+      job: 'build',
+      hosts: [],
+      firewall: [],
+      dnsRefused: [],
+      selfTests: [],
+      integrity: { status: 'verified', body: '' }
+    });
+    const diagnostics = out.match(/<details>[\s\S]*<\/details>/)?.[0] ?? '';
+    expect(diagnostics).toContain('**Config file tamper check** (advisory) — all verified');
+    expect(diagnostics).toContain(ADVISORY_REPORT_NOTE);
   });
 });
 
