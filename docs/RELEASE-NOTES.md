@@ -1,5 +1,30 @@
 # v2 release notes
 
+## v2.1.0
+
+Security hardening and report accuracy. No input changes — drop-in for v2.0.0.
+
+- **Container firewall fails closed in enforce.** If Docker is running but the expected
+  `DOCKER-USER` hook is missing (a non-standard firewall backend), setup now aborts in enforce
+  instead of continuing without container rules. Analyze still only warns. Standard
+  GitHub-hosted runners are unaffected.
+- **Tighter report redaction, honest wording.** Every label of a blocked hostname is now
+  checked (the earlier short-label and trailing-label gaps are closed). The caveat states
+  plainly that redaction is best effort, not a guarantee: data shaped to evade it can reach the
+  summary and job log whole, even through a single refused hostname. Treat the raw
+  `/var/log/safer-runner` logs (including `proxy-flows.jsonl`) as unredacted.
+- **Post-run integrity is labelled advisory.** The summary no longer shows "boundary intact" on
+  the strength of a check a malicious step could suppress. It shows "controls applied at setup"
+  plus a separate post-run status chip (advisory / tampered / unverified). Enforcement never
+  depended on the post step. See [docs/DESIGN-post-run-integrity.md](DESIGN-post-run-integrity.md)
+  for a proposed supervisor design.
+- **Report tidy-up.** The "Subdomains of exact entries" section is removed; refused subdomains
+  of exact entries are still listed under Diagnostics → DNS refused.
+- **New: [docs/CICD-GOOD-PRACTICE.md](CICD-GOOD-PRACTICE.md)** — defence-in-depth practices for
+  hardening pipelines around this action, linked from the README.
+- **Fix:** the scheduled GitHub-domains updater now targets `main` (the `v2` branch was removed
+  at GA).
+
 ## v2.0.0
 
 **Breaking: a smaller input surface.** Workflows that set any of the
