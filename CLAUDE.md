@@ -8,7 +8,9 @@
 > `src/trust.ts`, `src/firewall.ts`, `src/policy.ts`, `src/selftest.ts`, `src/report.ts`;
 > the GitHub list is `src/parsers/github-domains.generated.ts` (`npm run gen:domains`);
 > the addon is `proxy/policy.py` + `proxy/policy_core.py` (`npm test` runs jest + the Python
-> tests). The ipset/IP-allowlist sections below describe v1 and are kept for the shared
+> tests). The suggested `http-filter` is built by `proxy/suggest.py` (run by the post step via
+> `src/suggest.ts`; `report.ts` only renders it); `policy_core.Policy.load` checks `policy.json`
+> against the `src/policy.ts` contract (`version: 1`) and fails closed. The ipset/IP-allowlist sections below describe v1 and are kept for the shared
 > sudo / docker / validation layers; the dnsmasq sections are v1-only. Real-runner tests: test repo branch `v2-test`.
 > **v2 inputs (beta.6+):** `mode`, `allowed-domains`, `passthrough-domains`,
 > `block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `docker` (keep | remove-group |

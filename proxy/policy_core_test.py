@@ -616,5 +616,91 @@ class Config(unittest.TestCase):
         self.assertEqual(p.allow_patterns, ALLOW)
 
 
+def policy_json():
+    """policy.json as src/policy.ts writes it (PolicyConfig, version 1)."""
+    return {
+        "version": 1,
+        "mode": "enforce",
+        "allow": ALLOW,
+        "passthrough": PASS,
+        "deny": DENY,
+        "flow_log": "/var/log/safer-runner/proxy-flows.jsonl",
+        "container_tls": "sni-only",
+        "container_port": 20001,
+        "http_filter": {
+            "hosts": [{"host": "api.github.com", "rules": [{"path": "*", "methods": ["GET"]}]}],
+            "allow_github_platform": True,
+            "platform": [{"host": "api.github.com", "path": "x", "methods": ["POST"], "essential": False}],
+            "platform_auto_allowed": 0,
+            "platform_optional": 1,
+        },
+    }
+
+
+class ConfigContract(unittest.TestCase):
+    """Policy.load checks policy.json against the contract with src/policy.ts and fails closed."""
+
+    def load(self, cfg):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(cfg, f)
+        try:
+            return pc.Policy.load(f.name)
+        finally:
+            os.unlink(f.name)
+
+    def test_loads_what_the_action_writes(self):
+        p, cfg = self.load(policy_json())
+        self.assertTrue(p.enforce)
+        self.assertTrue(p.http_filter)
+        self.assertEqual(cfg["version"], 1)
+
+    def rejects(self, mutate):
+        cfg = policy_json()
+        mutate(cfg)
+        with self.assertRaises(pc.PolicyError):
+            self.load(cfg)
+
+    def test_rejects_another_version(self):
+        for v in (0, 2, "1", True, None, 1.0):
+            with self.subTest(version=v):
+                self.rejects(lambda c: c.update(version=v))
+        self.rejects(lambda c: c.pop("version"))
+
+    def test_rejects_missing_or_unknown_keys(self):
+        for k in ("mode", "allow", "flow_log", "container_port", "http_filter"):
+            with self.subTest(missing=k):
+                self.rejects(lambda c: c.pop(k))
+        self.rejects(lambda c: c.update(extra=1))
+        self.rejects(lambda c: c["http_filter"].pop("hosts"))
+        self.rejects(lambda c: c["http_filter"].update(extra=1))
+        self.rejects(lambda c: c["http_filter"]["hosts"][0].update(note="x"))
+        self.rejects(lambda c: c["http_filter"]["platform"][0].pop("essential"))
+
+    def test_rejects_wrong_types(self):
+        self.rejects(lambda c: c.update(allow="github.com"))
+        self.rejects(lambda c: c.update(allow=["github.com", 1]))
+        self.rejects(lambda c: c.update(container_port="20001"))
+        self.rejects(lambda c: c.update(container_port=True))
+        self.rejects(lambda c: c.update(container_port=0))
+        self.rejects(lambda c: c.update(flow_log=""))
+        self.rejects(lambda c: c.update(http_filter=None))
+        self.rejects(lambda c: c["http_filter"].update(allow_github_platform=1))
+        self.rejects(lambda c: c["http_filter"]["hosts"][0]["rules"][0].update(methods="GET"))
+        self.rejects(lambda c: c["http_filter"]["hosts"].append("api.github.com"))
+
+    def test_rejects_a_document_that_is_not_an_object(self):
+        for doc in ([], "policy", 1, None):
+            with self.subTest(doc=doc):
+                with self.assertRaises(pc.PolicyError):
+                    self.load(doc)
+
+    def test_values_are_still_checked_after_the_shape(self):
+        self.rejects(lambda c: c.update(mode="disabled"))
+        self.rejects(lambda c: c.update(container_tls="none"))
+        self.rejects(lambda c: c["http_filter"]["hosts"][0]["rules"][0].update(path="a/../b"))
+
+
 if __name__ == "__main__":
     unittest.main()

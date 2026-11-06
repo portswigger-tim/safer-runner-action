@@ -3,11 +3,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parseFlowLog, parseFlowLogWithOffsets, type FlowRecord } from './flowlog';
 import { parseHttpFilter } from './inputs';
-import { buildHttpFilter, type HttpFilterConfig } from './policy';
+import { buildPolicyConfig, type PolicyConfig } from './policy';
 import { withoutSelfTests } from './selftest';
+import { suggestHttpFilter } from './suggest';
 import {
   ADVISORY_REPORT_NOTE,
   addressClass,
+  allowedRequests,
   buildReport,
   containerSection,
   humanBytes,
@@ -20,9 +22,22 @@ import {
   summarizeContainers,
   summarizeFlows,
   summarizeHttpFilter,
+  type AllowedRequest,
   type FirewallEvent,
-  type HttpFilterSuggestion
+  type HttpFilterSuggestion,
+  type Suggester
 } from './report';
+
+const PROXY_DIR = path.join(__dirname, '..', 'proxy');
+/** proxy/test-vectors.json "suggest": allowed requests -> the suggestion (proxy/suggest.py) */
+interface SuggestVector {
+  name: string;
+  requests: AllowedRequest[];
+  expect: HttpFilterSuggestion;
+  replay?: AllowedRequest[];
+  refuse?: AllowedRequest[];
+}
+const SUGGEST: SuggestVector[] = JSON.parse(fs.readFileSync(path.join(PROXY_DIR, 'test-vectors.json'), 'utf8')).suggest;
 
 const log = [
   { ev: 'start', ok: true },
@@ -470,6 +485,61 @@ describe('upstream IP guard records (H1)', () => {
     // the resolved address is evidence of what the name points at, not what the client dialled
     expect(hosts[0].upstreamIps).toEqual(['169.254.169.254']);
     expect(hosts[0].dsts).toEqual([]);
+  });
+
+  it('carries a layer "ip" record end to end, as proxy/policy.py writes it', () => {
+    // an allowlisted name that resolves to the metadata service (SSRF): TLS allowed by name,
+    // then the upstream refused; the request on that connection never left the runner
+    const records = parseFlowLog(
+      [
+        {
+          ts: 1,
+          ev: 'tls',
+          verdict: 'INTERCEPT',
+          reason: 'allowed',
+          layer: 'sni',
+          sni: 'meta.example.org',
+          dst: '1.2.3.4:443',
+          client: '10.1.0.4:5000',
+          source: 'host'
+        },
+        {
+          ts: 2,
+          ev: 'upstream',
+          verdict: 'BLOCK',
+          reason: 'upstream-ip-forbidden',
+          layer: 'ip',
+          host: 'meta.example.org',
+          dst: '169.254.169.254:443',
+          resolved: ['169.254.169.254'],
+          client: '10.1.0.4:5000',
+          source: 'host'
+        },
+        {
+          ts: 3,
+          ev: 'https',
+          verdict: 'ALLOW',
+          reason: 'allowed',
+          layer: 'http',
+          host: 'meta.example.org',
+          sni: 'meta.example.org',
+          method: 'POST',
+          path: '/latest/api/token',
+          client: '10.1.0.4:5000'
+        }
+      ]
+        .map(r => JSON.stringify(r))
+        .join('\n')
+    );
+    const layer: FlowRecord['layer'] = records[1].layer;
+    expect(layer).toBe('ip');
+    const hosts = summarizeFlows(records);
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).toMatchObject({ name: 'meta.example.org', verdict: 'BLOCK', layers: ['ip'] });
+    expect(allowedRequests(records)).toEqual([]);
+    const md = buildReport({ mode: 'enforce', job: 'j', hosts, firewall: [], dnsRefused: [], selfTests: [] });
+    expect(md).toContain('🕳️ **Internal address** → `169.254.169.254` (cloud metadata service), refused');
+    expect(md).not.toContain('/latest/api/token');
   });
 });
 
@@ -981,115 +1051,27 @@ describe('http-filter', () => {
   });
   const refused = (host: string, method: string, path: string, verdict = 'BLOCK', reason = 'path-not-allowed') =>
     req(host, method, path, { verdict: verdict as FlowRecord['verdict'], reason, status: 403 });
-  const rulesFor = (s: HttpFilterSuggestion, host: string) =>
-    Object.fromEntries((s.hosts.find(h => h.host === host)?.rules ?? []).map(r => [r.path, r.methods.join(', ')]));
+  const rulesFor = (s: HttpFilterSuggestion | undefined, host: string) =>
+    Object.fromEntries((s?.hosts.find(h => h.host === host)?.rules ?? []).map(r => [r.path, r.methods.join(', ')]));
+  /** the post step's suggester: proxy/suggest.py */
+  const py: Suggester = reqs => suggestHttpFilter(reqs, PROXY_DIR);
+  const summarize = (recs: FlowRecord[]) => summarizeHttpFilter(recs, py);
   const base = { job: 'j', firewall: [], dnsRefused: [], selfTests: [] };
 
-  describe('suggested http-filter (level B)', () => {
-    it('collapses a read-only host to one line', () => {
-      const recs = [
-        ...Array.from({ length: 30 }, (_, i) => req('registry.npmjs.org', 'GET', `/pkg-${i}`)),
-        req('registry.npmjs.org', 'HEAD', '/lodash')
-      ];
-      const { suggestion } = summarizeHttpFilter(recs);
-      expect(rulesFor(suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
-      expect(suggestion).toMatchObject({ requests: 31, rules: 1, specific: 0, coarse: false });
+  describe('suggested http-filter (proxy/suggest.py, shared vectors)', () => {
+    // the synthesis itself is checked by proxy/suggest_test.py; this runs the same vectors
+    // through the flow-log path the post step uses (records -> allowedRequests -> suggest.py)
+    it.each(SUGGEST.map(c => [c.name, c] as const))('%s', (_, c) => {
+      const { suggestion } = summarize(c.requests.map(r => req(r.host, r.method, r.path)));
+      expect(suggestion).toEqual(c.expect);
     });
 
-    it('splits reads from writes and templates the write paths (ids never echoed)', () => {
-      const recs = [
-        req('api.github.com', 'GET', '/repos/o/r'),
-        req('api.github.com', 'OPTIONS', '/repos/o/r'),
-        req('api.github.com', 'POST', '/repos/o/r/issues/123/comments'),
-        req('api.github.com', 'POST', '/repos/o/r/issues/456/comments'),
-        req('api.github.com', 'PATCH', '/repos/o/r/issues/123/comments'),
-        req('api.github.com', 'PUT', '/repos/o/r/contents/550e8400-e29b-41d4-a716-446655440000')
-      ];
-      const { suggestion } = summarizeHttpFilter(recs);
-      expect(rulesFor(suggestion, 'api.github.com')).toEqual({
-        '*': 'GET, HEAD, OPTIONS',
-        // reads stay open on a write path too (the most specific rule decides)
-        'repos/o/r/contents/*': 'GET, HEAD, OPTIONS, PUT',
-        'repos/o/r/issues/*/comments': 'GET, HEAD, OPTIONS, POST, PATCH'
-      });
-      const yaml = httpFilterYaml(suggestion);
-      expect(yaml).not.toMatch(/123|456|550e8400/);
-    });
-
-    it('templates a position only when it has many distinct values', () => {
-      const few = summarizeHttpFilter(['a', 'b'].map(x => req('uploads.example.com', 'PUT', `/files/${x}`)));
-      expect(rulesFor(few.suggestion, 'uploads.example.com')).toEqual({ 'files/a': 'PUT', 'files/b': 'PUT' });
-      const many = summarizeHttpFilter(['a', 'b', 'c', 'd'].map(x => req('uploads.example.com', 'PUT', `/files/${x}`)));
-      expect(rulesFor(many.suggestion, 'uploads.example.com')).toEqual({ 'files/*': 'PUT' });
-    });
-
-    it('keeps a git push path-specific, pinned to the repo written to (not folded into a method baseline)', () => {
-      const recs = [
-        req('github.com', 'GET', '/myorg/app.git/info/refs'),
-        req('github.com', 'POST', '/myorg/app.git/git-upload-pack'),
-        req('github.com', 'POST', '/myorg/app.git/git-receive-pack'),
-        req('github.com', 'POST', '/other/lib.git/git-upload-pack')
-      ];
-      const { suggestion } = summarizeHttpFilter(recs);
-      expect(rulesFor(suggestion, 'github.com')).toEqual({
-        '*': 'GET, HEAD',
-        // github.com: one spelling per repository (case and `.git` don't matter there)
-        'myorg/app/git-receive-pack': 'POST',
-        'myorg/app/git-upload-pack': 'POST',
-        'other/lib/git-upload-pack': 'POST'
-      });
-      expect(suggestion.specific).toBe(3);
-      expect(suggestion.coarse).toBe(false);
-    });
-
-    it('templates pushed-to repos only when several are seen, and then says it is coarse', () => {
-      const owners = ['a', 'b', 'c', 'd'];
-      const { suggestion } = summarizeHttpFilter(
-        owners.map(o => req('github.com', 'POST', `/${o}/${o}-repo.git/git-receive-pack`))
+    it('renders a NONE rule as NONE', () => {
+      const trap = SUGGEST.find(c => c.name.startsWith('method-boundary trap'))!;
+      expect(httpFilterYaml(trap.expect)).toBe(
+        'http-filter: |\n  github.com:\n    "*": POST\n    "*/git-receive-pack": NONE\n    "*/git-upload-pack": NONE\n' +
+          '    "myorg/app/git-receive-pack": POST'
       );
-      expect(rulesFor(suggestion, 'github.com')).toEqual({ '*/git-receive-pack': 'POST' });
-      expect(suggestion.coarse).toBe(true);
-    });
-
-    it('method-boundary trap: a broad POST rule never re-opens pushes on a host that pushes', () => {
-      const recs = [
-        req('github.com', 'POST', '/myorg/app.git/git-receive-pack'),
-        // a write whose only segment is an id: templates to "*"
-        req('github.com', 'POST', '/0dd2149bb6f23853')
-      ];
-      const { suggestion } = summarizeHttpFilter(recs);
-      expect(rulesFor(suggestion, 'github.com')).toEqual({
-        '*': 'POST',
-        '*/git-receive-pack': '',
-        '*/git-upload-pack': '',
-        'myorg/app/git-receive-pack': 'POST'
-      });
-      expect(httpFilterYaml(suggestion)).toContain('"*/git-receive-pack": NONE');
-      expect(suggestion.coarse).toBe(true);
-    });
-
-    it('scopes the NONE rule under a broad rule, so it outranks it (most literal characters wins)', () => {
-      const recs = [
-        req('github.com', 'POST', '/myorg/app.git/git-receive-pack'),
-        ...['a', 'b', 'c', 'd'].map(x => req('github.com', 'POST', `/myorg/${x}`))
-      ];
-      const { suggestion } = summarizeHttpFilter(recs);
-      expect(rulesFor(suggestion, 'github.com')).toEqual({
-        'myorg/*': 'POST',
-        'myorg/*/git-receive-pack': '',
-        'myorg/*/git-upload-pack': '',
-        'myorg/app/git-receive-pack': 'POST'
-      });
-    });
-
-    it('adds no NONE rule where nothing broad could match a pack path', () => {
-      const recs = [
-        req('api.github.com', 'POST', '/repos/o/r/issues'),
-        req('github.com', 'POST', '/myorg/app.git/git-receive-pack')
-      ];
-      const { suggestion } = summarizeHttpFilter(recs);
-      expect(rulesFor(suggestion, 'api.github.com')).toEqual({ 'repos/o/r/issues': 'POST' });
-      expect(rulesFor(suggestion, 'github.com')).toEqual({ 'myorg/app/git-receive-pack': 'POST' });
     });
 
     it('leaves out refused requests, GitHub platform hosts, refused connections and unsafe names', () => {
@@ -1106,33 +1088,41 @@ describe('http-filter', () => {
           ev: 'upstream',
           verdict: 'BLOCK',
           reason: 'upstream-ip-forbidden',
+          layer: 'ip',
           host: 'meta.example.com',
           dst: '169.254.169.254:443',
           client: '10.1.0.4:1'
         }
       ];
-      const { suggestion } = summarizeHttpFilter(recs);
-      expect(suggestion.hosts.map(h => h.host)).toEqual(['registry.npmjs.org']);
+      expect(allowedRequests(recs).map(r => r.host)).toEqual([
+        'registry.npmjs.org',
+        'results-receiver.actions.githubusercontent.com',
+        'productionresultssa1.blob.core.windows.net',
+        '0dd2149bb6f23853abcdef.example.com'
+      ]);
+      const { suggestion } = summarize(recs);
+      expect(suggestion?.hosts.map(h => h.host)).toEqual(['registry.npmjs.org']);
       expect(rulesFor(suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
     });
 
     it('leaves out what the built-in platform list allowed on a filtered host', () => {
-      const { suggestion } = summarizeHttpFilter([
+      const { suggestion } = summarize([
         req('api.github.com', 'GET', '/repos/o/r'),
         req('api.github.com', 'POST', '/repos/o/r/check-runs', { filter: 'platform', filter_rule: null })
       ]);
       expect(rulesFor(suggestion, 'api.github.com')).toEqual({ '*': 'GET, HEAD' });
-      expect(suggestion.requests).toBe(1);
+      expect(suggestion?.requests).toBe(1);
     });
 
-    it('never pastes a segment that could break the YAML or the engine', () => {
-      const { suggestion } = summarizeHttpFilter([
-        req('api.example.com', 'POST', '/a"b/x'),
-        req('api.example.com', 'POST', '/c:d/y'),
-        // the engine refuses a dot segment whatever the rules say: nothing to suggest
-        req('api.example.com', 'POST', '/../z')
-      ]);
-      expect(rulesFor(suggestion, 'api.example.com')).toEqual({ '*/x': 'POST', '*/y': 'POST' });
+    it('builds no suggestion without a suggester, and the report still renders', () => {
+      const recs = [req('registry.npmjs.org', 'GET', '/lodash'), refused('registry.npmjs.org', 'PUT', '/x')];
+      for (const httpFilter of [summarizeHttpFilter(recs), summarizeHttpFilter(recs, () => undefined)]) {
+        expect(httpFilter.suggestion).toBeUndefined();
+        expect(httpFilter.blocks).toHaveLength(1);
+        const md = buildReport({ ...base, mode: 'analyze', hosts: summarizeFlows(recs), httpFilter });
+        expect(md).toContain('### 🔒 Refused by `http-filter` (1)');
+        expect(md).not.toContain('Suggested <code>http-filter');
+      }
     });
   });
 
@@ -1145,7 +1135,7 @@ describe('http-filter', () => {
       refused('github.com', 'POST', `/evil/${secret}.git/git-receive-pack`),
       refused('registry.npmjs.org', 'PUT', '/lodash', 'BLOCK', 'method-not-allowed')
     ];
-    const hf = summarizeHttpFilter(recs);
+    const hf = summarize(recs);
 
     it('groups refusals by host, method and reason (the path is never kept)', () => {
       expect(hf.blocks).toEqual([
@@ -1167,6 +1157,7 @@ describe('http-filter', () => {
     });
 
     it('never turns a refusal into a rule', () => {
+      expect(allowedRequests(recs).map(r => r.path)).toEqual(['/lodash', '/myorg/app.git/git-upload-pack']);
       expect(rulesFor(hf.suggestion, 'github.com')).toEqual({ 'myorg/app/git-upload-pack': 'POST' });
       expect(rulesFor(hf.suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
     });
@@ -1194,7 +1185,7 @@ describe('http-filter', () => {
         ...base,
         mode: 'analyze',
         hosts: summarizeFlows(wb),
-        httpFilter: summarizeHttpFilter(wb)
+        httpFilter: summarize(wb)
       });
       expect(md).toContain('<kbd>3 requests the http-filter would refuse</kbd>');
       expect(md).not.toContain('would be blocked</kbd>');
@@ -1211,18 +1202,15 @@ describe('http-filter', () => {
         refused('api.example.com', 'X' + token, '/x', 'BLOCK', 'method-not-allowed'),
         refused('api.example.com', 'delete', '/x', 'BLOCK', 'method-not-allowed')
       ];
-      const hf = summarizeHttpFilter(recs);
+      const hf = summarize(recs);
       expect(hf.blocks.map(b => [b.method, b.tries])).toEqual([
         ['INVALID', 2],
         ['DELETE', 1]
       ]);
       // never suggested either: only standard methods go into a rule
-      const allowed = summarizeHttpFilter([
-        req('api.example.com', token, '/y'),
-        req('api.example.com', 'PROPFIND', '/z')
-      ]);
-      expect(allowed.suggestion.hosts).toEqual([]);
-      expect(httpFilterYaml(allowed.suggestion)).not.toMatch(/INVALID|A1B2|PROPFIND/);
+      const allowed = summarize([req('api.example.com', token, '/y'), req('api.example.com', 'PROPFIND', '/z')]);
+      expect(allowed.suggestion?.hosts).toEqual([]);
+      expect(httpFilterYaml(allowed.suggestion!)).not.toMatch(/INVALID|A1B2|PROPFIND/);
       const md = buildReport({ ...base, mode: 'enforce', hosts: summarizeFlows(recs), httpFilter: hf });
       expect(md).not.toMatch(/A1B2C3D4E5F6/i);
       expect(md).toContain('| `api.example.com` | `INVALID` ‹path hidden› | method not allowed on this path | 2 |');
@@ -1237,7 +1225,7 @@ describe('http-filter', () => {
         refused('api.example.com', 'POST', `/up${chunks}`),
         refused('api.example.com', 'PUT', '/plain/words/only')
       ];
-      const hf = summarizeHttpFilter(recs);
+      const hf = summarize(recs);
       // grouped without the path, so neither its text nor how many distinct ones there were shows
       expect(hf.blocks).toEqual([
         { host: 'api.example.com', method: 'POST', reason: 'path-not-allowed', verdict: 'BLOCK', tries: 2 },
@@ -1254,120 +1242,70 @@ describe('http-filter', () => {
     });
   });
 
-  describe('round trip: suggestion → http-filter input → policy.json → the addon allows the request', () => {
-    /** proxy/policy_core.py HttpFilter.decide for each request ("allow:allowed", "block:<reason>", null) */
-    const engine = (config: HttpFilterConfig, reqs: { host: string; method: string; path: string }[]) => {
+  describe('round trip: printed suggestion → http-filter input → policy.json → the addon', () => {
+    /**
+     * proxy/policy_core.py: policy.json checked and loaded as the addon does, then the decision
+     * for each request ("allow:allowed", "block:<reason>"). `logged[i]`, when given, is `reqs[i]`
+     * as logged: a request suggest.py left out (suggest.observe) decides as null.
+     */
+    const engine = (config: PolicyConfig, reqs: AllowedRequest[], logged?: AllowedRequest[]) => {
       const script = [
         'import json, sys',
         'sys.path.insert(0, sys.argv[1])',
-        'from policy_core import HttpFilter',
+        'import policy_core as pc, suggest',
         'd = json.load(sys.stdin)',
-        'f = HttpFilter.from_config(d["config"])',
-        'out = [f.decide(r["host"], r["method"], r["path"]) for r in d["reqs"]]',
-        'print(json.dumps([x and f"{x.action}:{x.reason}" for x in out]))'
+        'pc.validate_config(d["config"])',
+        'p = pc.Policy.from_config(d["config"])',
+        'def decide(r, logged):',
+        '    if logged is not None and not suggest.observe([logged]):',
+        '        return None',
+        '    x = p.decide_filter(r["host"].lower(), r["method"].upper(), r["path"])',
+        '    return x and f"{x.action}:{x.reason}"',
+        'logged = d["logged"] or [None] * len(d["reqs"])',
+        'print(json.dumps([decide(r, l) for r, l in zip(d["reqs"], logged)]))'
       ].join('\n');
-      const run = spawnSync('python3', ['-I', '-c', script, path.join(__dirname, '..', 'proxy')], {
-        input: JSON.stringify({ config, reqs }),
+      const run = spawnSync('python3', ['-I', '-c', script, PROXY_DIR], {
+        input: JSON.stringify({ config, reqs, logged: logged ?? null }),
         encoding: 'utf8'
       });
       if (run.status !== 0) throw new Error(run.stderr);
       return JSON.parse(run.stdout) as (string | null)[];
     };
-    /** the YAML the report prints, read back as the action reads the input */
-    const asPolicy = (s: HttpFilterSuggestion): HttpFilterConfig => {
-      const hosts = parseHttpFilter(httpFilterYaml(s).split('\n').slice(1).join('\n'));
-      const warnings: string[] = [];
-      const config = buildHttpFilter(
-        hosts,
-        false,
-        hosts.map(h => h.host),
-        [],
-        warnings
-      );
-      expect(warnings).toEqual([]);
-      return config;
-    };
-    const longSegment = 'session-'.repeat(40);
-    /** [host, method, path as sent, path as logged] */
-    const traffic: [string, string, string, string?][] = [
-      ['upload.pypi.org', 'POST', '/legacy/'],
-      ['pypi.org', 'GET', '/simple/requests/'],
-      ['uploads.example.com', 'PUT', '/files/a%2Fb/c'],
-      ['uploads.example.com', 'PUT', '/files/%41pp/c'],
-      ['paths.example.com', 'POST', '/a//b'],
-      ['forms.example.com', 'POST', '/report;jsessionid=x'],
-      ['drafts.example.com', 'PUT', '/draft;v=2/'],
-      ['github.com', 'POST', '/MyOrg//Tools.git/git-upload-pack'],
-      ['uploads.example.com', 'POST', '/'],
-      ['github.com', 'GET', '/MyOrg/App.git/info/refs'],
-      ['github.com', 'POST', '/MyOrg/App.git/git-receive-pack'],
-      ['github.com', 'POST', '/myorg/app/git-upload-pack'],
-      ['github.com', 'POST', '/myorg/App/git-upload-pack'],
-      ['api.github.com', 'GET', '/repos/o/r/issues/1/comments'],
-      ...[1, 2, 3, 4, 5].map((n): [string, string, string] => [
-        'api.github.com',
-        'POST',
-        `/repos/o/r/issues/${n}/comments`
-      ]),
-      ...(['a', 'b', 'c', 'd'].map(o => ['codeberg.org', 'POST', `/${o}/repo/git-receive-pack`]) as [
-        string,
-        string,
-        string
-      ][]),
-      [
-        'blobs.example.com',
-        'PUT',
-        `/v2/acme/app/blobs/uploads/${longSegment}/part/2`,
-        `/v2/acme/app/blobs/uploads/${longSegment}`.slice(0, 256)
-      ],
-      // cut short in the middle of an escape
-      [
-        'logs.example.com',
-        'PUT',
-        `/runs/${'chunk-'.repeat(60)}%41/end`,
-        `/runs/${'chunk-'.repeat(60)}%41`.slice(0, 256)
-      ]
-    ];
-    // a `//` is replayed collapsed: the engine refuses the raw form unless a `*` spans it, which
-    // the suggestion never adds (it covers the request as a client normally sends it)
-    const sent = traffic.map(([host, method, p]) => ({ host, method, path: p.replace(/\/{2,}/g, '/') }));
-
-    it('the suggested http-filter allows every request it was built from', () => {
-      const recs = traffic.map(([host, method, p, logged]) => req(host, method, logged ?? p));
-      expect(recs[recs.length - 1].path).toHaveLength(256);
-      const { suggestion } = summarizeHttpFilter(recs);
-      const config = asPolicy(suggestion);
-      const got = engine(config, sent);
-      expect(sent.filter((_, i) => got[i] !== 'allow:allowed')).toEqual([]);
-      // a pattern can't end in `/`: the request and its relaxed form each need a rule
-      expect(rulesFor(suggestion, 'upload.pypi.org')).toEqual({ legacy: 'POST', 'legacy/*': 'POST' });
-      expect(rulesFor(suggestion, 'forms.example.com')).toEqual({ report: 'POST', 'report*': 'POST' });
-      // every form must be allowed: params and trailing slash, each with and without the other
-      expect(rulesFor(suggestion, 'drafts.example.com')).toEqual({
-        draft: 'PUT',
-        'draft*': 'PUT',
-        'draft*/*': 'PUT',
-        'draft/*': 'PUT'
+    /** the YAML the report prints, read back as the action reads the input, written as policy.json */
+    const asPolicy = (s: HttpFilterSuggestion): PolicyConfig => {
+      const httpFilter = parseHttpFilter(httpFilterYaml(s).split('\n').slice(1).join('\n'));
+      const { config, warnings } = buildPolicyConfig({
+        mode: 'enforce',
+        githubDomains: [],
+        allowedDomains: s.hosts.map(h => h.host).join('\n'),
+        passthroughDomains: '',
+        blockRiskySubdomains: false,
+        containerPort: 20001,
+        httpFilter,
+        allowGithubPlatform: false
       });
-      expect(rulesFor(suggestion, 'paths.example.com')).toEqual({ 'a/b': 'POST' });
-      expect(engine(config, [{ host: 'paths.example.com', method: 'POST', path: '/a//b' }])).toEqual([
-        'block:path-not-allowed'
-      ]);
-      expect(rulesFor(suggestion, 'blobs.example.com')).toEqual({ 'v2/acme/app/blobs/uploads/*': 'PUT' });
-      // and still refuses what it should: a push nobody made, a write the job never did
-      expect(
-        engine(config, [
-          { host: 'github.com', method: 'POST', path: '/other/repo.git/git-receive-pack' },
-          { host: 'upload.pypi.org', method: 'PUT', path: '/legacy/' },
-          { host: 'pypi.org', method: 'POST', path: '/simple/requests/' }
-        ])
-      ).toEqual(['block:method-not-allowed', 'block:method-not-allowed', 'block:method-not-allowed']);
+      expect(warnings).toEqual([]);
+      return JSON.parse(JSON.stringify(config));
+    };
+
+    it.each(SUGGEST.map(c => [c.name, c] as const))('%s', (_, c) => {
+      const config = asPolicy(c.expect);
+      // every request the suggestion was built from (as sent: replay, when the vector has one)
+      const sent = c.replay ?? c.requests;
+      const got = engine(config, sent, c.requests);
+      expect(got.some(d => d !== null)).toBe(c.expect.hosts.length > 0);
+      expect(sent.filter((_, i) => got[i] !== null && got[i] !== 'allow:allowed')).toEqual([]);
+      if (c.refuse) {
+        expect(
+          engine(config, c.refuse).every(d => d === 'block:method-not-allowed' || d === 'block:path-not-allowed')
+        ).toBe(true);
+      }
     });
   });
 
   it('analyze: suggests a filter even when none is configured; enforce only on a refusal', () => {
     const recs = [req('registry.npmjs.org', 'GET', '/lodash'), req('pypi.org', 'GET', '/simple/requests/')];
-    const httpFilter = summarizeHttpFilter(recs);
+    const httpFilter = summarize(recs);
     const hosts = summarizeFlows(recs);
     const analyze = buildReport({ ...base, mode: 'analyze', hosts, httpFilter });
     expect(analyze).toContain(

@@ -26,6 +26,11 @@
  * it (short or word-like labels) can get through whole and recoverable, even in a single name.
  * It doesn't apply to the raw logs on the runner (`proxy-flows.jsonl` and the DNS/firewall
  * logs are unredacted).
+ *
+ * The suggested http-filter is built in proxy/suggest.py, which holds the redaction it needs:
+ * the same label check (looks_encoded) for names, and the stricter check for path segments
+ * (path_segment_shown). Both copies of the label check run against proxy/test-vectors.json
+ * "redact".
  */
 
 export const HEX_MIN_LEN = 8;
@@ -80,11 +85,6 @@ export function needsRedaction(name: string): boolean {
   return redactName(name) !== name.toLowerCase();
 }
 
-/** A URL path segment that looks like encoded data: any `.`-separated part checked as a label is. */
-export function segmentLooksEncoded(segment: string): boolean {
-  return segment.split('.').some(looksEncoded);
-}
-
 /** Request methods a report shows by name; any other token is the caller's choice, so it can be the data. */
 export const STANDARD_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT'];
 /** how any other method is shown: a fixed word, never the token itself */
@@ -94,29 +94,6 @@ export const CUSTOM_METHOD = 'INVALID';
 export function methodLabel(method: unknown): string {
   const m = String(method ?? '').toUpperCase();
   return STANDARD_METHODS.includes(m) ? m : CUSTOM_METHOD;
-}
-
-/** digits in one shown path segment (`v1`, `issues/12`); more could be a number someone chose */
-export const MAX_SEGMENT_DIGITS = 2;
-export const MAX_SEGMENT_LEN = 64;
-/** hex of this length or more (`a1f3`, `cafe`) is not shown in a path */
-export const PATH_HEX_LEN = 4;
-const PATH_WORD = /^[A-Za-z0-9._~@+-]+$/;
-
-/**
- * Can this segment of an allowed request's path be printed (in a suggested rule)? Stricter than
- * a hostname label: a segment is shown only when it is plain characters, not too long, has at
- * most MAX_SEGMENT_DIGITS digits, is not PATH_HEX_LEN+ hex, and no `.`-part of it looks encoded.
- * Best effort, like names: word-like data can still get through. A refused request's path is
- * never printed at all (PATH_HIDDEN).
- */
-export function pathSegmentShown(segment: string): boolean {
-  if (!PATH_WORD.test(segment) || segment.length > MAX_SEGMENT_LEN || segment === '.' || segment === '..') {
-    return false;
-  }
-  if ((segment.match(/[0-9]/g) ?? []).length > MAX_SEGMENT_DIGITS) return false;
-  if (new RegExp(`^[0-9a-f]{${PATH_HEX_LEN},}$`, 'i').test(segment.replace(/[-_.~]/g, ''))) return false;
-  return !segmentLooksEncoded(segment);
 }
 
 /**

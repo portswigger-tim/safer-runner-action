@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
+import * as path from 'path';
 import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
 import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
@@ -12,10 +13,14 @@ import {
   parseFirewallLog,
   summarizeContainers,
   summarizeFlows,
-  summarizeHttpFilter
+  summarizeHttpFilter,
+  type AllowedRequest,
+  type HttpFilterSuggestion
 } from './report';
 import { containerAddresses } from './docker';
+import { actionRoot } from './proxy';
 import { type SelfTestWindow, withoutSelfTests } from './selftest';
+import { suggestHttpFilter } from './suggest';
 import { readSudoUsage } from './sudo';
 import { SystemValidator } from './validation';
 import { parseAllowedDomains, type Mode } from './policy';
@@ -41,6 +46,19 @@ function readPlatformAutoAllowed(): number | undefined {
     const n = JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8'))?.http_filter?.platform_auto_allowed;
     return typeof n === 'number' ? n : undefined;
   } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The suggested http-filter (proxy/suggest.py, from the action checkout). A failure costs only
+ * the suggestion: the rest of the report still renders.
+ */
+function suggestion(requests: AllowedRequest[]): HttpFilterSuggestion | undefined {
+  try {
+    return suggestHttpFilter(requests, path.join(actionRoot(), 'proxy'));
+  } catch (error) {
+    core.warning(`No suggested http-filter: ${error}`);
     return undefined;
   }
 }
@@ -86,7 +104,7 @@ async function run(): Promise<void> {
       : { records: [], offsets: [] };
     const records = withoutSelfTests(flows.records, flows.offsets, marker.selfTestWindow);
     const hosts = summarizeFlows(records);
-    const httpFilter = summarizeHttpFilter(records);
+    const httpFilter = summarizeHttpFilter(records, suggestion);
     const firewall = fs.existsSync(FIREWALL_LOG) ? parseFirewallLog(fs.readFileSync(FIREWALL_LOG, 'utf8')) : [];
     const containers = summarizeContainers(records, firewall, await containerAddresses());
     const dnsRefused = readRefusedNames(DNS_LOG).filter(n => n !== marker.dnsSelfTestName);

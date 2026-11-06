@@ -3231,6 +3231,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
 const egress_1 = __nccwpck_require__(765);
 const flowlog_1 = __nccwpck_require__(5422);
@@ -3238,7 +3239,9 @@ const dns_parser_1 = __nccwpck_require__(1106);
 const redact_1 = __nccwpck_require__(283);
 const report_1 = __nccwpck_require__(5444);
 const docker_1 = __nccwpck_require__(2306);
+const proxy_1 = __nccwpck_require__(3828);
 const selftest_1 = __nccwpck_require__(3180);
+const suggest_1 = __nccwpck_require__(3146);
 const sudo_1 = __nccwpck_require__(1279);
 const validation_1 = __nccwpck_require__(8449);
 const policy_1 = __nccwpck_require__(2224);
@@ -3250,6 +3253,19 @@ function readPlatformAutoAllowed() {
         return typeof n === 'number' ? n : undefined;
     }
     catch {
+        return undefined;
+    }
+}
+/**
+ * The suggested http-filter (proxy/suggest.py, from the action checkout). A failure costs only
+ * the suggestion: the rest of the report still renders.
+ */
+function suggestion(requests) {
+    try {
+        return (0, suggest_1.suggestHttpFilter)(requests, path.join((0, proxy_1.actionRoot)(), 'proxy'));
+    }
+    catch (error) {
+        core.warning(`No suggested http-filter: ${error}`);
         return undefined;
     }
 }
@@ -3294,7 +3310,7 @@ async function run() {
             : { records: [], offsets: [] };
         const records = (0, selftest_1.withoutSelfTests)(flows.records, flows.offsets, marker.selfTestWindow);
         const hosts = (0, report_1.summarizeFlows)(records);
-        const httpFilter = (0, report_1.summarizeHttpFilter)(records);
+        const httpFilter = (0, report_1.summarizeHttpFilter)(records, suggestion);
         const firewall = fs.existsSync(constants_1.FIREWALL_LOG) ? (0, report_1.parseFirewallLog)(fs.readFileSync(constants_1.FIREWALL_LOG, 'utf8')) : [];
         const containers = (0, report_1.summarizeContainers)(records, firewall, await (0, docker_1.containerAddresses)());
         const dnsRefused = (0, dns_parser_1.readRefusedNames)(constants_1.DNS_LOG).filter(n => n !== marker.dnsSelfTestName);
@@ -3739,16 +3755,19 @@ async function startProxy(o, timeoutMs = 90000) {
  * it (short or word-like labels) can get through whole and recoverable, even in a single name.
  * It doesn't apply to the raw logs on the runner (`proxy-flows.jsonl` and the DNS/firewall
  * logs are unredacted).
+ *
+ * The suggested http-filter is built in proxy/suggest.py, which holds the redaction it needs:
+ * the same label check (looks_encoded) for names, and the stricter check for path segments
+ * (path_segment_shown). Both copies of the label check run against proxy/test-vectors.json
+ * "redact".
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.PATH_HIDDEN = exports.PATH_HEX_LEN = exports.MAX_SEGMENT_LEN = exports.MAX_SEGMENT_DIGITS = exports.CUSTOM_METHOD = exports.STANDARD_METHODS = exports.REDACTED = exports.ENTROPY_BITS = exports.ENTROPY_MIN_LEN = exports.LONG_LABEL_LEN = exports.MIN_DIGIT_RUNS = exports.MAX_VOWEL_RATIO = exports.ENCODED_MIN_LEN = exports.SHORT_HEX_LEN = exports.HEX_MIN_LEN = void 0;
+exports.PATH_HIDDEN = exports.CUSTOM_METHOD = exports.STANDARD_METHODS = exports.REDACTED = exports.ENTROPY_BITS = exports.ENTROPY_MIN_LEN = exports.LONG_LABEL_LEN = exports.MIN_DIGIT_RUNS = exports.MAX_VOWEL_RATIO = exports.ENCODED_MIN_LEN = exports.SHORT_HEX_LEN = exports.HEX_MIN_LEN = void 0;
 exports.shannonBits = shannonBits;
 exports.looksEncoded = looksEncoded;
 exports.redactName = redactName;
 exports.needsRedaction = needsRedaction;
-exports.segmentLooksEncoded = segmentLooksEncoded;
 exports.methodLabel = methodLabel;
-exports.pathSegmentShown = pathSegmentShown;
 exports.HEX_MIN_LEN = 8;
 /** digits, or hex with at least one digit, from this length (`a1b2c3`, `482913`) */
 exports.SHORT_HEX_LEN = 6;
@@ -3806,10 +3825,6 @@ function redactName(name) {
 function needsRedaction(name) {
     return redactName(name) !== name.toLowerCase();
 }
-/** A URL path segment that looks like encoded data: any `.`-separated part checked as a label is. */
-function segmentLooksEncoded(segment) {
-    return segment.split('.').some(looksEncoded);
-}
 /** Request methods a report shows by name; any other token is the caller's choice, so it can be the data. */
 exports.STANDARD_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT'];
 /** how any other method is shown: a fixed word, never the token itself */
@@ -3818,29 +3833,6 @@ exports.CUSTOM_METHOD = 'INVALID';
 function methodLabel(method) {
     const m = String(method ?? '').toUpperCase();
     return exports.STANDARD_METHODS.includes(m) ? m : exports.CUSTOM_METHOD;
-}
-/** digits in one shown path segment (`v1`, `issues/12`); more could be a number someone chose */
-exports.MAX_SEGMENT_DIGITS = 2;
-exports.MAX_SEGMENT_LEN = 64;
-/** hex of this length or more (`a1f3`, `cafe`) is not shown in a path */
-exports.PATH_HEX_LEN = 4;
-const PATH_WORD = /^[A-Za-z0-9._~@+-]+$/;
-/**
- * Can this segment of an allowed request's path be printed (in a suggested rule)? Stricter than
- * a hostname label: a segment is shown only when it is plain characters, not too long, has at
- * most MAX_SEGMENT_DIGITS digits, is not PATH_HEX_LEN+ hex, and no `.`-part of it looks encoded.
- * Best effort, like names: word-like data can still get through. A refused request's path is
- * never printed at all (PATH_HIDDEN).
- */
-function pathSegmentShown(segment) {
-    if (!PATH_WORD.test(segment) || segment.length > exports.MAX_SEGMENT_LEN || segment === '.' || segment === '..') {
-        return false;
-    }
-    if ((segment.match(/[0-9]/g) ?? []).length > exports.MAX_SEGMENT_DIGITS)
-        return false;
-    if (new RegExp(`^[0-9a-f]{${exports.PATH_HEX_LEN},}$`, 'i').test(segment.replace(/[-_.~]/g, '')))
-        return false;
-    return !segmentLooksEncoded(segment);
 }
 /**
  * How the path of a refused request is shown: always this, never the path. Whoever sent the
@@ -3861,7 +3853,7 @@ exports.PATH_HIDDEN = '‹path hidden›';
  * DENIED first and in full; anything that has to be cut is said so explicitly (review M6).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SENSITIVE_PATH_SUFFIXES = exports.ADVISORY_REPORT_NOTE = void 0;
+exports.ADVISORY_REPORT_NOTE = void 0;
 exports.summarizeFlows = summarizeFlows;
 exports.parseFirewallLog = parseFirewallLog;
 exports.categorize = categorize;
@@ -3871,6 +3863,7 @@ exports.blockedName = blockedName;
 exports.statusSummary = statusSummary;
 exports.summarizeContainers = summarizeContainers;
 exports.containerSection = containerSection;
+exports.allowedRequests = allowedRequests;
 exports.summarizeHttpFilter = summarizeHttpFilter;
 exports.httpFilterYaml = httpFilterYaml;
 exports.suggestedAllowlist = suggestedAllowlist;
@@ -4329,329 +4322,17 @@ const FILTER_REASON_TEXT = {
     'method-not-allowed': 'method not allowed on this path',
     'path-not-allowed': 'path not allowed'
 };
-/** Not the exfil surface: in a suggestion they collapse to one `"*"` line per host. */
-const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
-const METHOD_ORDER = [...READ_METHODS, 'POST', 'PUT', 'PATCH', 'DELETE'];
-/**
- * Endpoints a suggestion keeps path-specific, matched on the end of the path, with the methods
- * they use. On these a read and a write share a method (git fetch and push are both POST), so
- * folding them into a host's method baseline would re-open the write everywhere. Seeded with
- * the git pack URLs; add more as they come up (registry blob uploads, PyPI `legacy`, ...). A
- * missing entry only makes a suggestion looser, never wrong at enforcement: the user reviews it.
- */
-exports.SENSITIVE_PATH_SUFFIXES = [
-    { suffix: 'git-receive-pack', methods: ['POST'] },
-    { suffix: 'git-upload-pack', methods: ['POST'] }
-];
-/**
- * Hosts the built-in platform allowlist covers (step logs, artifacts, caches, OIDC). Left out of
- * the suggestion, which describes the job's own traffic.
- */
-const PLATFORM_HOSTS = ['*.actions.githubusercontent.com', 'productionresultssa*.blob.core.windows.net'];
-/** Distinct literals kept at one path position (same prefix); more than this become `*`. */
-const MAX_PINNED = 3;
-/** proxy/policy.py MAX_PATH_LOG: a logged path this long may have been cut short */
-const PATH_LOG_MAX = 256;
 function isFilterBlock(r) {
     return DENIED.has(r.verdict) && FILTER_REASONS.has(r.reason ?? '');
 }
 /**
- * Numeric, empty, or not printable as a path segment (redact.ts pathSegmentShown: encoded-looking,
- * unusual characters, dot segments): becomes `*` in a suggestion.
+ * Allowed intercepted requests (the only ones with a method and path), never on a connection the
+ * upstream IP guard refused, less what the built-in platform list allowed (`filter: platform`).
+ * A refused request never goes into a suggestion: that would quietly undo the user's own filter,
+ * and its path was chosen by whoever sent it. Names, methods and paths are checked by the
+ * suggester itself.
  */
-function isVariableSegment(segment) {
-    return /^\d+$/.test(segment) || !(0, redact_1.pathSegmentShown)(segment);
-}
-/** `*`, or the segment itself; `name;params` keeps its name (`name*`), as the engine also matches it without them. */
-function templateSegment(segment) {
-    if (!isVariableSegment(segment))
-        return segment;
-    const name = segment.split(';', 1)[0];
-    return segment.includes(';') && name && !isVariableSegment(name) ? `${name}*` : '*';
-}
-/** policy.ts stripGit: on a git host `repo` and `repo.git` are one segment. */
-function stripGit(segment) {
-    return segment.endsWith('.git') && segment.length > 4 ? segment.slice(0, -4) : segment;
-}
-// The engine's path matching, mirrored to check a suggestion before it is shown. It MUST track
-// proxy/policy_core.py (path_forms, PathGlob, _decide_form): when that changes, change this too.
-// The round-trip test in report.test.ts runs every suggestion through the real parser and addon,
-// so drift fails there.
-/** proxy/policy_core.py MAX_PATH_SEGMENTS: a longer path is refused */
-const ENGINE_MAX_SEGMENTS = 256;
-function gitPath(path) {
-    return path.toLowerCase().split('/').map(stripGit).join('/');
-}
-/**
- * The forms of a logged request path the engine decides (path_forms): decoded once without the
- * leading `/`, then every combination of `;params` removed, repeated slashes collapsed and
- * trailing slashes removed (and, on a git host, its spelling canonicalised). A request is allowed
- * only if every form is. Undefined when the engine refuses the path whatever the rules say.
- *
- * Only the covered forms are returned (`forms`), each also as segments (`shapes`): those with no
- * empty segment before the last one. A `//` in a path is not reproduced (that would take a `*`
- * spanning segments): the suggestion covers the collapsed request, as a client normally sends
- * it. A path cut short in the log ends in an unknown segment (`''`, so `*`).
- */
-function pathForms(path, git) {
-    const truncated = path.length >= PATH_LOG_MAX;
-    let raw = path.split('?', 1)[0];
-    if (truncated)
-        raw = raw.replace(/%[0-9a-fA-F]?$/, '');
-    if (raw.includes('#') || /%(?![0-9a-fA-F]{2})/.test(raw))
-        return undefined;
-    if (raw.startsWith('/'))
-        raw = raw.slice(1);
-    let decoded;
-    try {
-        decoded = decodeURIComponent(raw);
-    }
-    catch {
-        return undefined;
-    }
-    if (/[\\\x00-\x1f\x7f]/.test(decoded) || /%[0-9a-fA-F]{2}/.test(decoded))
-        return undefined;
-    let forms = [decoded];
-    const relax = [
-        (f) => f
-            .split('/')
-            .map(x => x.split(';', 1)[0])
-            .join('/'),
-        (f) => f.replace(/\/{2,}/g, '/').replace(/^\/+/, ''),
-        (f) => f.replace(/\/+$/, '')
-    ];
-    for (const r of relax)
-        forms = forms.concat(forms.map(r));
-    if (git)
-        forms = forms.map(gitPath);
-    forms = [...new Set(forms)];
-    for (const f of forms) {
-        const segs = f.split('/');
-        if (segs.length > ENGINE_MAX_SEGMENTS || segs.some(x => x === '.' || x === '..'))
-            return undefined;
-    }
-    // only the covered forms are settled: widening a rule for a `//` form would open far more
-    const covered = forms.filter(f => f.split('/').slice(0, -1).every(Boolean));
-    const shapes = covered
-        .map(f => (f === '' ? [] : f.split('/')))
-        .map(segs => (truncated && segs.length ? [...segs.slice(0, -1), ''] : segs));
-    return { forms: covered, shapes };
-}
-function pathGlob(pattern, git) {
-    const p = (0, policy_1.validatePathPattern)(pattern);
-    return (git ? p.toLowerCase() : p).split('/').map(s => (s === '*' ? null : (git ? stripGit(s) : s).split('*')));
-}
-/** PathGlob._segment_matches: greedy, no backtracking */
-function segmentMatches(parts, s) {
-    if (parts.length === 1)
-        return s === parts[0];
-    const first = parts[0];
-    const last = parts[parts.length - 1];
-    if (s.length < first.length + last.length || !s.startsWith(first) || !s.endsWith(last))
-        return false;
-    let i = first.length;
-    const end = s.length - last.length;
-    for (const mid of parts.slice(1, -1)) {
-        const j = s.slice(0, end).indexOf(mid, i);
-        if (j < 0)
-            return false;
-        i = j + mid.length;
-    }
-    return true;
-}
-/** PathGlob.match */
-function globMatches(glob, path) {
-    let states = new Set([0]);
-    for (const s of path.split('/')) {
-        const next = new Set();
-        for (const k of states) {
-            const seg = glob[k];
-            if (k < glob.length && (seg === null || segmentMatches(seg, s)))
-                next.add(k + 1);
-            if (k > 0 && glob[k - 1] === null)
-                next.add(k);
-        }
-        if (!next.size)
-            return false;
-        states = next;
-    }
-    return states.has(glob.length);
-}
-/** PathGlob.specificity: literal characters, then segments, then fewer spans, then fewer `*` */
-function globSpecificity(glob) {
-    const parts = glob.filter((s) => s !== null);
-    const spans = glob.length - parts.length;
-    const lit = parts.reduce((n, s) => n + s.join('').length, 0) + glob.length - 1;
-    const stars = parts.reduce((n, s) => n + s.length - 1, 0) + spans;
-    return [lit, glob.length, -spans, -stars];
-}
-function compareSpecificity(a, b) {
-    for (let i = 0; i < a.length; i++)
-        if (a[i] !== b[i])
-            return a[i] - b[i];
-    return 0;
-}
-/**
- * Make the rules allow every observed request in each of its forms, as the engine decides
- * (_decide_form: the most specific matching rules win and every tied winner must allow the
- * method): a winner that lacks the method gets it, and a NONE guard that would refuse an observed
- * request is dropped.
- */
-function settleRules(byPath, reqs, git) {
-    for (let pass = 0; pass < 8; pass++) {
-        const rules = [...byPath.keys()].map(p => {
-            const glob = pathGlob(p, git);
-            return { p, glob, spec: globSpecificity(glob) };
-        });
-        let changed = false;
-        for (const r of reqs) {
-            for (const form of r.forms) {
-                const hits = rules.filter(x => byPath.has(x.p) && globMatches(x.glob, form));
-                if (!hits.length)
-                    continue;
-                const best = hits.reduce((a, b) => (compareSpecificity(a.spec, b.spec) >= 0 ? a : b)).spec;
-                for (const w of hits.filter(x => compareSpecificity(x.spec, best) === 0)) {
-                    const ms = byPath.get(w.p);
-                    if (ms.size === 0)
-                        byPath.delete(w.p);
-                    else if (ms.has(r.method))
-                        continue;
-                    else
-                        ms.add(r.method);
-                    changed = true;
-                }
-            }
-        }
-        if (!changed)
-            return;
-    }
-}
-function sensitiveSuffixOf(segs) {
-    const p = segs.join('/');
-    return exports.SENSITIVE_PATH_SUFFIXES.find(s => p === s.suffix || p.endsWith(`/${s.suffix}`));
-}
-function methodRank(m) {
-    const i = METHOD_ORDER.indexOf(m);
-    return i < 0 ? METHOD_ORDER.length : i;
-}
-function sortMethods(methods) {
-    return [...methods].sort((a, b) => methodRank(a) - methodRank(b) || a.localeCompare(b));
-}
-/**
- * Template paths: a payload-looking segment becomes `*`, and so does every literal at a position
- * where more than MAX_PINNED distinct ones follow the same prefix. The last `keep` segments of
- * a path (its sensitive suffix) stay literal. A run of `*` merges into one: a standalone `*`
- * spans any depth.
- */
-function templatePaths(paths) {
-    const out = paths.map(p => p.segs.map((s, i) => (i < p.segs.length - p.keep ? templateSegment(s) : s)));
-    const free = (i, d) => d < out[i].length - paths[i].keep && out[i][d] !== '*';
-    const depth = Math.max(0, ...out.map(s => s.length));
-    for (let d = 0; d < depth; d++) {
-        const seen = new Map();
-        out.forEach((s, i) => {
-            if (!free(i, d))
-                return;
-            const k = s.slice(0, d).join('/');
-            seen.set(k, (seen.get(k) ?? new Set()).add(s[d]));
-        });
-        out.forEach((s, i) => {
-            if (free(i, d) && seen.get(s.slice(0, d).join('/')).size > MAX_PINNED)
-                s[d] = '*';
-        });
-    }
-    return out.map(s => s.filter((x, i) => x !== '*' || s[i - 1] !== '*').join('/') || '/');
-}
-/**
- * One host's rules: reads become a single `"*"` line and only writes are templated (level B).
- * Sensitive endpoints are templated on their own, so the repos actually written to
- * stay pinned; and when a broader write rule could also match one, a `NONE` rule under that
- * rule's prefix keeps the write closed elsewhere (the method-boundary trap).
- */
-function hostRules(reqs, git) {
-    const byPath = new Map();
-    const add = (path, methods) => {
-        const set = byPath.get(path) ?? new Set();
-        for (const m of methods)
-            set.add(m);
-        byPath.set(path, set);
-    };
-    const reads = new Set();
-    const plain = [];
-    const sensitive = [];
-    for (const r of reqs) {
-        if (READ_METHODS.includes(r.method)) {
-            reads.add(r.method);
-            continue;
-        }
-        for (const segs of r.shapes) {
-            const s = sensitiveSuffixOf(segs);
-            if (s)
-                sensitive.push({ method: r.method, segs, keep: s.suffix.split('/').length });
-            else
-                plain.push({ method: r.method, segs });
-        }
-    }
-    if (reads.size)
-        add('*', ['GET', 'HEAD', ...reads]);
-    templatePaths(plain.map(r => ({ segs: r.segs, keep: 0 }))).forEach((p, i) => add(p, [plain[i].method]));
-    const pinned = new Set();
-    templatePaths(sensitive).forEach((p, i) => {
-        add(p, [sensitive[i].method]);
-        pinned.add(p);
-    });
-    // A rule ending in `*` also matches `<its prefix>/.../<suffix>`. The guard sits under that same
-    // prefix, so it always has more literal characters (the engine's "most specific") than the
-    // rule it narrows, and fewer than a pinned repo.
-    const guards = [];
-    for (const [p, ms] of [...byPath]) {
-        if (pinned.has(p) || !(p === '*' || p.endsWith('/*')) || !(sensitive.length > 0 || p.startsWith('*')))
-            continue;
-        for (const s of exports.SENSITIVE_PATH_SUFFIXES) {
-            const guard = `${p}/${s.suffix}`;
-            if (s.methods.some(m => ms.has(m)) && !byPath.has(guard) && !guards.includes(guard))
-                guards.push(guard);
-        }
-    }
-    for (const g of guards)
-        byPath.set(g, new Set());
-    // reads are allowed anywhere on the host, so a more specific write rule must not refuse them
-    // (the pack endpoints excepted: git only ever POSTs to them)
-    if (reads.size) {
-        for (const [p, ms] of byPath)
-            if (ms.size && !pinned.has(p))
-                ['GET', 'HEAD', ...reads].forEach(m => ms.add(m));
-    }
-    settleRules(byPath, reqs, git);
-    const rest = [...byPath.keys()].filter(p => p !== '*').sort();
-    const rules = [
-        ...(byPath.has('*') ? [{ path: '*', methods: sortMethods(byPath.get('*')) }] : []),
-        ...rest.map(path => ({ path, methods: sortMethods(byPath.get(path)) }))
-    ];
-    const coarse = rules.some(r => r.path.startsWith('*') && r.methods.some(m => !READ_METHODS.includes(m)));
-    return { rules, specific: [...pinned].filter(p => byPath.has(p)).length, coarse };
-}
-function suggest(reqs) {
-    const byHost = new Map();
-    for (const r of reqs)
-        byHost.set(r.host, [...(byHost.get(r.host) ?? []), r]);
-    const out = { hosts: [], requests: reqs.length, rules: 0, specific: 0, coarse: false };
-    for (const host of [...byHost.keys()].sort()) {
-        const h = hostRules(byHost.get(host), policy_1.GIT_HOSTS.includes(host));
-        out.hosts.push({ host, rules: h.rules });
-        out.rules += h.rules.length;
-        out.specific += h.specific;
-        out.coarse ||= h.coarse;
-    }
-    return out;
-}
-/**
- * Allowed intercepted requests (the only ones with a method and path) to well-formed names, never
- * on a connection the upstream IP guard refused, less what the built-in platform list allowed
- * (`filter: platform`). A refused request never goes into a suggestion: that would quietly undo
- * the user's own filter, and its path was chosen by whoever sent it.
- */
-function observedRequests(records) {
+function allowedRequests(records) {
     const conns = assignConnections(records);
     const out = [];
     records.forEach((r, i) => {
@@ -4659,26 +4340,20 @@ function observedRequests(records) {
             return;
         if (DENIED.has(r.verdict) || r.filter === 'platform')
             return;
-        if (!r.host || typeof r.method !== 'string' || typeof r.path !== 'string')
+        if (typeof r.host !== 'string' || !r.host || typeof r.method !== 'string' || typeof r.path !== 'string')
             return;
-        const host = r.host.toLowerCase();
-        const method = r.method.toUpperCase();
-        if (!redact_1.STANDARD_METHODS.includes(method) || !HOSTNAME.test(host) || (0, redact_1.needsRedaction)(host))
-            return;
-        const p = pathForms(r.path, policy_1.GIT_HOSTS.includes(host));
-        if (p)
-            out.push({ host, method, ...p });
+        out.push({ host: r.host, method: r.method, path: r.path });
     });
     return out;
 }
 /**
  * The http-filter part of the report: refused requests (host, method and why; never the path,
  * which the sender chose and can carry data whatever its shape), and a suggested `http-filter`
- * built from allowed traffic as
- * observe → split reads from writes → template writes → union methods (design: "Suggested
- * http-filter (report)"). Advisory: never applied.
+ * built by `suggest` from allowed traffic (proxy/suggest.py: observe → split reads from writes →
+ * template writes → union methods; design: "Suggested http-filter (report)"). Advisory: never
+ * applied. Without `suggest`, no suggestion.
  */
-function summarizeHttpFilter(records) {
+function summarizeHttpFilter(records, suggest) {
     const byKey = new Map();
     for (const r of records) {
         if ((r.ev !== 'https' && r.ev !== 'http') || !isFilterBlock(r))
@@ -4695,13 +4370,12 @@ function summarizeHttpFilter(records) {
         row.tries++;
         byKey.set(key, row);
     }
-    const platform = compileUserPatterns(PLATFORM_HOSTS);
     return {
         blocks: [...byKey.values()].sort((a, b) => b.tries - a.tries || a.host.localeCompare(b.host)),
-        suggestion: suggest(observedRequests(records).filter(r => !(0, policy_1.matchesAny)(r.host, platform)))
+        suggestion: suggest?.(allowedRequests(records))
     };
 }
-/** The suggestion as the `http-filter` input. Path segments are pre-checked (pathSegmentShown), methods standard. */
+/** The suggestion as the `http-filter` input. Names, path segments and methods are checked (proxy/suggest.py, src/suggest.ts). */
 function httpFilterYaml(s) {
     const hosts = s.hosts.map(h => `  ${h.host}:\n` +
         h.rules.map(r => `    "${r.path}": ${r.methods.length ? r.methods.join(', ') : 'NONE'}`).join('\n'));
@@ -5850,6 +5524,130 @@ function generateSudoSummarySection(commands, title) {
     }
     report += `\n`;
     return report;
+}
+
+
+/***/ }),
+
+/***/ 3146:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Runs the http-filter suggester (proxy/suggest.py) for the report.
+ *
+ * The suggestion is built in Python, next to the matcher that enforces it, so there is one copy
+ * of the path matching and of the path-segment redaction a suggestion needs. This side only
+ * passes the allowed requests in and checks that what comes back is safe to print as YAML.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.defaultPython = defaultPython;
+exports.parseSuggestion = parseSuggestion;
+exports.suggestHttpFilter = suggestHttpFilter;
+const child_process_1 = __nccwpck_require__(5317);
+const fs = __importStar(__nccwpck_require__(9896));
+const redact_1 = __nccwpck_require__(283);
+/** The system interpreter when there is one: a job's own PATH (setup-python, GITHUB_PATH) can't swap it. */
+function defaultPython() {
+    return fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : 'python3';
+}
+/** -I: no PYTHON* variables, user site or current directory (the job's workspace) on the path. */
+const RUN = 'import sys; sys.path.insert(0, sys.argv[1]); import suggest; suggest.main()';
+const TIMEOUT_MS = 60_000;
+const EMPTY = { hosts: [], requests: 0, rules: 0, specific: 0, coarse: false };
+/** what suggest.py can print: well-formed names, templated paths, standard methods */
+const HOST = /^[a-z0-9_.-]+$/;
+const PATH = /^[A-Za-z0-9._~@+*/-]+$/;
+function isCount(n) {
+    return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+}
+/** The suggestion, or throws when anything in it is not what suggest.py prints. */
+function parseSuggestion(value) {
+    const s = value;
+    const ok = typeof s === 'object' &&
+        s !== null &&
+        Array.isArray(s.hosts) &&
+        isCount(s.requests) &&
+        isCount(s.rules) &&
+        isCount(s.specific) &&
+        typeof s.coarse === 'boolean' &&
+        s.hosts.every(h => typeof h?.host === 'string' &&
+            HOST.test(h.host) &&
+            Array.isArray(h.rules) &&
+            h.rules.every(r => typeof r?.path === 'string' &&
+                PATH.test(r.path) &&
+                Array.isArray(r.methods) &&
+                r.methods.every(m => typeof m === 'string' && redact_1.STANDARD_METHODS.includes(m))));
+    if (!ok)
+        throw new Error('unexpected output from suggest.py');
+    return {
+        hosts: s.hosts.map(h => ({ host: h.host, rules: h.rules.map(r => ({ path: r.path, methods: [...r.methods] })) })),
+        requests: s.requests,
+        rules: s.rules,
+        specific: s.specific,
+        coarse: s.coarse
+    };
+}
+/**
+ * The suggested http-filter for these allowed requests, from proxy/suggest.py in `proxyDir`.
+ * Throws when it can't be built: the caller reports without a suggestion.
+ */
+function suggestHttpFilter(requests, proxyDir, python = defaultPython()) {
+    if (!requests.length)
+        return { ...EMPTY, hosts: [] };
+    const run = (0, child_process_1.spawnSync)(python, ['-I', '-c', RUN, proxyDir], {
+        input: JSON.stringify({ requests }),
+        encoding: 'utf8',
+        timeout: TIMEOUT_MS,
+        maxBuffer: 64 * 1024 * 1024
+    });
+    if (run.error)
+        throw run.error;
+    // stderr is not passed on: an error message can quote a request path, and the job log is public
+    if (run.status !== 0)
+        throw new Error(`suggest.py exited ${run.status ?? run.signal}`);
+    let out;
+    try {
+        out = JSON.parse(run.stdout);
+    }
+    catch {
+        throw new Error('suggest.py printed no JSON');
+    }
+    return parseSuggestion(out);
 }
 
 

@@ -1,4 +1,6 @@
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   CUSTOM_METHOD,
   PATH_HIDDEN,
@@ -6,10 +8,12 @@ import {
   looksEncoded,
   methodLabel,
   needsRedaction,
-  pathSegmentShown,
   redactName,
-  segmentLooksEncoded
+  STANDARD_METHODS
 } from './redact';
+
+/** proxy/test-vectors.json "redact": also run by proxy/suggest_test.py (suggest.looks_encoded) */
+const VECTORS = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'proxy', 'test-vectors.json'), 'utf8')).redact;
 
 const b32 = (b: Buffer) => {
   const A = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -105,33 +109,14 @@ describe('redactName', () => {
   });
 });
 
-describe('pathSegmentShown (allowed requests, in a suggested rule)', () => {
-  it('rejects encoded-looking parts, like the labels of a name', () => {
-    expect(segmentLooksEncoded('notes.0dd2149bb6f23853.txt')).toBe(true);
-    for (const seg of ['c2VjcmV0LXRva2VuLTEyMzQ1Njc4', 'notes.0dd2149bb6f23853.txt', '0dd2149bb6f23853']) {
-      expect(pathSegmentShown(seg)).toBe(false);
-    }
-  });
-
-  it('rejects short chunks a hostname label would keep: hex, digit runs, unusual characters', () => {
-    for (const seg of ['a1f3', 'cafe', 'dead-beef', 'v123', 'x9y8z7', 'a%20b', 'a;b', 'x'.repeat(65), '..', '']) {
-      expect(pathSegmentShown(seg)).toBe(false);
-    }
-  });
-
-  it('shows ordinary segments', () => {
-    for (const seg of [
-      'myorg',
-      'safer-runner-action.git',
-      'git-upload-pack',
-      'issues',
-      '12',
-      'results.services.receiver.v1.ResultsService',
-      'requests'
-    ]) {
-      expect(pathSegmentShown(seg)).toBe(true);
-    }
-  });
+describe('shared redaction vectors (proxy/suggest.py checks the same labels)', () => {
+  it.each(VECTORS.encoded_labels as string[])('redacts %p', l => expect(looksEncoded(l)).toBe(true));
+  it.each(VECTORS.plain_labels as string[])('shows %p', l => expect(looksEncoded(l)).toBe(false));
+  it.each(VECTORS.boundary_labels as { label: string; encoded: boolean; rule: string }[])(
+    '$rule',
+    ({ label, encoded }) => expect(looksEncoded(label)).toBe(encoded)
+  );
+  it('names the same standard methods', () => expect(STANDARD_METHODS).toEqual(VECTORS.standard_methods));
 });
 
 describe('methodLabel', () => {
