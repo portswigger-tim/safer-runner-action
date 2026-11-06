@@ -49,7 +49,9 @@ inputs:
       makes it default-deny: a request is allowed only if a path rule matches and lists its
       method; the most specific path wins. Methods: a comma list, `*`/`ALL` for any, `NONE` to
       deny the path. Paths use the allowed-domains `*` with `/` in the role of `.` (a lone `*`
-      segment spans any depth); the query string is ignored. It never grants access: a host not
+      segment spans any depth); the query string is ignored. On github.com, paths match
+      case-insensitively and with or without `.git` (`org/app/git-receive-pack` also matches
+      `/Org/app.git/git-receive-pack`). It never grants access: a host not
       in allowed-domains stays unreachable. See docs/DESIGN-L7-path-method.md.
     required: false
     default: ''

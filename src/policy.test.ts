@@ -9,6 +9,8 @@ import {
   matchesAny,
   normHost,
   parseAllowedDomains,
+  GIT_HOSTS,
+  gitPatternKey,
   patternsOverlap,
   validatePathPattern,
   validatePattern
@@ -283,9 +285,12 @@ describe('buildPolicyConfig: http-filter', () => {
     const { config } = buildPolicyConfig({ ...base, httpFilter: [rule('*.actions.githubusercontent.com')] });
     expect(config.http_filter.platform).toEqual([
       { host: 'results-receiver.actions.githubusercontent.com', path: 'twirp/*', methods: ['POST'] },
-      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] }
+      { host: 'results-receiver.actions.githubusercontent.com', path: '_ws/ingest.sock', methods: ['GET'] },
+      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
+      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
+      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
     ]);
-    expect(config.http_filter.platform_auto_allowed).toBe(2);
+    expect(config.http_filter.platform_auto_allowed).toBe(5);
 
     const blob = buildPolicyConfig({ ...base, httpFilter: [rule('productionresultssa1.blob.core.windows.net')] });
     expect(blob.config.http_filter.platform.map(e => e.path)).toEqual(['actions-results/*', 'actions-cache/*']);
@@ -319,5 +324,15 @@ describe('buildPolicyConfig: http-filter', () => {
         /'hosted-compute-westus.githubapp.com' matches passthrough-domains entry 'hosted-compute-\*.githubapp.com'.*cannot be path-filtered/
       )
     ]);
+  });
+});
+
+describe('git hosts (shared vectors with proxy/policy_core.py)', () => {
+  it('has the same git hosts as the addon', () => {
+    expect(GIT_HOSTS).toEqual(vectors.git_hosts);
+  });
+
+  it.each(vectors.git_pattern_keys as { pattern: string; key: string }[])('$pattern -> $key', ({ pattern, key }) => {
+    expect(gitPatternKey(pattern)).toBe(key);
   });
 });

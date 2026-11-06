@@ -199,6 +199,26 @@ export function validatePathPattern(pattern: string): string {
 }
 
 /**
+ * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
+ * case-insensitive and .git is optional, so the addon matches paths there case-insensitively
+ * and with or without ".git" on each segment. Mirrors GIT_HOSTS in proxy/policy_core.py.
+ */
+export const GIT_HOSTS = ['github.com'];
+
+function stripGit(seg: string): string {
+  return seg.endsWith('.git') && seg.length > 4 ? seg.slice(0, -4) : seg;
+}
+
+/** Identity of a path pattern on a git host: two patterns with one key are duplicates. */
+export function gitPatternKey(pattern: string): string {
+  const p = validatePathPattern(pattern).toLowerCase();
+  return p
+    .split('/')
+    .map(s => (stripGit(s) === '*' ? s : stripGit(s)))
+    .join('/');
+}
+
+/**
  * Whether two domain patterns can match a common name (approximate: each is tried against a
  * concrete instance of the other). Used for warnings and to pick which platform endpoints to
  * ship - never as an allow decision itself (the addon still matches every request).

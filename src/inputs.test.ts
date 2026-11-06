@@ -240,6 +240,11 @@ describe('parseHttpFilter', () => {
     ]);
   });
 
+  it('only folds git spellings on a git host', () => {
+    const raw = 'example.org:\n  "org/app/x": GET\n  "org/app.git/x": PUT\n  "ORG/App/x": POST';
+    expect(parseHttpFilter(raw)[0].rules).toHaveLength(3);
+  });
+
   it('accepts JSON (e.g. from toJSON())', () => {
     expect(parseHttpFilter('{"github.com": {"*": "GET, HEAD", "/a/*": ["put"], "b": null}}')).toEqual([
       {
@@ -267,6 +272,8 @@ describe('parseHttpFilter', () => {
     ['too-broad host', '*.com:\n  "*": GET', /too broad/],
     ['duplicate host', 'github.com:\n  "*": GET\nGITHUB.COM:\n  "*": GET', /more than once/],
     ['duplicate path', 'github.com:\n  "/a": GET\n  "a": PUT', /duplicate path/],
+    ['git: .git spelling', 'github.com:\n  "org/app/x": GET\n  "org/app.git/x": PUT', /duplicate path/],
+    ['git: case spelling', 'github.com:\n  "org/app/x": GET\n  "ORG/App/x": PUT', /duplicate path/],
     ['bad path', 'github.com:\n  "a/**": GET', /\*\*/],
     ['encoded path', 'github.com:\n  "@s%2f*": GET', /invalid path pattern/],
     ['dot segment', 'github.com:\n  "a/../b": GET', /segment/],
