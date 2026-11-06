@@ -6,6 +6,10 @@
 # - github-actions updates keep the full-SHA pins (and their `# vX.Y.Z` comments) current.
 # - cooldown: don't propose a release until it has been public for a week, so a compromised
 #   upstream release has time to be caught and yanked before it reaches a PR here.
+# - groups cover minor/patch only, so a major arrives as its own PR (grouping a major with
+#   minors produces an unmergeable PR). Majors that need a migration are ignored here and
+#   tracked as issues: TypeScript (7.x = native rewrite; ts-jest and our jest-globals aren't
+#   ready) and @actions/core / @actions/exec (3.x = ESM-only; the build/test toolchain is CJS).
 
 version: 2
 updates:
@@ -21,8 +25,19 @@ updates:
     groups:
       runtime:
         dependency-type: production
+        update-types: [minor, patch]
       dev:
         dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # 3.x is ESM-only; our build/test toolchain is CommonJS (tracked as an issue).
+      - dependency-name: "@actions/core"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@actions/exec"
+        update-types: ["version-update:semver-major"]
+      # 7.x is the native-compiler rewrite; ts-jest peers <7 (tracked as an issue).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
