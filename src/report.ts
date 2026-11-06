@@ -7,6 +7,7 @@ import { ipOf, type FlowRecord } from './flowlog';
 import { compilePattern, expandPattern, isIpLiteral, matchesAny, type Mode } from './policy';
 import type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
 import { PATH_HIDDEN, methodLabel, needsRedaction, redactName } from './redact';
+import { Document, Pair, Scalar, YAMLMap, stringify } from 'yaml';
 
 export interface HostSummary {
   name: string;
@@ -614,14 +615,27 @@ export function summarizeHttpFilter(records: FlowRecord[], suggest?: Suggester):
   };
 }
 
-/** The suggestion as the `http-filter` input. Names, path segments and methods are checked (proxy/suggest.py, src/suggest.ts). */
+/**
+ * The suggestion as the `http-filter` input, written by the `yaml` library that reads the input
+ * (inputs.ts parseHttpFilter), so a pasted suggestion reads back as printed. Names, path segments
+ * and methods are also checked before this (proxy/suggest.py, src/suggest.ts).
+ */
 export function httpFilterYaml(s: HttpFilterSuggestion): string {
-  const hosts = s.hosts.map(
-    h =>
-      `  ${h.host}:\n` +
-      h.rules.map(r => `    "${r.path}": ${r.methods.length ? r.methods.join(', ') : 'NONE'}`).join('\n')
-  );
-  return 'http-filter: |\n' + hosts.join('\n');
+  const hosts = new YAMLMap();
+  for (const h of s.hosts) {
+    const rules = new YAMLMap();
+    for (const r of h.rules) {
+      // path patterns always in double quotes: `*` and `*/x` cannot be plain YAML
+      const path = new Scalar(r.path);
+      path.type = Scalar.QUOTE_DOUBLE;
+      rules.add(new Pair(path, new Scalar(r.methods.length ? r.methods.join(', ') : 'NONE')));
+    }
+    hosts.add(new Pair(new Scalar(h.host), rules));
+  }
+  const doc = new Document();
+  doc.contents = hosts;
+  const input = doc.toString({ lineWidth: 0 });
+  return stringify({ 'http-filter': input }, { blockQuote: 'literal', lineWidth: 0 }).replace(/\n$/, '');
 }
 
 function compressionText(s: HttpFilterSuggestion): string {

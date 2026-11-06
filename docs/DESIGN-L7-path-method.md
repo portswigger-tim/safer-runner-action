@@ -296,7 +296,13 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
   allow/deny with a reason. A pure function — unit-testable alongside the existing Python
   tests. Reuse the `allowed-domains` matcher so `*` behaves identically.
 - `src/policy.ts` / `policy.json`: build and carry the compiled rules.
-- `src/inputs.ts`: parse and validate `http-filter`; emit the two guardrail warnings.
+- `src/inputs.ts`: parse and validate `http-filter`; emit the two guardrail warnings. The
+  `yaml` library reads the input, and a strict check accepts only host → { path → methods }:
+  a duplicate host or path, an anchor, alias, tag, document marker or deeper nesting fails the
+  step (never last-wins, never ignored). In an inline `{ }` rule, a word after a comma with no
+  `:` continues the methods (`{ "*": GET, HEAD }`). YAML `null` or no value means `NONE`.
+- `src/report.ts` prints the suggestion with the same library, so a pasted suggestion reads
+  back as printed.
 - `src/report.ts`: new blocked-reason rows, and renders the "if the job needs it" suggestion.
 - `proxy/suggest.py`: builds the suggestion next to the matcher (it reuses `path_forms`,
   `PathGlob` and specificity from `policy_core.py`, so there is no second copy of the matching
