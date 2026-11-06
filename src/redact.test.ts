@@ -112,6 +112,10 @@ describe('redactName', () => {
 describe('shared redaction vectors (proxy/suggest.py checks the same labels)', () => {
   it.each(VECTORS.encoded_labels as string[])('redacts %p', l => expect(looksEncoded(l)).toBe(true));
   it.each(VECTORS.plain_labels as string[])('shows %p', l => expect(looksEncoded(l)).toBe(false));
+  it.each(VECTORS.boundary_labels as { label: string; encoded: boolean; rule: string }[])(
+    '$rule',
+    ({ label, encoded }) => expect(looksEncoded(label)).toBe(encoded)
+  );
   it('names the same standard methods', () => expect(STANDARD_METHODS).toEqual(VECTORS.standard_methods));
 });
 

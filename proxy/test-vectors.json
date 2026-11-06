@@ -105,7 +105,7 @@
     {"host": "github.com", "expect": false},
     {"host": "pkg-containers.githubusercontent.com", "expect": false}
   ],
-  "redact_comment": "Redaction of what the report prints from the job's traffic. Labels: src/redact.ts looksEncoded (refused names) and proxy/suggest.py looks_encoded (names in a suggestion) must agree; both run these. Path segments (proxy/suggest.py path_segment_shown, checked by proxy/suggest_test.py) are stricter: a hidden one becomes * in a suggestion. standard_methods: the only methods a report or suggestion names.",
+  "redact_comment": "Redaction of what the report prints from the job's traffic. Labels: src/redact.ts looksEncoded (refused names) and proxy/suggest.py looks_encoded (names in a suggestion) must agree; both run these. boundary_labels sit on each side of every threshold the two copies share (LONG_LABEL_LEN, ENCODED_MIN_LEN, HEX_MIN_LEN, SHORT_HEX_LEN, MAX_VOWEL_RATIO, MIN_DIGIT_RUNS, ENTROPY_MIN_LEN, ENTROPY_BITS), most of them caught by that rule alone, so a change to a constant on one side only fails a test. (HEX_MIN_LEN below ENCODED_MIN_LEN changes nothing: shorter labels return first.) Path segments (proxy/suggest.py path_segment_shown, checked by proxy/suggest_test.py) are stricter: a hidden one becomes * in a suggestion. standard_methods: the only methods a report or suggestion names.",
   "redact": {
     "encoded_labels": [
       "aghvsbg8gd29ybgq",
@@ -173,6 +173,27 @@
       "..",
       ".",
       ""
+    ],
+    "boundary_labels": [
+      {"label": "bananabananabananabananabananabananaban", "encoded": false, "rule": "LONG_LABEL_LEN: 39 chars, word-like"},
+      {"label": "bananabananabananabananabananabananabana", "encoded": true, "rule": "LONG_LABEL_LEN: 40 chars, word-like (only the length rule fires)"},
+      {"label": "bcdfghj", "encoded": false, "rule": "ENCODED_MIN_LEN: 7 chars, no vowels, shown"},
+      {"label": "bcdfghjk", "encoded": true, "rule": "ENCODED_MIN_LEN: 8 chars, no vowels (vowel rule)"},
+      {"label": "deadbee", "encoded": false, "rule": "HEX_MIN_LEN: 7 hex chars, no digit"},
+      {"label": "deadbeef", "encoded": true, "rule": "HEX_MIN_LEN: 8 hex chars, no digit (only the hex rule fires)"},
+      {"label": "a1b2c", "encoded": false, "rule": "SHORT_HEX_LEN: 5 hex chars with digits"},
+      {"label": "a1b2c3", "encoded": true, "rule": "SHORT_HEX_LEN: 6 hex chars with digits"},
+      {"label": "strabcde", "encoded": false, "rule": "MAX_VOWEL_RATIO: exactly 25% vowels"},
+      {"label": "strabcdeg", "encoded": true, "rule": "MAX_VOWEL_RATIO: 22% vowels (only the vowel rule fires)"},
+      {"label": "kakkkakkkakkkakkkakkkakkk", "encoded": true, "rule": "MAX_VOWEL_RATIO: 24% vowels, word-like entropy (only the vowel rule fires)"},
+      {"label": "abe1cid2fo", "encoded": false, "rule": "MIN_DIGIT_RUNS: 2 runs of digits"},
+      {"label": "abe1cid2fo3", "encoded": true, "rule": "MIN_DIGIT_RUNS: 3 runs of digits (only the digit-run rule fires)"},
+      {"label": "aebicodufyghkjlmnpq", "encoded": false, "rule": "ENTROPY_MIN_LEN: 19 distinct letters (4.25 bits), too short for the entropy rule"},
+      {"label": "aebicodufyghkjlmnpqr", "encoded": true, "rule": "ENTROPY_MIN_LEN: 20 distinct letters (4.32 bits; only the entropy rule fires)"},
+      {"label": "quickbrownfoxjumpsov", "encoded": false, "rule": "ENTROPY_BITS: 20 chars, 3.98 bits (just under)"},
+      {"label": "thepackbuilddogjumps", "encoded": true, "rule": "ENTROPY_BITS: 20 chars, 4.02 bits (just over; only the entropy rule fires)"},
+      {"label": "quickbrownfoxjumpsoverlazydg", "encoded": true, "rule": "ENTROPY_BITS: 28 chars, 4.49 bits (only the entropy rule fires)"},
+      {"label": "bananabananabananaban", "encoded": false, "rule": "ENTROPY_BITS: 21 chars, 1.49 bits, word-like"}
     ],
     "standard_methods": [
       "GET",

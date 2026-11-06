@@ -66,6 +66,11 @@ class RedactVectors(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertFalse(suggest.looks_encoded(label))
 
+    def test_label_thresholds(self):
+        for v in self.v["boundary_labels"]:
+            with self.subTest(**v):
+                self.assertEqual(suggest.looks_encoded(v["label"]), v["encoded"])
+
     def test_path_segments(self):
         for seg in self.v["shown_segments"]:
             with self.subTest(segment=seg):
