@@ -7,7 +7,7 @@
  *
  * No DNS-rebind filtering: the proxy's upstream-IP guard (server_connect) refuses a strict
  * superset of internal answers and logs the address, and anything outside the proxy can
- * only reach addresses a step could dial by IP anyway (docs/spikes, REPLACE-vs-FRONT §3).
+ * only reach addresses a step could dial by IP anyway. See docs/DNS-COREDNS.md.
  */
 
 import * as core from '@actions/core';

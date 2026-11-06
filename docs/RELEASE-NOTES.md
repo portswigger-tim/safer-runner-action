@@ -1,5 +1,20 @@
 # v2 release notes
 
+## v2.3.0
+
+Internal refactors and stricter, standards-based `http-filter` parsing. No new inputs.
+
+- **`http-filter` is parsed with a standard YAML library and a strict schema.** Errors are
+  clearer and name the line, and an ambiguous or malformed filter is rejected (fails closed)
+  rather than guessed at — duplicate host or path keys, unexpected structure, and non-string
+  methods are now caught.
+- **The suggester and the enforcing engine are unified.** The logic that turns observed traffic
+  into a suggested `http-filter` now shares the proxy's own matcher, so a suggestion always
+  matches what enforcement would do. The suggestions you see for a given job are unchanged.
+- **Stricter validation of the internal policy file**, which now fails closed on an unexpected
+  shape.
+- Documentation refreshed (CLAUDE.md and the design notes) to the current v2 architecture.
+
 ## v2.2.1
 
 Hardening for the `http-filter` feature in v2.2.0. No input changes; drop-in.

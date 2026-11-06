@@ -1,8 +1,8 @@
 {
   "name": "safer-runner",
-  "version": "2.0.0-beta.1",
+  "version": "2.3.0",
   "description": "L7 egress control for GitHub Actions runners: hostname allowlisting through a TLS-terminating proxy",
-  "main": "dist/main.js",
+  "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc && ncc build lib/main.js -o dist/main --license licenses.txt",
     "build:pre": "ncc build lib/pre.js -o dist/pre --license licenses.txt",
