@@ -8,7 +8,6 @@ import {
   GIT_HOSTS,
   compilePattern,
   expandPattern,
-  gitPatternKey,
   isIpLiteral,
   matchesAny,
   validatePathPattern,
@@ -593,7 +592,7 @@ export interface HttpFilterReport {
 interface ObservedRequest {
   host: string;
   method: string;
-  /** the path forms the engine matches (canonical_path: decoded, then relaxed), no leading `/` */
+  /** the path forms the engine decides (path_forms) that the suggestion covers, no leading `/` */
   forms: string[];
   /** each form as segments to template; `''` (an empty or cut-off segment) always becomes `*` */
   shapes: string[][];
@@ -601,36 +600,6 @@ interface ObservedRequest {
 
 function isFilterBlock(r: FlowRecord): boolean {
   return DENIED.has(r.verdict) && FILTER_REASONS.has(r.reason ?? '');
-}
-
-/**
- * The forms of a logged request path the engine matches (proxy/policy_core.py canonical_path):
- * decoded once without the leading `/`, and relaxed (no `;params` or trailing `/`). Undefined
- * when the engine refuses the path whatever the rules say. A path cut short in the log keeps
- * only its decoded form, its last segment unknown.
- */
-function pathForms(path: string, git: boolean): { forms: string[]; shapes: string[][] } | undefined {
-  const truncated = path.length >= PATH_LOG_MAX;
-  let raw = path.split('?', 1)[0].split('#', 1)[0];
-  if (raw.startsWith('/')) raw = raw.slice(1);
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    decoded = raw;
-  }
-  if (/[\\\x00-\x1f\x7f]/.test(decoded) || /%(?:2e|2f|5c)/i.test(decoded)) return undefined;
-  if (decoded.split('/').some(s => s === '.' || s === '..')) return undefined;
-  let relaxed = decoded
-    .split('/')
-    .map(s => s.split(';', 1)[0])
-    .join('/')
-    .replace(/\/+$/, '');
-  if (git) [decoded, relaxed] = [decoded.toLowerCase(), relaxed.toLowerCase()];
-  const forms = truncated || relaxed === decoded ? [decoded] : [decoded, relaxed];
-  const shapes = forms.map(f => (f === '' ? [] : f.split('/').map(s => (git ? stripGit(s) : s))));
-  if (truncated && shapes[0].length) shapes[0][shapes[0].length - 1] = '';
-  return { forms, shapes };
 }
 
 /**
@@ -653,41 +622,137 @@ function stripGit(segment: string): string {
   return segment.endsWith('.git') && segment.length > 4 ? segment.slice(0, -4) : segment;
 }
 
-/** proxy/policy_core.py compile_path_pattern, for checking a suggestion before it is shown. */
-function pathRegex(pattern: string, git: boolean): RegExp {
-  const p = validatePathPattern(pattern);
-  const parts = (git ? p.toLowerCase() : p).split('/').map(s => {
-    if (s === '*') return '.*';
-    const lit = (git ? stripGit(s) : s).replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
-    return git ? `${lit}(?:\\.git)?` : lit;
-  });
-  return new RegExp(`^${parts.join('/')}$`);
+// The engine's path matching, mirrored to check a suggestion before it is shown. It MUST track
+// proxy/policy_core.py (path_forms, PathGlob, _decide_form): when that changes, change this too.
+// The round-trip test in report.test.ts runs every suggestion through the real parser and addon,
+// so drift fails there.
+
+/** proxy/policy_core.py MAX_PATH_SEGMENTS: a longer path is refused */
+const ENGINE_MAX_SEGMENTS = 256;
+
+function gitPath(path: string): string {
+  return path.toLowerCase().split('/').map(stripGit).join('/');
 }
 
-/** proxy/policy_core.py PathRule.specificity: literal characters, then segments, then fewer `*`. */
-function pathSpecificity(pattern: string, git: boolean): number[] {
-  const key = git ? gitPatternKey(pattern) : validatePathPattern(pattern);
-  return [key.replace(/\*/g, '').length, key.split('/').length - 1, -(key.match(/\*/g) ?? []).length];
+/**
+ * The forms of a logged request path the engine decides (path_forms): decoded once without the
+ * leading `/`, then every combination of `;params` removed, repeated slashes collapsed and
+ * trailing slashes removed (and, on a git host, its spelling canonicalised). A request is allowed
+ * only if every form is. Undefined when the engine refuses the path whatever the rules say.
+ *
+ * Only the covered forms are returned (`forms`), each also as segments (`shapes`): those with no
+ * empty segment before the last one. A `//` in a path is not reproduced (that would take a `*`
+ * spanning segments): the suggestion covers the collapsed request, as a client normally sends
+ * it. A path cut short in the log ends in an unknown segment (`''`, so `*`).
+ */
+function pathForms(path: string, git: boolean): { forms: string[]; shapes: string[][] } | undefined {
+  const truncated = path.length >= PATH_LOG_MAX;
+  let raw = path.split('?', 1)[0];
+  if (truncated) raw = raw.replace(/%[0-9a-fA-F]?$/, '');
+  if (raw.includes('#') || /%(?![0-9a-fA-F]{2})/.test(raw)) return undefined;
+  if (raw.startsWith('/')) raw = raw.slice(1);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+  if (/[\\\x00-\x1f\x7f]/.test(decoded) || /%[0-9a-fA-F]{2}/.test(decoded)) return undefined;
+  let forms = [decoded];
+  const relax = [
+    (f: string) =>
+      f
+        .split('/')
+        .map(x => x.split(';', 1)[0])
+        .join('/'),
+    (f: string) => f.replace(/\/{2,}/g, '/').replace(/^\/+/, ''),
+    (f: string) => f.replace(/\/+$/, '')
+  ];
+  for (const r of relax) forms = forms.concat(forms.map(r));
+  if (git) forms = forms.map(gitPath);
+  forms = [...new Set(forms)];
+  for (const f of forms) {
+    const segs = f.split('/');
+    if (segs.length > ENGINE_MAX_SEGMENTS || segs.some(x => x === '.' || x === '..')) return undefined;
+  }
+  // only the covered forms are settled: widening a rule for a `//` form would open far more
+  const covered = forms.filter(f => f.split('/').slice(0, -1).every(Boolean));
+  const shapes = covered
+    .map(f => (f === '' ? [] : f.split('/')))
+    .map(segs => (truncated && segs.length ? [...segs.slice(0, -1), ''] : segs));
+  return { forms: covered, shapes };
+}
+
+/** A compiled pattern (PathGlob): `null` is a `*` segment (one or more segments), else the parts around in-segment `*`. */
+type PathGlob = (string[] | null)[];
+
+function pathGlob(pattern: string, git: boolean): PathGlob {
+  const p = validatePathPattern(pattern);
+  return (git ? p.toLowerCase() : p).split('/').map(s => (s === '*' ? null : (git ? stripGit(s) : s).split('*')));
+}
+
+/** PathGlob._segment_matches: greedy, no backtracking */
+function segmentMatches(parts: string[], s: string): boolean {
+  if (parts.length === 1) return s === parts[0];
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if (s.length < first.length + last.length || !s.startsWith(first) || !s.endsWith(last)) return false;
+  let i = first.length;
+  const end = s.length - last.length;
+  for (const mid of parts.slice(1, -1)) {
+    const j = s.slice(0, end).indexOf(mid, i);
+    if (j < 0) return false;
+    i = j + mid.length;
+  }
+  return true;
+}
+
+/** PathGlob.match */
+function globMatches(glob: PathGlob, path: string): boolean {
+  let states = new Set([0]);
+  for (const s of path.split('/')) {
+    const next = new Set<number>();
+    for (const k of states) {
+      const seg = glob[k];
+      if (k < glob.length && (seg === null || segmentMatches(seg, s))) next.add(k + 1);
+      if (k > 0 && glob[k - 1] === null) next.add(k);
+    }
+    if (!next.size) return false;
+    states = next;
+  }
+  return states.has(glob.length);
+}
+
+/** PathGlob.specificity: literal characters, then segments, then fewer spans, then fewer `*` */
+function globSpecificity(glob: PathGlob): number[] {
+  const parts = glob.filter((s): s is string[] => s !== null);
+  const spans = glob.length - parts.length;
+  const lit = parts.reduce((n, s) => n + s.join('').length, 0) + glob.length - 1;
+  const stars = parts.reduce((n, s) => n + s.length - 1, 0) + spans;
+  return [lit, glob.length, -spans, -stars];
 }
 
 function compareSpecificity(a: number[], b: number[]): number {
-  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
 }
 
 /**
  * Make the rules allow every observed request in each of its forms, as the engine decides
- * (proxy/policy_core.py _decide_rules: the most specific matching rules win and every tied winner
- * must allow the method): a winner that lacks the method gets it, and a NONE guard that would
- * refuse an observed request is dropped. The round-trip test in report.test.ts runs the result
- * through the real parser and matcher.
+ * (_decide_form: the most specific matching rules win and every tied winner must allow the
+ * method): a winner that lacks the method gets it, and a NONE guard that would refuse an observed
+ * request is dropped.
  */
 function settleRules(byPath: Map<string, Set<string>>, reqs: ObservedRequest[], git: boolean): void {
   for (let pass = 0; pass < 8; pass++) {
-    const rules = [...byPath.keys()].map(p => ({ p, rx: pathRegex(p, git), spec: pathSpecificity(p, git) }));
+    const rules = [...byPath.keys()].map(p => {
+      const glob = pathGlob(p, git);
+      return { p, glob, spec: globSpecificity(glob) };
+    });
     let changed = false;
     for (const r of reqs) {
       for (const form of r.forms) {
-        const hits = rules.filter(x => byPath.has(x.p) && x.rx.test(form));
+        const hits = rules.filter(x => byPath.has(x.p) && globMatches(x.glob, form));
         if (!hits.length) continue;
         const best = hits.reduce((a, b) => (compareSpecificity(a.spec, b.spec) >= 0 ? a : b)).spec;
         for (const w of hits.filter(x => compareSpecificity(x.spec, best) === 0)) {
