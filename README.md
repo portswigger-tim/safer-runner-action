@@ -220,6 +220,13 @@ can send data; these limit what that dependency can reach in the first place:
   [environment](https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment)
   with required reviewers, and scope the cloud-side trust policy to that environment.
 
+## CI/CD good practice
+
+This action hardens one layer — network egress. For defence in depth around it (pinning
+actions by SHA, least-privilege tokens, keeping secrets off public repos, protecting the
+files that control the pipeline, and more), see
+[docs/CICD-GOOD-PRACTICE.md](docs/CICD-GOOD-PRACTICE.md).
+
 ## Limitations (read these)
 
 - **`disable-sudo: false` or `docker: keep` makes enforce advisory.** Any step with root can
