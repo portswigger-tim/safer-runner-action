@@ -101,17 +101,21 @@ def validate_pattern(pattern):
     return p
 
 
-def _glob(segments, sep, char, span):
+def _glob(segments, sep, char, span, literal=None):
     """The one glob shared by host names and paths.
 
     ``*`` inside a segment matches within that segment (``char*``). A segment that is exactly
     ``*`` matches across segments wherever ``span(i)`` returns a regex for it (None: it is an
-    in-segment ``*`` like any other).
+    in-segment ``*`` like any other). ``literal(seg)``, if given, maps any other segment to
+    ``(segment, regex suffix)`` before it is compiled.
     """
     out = []
     for i, seg in enumerate(segments):
         s = span(i) if seg == "*" else None
-        out.append(s if s is not None else re.escape(seg).replace(r"\*", char + "*"))
+        if s is None:
+            seg, tail = literal(seg) if literal else (seg, "")
+            s = re.escape(seg).replace(r"\*", char + "*") + tail
+        out.append(s)
     return re.compile("^" + re.escape(sep).join(out) + "$")
 
 
@@ -234,9 +238,30 @@ def validate_path_pattern(pattern):
     return p
 
 
-def compile_path_pattern(pattern):
+# Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
+# case-insensitive and the .git suffix is optional, so one repository has many spellings. On
+# these hosts paths and patterns are matched case-insensitively and every segment matches with
+# or without ".git", so all spellings of a request get the same verdict. Mirrored in
+# src/policy.ts (GIT_HOSTS).
+GIT_HOSTS = ("github.com",)
+_GIT_SUFFIX = r"(?:\.git)?"
+
+
+def _strip_git(seg):
+    return seg[:-4] if seg.endswith(".git") and len(seg) > 4 else seg
+
+
+def git_pattern_key(pattern):
+    """Identity of a path pattern on a git host (two patterns with one key are duplicates)."""
+    p = validate_path_pattern(pattern).lower()
+    return "/".join(s if _strip_git(s) == "*" else _strip_git(s) for s in p.split("/")) if p else p
+
+
+def compile_path_pattern(pattern, git=False):
     p = validate_path_pattern(pattern)
-    return _glob(p.split("/"), "/", "[^/]", lambda i: _PATH_SPAN)
+    if not git:
+        return _glob(p.split("/"), "/", "[^/]", lambda i: _PATH_SPAN)
+    return _glob(p.lower().split("/"), "/", "[^/]", lambda i: _PATH_SPAN, lambda s: (_strip_git(s), _GIT_SUFFIX))
 
 
 def _methods(raw, where):
@@ -281,13 +306,13 @@ def canonical_path(path):
 class PathRule:
     __slots__ = ("pattern", "regex", "methods", "specificity")
 
-    def __init__(self, pattern, methods, where):
+    def __init__(self, pattern, methods, where, git=False):
         self.pattern = validate_path_pattern(pattern)
-        self.regex = compile_path_pattern(self.pattern)
+        self.regex = compile_path_pattern(self.pattern, git)
         self.methods = _methods(methods, where)
         # most specific wins: more literal characters, then more segments, then fewer wildcards
-        literal = self.pattern.replace("*", "")
-        self.specificity = (len(literal), self.pattern.count("/"), -self.pattern.count("*"))
+        key = git_pattern_key(self.pattern) if git else self.pattern
+        self.specificity = (len(key.replace("*", "")), key.count("/"), -key.count("*"))
 
     def allows(self, method):
         return self.methods is None or method in self.methods
@@ -314,10 +339,12 @@ class HttpFilter:
             if name in seen:
                 raise PolicyError(f"http_filter: duplicate host {name!r}")
             seen.add(name)
-            rules = [PathRule(r["path"], r["methods"], f"{name} {r['path']!r}") for r in h["rules"]]
+            git = name in GIT_HOSTS
+            rules = [PathRule(r["path"], r["methods"], f"{name} {r['path']!r}", git) for r in h["rules"]]
             if not rules:
                 raise PolicyError(f"http_filter: no path rules for {name!r}")
-            if len({r.pattern for r in rules}) != len(rules):
+            keys = {git_pattern_key(r.pattern) if git else r.pattern for r in rules}
+            if len(keys) != len(rules):
                 raise PolicyError(f"http_filter: duplicate path pattern for {name!r}")
             self.hosts.append((name, compile_pattern(name), _host_specificity(name), rules))
         self.platform = []
@@ -357,6 +384,8 @@ class HttpFilter:
             return Decision("block", FILTER_PATH)
         decoded, relaxed = forms
         h = norm_host(host)
+        if h in GIT_HOSTS:  # rules on a git host are compiled case-insensitive (see GIT_HOSTS)
+            decoded, relaxed = decoded.lower(), relaxed.lower()
         for _, rx, rule in self.platform:
             if rx.match(h) and rule.regex.match(decoded) and rule.allows(method):
                 return Decision("allow", "allowed", FILTER_PLATFORM)

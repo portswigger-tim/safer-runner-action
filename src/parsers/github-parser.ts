@@ -55,12 +55,18 @@ export interface PlatformEndpoint {
 export const GITHUB_PLATFORM_ENDPOINTS: readonly PlatformEndpoint[] = [
   // results service RPCs: step logs, step status (WorkflowStepsUpdate), artifact + cache
   { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'] },
+  // runner live-log stream (websocket upgrade)
+  { host: 'results-receiver.actions.githubusercontent.com', path: '/_ws/ingest.sock', methods: ['GET'] },
   // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
   // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
   { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-results/*', methods: ['GET', 'HEAD', 'PUT'] },
   { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-cache/*', methods: ['GET', 'HEAD', 'PUT'] },
   // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
-  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] }
+  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
+  // job lease renewal (/<n>/renewjob) - refusing it ends the job
+  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
+  // job completion, sent through the proxy after the last post step
+  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
 ];
 
 /**

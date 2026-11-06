@@ -9,7 +9,7 @@
 
 import * as core from '@actions/core';
 import * as net from 'net';
-import { expandPattern, validatePathPattern, validatePattern } from './policy';
+import { GIT_HOSTS, expandPattern, gitPatternKey, validatePathPattern, validatePattern } from './policy';
 import type { HttpFilterHost, Mode } from './policy';
 
 /**
@@ -303,7 +303,7 @@ export function parseHttpFilter(raw: string): HttpFilterHost[] {
     if (!rules.length) {
       throw new Error(`${where}: '${key}' has no path rules (write "*": NONE to refuse every request)`);
     }
-    const compiled = new Map<string, string[]>();
+    const compiled: { path: string; methods: string[]; where: string; key: string }[] = [];
     for (const r of rules) {
       let path: string;
       try {
@@ -311,8 +311,7 @@ export function parseHttpFilter(raw: string): HttpFilterHost[] {
       } catch (e) {
         throw new Error(`${r.where}: ${(e as Error).message}`);
       }
-      if (compiled.has(path)) throw new Error(`${r.where}: duplicate path pattern '${r.key}' for '${key}'`);
-      compiled.set(path, parseMethods(r.value, `${r.where} '${r.key}'`));
+      compiled.push({ path, methods: parseMethods(r.value, `${r.where} '${r.key}'`), where: r.where, key: r.key });
     }
     for (const entry of expandPattern(unquote(key))) {
       let host: string;
@@ -322,7 +321,15 @@ export function parseHttpFilter(raw: string): HttpFilterHost[] {
         throw new Error(`${where}: ${(e as Error).message}`);
       }
       if (out.has(host)) throw new Error(`${where}: '${host}' is listed more than once`);
-      out.set(host, { host, rules: Array.from(compiled, ([path, methods]) => ({ path, methods })) });
+      // on a git host, spellings of one repository path are the same pattern (see GIT_HOSTS)
+      const identity = GIT_HOSTS.includes(host) ? gitPatternKey : (p: string) => p;
+      const seen = new Set<string>();
+      for (const r of compiled) {
+        const id = identity(r.path);
+        if (seen.has(id)) throw new Error(`${r.where}: duplicate path pattern '${r.key}' for '${host}'`);
+        seen.add(id);
+      }
+      out.set(host, { host, rules: compiled.map(({ path, methods }) => ({ path, methods })) });
     }
   }
   return Array.from(out.values());
