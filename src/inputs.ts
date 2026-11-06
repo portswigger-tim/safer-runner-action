@@ -11,6 +11,8 @@ import * as core from '@actions/core';
 import * as net from 'net';
 import { GIT_HOSTS, expandPattern, gitPatternKey, validatePathPattern, validatePattern } from './policy';
 import type { HttpFilterHost, Mode } from './policy';
+import { LineCounter, isAlias, isMap, isScalar, isSeq, parseDocument, visit } from 'yaml';
+import type { Node, Pair, Scalar, YAMLMap } from 'yaml';
 
 /**
  * What happens to docker access. Docker group membership is root-equivalent (a step can use
@@ -115,8 +117,9 @@ export function parseDnsServers(raw: string): string[] {
   return servers.length ? Array.from(new Set(servers)) : [...DEFAULT_DNS_SERVERS];
 }
 
-/** One `key: value` pair, before validation. */
-type RawPair = { key: string; value: string | string[] | null; where: string };
+/** One `"path": methods` rule as written, before validation. */
+type RawRule = { key: string; value: string | string[] | null; where: string };
+type RawHost = { key: string; where: string; rules: RawRule[] };
 
 const METHOD = /^[A-Z][A-Z0-9_-]*$/;
 
@@ -126,135 +129,110 @@ function unquote(s: string): string {
   return t;
 }
 
-/** Drop a `#` comment (at the start, or after whitespace, outside quotes). */
-function stripComment(line: string): string {
-  let quote = '';
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      if (c === quote) quote = '';
-    } else if (c === '"' || c === "'") {
-      quote = c;
-    } else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
-      return line.slice(0, i);
-    }
-  }
-  return line;
+/** Plain words for the YAML errors a user is most likely to hit; any other uses the library's text. */
+const YAML_HINTS: Record<string, string> = {
+  TAB_AS_INDENT: 'indent with spaces, not tabs',
+  BAD_INDENT: 'inconsistent indentation',
+  BLOCK_AS_IMPLICIT_KEY: 'inconsistent indentation (a line is indented more than the line above it)',
+  MULTILINE_IMPLICIT_KEY: 'inconsistent indentation (a key must be on one line)',
+  BAD_ALIAS: 'put a key or a value that starts with * in quotes, e.g. "*": GET'
+};
+
+/** A key as written: a host name or a path pattern, never a number or other YAML type. */
+function keyText(pair: Pair, where: string): string {
+  const k = pair.key;
+  if (!isScalar(k)) throw new Error(`${where}: a key must be a host name or a path pattern`);
+  // `404:` or `v1.0:` must stay the text the user wrote, not a number
+  return typeof k.value === 'string' ? k.value : String(k.source ?? k.value);
 }
 
-/** Split `key: value` (key optionally quoted; the `:` must be followed by space or the end). */
-function splitKey(s: string): [string, string] | null {
-  const t = s.trim();
-  if (t[0] === '"' || t[0] === "'") {
-    const end = t.indexOf(t[0], 1);
-    if (end < 0) return null;
-    const m = /^:(?:\s+|$)/.exec(t.slice(end + 1));
-    return m ? [t.slice(1, end), t.slice(end + 1 + m[0].length).trim()] : null;
+/** The methods of one rule: a string, a list of strings, or nothing (NONE). */
+function methodsValue(node: unknown, where: string): string | string[] | null {
+  if (isScalar(node) && (node.value === null || typeof node.value === 'string')) return node.value;
+  if (isSeq(node) && node.items.every(i => isScalar(i) && typeof i.value === 'string')) {
+    return node.items.map(i => (i as Scalar<string>).value);
   }
-  const m = /^(\S+?):(?:\s+|$)/.exec(t);
-  return m ? [m[1], t.slice(m[0].length).trim()] : null;
+  throw new Error(`${where}: methods must be a string or a list of strings`);
 }
 
-/** Split on commas outside quotes. */
-function splitCommas(s: string): string[] {
-  const out: string[] = [];
-  let quote = '';
-  let cur = '';
-  for (const c of s) {
-    if (quote) {
-      if (c === quote) quote = '';
-    } else if (c === '"' || c === "'") {
-      quote = c;
-    } else if (c === ',') {
-      out.push(cur);
-      cur = '';
+/** The path rules of one host: a block or a flow (`{ }`) mapping. */
+function parseRules(map: YAMLMap, src: string, at: (n: Node | null | undefined) => string): RawRule[] {
+  const out: RawRule[] = [];
+  let end = 0; // where the previous rule's methods end
+  for (const pair of map.items) {
+    const key = pair.key as Node | null;
+    const where = at(key);
+    if (pair.value === null) {
+      // `{ "*": GET, HEAD }`: in a flow mapping, a word after a comma with no `:` continues the
+      // methods of the rule before it. Only that exact shape: not `? key`, not a first entry.
+      const prev = out[out.length - 1];
+      const between = src.slice(end, key?.range?.[0] ?? end);
+      if (!map.flow || !prev || typeof prev.value !== 'string' || !/^\s*,\s*$/.test(between)) {
+        throw new Error(`${where}: expected "path": METHODS`);
+      }
+      prev.value += `, ${keyText(pair, where)}`;
+      end = key?.range?.[1] ?? end;
       continue;
     }
-    cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
-/** `{ "*": GET, HEAD, "x/*": NONE }`: a comma that isn't followed by a new `key:` continues the methods. */
-function parseFlowRules(inner: string, where: string): RawPair[] {
-  const out: RawPair[] = [];
-  for (const token of splitCommas(inner)) {
-    if (!token.trim()) continue;
-    const kv = splitKey(token);
-    if (kv) {
-      out.push({ key: kv[0], value: kv[1], where });
-    } else if (out.length) {
-      out[out.length - 1].value += `, ${token.trim()}`;
-    } else {
-      throw new Error(`${where}: expected "path": METHODS inside { }`);
-    }
+    const text = keyText(pair, where);
+    if (out.some(r => r.key === text)) throw new Error(`${where}: path pattern '${text}' is listed more than once`);
+    out.push({ key: text, value: methodsValue(pair.value, where), where });
+    end = (pair.value as Node).range?.[1] ?? end;
   }
   return out;
 }
 
-/** The YAML subset http-filter accepts: host keys, each with path rules (block or `{ }`). */
-function parseFilterYaml(text: string): { key: string; where: string; rules: RawPair[] }[] {
-  const hosts: { key: string; where: string; rules: RawPair[]; inline: boolean; ruleIndent: number }[] = [];
-  let hostIndent = -1;
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = stripComment(lines[i]).replace(/\s+$/, '');
-    if (!line.trim()) continue;
-    const where = `http-filter line ${i + 1}`;
-    const lead = line.slice(0, line.length - line.trimStart().length);
-    if (lead.includes('\t')) throw new Error(`${where}: indent with spaces, not tabs`);
-    const indent = lead.length;
-    if (hostIndent < 0) hostIndent = indent;
-    const kv = splitKey(line);
-    if (!kv) throw new Error(`${where}: expected "key: value", got '${line.trim()}'`);
-    const current = hosts[hosts.length - 1];
-    if (indent === hostIndent) {
-      const [key, rest] = kv;
-      const host = { key, where, rules: [] as RawPair[], inline: false, ruleIndent: -1 };
-      if (rest) {
-        if (!rest.startsWith('{') || !rest.endsWith('}')) {
-          throw new Error(`${where}: put the path rules on the following lines, or inline as { "path": METHODS }`);
-        }
-        host.rules = parseFlowRules(rest.slice(1, -1), where);
-        host.inline = true;
+/**
+ * http-filter as YAML (JSON is YAML too), checked against its one shape: host -> { path ->
+ * methods }. Anything else fails: duplicate keys, anchors, aliases, tags, document markers,
+ * directives and deeper nesting are never resolved or ignored.
+ */
+function parseFilterYaml(raw: string): RawHost[] {
+  const lines = new LineCounter();
+  const doc = parseDocument(raw, {
+    lineCounter: lines,
+    prettyErrors: false,
+    schema: 'core',
+    strict: true,
+    // duplicates are refused below, once `{ "*": GET, HEAD, "x": PUT, HEAD }` continuations are merged
+    uniqueKeys: false,
+    version: '1.2'
+  });
+  const line = (offset: number) => `http-filter line ${lines.linePos(offset).line}`;
+  const at = (n: Node | null | undefined) => line(n?.range?.[0] ?? 0);
+  const problems = [...doc.errors, ...doc.warnings];
+  if (problems.length) {
+    const p = problems.find(e => e.code === 'BAD_ALIAS') ?? problems[0];
+    const text =
+      YAML_HINTS[p.code] ??
+      `${p.message.split('\n')[0]} (check the indentation; write methods as GET, HEAD or [GET, HEAD], not "GET", HEAD)`;
+    throw new Error(`${line(p.pos[0])}: ${text}`);
+  }
+  if (doc.directives?.docStart || doc.directives?.docEnd) {
+    throw new Error('http-filter: remove the YAML document markers (--- and ...) and any % directives');
+  }
+  visit(doc, {
+    Node(_, n) {
+      if (isAlias(n) || n.anchor || n.tag) {
+        throw new Error(`${at(n)}: YAML anchors (&), aliases (*name) and tags (!) are not allowed`);
       }
-      hosts.push(host);
-    } else if (indent > hostIndent && current && !current.inline) {
-      if (current.ruleIndent < 0) current.ruleIndent = indent;
-      if (indent !== current.ruleIndent) throw new Error(`${where}: inconsistent indentation`);
-      current.rules.push({ key: kv[0], value: kv[1], where });
-    } else {
-      throw new Error(`${where}: unexpected indentation`);
     }
+  });
+  if (doc.contents === null) return [];
+  if (!isMap(doc.contents)) {
+    throw new Error(`${at(doc.contents)}: expected host names, each with "path": METHODS rules`);
   }
-  return hosts;
-}
-
-function parseFilterJson(text: string): { key: string; where: string; rules: RawPair[] }[] {
-  let obj: unknown;
-  try {
-    obj = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`http-filter: invalid JSON: ${(e as Error).message}`);
-  }
-  const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-  if (!isMap(obj)) throw new Error('http-filter: expected an object of host -> { path: methods }');
-  return Object.entries(obj).map(([key, rules]) => {
-    const where = `http-filter '${key}'`;
-    if (!isMap(rules)) throw new Error(`${where}: expected an object of path -> methods`);
-    return {
-      key,
-      where,
-      rules: Object.entries(rules).map(([path, value]) => {
-        const ok =
-          value === null ||
-          typeof value === 'string' ||
-          (Array.isArray(value) && value.every(m => typeof m === 'string'));
-        if (!ok) throw new Error(`${where} '${path}': methods must be a string or a list of strings`);
-        return { key: path, value: value as string | string[] | null, where };
-      })
-    };
+  const seen = new Set<string>();
+  return doc.contents.items.map(pair => {
+    const where = at(pair.key as Node | null);
+    const key = keyText(pair, where);
+    if (seen.has(key)) throw new Error(`${where}: host '${key}' is listed more than once`);
+    seen.add(key);
+    const v = pair.value;
+    if (isMap(v)) return { key, where, rules: parseRules(v, raw, at) };
+    // `host:` with nothing after it: no rules (refused below with a hint)
+    if (isScalar(v) && v.value === null) return { key, where, rules: [] };
+    throw new Error(`${where}: put the path rules on the following lines, or inline as { "path": METHODS }`);
   });
 }
 
@@ -288,16 +266,17 @@ export function parseMethods(value: string | string[] | null, where = 'http-filt
  * http-filter (docs/DESIGN-L7-path-method.md): host -> { path pattern -> methods }. Naming a
  * host makes it default-deny; it only ever narrows hosts already in allowed-domains.
  *
- * Input is a small YAML subset (host keys; under each, `"path": METHODS` lines or an inline
- * `{ "path": METHODS, ... }`; quoted or bare keys; `#` comments), or a JSON object. Host keys
- * are domain patterns as in allowed-domains (`.example.com` shorthand included). Anything
- * invalid throws: a filter that silently didn't apply would leave the host fully open.
+ * Input is YAML or JSON, read by the `yaml` library (parseFilterYaml): host keys; under each,
+ * `"path": METHODS` lines or an inline `{ "path": METHODS, ... }`. Host keys are domain patterns
+ * as in allowed-domains (`.example.com` shorthand included). The report prints its suggestion
+ * with the same library (report.ts httpFilterYaml), so a pasted suggestion reads back as printed.
+ * Anything invalid throws: a filter that silently didn't apply would leave the host fully open.
  */
 export function parseHttpFilter(raw: string): HttpFilterHost[] {
   const text = (raw || '').trim();
   if (!text) return [];
-  // the YAML form keeps its indentation: the first line's indent is the host level
-  const parsed = text.startsWith('{') ? parseFilterJson(text) : parseFilterYaml(raw);
+  // parse the raw text, so that line numbers in errors match the input
+  const parsed = parseFilterYaml(raw);
   const out = new Map<string, HttpFilterHost>();
   for (const { key, where, rules } of parsed) {
     if (!rules.length) {
@@ -307,13 +286,13 @@ export function parseHttpFilter(raw: string): HttpFilterHost[] {
     for (const r of rules) {
       let path: string;
       try {
-        path = validatePathPattern(unquote(r.key));
+        path = validatePathPattern(r.key);
       } catch (e) {
         throw new Error(`${r.where}: ${(e as Error).message}`);
       }
       compiled.push({ path, methods: parseMethods(r.value, `${r.where} '${r.key}'`), where: r.where, key: r.key });
     }
-    for (const entry of expandPattern(unquote(key))) {
+    for (const entry of expandPattern(key)) {
       let host: string;
       try {
         host = validatePattern(entry);

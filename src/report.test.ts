@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parseFlowLog, parseFlowLogWithOffsets, type FlowRecord } from './flowlog';
 import { parseHttpFilter } from './inputs';
+import { parse as parseYaml } from 'yaml';
 import { buildPolicyConfig, type PolicyConfig } from './policy';
 import { withoutSelfTests } from './selftest';
 import { suggestHttpFilter } from './suggest';
@@ -1074,6 +1075,26 @@ describe('http-filter', () => {
       );
     });
 
+    it('prints any text so that YAML reads it back unchanged (the yaml library escapes it)', () => {
+      // suggest.py and parseSuggestion never let these through; the printer must not rely on that
+      const paths = ['a"b', 'x: y', ' #c', "it's", '-', '? q', 'a\\nb', 'tab\there', '\n', '*', '&a', '!t', '%'];
+      const s = {
+        hosts: [
+          { host: 'a.example.com', rules: paths.map(path => ({ path, methods: ['GET', 'HEAD'] })) },
+          { host: '- x: y', rules: [{ path: '*', methods: [] }] }
+        ],
+        requests: 0,
+        rules: 0,
+        specific: 0,
+        coarse: false
+      };
+      const back = parseYaml(parseYaml(httpFilterYaml(s))['http-filter']);
+      expect(back).toEqual({
+        'a.example.com': Object.fromEntries(paths.map(p => [p, 'GET, HEAD'])),
+        '- x: y': { '*': 'NONE' }
+      });
+    });
+
     it('leaves out refused requests, GitHub platform hosts, refused connections and unsafe names', () => {
       const recs: FlowRecord[] = [
         req('registry.npmjs.org', 'GET', '/lodash'),
@@ -1271,9 +1292,16 @@ describe('http-filter', () => {
       if (run.status !== 0) throw new Error(run.stderr);
       return JSON.parse(run.stdout) as (string | null)[];
     };
-    /** the YAML the report prints, read back as the action reads the input, written as policy.json */
+    /**
+     * The YAML the report prints, pasted into a workflow (the runner passes the block scalar's
+     * text as the input), read back as the action reads it, written as policy.json.
+     */
     const asPolicy = (s: HttpFilterSuggestion): PolicyConfig => {
-      const httpFilter = parseHttpFilter(httpFilterYaml(s).split('\n').slice(1).join('\n'));
+      const printed = httpFilterYaml(s);
+      const input = parseYaml(printed)['http-filter'];
+      // the indented block as it stands in the summary reads the same
+      expect(parseHttpFilter(printed.split('\n').slice(1).join('\n'))).toEqual(parseHttpFilter(input));
+      const httpFilter = parseHttpFilter(input);
       const { config, warnings } = buildPolicyConfig({
         mode: 'enforce',
         githubDomains: [],
