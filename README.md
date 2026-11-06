@@ -165,9 +165,14 @@ To refuse all pushes, remove the last line. SSH pushes are already blocked (only
 
 When you filter a GitHub host, the runner and first-party actions still need some endpoints:
 step logs and status, the cache and artifact services, and the OIDC token request. The action
-adds these from a built-in list. Each entry names one exact host, path and method; the entries
-are more specific than your rules, so they win. The list is explicit. It is **not** a blanket
-`"*": GET, HEAD` rule, which would trust much more than the platform uses.
+adds these from a built-in list. Each entry names one exact host, path and method. The list is
+explicit. It is **not** a blanket `"*": GET, HEAD` rule, which would trust much more than the
+platform uses.
+
+- The job's own control plane (step logs and status, job lease and completion, OIDC) is always
+  allowed: the job cannot run without it.
+- The artifact and cache endpoints are allowed only where none of your rules for that host
+  matches the request. A rule of yours that matches, `NONE` included, wins.
 
 - The list applies only when you filter a GitHub host. Jobs without `http-filter` do not change.
 - It holds only what the platform needs. Writes the workflow chooses stay yours to allow. For

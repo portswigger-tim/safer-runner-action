@@ -220,7 +220,8 @@ export async function runSetup(inputs: Inputs): Promise<void> {
   if (policy.http_filter.hosts.length) {
     core.info(
       `http-filter: ${policy.http_filter.hosts.length} filtered host(s) [${policy.http_filter.hosts.map(h => h.host).join(', ')}], ` +
-        `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed`
+        `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed, ` +
+        `${policy.http_filter.platform_optional} more unless a rule of the job's matches`
     );
   }
 

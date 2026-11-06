@@ -15,7 +15,9 @@ Security rules (docs/DESIGN-v2.md section 4):
   * HTTP: Host checked on every request; inside intercepted TLS it must equal the SNI.
   * http-filter: on a filtered host, a request the Host check allowed is then matched on
     method + path (policy_core.HttpFilter) and refused with method-not-allowed /
-    path-not-allowed. Passthrough connections are never decrypted, so never filtered.
+    path-not-allowed. Passthrough connections are never decrypted, so never filtered. The
+    action's own setup probe (policy_core.is_selftest_probe) is not filtered, and its body
+    is dropped.
   * Upstream IP guard (review H1): every upstream connection (intercept, passthrough, plain
     HTTP) is resolved ONCE here, refused if any address is internal (loopback, link-local
     incl. IMDS, RFC 1918, CGNAT, ULA...), and pinned to the checked address so mitmproxy
@@ -86,6 +88,16 @@ class ByteCounter:
     def __call__(self, data):
         self.n += len(data)
         return data
+
+
+class DropBody(ByteCounter):
+    """A ByteCounter that forwards nothing (for requests that must not carry a body)."""
+
+    __slots__ = ()
+
+    def __call__(self, data):
+        self.n += len(data)
+        return b""
 
 
 def _no_decision(nextlayer):
@@ -293,7 +305,8 @@ class SaferRunnerPolicy:
         host = pc.norm_host(req.host_header)
         others = [req.authority, req.headers.get("host")]
         d = self.policy.decide_http(req.host_header, others=others, method=req.method, sni=sni)
-        f = self.policy.decide_filter(host, req.method, req.path) if d.action == "allow" else None
+        probe = d.action == "allow" and pc.is_selftest_probe(host, req.method, req.path, state.get("dst"))
+        f = self.policy.decide_filter(host, req.method, req.path) if d.action == "allow" and not probe else None
         if f is not None and f.action == "block":
             d = f  # http-filter: the host is allowed but this method/path is not
         verdict = self._verdict(d.action)
@@ -319,7 +332,7 @@ class SaferRunnerPolicy:
         if target:
             req.host = target
         meta["repointed"] = bool(target)
-        meta["req_counter"] = ByteCounter()
+        meta["req_counter"] = DropBody() if probe else ByteCounter()
         req.stream = meta["req_counter"]
         flow.metadata["safer_runner"] = meta
 

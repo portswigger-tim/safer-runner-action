@@ -213,10 +213,12 @@ FILTER_PLATFORM = "platform"  # Decision.rule when the built-in platform allowli
 
 ANY_METHOD = "*"
 MAX_PATH_PATTERN = 512
+# Request paths with more segments than this are refused on a filtered host (bounds matching).
+MAX_PATH_SEGMENTS = 256
 _METHOD = re.compile(r"^[A-Z][A-Z0-9_-]*$")
 _PATH_PATTERN_CHARS = re.compile(r"^[\x21-\x7e]*$")
-_PATH_SPAN = ".*"  # a standalone * segment: any depth, empty segments included
-_DOUBLE_ENCODED = re.compile(r"%(?:2e|2f|5c)", re.IGNORECASE)
+_BAD_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
+_ESCAPE = re.compile(r"%[0-9a-fA-F]{2}")
 
 
 def validate_path_pattern(pattern):
@@ -240,11 +242,10 @@ def validate_path_pattern(pattern):
 
 # Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
 # case-insensitive and the .git suffix is optional, so one repository has many spellings. On
-# these hosts paths and patterns are matched case-insensitively and every segment matches with
-# or without ".git", so all spellings of a request get the same verdict. Mirrored in
-# src/policy.ts (GIT_HOSTS).
+# these hosts request paths and patterns are both lower-cased and one ".git" suffix is dropped
+# from every segment before matching, so all spellings of a request get the same verdict and
+# the suffix never counts towards a rule's specificity. Mirrored in src/policy.ts (GIT_HOSTS).
 GIT_HOSTS = ("github.com",)
-_GIT_SUFFIX = r"(?:\.git)?"
 
 
 def _strip_git(seg):
@@ -257,11 +258,77 @@ def git_pattern_key(pattern):
     return "/".join(s if _strip_git(s) == "*" else _strip_git(s) for s in p.split("/")) if p else p
 
 
+def _git_path(path):
+    return "/".join(_strip_git(s) for s in path.lower().split("/"))
+
+
+_SPAN = None  # a segment that is exactly "*": one or more whole segments (any depth)
+
+
+def _segment_matches(parts, s):
+    """``s`` against one pattern segment split on its in-segment ``*`` (greedy, no backtracking)."""
+    if len(parts) == 1:
+        return s == parts[0]
+    first, last = parts[0], parts[-1]
+    if len(s) < len(first) + len(last) or not s.startswith(first) or not s.endswith(last):
+        return False
+    i, end = len(first), len(s) - len(last)
+    for mid in parts[1:-1]:
+        j = s.find(mid, i, end)
+        if j < 0:
+            return False
+        i = j + len(mid)
+    return True
+
+
+class PathGlob:
+    """A compiled path pattern: the host glob with ``/`` in the role of ``.``.
+
+    A segment that is exactly ``*`` spans one or more segments (empty ones included); a ``*``
+    inside a segment stays within it. Matched segment by segment over the set of reachable
+    pattern positions - linear in the path, whatever the pattern - rather than by regex.
+    On a git host (``git``) the pattern is lower-cased and each segment loses one ".git"
+    suffix, so ``*.git`` is a one-segment ``*``; the request path is canonicalised the same way
+    (path_forms).
+    """
+
+    __slots__ = ("pattern", "segments")
+
+    def __init__(self, pattern, git=False):
+        p = validate_path_pattern(pattern)
+        self.pattern = p
+        if git:
+            p = p.lower()
+        self.segments = [
+            _SPAN if s == "*" else tuple((_strip_git(s) if git else s).split("*")) for s in p.split("/")
+        ]
+
+    def match(self, path):
+        segs = self.segments
+        n = len(segs)
+        states = {0}
+        for s in path.split("/"):
+            nxt = set()
+            for k in states:
+                if k < n and (segs[k] is _SPAN or _segment_matches(segs[k], s)):
+                    nxt.add(k + 1)
+                if k > 0 and segs[k - 1] is _SPAN:
+                    nxt.add(k)  # the span before k takes this segment too
+            if not nxt:
+                return False
+            states = nxt
+        return n in states
+
+    def specificity(self):
+        """More literal characters, then more segments, then fewer spans, then fewer ``*``."""
+        lit = sum(len("".join(s)) for s in self.segments if s is not _SPAN) + len(self.segments) - 1
+        spans = sum(1 for s in self.segments if s is _SPAN)
+        stars = sum(len(s) - 1 for s in self.segments if s is not _SPAN) + spans
+        return (lit, len(self.segments), -spans, -stars)
+
+
 def compile_path_pattern(pattern, git=False):
-    p = validate_path_pattern(pattern)
-    if not git:
-        return _glob(p.split("/"), "/", "[^/]", lambda i: _PATH_SPAN)
-    return _glob(p.lower().split("/"), "/", "[^/]", lambda i: _PATH_SPAN, lambda s: (_strip_git(s), _GIT_SUFFIX))
+    return PathGlob(pattern, git)
 
 
 def _methods(raw, where):
@@ -279,40 +346,67 @@ def _methods(raw, where):
     return frozenset(ms)
 
 
-def canonical_path(path):
+def _strip_params(path):
+    return "/".join(s.split(";", 1)[0] for s in path.split("/"))
+
+
+def _collapse_slashes(path):
+    return re.sub(r"/{2,}", "/", path).lstrip("/")
+
+
+def _strip_trailing(path):
+    return path.rstrip("/")
+
+
+def path_forms(path, git=False):
     """The forms of a request path the filter matches, or None if it must be refused.
 
-    Returns ``(decoded, relaxed)``: the path without the query string or its leading ``/``,
-    percent-decoded once (matching is on what the server will see), and the same with
-    ``;params`` and trailing slashes removed - forms a server may treat as the same resource.
-    Dot segments, backslashes, control characters and still-encoded separators are refused
-    outright rather than guessed at.
+    The first form is the path without the query string or its leading ``/``, percent-decoded
+    once (matching is on what the server will see). The rest are every combination of the
+    relaxations a server may apply to reach the same resource: ``;params`` removed, repeated
+    slashes collapsed, trailing slashes removed - and, on a git host, the GIT_HOSTS spelling
+    canonicalisation of each. A request is allowed only if every form is. Refused outright
+    rather than guessed at: a malformed or still-encoded escape, invalid UTF-8, a fragment,
+    backslashes, control characters, a dot segment in ANY form, or too many segments.
     """
-    raw = (path or "").split("?", 1)[0].split("#", 1)[0]
+    raw = (path or "").split("?", 1)[0]
+    if "#" in raw or _BAD_ESCAPE.search(raw):
+        return None
     if raw.startswith("/"):
         raw = raw[1:]
-    decoded = unquote(raw)
+    try:
+        decoded = unquote(raw, errors="strict")
+    except UnicodeDecodeError:
+        return None
     if "\\" in decoded or any(ord(c) < 0x20 or ord(c) == 0x7F for c in decoded):
         return None
-    if _DOUBLE_ENCODED.search(decoded):
-        return None
-    segments = decoded.split("/")
-    if any(s in (".", "..") for s in segments):
-        return None
-    relaxed = "/".join(s.split(";", 1)[0] for s in segments).rstrip("/")
-    return decoded, relaxed
+    if _ESCAPE.search(decoded):
+        return None  # encoded twice: a server decoding again would see another path
+    forms = [decoded]
+    for relax in (_strip_params, _collapse_slashes, _strip_trailing):
+        forms += [relax(f) for f in forms]
+    if git:
+        forms = [_git_path(f) for f in forms]
+    forms = list(dict.fromkeys(forms))
+    for f in forms:
+        segments = f.split("/")
+        if len(segments) > MAX_PATH_SEGMENTS or any(s in (".", "..") for s in segments):
+            return None
+    return forms
 
 
 class PathRule:
-    __slots__ = ("pattern", "regex", "methods", "specificity")
+    __slots__ = ("pattern", "glob", "methods", "specificity")
 
     def __init__(self, pattern, methods, where, git=False):
-        self.pattern = validate_path_pattern(pattern)
-        self.regex = compile_path_pattern(self.pattern, git)
+        self.glob = PathGlob(pattern, git)
+        self.pattern = self.glob.pattern
         self.methods = _methods(methods, where)
-        # most specific wins: more literal characters, then more segments, then fewer wildcards
-        key = git_pattern_key(self.pattern) if git else self.pattern
-        self.specificity = (len(key.replace("*", "")), key.count("/"), -key.count("*"))
+        # most specific wins (PathGlob.specificity); on a git host an optional .git counts for nothing
+        self.specificity = self.glob.specificity()
+
+    def matches(self, path):
+        return self.glob.match(path)
 
     def allows(self, method):
         return self.methods is None or method in self.methods
@@ -328,7 +422,9 @@ class HttpFilter:
 
     ``hosts``: user rules - naming a host makes it default-deny; the most specific matching
     path rule decides (ties: every tied rule must allow the method). ``platform``: built-in
-    platform endpoints, allowed on a filtered host whatever the user rules say.
+    platform endpoints on filtered hosts. An ``essential`` one (the job's own control plane)
+    is allowed whatever the user rules say; any other applies only to a request no user rule
+    on that host matches, so the job's own rules always win over it.
     """
 
     def __init__(self, hosts=(), platform=()):
@@ -350,10 +446,13 @@ class HttpFilter:
         self.platform = []
         for e in platform:
             name = validate_pattern(e["host"])
-            rule = PathRule(e["path"], e["methods"], f"platform {name} {e['path']!r}")
+            rule = PathRule(e["path"], e["methods"], f"platform {name} {e['path']!r}", name in GIT_HOSTS)
             if rule.methods is None or not rule.methods:
                 raise PolicyError(f"http_filter: platform entries name explicit methods: {name!r}")
-            self.platform.append((name, compile_pattern(name), rule))
+            essential = e.get("essential", False)
+            if not isinstance(essential, bool):
+                raise PolicyError(f"http_filter: platform 'essential' must be a boolean: {name!r}")
+            self.platform.append((name, compile_pattern(name), rule, essential))
 
     @classmethod
     def from_config(cls, cfg):
@@ -374,32 +473,39 @@ class HttpFilter:
         return [r for spec, rules in hits if spec == best for r in rules]
 
     def decide(self, host, method, path):
-        """None when ``host`` is not filtered; else an allow/block Decision with its rule."""
+        """None when ``host`` is not filtered; else an allow/block Decision with its rule.
+
+        Every form of the path (path_forms) is decided; the first refusal wins.
+        """
         rules = self.rules_for(host)
         if not rules:
             return None
         method = (method or "").upper()
-        forms = canonical_path(path)
+        h = norm_host(host)
+        forms = path_forms(path, git=h in GIT_HOSTS)
         if forms is None:
             return Decision("block", FILTER_PATH)
-        decoded, relaxed = forms
-        h = norm_host(host)
-        if h in GIT_HOSTS:  # rules on a git host are compiled case-insensitive (see GIT_HOSTS)
-            decoded, relaxed = decoded.lower(), relaxed.lower()
-        for _, rx, rule in self.platform:
-            if rx.match(h) and rule.regex.match(decoded) and rule.allows(method):
-                return Decision("allow", "allowed", FILTER_PLATFORM)
-        d = _decide_rules(rules, method, decoded)
-        if d.action == "allow" and relaxed != decoded:
-            r = _decide_rules(rules, method, relaxed)
-            if r.action == "block":
-                return r
-        return d
+        platform = [(rule, essential) for _, rx, rule, essential in self.platform if rx.match(h)]
+        first = None
+        for form in forms:
+            d = _decide_form(rules, platform, method, form)
+            if d.action == "block":
+                return d
+            first = first or d
+        return first
 
 
-def _decide_rules(rules, method, path):
-    matched = [r for r in rules if r.regex.match(path)]
+def _platform_allows(platform, essential, method, path):
+    return any(e == essential and r.matches(path) and r.allows(method) for r, e in platform)
+
+
+def _decide_form(rules, platform, method, path):
+    if _platform_allows(platform, True, method, path):
+        return Decision("allow", "allowed", FILTER_PLATFORM)
+    matched = [r for r in rules if r.matches(path)]
     if not matched:
+        if _platform_allows(platform, False, method, path):
+            return Decision("allow", "allowed", FILTER_PLATFORM)
         return Decision("block", FILTER_PATH)
     best = max(r.specificity for r in matched)
     winners = [r for r in matched if r.specificity == best]
@@ -409,6 +515,19 @@ def _decide_rules(rules, method, path):
     if all(r.allows(method) for r in winners):
         return Decision("allow", "allowed", rule)
     return Decision("block", FILTER_METHOD, rule)
+
+
+# The action's own setup probe (src/selftest.ts repointSelfTest): a bodiless GET of a fixed
+# public file, dialled at TEST-NET-1 so the proxy has to repoint it. It is exempt from
+# http-filter, so a job's filter on that host can never fail setup; it carries nothing.
+SELFTEST_PROBE = ("github.com", "GET", "/robots.txt")
+SELFTEST_BOGUS_IP = "192.0.2.1"
+
+
+def is_selftest_probe(host, method, path, dst):
+    """True for exactly the setup probe request (``dst``: the address the client dialled)."""
+    ip = str(dst or "").rsplit(":", 1)[0]
+    return ip == SELFTEST_BOGUS_IP and (norm_host(host), (method or "").upper(), path) == SELFTEST_PROBE
 
 
 class Policy:
@@ -545,8 +664,9 @@ def selftest(policy):
     # every filtered name refuses a path it cannot match reliably
     for name, _, _, _ in policy.http_filter.hosts:
         concrete = name.replace("*", "x")
-        d = policy.decide_filter(concrete, "GET", "/a/../b")
-        assert d is not None and d.action == "block", "http-filter: dot-segment path not refused"
+        for path in ("/a/../b", "/a/..;/b"):
+            d = policy.decide_filter(concrete, "GET", path)
+            assert d is not None and d.action == "block", "http-filter: dot-segment path not refused"
     if policy.enforce and policy.container_tls == "sni-only":
         fd = "selftest.blob.core.windows.net"
         assert policy.is_front_door(fd), "front door not recognised"

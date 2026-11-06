@@ -23,7 +23,14 @@ export interface SelfTestResult {
   detail: string;
 }
 
+/**
+ * The repoint probe: a bodiless GET of this fixed public file. The addon recognises exactly this
+ * request dialled at SELFTEST_BOGUS_IP (policy_core.is_selftest_probe) and exempts it from
+ * http-filter, so a job's filter on this host cannot fail setup. Checked against
+ * proxy/test-vectors.json "selftest_probe".
+ */
 export const REPOINT_HOST = 'github.com';
+export const REPOINT_PATH = '/robots.txt';
 
 async function curl(args: string[]): Promise<{ code: number; out: string }> {
   const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
@@ -60,7 +67,11 @@ export async function sniBlockSelfTest(mode: Mode): Promise<SelfTestResult> {
 
 export async function repointSelfTest(): Promise<SelfTestResult> {
   const from = flowLogSize(FLOW_LOG);
-  const r = await curl(['--resolve', `${REPOINT_HOST}:443:${SELFTEST_BOGUS_IP}`, `https://${REPOINT_HOST}/robots.txt`]);
+  const r = await curl([
+    '--resolve',
+    `${REPOINT_HOST}:443:${SELFTEST_BOGUS_IP}`,
+    `https://${REPOINT_HOST}${REPOINT_PATH}`
+  ]);
   const rec = await waitFor(
     from,
     x => (x.ev === 'https' || x.ev === 'http') && x.host === REPOINT_HOST && ipOf(x.dst) === SELFTEST_BOGUS_IP
