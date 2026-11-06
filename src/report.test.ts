@@ -1063,6 +1063,20 @@ describe('http-filter', () => {
       expect(suggestion.coarse).toBe(true);
     });
 
+    it('scopes the NONE rule under a broad rule, so it outranks it (most literal characters wins)', () => {
+      const recs = [
+        req('github.com', 'POST', '/myorg/app.git/git-receive-pack'),
+        ...['a', 'b', 'c', 'd'].map(x => req('github.com', 'POST', `/myorg/${x}`))
+      ];
+      const { suggestion } = summarizeHttpFilter(recs);
+      expect(rulesFor(suggestion, 'github.com')).toEqual({
+        'myorg/*': 'POST',
+        'myorg/*/git-receive-pack': '',
+        'myorg/*/git-upload-pack': '',
+        'myorg/app.git/git-receive-pack': 'POST'
+      });
+    });
+
     it('adds no NONE rule where nothing broad could match a pack path', () => {
       const recs = [
         req('api.github.com', 'POST', '/repos/o/r/issues'),
@@ -1097,12 +1111,22 @@ describe('http-filter', () => {
       expect(rulesFor(suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
     });
 
-    it('never pastes a segment that could break the YAML', () => {
+    it('leaves out what the built-in platform list allowed on a filtered host', () => {
+      const { suggestion } = summarizeHttpFilter([
+        req('api.github.com', 'GET', '/repos/o/r'),
+        req('api.github.com', 'POST', '/repos/o/r/check-runs', { filter: 'platform', filter_rule: null })
+      ]);
+      expect(rulesFor(suggestion, 'api.github.com')).toEqual({ '*': 'GET, HEAD' });
+      expect(suggestion.requests).toBe(1);
+    });
+
+    it('never pastes a segment that could break the YAML or the engine', () => {
       const { suggestion } = summarizeHttpFilter([
         req('api.example.com', 'POST', '/a"b/x'),
-        req('api.example.com', 'POST', '/c:d#e/y')
+        req('api.example.com', 'POST', '/c:d#e/y'),
+        req('api.example.com', 'POST', '/../z')
       ]);
-      expect(rulesFor(suggestion, 'api.example.com')).toEqual({ '*/x': 'POST', '*/y': 'POST' });
+      expect(rulesFor(suggestion, 'api.example.com')).toEqual({ '*/x': 'POST', '*/y': 'POST', '*/z': 'POST' });
     });
   });
 
