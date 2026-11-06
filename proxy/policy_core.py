@@ -11,6 +11,12 @@ Pattern semantics (mirrors src/policy.ts):
 
 Decisions are made on names only, never on the destination IP the client chose.
 
+HTTP filter (``http-filter``): after the host check, a request to a filtered host is allowed
+only if a path rule matches and lists its method (docs/DESIGN-L7-path-method.md). Paths use
+the same glob, with ``/`` in the role of ``.``: a segment that is exactly ``*`` spans any
+depth, a ``*`` inside a segment stays within it. Only HTTP the proxy sees (intercepted HTTPS,
+plain HTTP) can be filtered; passthrough connections never reach it.
+
 Container sources (P2): traffic containers send off their bridge arrives on a second proxy
 listener. With ``container_tls: sni-only`` (the default) an allowlisted name from a container
 is passed through by SNI (repointed, IP-pinned, never decrypted - no CA needed inside the
@@ -21,6 +27,7 @@ enforce so the Host check still stops fronting to another tenant behind the same
 import ipaddress
 import json
 import re
+from urllib.parse import unquote
 
 # Verdicts written to the flow log.
 INTERCEPT = "INTERCEPT"  # TLS terminated with our CA, Host enforced per request
@@ -94,15 +101,28 @@ def validate_pattern(pattern):
     return p
 
 
+def _glob(segments, sep, char, span):
+    """The one glob shared by host names and paths.
+
+    ``*`` inside a segment matches within that segment (``char*``). A segment that is exactly
+    ``*`` matches across segments wherever ``span(i)`` returns a regex for it (None: it is an
+    in-segment ``*`` like any other).
+    """
+    out = []
+    for i, seg in enumerate(segments):
+        s = span(i) if seg == "*" else None
+        out.append(s if s is not None else re.escape(seg).replace(r"\*", char + "*"))
+    return re.compile("^" + re.escape(sep).join(out) + "$")
+
+
+_HOST_CHAR = r"[a-z0-9_-]"
+
+
 def compile_pattern(pattern):
     p = validate_pattern(pattern)
-    if p.startswith("*."):
-        body = r"(?:[a-z0-9_-]+\.)+" + re.escape(p[2:])
-    elif "*" in p:
-        body = re.escape(p).replace(r"\*", r"[a-z0-9_-]*")
-    else:
-        body = re.escape(p)
-    return re.compile("^" + body + "$")
+    # a leading "*." spans one or more labels; any other * stays within its label
+    lead = rf"{_HOST_CHAR}+(?:\.{_HOST_CHAR}+)*"
+    return _glob(p.split("."), ".", _HOST_CHAR, lambda i: lead if i == 0 else None)
 
 
 def matches(host, compiled):
@@ -169,20 +189,203 @@ def pick_upstream(addrs):
 
 
 class Decision:
-    __slots__ = ("action", "reason")
+    __slots__ = ("action", "reason", "rule")
 
-    def __init__(self, action, reason):
+    def __init__(self, action, reason, rule=None):
         self.action = action
         self.reason = reason
+        self.rule = rule  # http-filter: the path pattern (or "platform") that decided
 
     def __repr__(self):
         return f"Decision({self.action!r}, {self.reason!r})"
 
 
+# ---------------------------------------------------------------- HTTP filter
+
+# Flow-log reasons for a request refused by http-filter (the report keys on these).
+FILTER_METHOD = "method-not-allowed"
+FILTER_PATH = "path-not-allowed"
+FILTER_PLATFORM = "platform"  # Decision.rule when the built-in platform allowlist allowed it
+
+ANY_METHOD = "*"
+MAX_PATH_PATTERN = 512
+_METHOD = re.compile(r"^[A-Z][A-Z0-9_-]*$")
+_PATH_PATTERN_CHARS = re.compile(r"^[\x21-\x7e]*$")
+_PATH_SPAN = ".*"  # a standalone * segment: any depth, empty segments included
+_DOUBLE_ENCODED = re.compile(r"%(?:2e|2f|5c)", re.IGNORECASE)
+
+
+def validate_path_pattern(pattern):
+    """Return the normalised path pattern (one leading / stripped; '' is the root) or raise."""
+    if not isinstance(pattern, str):
+        raise PolicyError(f"path pattern must be a string: {pattern!r}")
+    p = pattern.strip()
+    if p.startswith("/"):
+        p = p[1:]
+    if p == "":
+        return p
+    if len(p) > MAX_PATH_PATTERN or not _PATH_PATTERN_CHARS.match(p) or any(c in p for c in "?#%\\"):
+        raise PolicyError(f"invalid path pattern: {pattern!r}")
+    segments = p.split("/")
+    if any(s in ("", ".", "..") for s in segments):
+        raise PolicyError(f"empty, '.' or '..' segment in path pattern: {pattern!r}")
+    if "**" in p:
+        raise PolicyError(f"'**' is not supported (a lone '*' segment already spans any depth): {pattern!r}")
+    return p
+
+
+def compile_path_pattern(pattern):
+    p = validate_path_pattern(pattern)
+    return _glob(p.split("/"), "/", "[^/]", lambda i: _PATH_SPAN)
+
+
+def _methods(raw, where):
+    """Methods list from policy.json: ["*"] any, [] none, else upper-case tokens."""
+    if not isinstance(raw, list) or not all(isinstance(m, str) for m in raw):
+        raise PolicyError(f"methods must be a list of strings: {where}")
+    ms = [m.strip().upper() for m in raw]
+    if ANY_METHOD in ms:
+        if len(ms) != 1:
+            raise PolicyError(f"'*' cannot be combined with other methods: {where}")
+        return None  # any method
+    for m in ms:
+        if not _METHOD.match(m):
+            raise PolicyError(f"invalid method {m!r}: {where}")
+    return frozenset(ms)
+
+
+def canonical_path(path):
+    """The forms of a request path the filter matches, or None if it must be refused.
+
+    Returns ``(decoded, relaxed)``: the path without the query string or its leading ``/``,
+    percent-decoded once (matching is on what the server will see), and the same with
+    ``;params`` and trailing slashes removed - forms a server may treat as the same resource.
+    Dot segments, backslashes, control characters and still-encoded separators are refused
+    outright rather than guessed at.
+    """
+    raw = (path or "").split("?", 1)[0].split("#", 1)[0]
+    if raw.startswith("/"):
+        raw = raw[1:]
+    decoded = unquote(raw)
+    if "\\" in decoded or any(ord(c) < 0x20 or ord(c) == 0x7F for c in decoded):
+        return None
+    if _DOUBLE_ENCODED.search(decoded):
+        return None
+    segments = decoded.split("/")
+    if any(s in (".", "..") for s in segments):
+        return None
+    relaxed = "/".join(s.split(";", 1)[0] for s in segments).rstrip("/")
+    return decoded, relaxed
+
+
+class PathRule:
+    __slots__ = ("pattern", "regex", "methods", "specificity")
+
+    def __init__(self, pattern, methods, where):
+        self.pattern = validate_path_pattern(pattern)
+        self.regex = compile_path_pattern(self.pattern)
+        self.methods = _methods(methods, where)
+        # most specific wins: more literal characters, then more segments, then fewer wildcards
+        literal = self.pattern.replace("*", "")
+        self.specificity = (len(literal), self.pattern.count("/"), -self.pattern.count("*"))
+
+    def allows(self, method):
+        return self.methods is None or method in self.methods
+
+
+def _host_specificity(pattern):
+    """An exact name beats any wildcard pattern; then more literal characters."""
+    return (0 if "*" in pattern else 1, len(pattern.replace("*", "")))
+
+
+class HttpFilter:
+    """Compiled ``http_filter`` from policy.json (see src/policy.ts HttpFilterConfig).
+
+    ``hosts``: user rules - naming a host makes it default-deny; the most specific matching
+    path rule decides (ties: every tied rule must allow the method). ``platform``: built-in
+    platform endpoints, allowed on a filtered host whatever the user rules say.
+    """
+
+    def __init__(self, hosts=(), platform=()):
+        self.hosts = []
+        seen = set()
+        for h in hosts:
+            name = validate_pattern(h["host"])
+            if name in seen:
+                raise PolicyError(f"http_filter: duplicate host {name!r}")
+            seen.add(name)
+            rules = [PathRule(r["path"], r["methods"], f"{name} {r['path']!r}") for r in h["rules"]]
+            if not rules:
+                raise PolicyError(f"http_filter: no path rules for {name!r}")
+            if len({r.pattern for r in rules}) != len(rules):
+                raise PolicyError(f"http_filter: duplicate path pattern for {name!r}")
+            self.hosts.append((name, compile_pattern(name), _host_specificity(name), rules))
+        self.platform = []
+        for e in platform:
+            name = validate_pattern(e["host"])
+            rule = PathRule(e["path"], e["methods"], f"platform {name} {e['path']!r}")
+            if rule.methods is None or not rule.methods:
+                raise PolicyError(f"http_filter: platform entries name explicit methods: {name!r}")
+            self.platform.append((name, compile_pattern(name), rule))
+
+    @classmethod
+    def from_config(cls, cfg):
+        if not cfg:
+            return cls()
+        return cls(cfg.get("hosts", []), cfg.get("platform", []))
+
+    def __bool__(self):
+        return bool(self.hosts)
+
+    def rules_for(self, host):
+        """The path rules of the most specific host entries matching ``host`` ([] = unfiltered)."""
+        host = norm_host(host)
+        hits = [(spec, rules) for _, rx, spec, rules in self.hosts if host and rx.match(host)]
+        if not hits:
+            return []
+        best = max(spec for spec, _ in hits)
+        return [r for spec, rules in hits if spec == best for r in rules]
+
+    def decide(self, host, method, path):
+        """None when ``host`` is not filtered; else an allow/block Decision with its rule."""
+        rules = self.rules_for(host)
+        if not rules:
+            return None
+        method = (method or "").upper()
+        forms = canonical_path(path)
+        if forms is None:
+            return Decision("block", FILTER_PATH)
+        decoded, relaxed = forms
+        h = norm_host(host)
+        for _, rx, rule in self.platform:
+            if rx.match(h) and rule.regex.match(decoded) and rule.allows(method):
+                return Decision("allow", "allowed", FILTER_PLATFORM)
+        d = _decide_rules(rules, method, decoded)
+        if d.action == "allow" and relaxed != decoded:
+            r = _decide_rules(rules, method, relaxed)
+            if r.action == "block":
+                return r
+        return d
+
+
+def _decide_rules(rules, method, path):
+    matched = [r for r in rules if r.regex.match(path)]
+    if not matched:
+        return Decision("block", FILTER_PATH)
+    best = max(r.specificity for r in matched)
+    winners = [r for r in matched if r.specificity == best]
+    rule = winners[0].pattern
+    if any(r.methods is not None and not r.methods for r in winners):
+        return Decision("block", FILTER_PATH, rule)  # NONE: the path is denied
+    if all(r.allows(method) for r in winners):
+        return Decision("allow", "allowed", rule)
+    return Decision("block", FILTER_METHOD, rule)
+
+
 class Policy:
     """Hostname policy. ``mode`` is 'enforce' or 'analyze'."""
 
-    def __init__(self, mode, allow, passthrough, deny, container_tls="intercept"):
+    def __init__(self, mode, allow, passthrough, deny, container_tls="intercept", http_filter=None):
         if mode not in ("enforce", "analyze"):
             raise PolicyError(f"invalid mode: {mode!r}")
         if container_tls not in CONTAINER_TLS_MODES:
@@ -196,6 +399,7 @@ class Policy:
         self._allow = [compile_pattern(p) for p in self.allow_patterns]
         self._pass = [compile_pattern(p) for p in self.passthrough_patterns]
         self._deny = [compile_pattern(p) for p in self.deny_patterns]
+        self.http_filter = http_filter if http_filter is not None else HttpFilter()
 
     @classmethod
     def from_config(cls, cfg):
@@ -206,6 +410,8 @@ class Policy:
             cfg.get("deny", []),
             # absent (older config): containers are treated exactly like the host
             cfg.get("container_tls", "intercept"),
+            # absent (older config): no host is filtered
+            HttpFilter.from_config(cfg.get("http_filter")),
         )
 
     @classmethod
@@ -282,6 +488,10 @@ class Policy:
             return Decision("block", "host-not-allowed")
         return Decision("allow", "allowed")
 
+    def decide_filter(self, host, method, path):
+        """http-filter gate, for a request ``decide_http`` allowed. None: host not filtered."""
+        return self.http_filter.decide(host, method, path)
+
 
 def selftest(policy):
     """Invariants that must hold for any loaded policy. Raises AssertionError on failure."""
@@ -303,6 +513,11 @@ def selftest(policy):
     # container posture never relaxes a block
     for name in (probe, "", "1.2.3.4"):
         assert policy.decide_tls(name, SOURCE_CONTAINER).action == "block", "container SNI block relaxed"
+    # every filtered name refuses a path it cannot match reliably
+    for name, _, _, _ in policy.http_filter.hosts:
+        concrete = name.replace("*", "x")
+        d = policy.decide_filter(concrete, "GET", "/a/../b")
+        assert d is not None and d.action == "block", "http-filter: dot-segment path not refused"
     if policy.enforce and policy.container_tls == "sni-only":
         fd = "selftest.blob.core.windows.net"
         assert policy.is_front_door(fd), "front door not recognised"

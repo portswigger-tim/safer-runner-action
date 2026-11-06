@@ -41,6 +41,26 @@ inputs:
       it. Empty falls back to the default (Quad9).
     required: false
     default: '9.9.9.9 149.112.112.112'
+  http-filter:
+    description: >-
+      Method + path filtering on hosts that are already allowed (intercepted HTTPS and plain
+      HTTP only; passthrough hosts cannot be filtered). A YAML map of host -> { path pattern ->
+      methods }, e.g. `registry.npmjs.org: { "*": GET, HEAD }` makes npm read-only. Naming a host
+      makes it default-deny: a request is allowed only if a path rule matches and lists its
+      method; the most specific path wins. Methods: a comma list, `*`/`ALL` for any, `NONE` to
+      deny the path. Paths use the allowed-domains `*` with `/` in the role of `.` (a lone `*`
+      segment spans any depth); the query string is ignored. It never grants access: a host not
+      in allowed-domains stays unreachable. See docs/DESIGN-L7-path-method.md.
+    required: false
+    default: ''
+  allow-github-platform:
+    description: >-
+      When a filtered host (http-filter) is one the GitHub Actions platform uses, also allow the
+      platform's own endpoints there (step logs, artifacts, cache, OIDC) - an explicit, built-in
+      list of host + path + method, never a blanket read rule. Set `false` for a hard lockdown
+      and allowlist those endpoints by hand.
+    required: false
+    default: 'true'
   disable-sudo:
     description: >-
       Override whether sudo is removed from the runner user after setup. `enforce` removes it

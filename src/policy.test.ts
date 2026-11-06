@@ -9,8 +9,11 @@ import {
   matchesAny,
   normHost,
   parseAllowedDomains,
+  patternsOverlap,
+  validatePathPattern,
   validatePattern
 } from './policy';
+import { GITHUB_PLATFORM_ENDPOINTS } from './parsers/github-parser';
 
 const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'proxy', 'test-vectors.json'), 'utf8'));
 
@@ -189,5 +192,132 @@ describe('parseAllowedDomains', () => {
       api.service.io`;
     const result = parseAllowedDomains(yamlStyle);
     expect(result).toEqual(['example.com', 'test.org', 'api.service.io']);
+  });
+});
+
+describe('validatePathPattern', () => {
+  it.each([
+    ['/twirp/*', 'twirp/*'],
+    ['*', '*'],
+    ['/', ''],
+    ['', ''],
+    [' /a/b ', 'a/b']
+  ])('%p -> %p', (p, want) => {
+    expect(validatePathPattern(p)).toEqual(want);
+  });
+
+  it.each(vectors.invalid_path_patterns as string[])('rejects %p', p => {
+    expect(() => validatePathPattern(p)).toThrow();
+  });
+});
+
+describe('patternsOverlap', () => {
+  it.each([
+    ['github.com', 'github.com', true],
+    ['github.com', 'api.github.com', false],
+    ['*.github.com', 'api.github.com', true],
+    ['*.github.com', 'github.com', false],
+    ['run-actions-*-azure-*.actions.githubusercontent.com', '*.actions.githubusercontent.com', true],
+    [
+      'run-actions-*-azure-*.actions.githubusercontent.com',
+      'run-actions-1-azure-eastus.actions.githubusercontent.com',
+      true
+    ],
+    ['productionresultssa*.blob.core.windows.net', 'productionresultssa3.blob.core.windows.net', true],
+    ['productionresultssa*.blob.core.windows.net', 'attacker.blob.core.windows.net', false]
+  ])('%p ~ %p -> %p', (a, b, want) => {
+    expect(patternsOverlap(a, b)).toBe(want);
+    expect(patternsOverlap(b, a)).toBe(want);
+  });
+});
+
+describe('GITHUB_PLATFORM_ENDPOINTS', () => {
+  it('is explicit: valid host + path, named methods, no blanket read rule', () => {
+    expect(GITHUB_PLATFORM_ENDPOINTS.length).toBeGreaterThan(0);
+    for (const e of GITHUB_PLATFORM_ENDPOINTS) {
+      expect(() => validatePattern(e.host)).not.toThrow();
+      expect(validatePathPattern(e.path)).not.toBe('*');
+      expect(e.methods.length).toBeGreaterThan(0);
+      expect(e.methods).not.toContain('*');
+      for (const m of e.methods) expect(m).toMatch(/^[A-Z]+$/);
+    }
+  });
+});
+
+describe('buildPolicyConfig: http-filter', () => {
+  const base = {
+    mode: 'enforce' as const,
+    githubDomains: [
+      'github.com',
+      'api.github.com',
+      '*.actions.githubusercontent.com',
+      'productionresultssa1.blob.core.windows.net'
+    ],
+    allowedDomains: 'registry.npmjs.org',
+    containerPort: 8081,
+    passthroughDomains: '',
+    blockRiskySubdomains: true
+  };
+  const rule = (host: string, methods = ['GET', 'HEAD']) => ({ host, rules: [{ path: '*', methods }] });
+
+  it('is empty (and inert) by default', () => {
+    const { config, warnings } = buildPolicyConfig(base);
+    expect(config.http_filter).toEqual({
+      hosts: [],
+      allow_github_platform: true,
+      platform: [],
+      platform_auto_allowed: 0
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it('carries the rules; no platform endpoints for a non-platform host', () => {
+    const hosts = [rule('registry.npmjs.org'), rule('github.com', ['*'])];
+    const { config, warnings } = buildPolicyConfig({ ...base, httpFilter: hosts });
+    expect(config.http_filter.hosts).toEqual(hosts);
+    expect(config.http_filter.platform_auto_allowed).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it('auto-allows the platform endpoints on a filtered platform host', () => {
+    const { config } = buildPolicyConfig({ ...base, httpFilter: [rule('*.actions.githubusercontent.com')] });
+    expect(config.http_filter.platform).toEqual([
+      { host: 'results-receiver.actions.githubusercontent.com', path: 'twirp/*', methods: ['POST'] },
+      { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] }
+    ]);
+    expect(config.http_filter.platform_auto_allowed).toBe(2);
+
+    const blob = buildPolicyConfig({ ...base, httpFilter: [rule('productionresultssa1.blob.core.windows.net')] });
+    expect(blob.config.http_filter.platform.map(e => e.path)).toEqual(['actions-results/*', 'actions-cache/*']);
+  });
+
+  it('allow-github-platform: false turns them off', () => {
+    const { config } = buildPolicyConfig({
+      ...base,
+      httpFilter: [rule('*.actions.githubusercontent.com')],
+      allowGithubPlatform: false
+    });
+    expect(config.http_filter).toMatchObject({ allow_github_platform: false, platform: [], platform_auto_allowed: 0 });
+  });
+
+  it('warns when a filtered host is not allowed (the filter is inert)', () => {
+    const { warnings } = buildPolicyConfig({ ...base, httpFilter: [rule('pypi.org'), rule('github.com')] });
+    expect(warnings).toEqual([
+      expect.stringMatching(/'pypi.org' is not in allowed-domains, so this filter has no effect/)
+    ]);
+  });
+
+  it('warns when a filtered host is passthrough (cannot be path-filtered)', () => {
+    const { warnings } = buildPolicyConfig({
+      ...base,
+      passthroughDomains: 'pinned.example.com',
+      httpFilter: [rule('pinned.example.com'), rule('hosted-compute-westus.githubapp.com')]
+    });
+    expect(warnings).toEqual([
+      expect.stringMatching(/'pinned.example.com' matches passthrough-domains entry 'pinned.example.com'/),
+      expect.stringMatching(
+        /'hosted-compute-westus.githubapp.com' matches passthrough-domains entry 'hosted-compute-\*.githubapp.com'.*cannot be path-filtered/
+      )
+    ]);
   });
 });

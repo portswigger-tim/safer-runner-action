@@ -209,12 +209,20 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     allowedDomains: inputs.allowedDomains,
     passthroughDomains: inputs.passthroughDomains,
     blockRiskySubdomains: inputs.blockRiskySubdomains,
-    containerPort: ports.containerPort
+    containerPort: ports.containerPort,
+    httpFilter: inputs.httpFilter,
+    allowGithubPlatform: inputs.allowGithubPlatform
   });
   for (const w of warnings) core.warning(w);
   core.info(
     `Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`
   );
+  if (policy.http_filter.hosts.length) {
+    core.info(
+      `http-filter: ${policy.http_filter.hosts.length} filtered host(s) [${policy.http_filter.hosts.map(h => h.host).join(', ')}], ` +
+        `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed`
+    );
+  }
 
   const { dnsServers } = inputs;
 
