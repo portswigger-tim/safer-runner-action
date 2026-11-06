@@ -9,9 +9,19 @@
  *
  * Input shorthand (expanded before validation, never reaches the addon or the Corefile):
  *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
+ *
+ * http-filter path patterns use the same glob with `/` in the role of `.`: a segment that is
+ * exactly `*` spans any depth (empty segments included), a `*` inside a segment stays within
+ * it, and a lone `*` matches every path. Matched by the addon (policy_core.HttpFilter) against
+ * the request path without its query string, percent-decoded once.
  */
 
-import { DANGEROUS_BROAD_DOMAINS, RISKY_GITHUB_SUBDOMAINS } from './parsers/github-parser';
+import {
+  DANGEROUS_BROAD_DOMAINS,
+  GITHUB_PLATFORM_ENDPOINTS,
+  PlatformEndpoint,
+  RISKY_GITHUB_SUBDOMAINS
+} from './parsers/github-parser';
 import { FLOW_LOG } from './constants';
 
 export type Mode = 'analyze' | 'enforce';
@@ -47,6 +57,37 @@ export const FRONT_DOORS = [
  */
 export const MANDATORY_PASSTHROUGH = ['hosted-compute-*.githubapp.com'];
 
+/**
+ * http-filter methods: `['*']` any method, `[]` none (NONE: the path is denied), otherwise
+ * upper-case method names.
+ */
+export interface HttpPathRule {
+  /** path pattern, normalised: no leading `/` (`''` is the root path) */
+  path: string;
+  methods: string[];
+}
+
+/** One filtered host (a domain pattern, as in allowed-domains) and its path rules. */
+export interface HttpFilterHost {
+  host: string;
+  rules: HttpPathRule[];
+}
+
+/** policy.json `http_filter`: what the addon enforces after the host check. */
+export interface HttpFilterConfig {
+  /** filtered hosts: naming a host makes it default-deny; the most specific path rule decides */
+  hosts: HttpFilterHost[];
+  /** the allow-github-platform input */
+  allow_github_platform: boolean;
+  /**
+   * Built-in platform endpoints in force: the GITHUB_PLATFORM_ENDPOINTS entries on a filtered
+   * host (path normalised), allowed whatever the host's rules say. [] when the toggle is off.
+   */
+  platform: PlatformEndpoint[];
+  /** platform.length, for the report ("N platform endpoints auto-allowed") */
+  platform_auto_allowed: number;
+}
+
 export interface PolicyConfig {
   version: 1;
   mode: Mode;
@@ -57,6 +98,7 @@ export interface PolicyConfig {
   container_tls: ContainerTls;
   /** Proxy listener that only receives container traffic (the addon classifies by it). */
   container_port: number;
+  http_filter: HttpFilterConfig;
 }
 
 const LABEL = /^[a-z0-9_*]([a-z0-9_*-]*[a-z0-9_*])?$/;
@@ -133,6 +175,59 @@ export function matchesAny(host: string, compiled: RegExp[]): boolean {
   return h !== '' && compiled.some(c => c.test(h));
 }
 
+export const MAX_PATH_PATTERN = 512;
+
+/**
+ * Return the normalised http-filter path pattern (one leading `/` stripped; `''` is the root),
+ * or throw. Mirrors validate_path_pattern in proxy/policy_core.py (shared vectors). Patterns
+ * are written decoded (`@scope/*`, not `@scope%2f*`): the addon matches the decoded path.
+ */
+export function validatePathPattern(pattern: string): string {
+  let p = String(pattern).trim();
+  if (p.startsWith('/')) p = p.slice(1);
+  if (p === '') return p;
+  if (p.length > MAX_PATH_PATTERN || !/^[\x21-\x7e]*$/.test(p) || /[?#%\\]/.test(p)) {
+    throw new Error(`invalid path pattern: '${pattern}'`);
+  }
+  if (p.split('/').some(s => s === '' || s === '.' || s === '..')) {
+    throw new Error(`empty, '.' or '..' segment in path pattern: '${pattern}'`);
+  }
+  if (p.includes('**')) {
+    throw new Error(`'**' is not supported (a lone '*' segment already spans any depth): '${pattern}'`);
+  }
+  return p;
+}
+
+/**
+ * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
+ * case-insensitive and .git is optional, so the addon matches paths there case-insensitively
+ * and with or without ".git" on each segment. Mirrors GIT_HOSTS in proxy/policy_core.py.
+ */
+export const GIT_HOSTS = ['github.com'];
+
+function stripGit(seg: string): string {
+  return seg.endsWith('.git') && seg.length > 4 ? seg.slice(0, -4) : seg;
+}
+
+/** Identity of a path pattern on a git host: two patterns with one key are duplicates. */
+export function gitPatternKey(pattern: string): string {
+  const p = validatePathPattern(pattern).toLowerCase();
+  return p
+    .split('/')
+    .map(s => (stripGit(s) === '*' ? s : stripGit(s)))
+    .join('/');
+}
+
+/**
+ * Whether two domain patterns can match a common name (approximate: each is tried against a
+ * concrete instance of the other). Used for warnings and to pick which platform endpoints to
+ * ship - never as an allow decision itself (the addon still matches every request).
+ */
+export function patternsOverlap(a: string, b: string): boolean {
+  const concrete = (p: string) => p.replace(/\*/g, 'x');
+  return matchesAny(concrete(b), [compilePattern(a)]) || matchesAny(concrete(a), [compilePattern(b)]);
+}
+
 /** A pattern that would allow a whole shared namespace (anyone can register a sibling name). */
 export function isDangerouslyBroad(pattern: string): boolean {
   const base = pattern.startsWith('*.') ? pattern.slice(2) : pattern;
@@ -146,6 +241,10 @@ export interface PolicyBuildOptions {
   passthroughDomains: string;
   blockRiskySubdomains: boolean;
   containerPort: number;
+  /** parsed http-filter input (parseHttpFilter); absent = nothing filtered */
+  httpFilter?: HttpFilterHost[];
+  /** allow-github-platform input; absent = true */
+  allowGithubPlatform?: boolean;
 }
 
 export interface PolicyBuildResult {
@@ -176,6 +275,48 @@ function cleanUserPatterns(raw: string, inputName: string, warnings: string[]): 
   return out;
 }
 
+/**
+ * Compile http-filter for policy.json: the user's rules plus the platform endpoints in force,
+ * with the guardrail warnings (a filter on a host that isn't reachable is inert; a passthrough
+ * host is never decrypted, so it cannot be path-filtered).
+ */
+export function buildHttpFilter(
+  hosts: HttpFilterHost[],
+  allowGithubPlatform: boolean,
+  reachable: string[],
+  passthrough: string[],
+  warnings: string[]
+): HttpFilterConfig {
+  for (const { host } of hosts) {
+    if (!reachable.some(a => patternsOverlap(host, a))) {
+      warnings.push(
+        `http-filter: '${host}' is not in allowed-domains, so this filter has no effect ` +
+          '(http-filter only narrows hosts that are already allowed); add the host to allowed-domains'
+      );
+    }
+    const pt = passthrough.find(p => patternsOverlap(host, p));
+    if (pt) {
+      warnings.push(
+        `http-filter: '${host}' matches passthrough-domains entry '${pt}' (SNI-only, never decrypted), ` +
+          'so those requests cannot be path-filtered'
+      );
+    }
+  }
+  const platform = allowGithubPlatform
+    ? GITHUB_PLATFORM_ENDPOINTS.filter(e => hosts.some(h => patternsOverlap(h.host, e.host))).map(e => ({
+        host: validatePattern(e.host),
+        path: validatePathPattern(e.path),
+        methods: [...e.methods]
+      }))
+    : [];
+  return {
+    hosts,
+    allow_github_platform: allowGithubPlatform,
+    platform,
+    platform_auto_allowed: platform.length
+  };
+}
+
 export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
   const warnings: string[] = [];
   const github: string[] = [];
@@ -192,18 +333,27 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
     ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
   ]);
   const deny = opts.blockRiskySubdomains ? [...RISKY_GITHUB_SUBDOMAINS] : [];
+  const allow = uniq([...github, ...user]);
+  const httpFilter = buildHttpFilter(
+    opts.httpFilter ?? [],
+    opts.allowGithubPlatform ?? true,
+    [...allow, ...passthrough],
+    passthrough,
+    warnings
+  );
 
   return {
     config: {
       version: 1,
       mode: opts.mode,
-      allow: uniq([...github, ...user]),
+      allow,
       passthrough,
       deny,
       flow_log: FLOW_LOG,
       // TODO P3: re-add container-tls input when intercept (CA-into-container) ships
       container_tls: CONTAINER_TLS,
-      container_port: opts.containerPort
+      container_port: opts.containerPort,
+      http_filter: httpFilter
     },
     warnings
   };

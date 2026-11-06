@@ -1,11 +1,18 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
+import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
 import { SETUP_MARKER } from './egress';
 import { parseFlowLogWithOffsets } from './flowlog';
 import { readRefusedNames } from './parsers/dns-parser';
-import { blockedName, buildReport, parseFirewallLog, summarizeContainers, summarizeFlows } from './report';
+import {
+  blockedName,
+  buildReport,
+  parseFirewallLog,
+  summarizeContainers,
+  summarizeFlows,
+  summarizeHttpFilter
+} from './report';
 import { containerAddresses } from './docker';
 import { type SelfTestWindow, withoutSelfTests } from './selftest';
 import { readSudoUsage } from './sudo';
@@ -25,6 +32,16 @@ interface SetupMarker {
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
   dnsSelfTestName?: string;
+}
+
+/** GitHub platform endpoints the built-in list allowed on filtered hosts (policy.json, 0644). */
+function readPlatformAutoAllowed(): number | undefined {
+  try {
+    const n = JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8'))?.http_filter?.platform_auto_allowed;
+    return typeof n === 'number' ? n : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readSetupMarker(): SetupMarker | null {
@@ -68,6 +85,7 @@ async function run(): Promise<void> {
       : { records: [], offsets: [] };
     const records = withoutSelfTests(flows.records, flows.offsets, marker.selfTestWindow);
     const hosts = summarizeFlows(records);
+    const httpFilter = summarizeHttpFilter(records);
     const firewall = fs.existsSync(FIREWALL_LOG) ? parseFirewallLog(fs.readFileSync(FIREWALL_LOG, 'utf8')) : [];
     const containers = summarizeContainers(records, firewall, await containerAddresses());
     const dnsRefused = readRefusedNames(DNS_LOG).filter(n => n !== marker.dnsSelfTestName);
@@ -84,6 +102,9 @@ async function run(): Promise<void> {
       core.info(
         `${h.verdict.padEnd(11)} ${blockedName(h.name)} conns=${h.connections} reqs=${h.requests} tries=${h.tries} ${h.reasons.join(',')}`
       );
+    }
+    for (const b of httpFilter.blocks) {
+      core.info(`${b.verdict.padEnd(11)} http-filter ${b.host} ${b.method} ${b.path} tries=${b.tries} ${b.reason}`);
     }
 
     const integrity = await validator.generateValidationDetails();
@@ -109,7 +130,9 @@ async function run(): Promise<void> {
       ],
       selfTests,
       integrity,
-      containers
+      containers,
+      httpFilter,
+      platformEndpoints: readPlatformAutoAllowed()
     });
     await core.summary.addRaw(md).write();
   } catch (error) {

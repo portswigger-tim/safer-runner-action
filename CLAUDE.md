@@ -12,7 +12,9 @@
 > sudo / docker / validation layers; the dnsmasq sections are v1-only. Real-runner tests: test repo branch `v2-test`.
 > **v2 inputs (beta.6+):** `mode`, `allowed-domains`, `passthrough-domains`,
 > `block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `docker` (keep | remove-group |
-> stop), `fail-on-tampering` - parsed in `src/inputs.ts`. `disable-sudo`, `docker` and
+> stop), `fail-on-tampering`, `http-filter` + `allow-github-platform` (L7 method/path filter -
+> [docs/DESIGN-L7-path-method.md](docs/DESIGN-L7-path-method.md); matcher `HttpFilter` in
+> `proxy/policy_core.py`, platform list `GITHUB_PLATFORM_ENDPOINTS`) - parsed in `src/inputs.ts`. `disable-sudo`, `docker` and
 > `fail-on-tampering` are mode-aware (no action.yaml default; unset = the enforce-safe value in
 > enforce). `sudo-config`, `disable-docker`, `stop-docker`, `*-dns-server`, `proxy-*` and
 > `container-tls` are v1/early-beta only; sections below that mention them describe v1.

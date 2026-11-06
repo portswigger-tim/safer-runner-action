@@ -34,6 +34,41 @@ export const RISKY_GITHUB_SUBDOMAINS = [
   'raw.githubusercontent.com' // Common vector for serving malicious raw file content
 ] as const;
 
+/** One endpoint of the built-in platform allowlist: path is an http-filter path pattern. */
+export interface PlatformEndpoint {
+  host: string;
+  path: string;
+  methods: string[];
+}
+
+/**
+ * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
+ * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
+ * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
+ * is on) only on a host the job filters, as allows that win over the job's own rules.
+ *
+ * EXPLICIT (host, path, methods) only, reads included - never a blanket "*": GET, HEAD, which
+ * would trust far more than the platform uses. Workflow-chosen writes (e.g. SARIF upload) are
+ * NOT platform and stay user-controlled. Grow it from observed real-runner traffic (the proxy
+ * flow log); a missing entry only breaks that job's platform step, never enforcement.
+ */
+export const GITHUB_PLATFORM_ENDPOINTS: readonly PlatformEndpoint[] = [
+  // results service RPCs: step logs, step status (WorkflowStepsUpdate), artifact + cache
+  { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'] },
+  // runner live-log stream (websocket upgrade)
+  { host: 'results-receiver.actions.githubusercontent.com', path: '/_ws/ingest.sock', methods: ['GET'] },
+  // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
+  // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
+  { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-results/*', methods: ['GET', 'HEAD', 'PUT'] },
+  { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-cache/*', methods: ['GET', 'HEAD', 'PUT'] },
+  // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
+  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
+  // job lease renewal (/<n>/renewjob) - refusing it ends the job
+  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
+  // job completion, sent through the proxy after the last post step
+  { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
+];
+
 /**
  * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
  * even if a future api.github.com/meta response lists them. These are shared global

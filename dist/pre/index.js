@@ -947,11 +947,17 @@ async function runSetup(inputs) {
         allowedDomains: inputs.allowedDomains,
         passthroughDomains: inputs.passthroughDomains,
         blockRiskySubdomains: inputs.blockRiskySubdomains,
-        containerPort: ports.containerPort
+        containerPort: ports.containerPort,
+        httpFilter: inputs.httpFilter,
+        allowGithubPlatform: inputs.allowGithubPlatform
     });
     for (const w of warnings)
         core.warning(w);
     core.info(`Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`);
+    if (policy.http_filter.hosts.length) {
+        core.info(`http-filter: ${policy.http_filter.hosts.length} filtered host(s) [${policy.http_filter.hosts.map(h => h.host).join(', ')}], ` +
+            `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed`);
+    }
     const { dnsServers } = inputs;
     // 2. Install (parallel - both are network-bound)
     await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), (0, dns_1.installCoreDns)(), (0, proxy_1.installMitmproxy)()]));
@@ -1660,9 +1666,12 @@ exports.resolveDocker = resolveDocker;
 exports.resolveFailOnTampering = resolveFailOnTampering;
 exports.effectiveFailOnTampering = effectiveFailOnTampering;
 exports.parseDnsServers = parseDnsServers;
+exports.parseMethods = parseMethods;
+exports.parseHttpFilter = parseHttpFilter;
 exports.readInputs = readInputs;
 const core = __importStar(__nccwpck_require__(7484));
 const net = __importStar(__nccwpck_require__(9278));
+const policy_1 = __nccwpck_require__(2224);
 exports.DOCKER_POLICIES = ['keep', 'remove-group', 'stop'];
 /** Quad9 (filtering, no logging of client IPs): primary + secondary. */
 exports.DEFAULT_DNS_SERVERS = ['9.9.9.9', '149.112.112.112'];
@@ -1732,6 +1741,241 @@ function parseDnsServers(raw) {
     }
     return servers.length ? Array.from(new Set(servers)) : [...exports.DEFAULT_DNS_SERVERS];
 }
+const METHOD = /^[A-Z][A-Z0-9_-]*$/;
+function unquote(s) {
+    const t = s.trim();
+    if (t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0])
+        return t.slice(1, -1);
+    return t;
+}
+/** Drop a `#` comment (at the start, or after whitespace, outside quotes). */
+function stripComment(line) {
+    let quote = '';
+    for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (quote) {
+            if (c === quote)
+                quote = '';
+        }
+        else if (c === '"' || c === "'") {
+            quote = c;
+        }
+        else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+            return line.slice(0, i);
+        }
+    }
+    return line;
+}
+/** Split `key: value` (key optionally quoted; the `:` must be followed by space or the end). */
+function splitKey(s) {
+    const t = s.trim();
+    if (t[0] === '"' || t[0] === "'") {
+        const end = t.indexOf(t[0], 1);
+        if (end < 0)
+            return null;
+        const m = /^:(?:\s+|$)/.exec(t.slice(end + 1));
+        return m ? [t.slice(1, end), t.slice(end + 1 + m[0].length).trim()] : null;
+    }
+    const m = /^(\S+?):(?:\s+|$)/.exec(t);
+    return m ? [m[1], t.slice(m[0].length).trim()] : null;
+}
+/** Split on commas outside quotes. */
+function splitCommas(s) {
+    const out = [];
+    let quote = '';
+    let cur = '';
+    for (const c of s) {
+        if (quote) {
+            if (c === quote)
+                quote = '';
+        }
+        else if (c === '"' || c === "'") {
+            quote = c;
+        }
+        else if (c === ',') {
+            out.push(cur);
+            cur = '';
+            continue;
+        }
+        cur += c;
+    }
+    out.push(cur);
+    return out;
+}
+/** `{ "*": GET, HEAD, "x/*": NONE }`: a comma that isn't followed by a new `key:` continues the methods. */
+function parseFlowRules(inner, where) {
+    const out = [];
+    for (const token of splitCommas(inner)) {
+        if (!token.trim())
+            continue;
+        const kv = splitKey(token);
+        if (kv) {
+            out.push({ key: kv[0], value: kv[1], where });
+        }
+        else if (out.length) {
+            out[out.length - 1].value += `, ${token.trim()}`;
+        }
+        else {
+            throw new Error(`${where}: expected "path": METHODS inside { }`);
+        }
+    }
+    return out;
+}
+/** The YAML subset http-filter accepts: host keys, each with path rules (block or `{ }`). */
+function parseFilterYaml(text) {
+    const hosts = [];
+    let hostIndent = -1;
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+        const line = stripComment(lines[i]).replace(/\s+$/, '');
+        if (!line.trim())
+            continue;
+        const where = `http-filter line ${i + 1}`;
+        const lead = line.slice(0, line.length - line.trimStart().length);
+        if (lead.includes('\t'))
+            throw new Error(`${where}: indent with spaces, not tabs`);
+        const indent = lead.length;
+        if (hostIndent < 0)
+            hostIndent = indent;
+        const kv = splitKey(line);
+        if (!kv)
+            throw new Error(`${where}: expected "key: value", got '${line.trim()}'`);
+        const current = hosts[hosts.length - 1];
+        if (indent === hostIndent) {
+            const [key, rest] = kv;
+            const host = { key, where, rules: [], inline: false, ruleIndent: -1 };
+            if (rest) {
+                if (!rest.startsWith('{') || !rest.endsWith('}')) {
+                    throw new Error(`${where}: put the path rules on the following lines, or inline as { "path": METHODS }`);
+                }
+                host.rules = parseFlowRules(rest.slice(1, -1), where);
+                host.inline = true;
+            }
+            hosts.push(host);
+        }
+        else if (indent > hostIndent && current && !current.inline) {
+            if (current.ruleIndent < 0)
+                current.ruleIndent = indent;
+            if (indent !== current.ruleIndent)
+                throw new Error(`${where}: inconsistent indentation`);
+            current.rules.push({ key: kv[0], value: kv[1], where });
+        }
+        else {
+            throw new Error(`${where}: unexpected indentation`);
+        }
+    }
+    return hosts;
+}
+function parseFilterJson(text) {
+    let obj;
+    try {
+        obj = JSON.parse(text);
+    }
+    catch (e) {
+        throw new Error(`http-filter: invalid JSON: ${e.message}`);
+    }
+    const isMap = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+    if (!isMap(obj))
+        throw new Error('http-filter: expected an object of host -> { path: methods }');
+    return Object.entries(obj).map(([key, rules]) => {
+        const where = `http-filter '${key}'`;
+        if (!isMap(rules))
+            throw new Error(`${where}: expected an object of path -> methods`);
+        return {
+            key,
+            where,
+            rules: Object.entries(rules).map(([path, value]) => {
+                const ok = value === null ||
+                    typeof value === 'string' ||
+                    (Array.isArray(value) && value.every(m => typeof m === 'string'));
+                if (!ok)
+                    throw new Error(`${where} '${path}': methods must be a string or a list of strings`);
+                return { key: path, value: value, where };
+            })
+        };
+    });
+}
+/**
+ * Methods for one path rule: a comma list (optionally in [ ]), `*` or `ALL` for any method,
+ * `NONE` or nothing to deny the path. Returns ['*'], [] or upper-case names.
+ */
+function parseMethods(value, where = 'http-filter') {
+    let v = Array.isArray(value) ? value.join(',') : unquote(value ?? '');
+    if (v.startsWith('[') && v.endsWith(']'))
+        v = v.slice(1, -1);
+    const tokens = Array.from(new Set(v
+        .split(/[\s,]+/)
+        .map(t => unquote(t).toUpperCase())
+        .filter(Boolean)));
+    if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === 'NONE'))
+        return [];
+    if (tokens.includes('*') || tokens.includes('ALL')) {
+        if (tokens.length !== 1)
+            throw new Error(`${where}: '*' / ALL cannot be combined with other methods`);
+        return ['*'];
+    }
+    if (tokens.includes('NONE'))
+        throw new Error(`${where}: NONE cannot be combined with other methods`);
+    const bad = tokens.find(t => !METHOD.test(t));
+    if (bad)
+        throw new Error(`${where}: '${bad}' is not an HTTP method`);
+    return tokens;
+}
+/**
+ * http-filter (docs/DESIGN-L7-path-method.md): host -> { path pattern -> methods }. Naming a
+ * host makes it default-deny; it only ever narrows hosts already in allowed-domains.
+ *
+ * Input is a small YAML subset (host keys; under each, `"path": METHODS` lines or an inline
+ * `{ "path": METHODS, ... }`; quoted or bare keys; `#` comments), or a JSON object. Host keys
+ * are domain patterns as in allowed-domains (`.example.com` shorthand included). Anything
+ * invalid throws: a filter that silently didn't apply would leave the host fully open.
+ */
+function parseHttpFilter(raw) {
+    const text = (raw || '').trim();
+    if (!text)
+        return [];
+    // the YAML form keeps its indentation: the first line's indent is the host level
+    const parsed = text.startsWith('{') ? parseFilterJson(text) : parseFilterYaml(raw);
+    const out = new Map();
+    for (const { key, where, rules } of parsed) {
+        if (!rules.length) {
+            throw new Error(`${where}: '${key}' has no path rules (write "*": NONE to refuse every request)`);
+        }
+        const compiled = [];
+        for (const r of rules) {
+            let path;
+            try {
+                path = (0, policy_1.validatePathPattern)(unquote(r.key));
+            }
+            catch (e) {
+                throw new Error(`${r.where}: ${e.message}`);
+            }
+            compiled.push({ path, methods: parseMethods(r.value, `${r.where} '${r.key}'`), where: r.where, key: r.key });
+        }
+        for (const entry of (0, policy_1.expandPattern)(unquote(key))) {
+            let host;
+            try {
+                host = (0, policy_1.validatePattern)(entry);
+            }
+            catch (e) {
+                throw new Error(`${where}: ${e.message}`);
+            }
+            if (out.has(host))
+                throw new Error(`${where}: '${host}' is listed more than once`);
+            // on a git host, spellings of one repository path are the same pattern (see GIT_HOSTS)
+            const identity = policy_1.GIT_HOSTS.includes(host) ? policy_1.gitPatternKey : (p) => p;
+            const seen = new Set();
+            for (const r of compiled) {
+                const id = identity(r.path);
+                if (seen.has(id))
+                    throw new Error(`${r.where}: duplicate path pattern '${r.key}' for '${host}'`);
+                seen.add(id);
+            }
+            out.set(host, { host, rules: compiled.map(({ path, methods }) => ({ path, methods })) });
+        }
+    }
+    return Array.from(out.values());
+}
 function bool(name) {
     // getBooleanInput throws on an empty value (e.g. when inputs are absent in the pre step on a local action)
     const v = core.getInput(name);
@@ -1743,6 +1987,7 @@ function readInputs() {
     const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
     const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
     const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
+    const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
     return {
         mode,
         allowedDomains: core.getInput('allowed-domains'),
@@ -1753,7 +1998,9 @@ function readInputs() {
         disableSudoDefaulted,
         docker,
         dockerDefaulted,
-        failOnTampering
+        failOnTampering,
+        httpFilter: parseHttpFilter(core.getInput('http-filter', { trimWhitespace: false })),
+        allowGithubPlatform: allowGithubPlatform ?? true
     };
 }
 
@@ -2068,7 +2315,7 @@ exports.GITHUB_ACTIONS_DOMAINS = [
  * widening it into a shared namespace.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DANGEROUS_BROAD_DOMAINS = exports.RISKY_GITHUB_SUBDOMAINS = exports.GITHUB_EXTRAS = void 0;
+exports.DANGEROUS_BROAD_DOMAINS = exports.GITHUB_PLATFORM_ENDPOINTS = exports.RISKY_GITHUB_SUBDOMAINS = exports.GITHUB_EXTRAS = void 0;
 exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
 exports.normalizeMetaDomain = normalizeMetaDomain;
 exports.metaDomainGroups = metaDomainGroups;
@@ -2100,6 +2347,33 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
     'gist.github.com', // Gist web interface
     'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
     'raw.githubusercontent.com' // Common vector for serving malicious raw file content
+];
+/**
+ * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
+ * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
+ * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
+ * is on) only on a host the job filters, as allows that win over the job's own rules.
+ *
+ * EXPLICIT (host, path, methods) only, reads included - never a blanket "*": GET, HEAD, which
+ * would trust far more than the platform uses. Workflow-chosen writes (e.g. SARIF upload) are
+ * NOT platform and stay user-controlled. Grow it from observed real-runner traffic (the proxy
+ * flow log); a missing entry only breaks that job's platform step, never enforcement.
+ */
+exports.GITHUB_PLATFORM_ENDPOINTS = [
+    // results service RPCs: step logs, step status (WorkflowStepsUpdate), artifact + cache
+    { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'] },
+    // runner live-log stream (websocket upgrade)
+    { host: 'results-receiver.actions.githubusercontent.com', path: '/_ws/ingest.sock', methods: ['GET'] },
+    // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
+    // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
+    { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-results/*', methods: ['GET', 'HEAD', 'PUT'] },
+    { host: 'productionresultssa*.blob.core.windows.net', path: '/actions-cache/*', methods: ['GET', 'HEAD', 'PUT'] },
+    // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
+    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/idtoken/*', methods: ['GET'] },
+    // job lease renewal (/<n>/renewjob) - refusing it ends the job
+    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/renewjob', methods: ['POST'] },
+    // job completion, sent through the proxy after the last post step
+    { host: 'run-actions-*-azure-*.actions.githubusercontent.com', path: '*/completejob', methods: ['POST'] }
 ];
 /**
  * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
@@ -2602,9 +2876,14 @@ function generateSudoersConfig(commands, username = 'runner') {
  *
  * Input shorthand (expanded before validation, never reaches the addon or the Corefile):
  *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
+ *
+ * http-filter path patterns use the same glob with `/` in the role of `.`: a segment that is
+ * exactly `*` spans any depth (empty segments included), a `*` inside a segment stays within
+ * it, and a lone `*` matches every path. Matched by the addon (policy_core.HttpFilter) against
+ * the request path without its query string, percent-decoded once.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = exports.CONTAINER_TLS = void 0;
+exports.GIT_HOSTS = exports.MAX_PATH_PATTERN = exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = exports.CONTAINER_TLS = void 0;
 exports.normHost = normHost;
 exports.isIpLiteral = isIpLiteral;
 exports.parseAllowedDomains = parseAllowedDomains;
@@ -2612,7 +2891,11 @@ exports.validatePattern = validatePattern;
 exports.expandPattern = expandPattern;
 exports.compilePattern = compilePattern;
 exports.matchesAny = matchesAny;
+exports.validatePathPattern = validatePathPattern;
+exports.gitPatternKey = gitPatternKey;
+exports.patternsOverlap = patternsOverlap;
 exports.isDangerouslyBroad = isDangerouslyBroad;
+exports.buildHttpFilter = buildHttpFilter;
 exports.buildPolicyConfig = buildPolicyConfig;
 const github_parser_1 = __nccwpck_require__(9170);
 const constants_1 = __nccwpck_require__(8729);
@@ -2712,6 +2995,55 @@ function matchesAny(host, compiled) {
     const h = normHost(host);
     return h !== '' && compiled.some(c => c.test(h));
 }
+exports.MAX_PATH_PATTERN = 512;
+/**
+ * Return the normalised http-filter path pattern (one leading `/` stripped; `''` is the root),
+ * or throw. Mirrors validate_path_pattern in proxy/policy_core.py (shared vectors). Patterns
+ * are written decoded (`@scope/*`, not `@scope%2f*`): the addon matches the decoded path.
+ */
+function validatePathPattern(pattern) {
+    let p = String(pattern).trim();
+    if (p.startsWith('/'))
+        p = p.slice(1);
+    if (p === '')
+        return p;
+    if (p.length > exports.MAX_PATH_PATTERN || !/^[\x21-\x7e]*$/.test(p) || /[?#%\\]/.test(p)) {
+        throw new Error(`invalid path pattern: '${pattern}'`);
+    }
+    if (p.split('/').some(s => s === '' || s === '.' || s === '..')) {
+        throw new Error(`empty, '.' or '..' segment in path pattern: '${pattern}'`);
+    }
+    if (p.includes('**')) {
+        throw new Error(`'**' is not supported (a lone '*' segment already spans any depth): '${pattern}'`);
+    }
+    return p;
+}
+/**
+ * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
+ * case-insensitive and .git is optional, so the addon matches paths there case-insensitively
+ * and with or without ".git" on each segment. Mirrors GIT_HOSTS in proxy/policy_core.py.
+ */
+exports.GIT_HOSTS = ['github.com'];
+function stripGit(seg) {
+    return seg.endsWith('.git') && seg.length > 4 ? seg.slice(0, -4) : seg;
+}
+/** Identity of a path pattern on a git host: two patterns with one key are duplicates. */
+function gitPatternKey(pattern) {
+    const p = validatePathPattern(pattern).toLowerCase();
+    return p
+        .split('/')
+        .map(s => (stripGit(s) === '*' ? s : stripGit(s)))
+        .join('/');
+}
+/**
+ * Whether two domain patterns can match a common name (approximate: each is tried against a
+ * concrete instance of the other). Used for warnings and to pick which platform endpoints to
+ * ship - never as an allow decision itself (the addon still matches every request).
+ */
+function patternsOverlap(a, b) {
+    const concrete = (p) => p.replace(/\*/g, 'x');
+    return matchesAny(concrete(b), [compilePattern(a)]) || matchesAny(concrete(a), [compilePattern(b)]);
+}
 /** A pattern that would allow a whole shared namespace (anyone can register a sibling name). */
 function isDangerouslyBroad(pattern) {
     const base = pattern.startsWith('*.') ? pattern.slice(2) : pattern;
@@ -2738,6 +3070,37 @@ function cleanUserPatterns(raw, inputName, warnings) {
     }
     return out;
 }
+/**
+ * Compile http-filter for policy.json: the user's rules plus the platform endpoints in force,
+ * with the guardrail warnings (a filter on a host that isn't reachable is inert; a passthrough
+ * host is never decrypted, so it cannot be path-filtered).
+ */
+function buildHttpFilter(hosts, allowGithubPlatform, reachable, passthrough, warnings) {
+    for (const { host } of hosts) {
+        if (!reachable.some(a => patternsOverlap(host, a))) {
+            warnings.push(`http-filter: '${host}' is not in allowed-domains, so this filter has no effect ` +
+                '(http-filter only narrows hosts that are already allowed); add the host to allowed-domains');
+        }
+        const pt = passthrough.find(p => patternsOverlap(host, p));
+        if (pt) {
+            warnings.push(`http-filter: '${host}' matches passthrough-domains entry '${pt}' (SNI-only, never decrypted), ` +
+                'so those requests cannot be path-filtered');
+        }
+    }
+    const platform = allowGithubPlatform
+        ? github_parser_1.GITHUB_PLATFORM_ENDPOINTS.filter(e => hosts.some(h => patternsOverlap(h.host, e.host))).map(e => ({
+            host: validatePattern(e.host),
+            path: validatePathPattern(e.path),
+            methods: [...e.methods]
+        }))
+        : [];
+    return {
+        hosts,
+        allow_github_platform: allowGithubPlatform,
+        platform,
+        platform_auto_allowed: platform.length
+    };
+}
 function buildPolicyConfig(opts) {
     const warnings = [];
     const github = [];
@@ -2755,17 +3118,20 @@ function buildPolicyConfig(opts) {
         ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
     ]);
     const deny = opts.blockRiskySubdomains ? [...github_parser_1.RISKY_GITHUB_SUBDOMAINS] : [];
+    const allow = uniq([...github, ...user]);
+    const httpFilter = buildHttpFilter(opts.httpFilter ?? [], opts.allowGithubPlatform ?? true, [...allow, ...passthrough], passthrough, warnings);
     return {
         config: {
             version: 1,
             mode: opts.mode,
-            allow: uniq([...github, ...user]),
+            allow,
             passthrough,
             deny,
             flow_log: constants_1.FLOW_LOG,
             // TODO P3: re-add container-tls input when intercept (CA-into-container) ships
             container_tls: exports.CONTAINER_TLS,
-            container_port: opts.containerPort
+            container_port: opts.containerPort,
+            http_filter: httpFilter
         },
         warnings
     };

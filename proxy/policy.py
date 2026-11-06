@@ -13,6 +13,9 @@ Security rules (docs/DESIGN-v2.md section 4):
   * TLS: SNI checked at the ClientHello. No SNI / IP-literal SNI / not allowlisted -> closed
     without opening any upstream connection.
   * HTTP: Host checked on every request; inside intercepted TLS it must equal the SNI.
+  * http-filter: on a filtered host, a request the Host check allowed is then matched on
+    method + path (policy_core.HttpFilter) and refused with method-not-allowed /
+    path-not-allowed. Passthrough connections are never decrypted, so never filtered.
   * Upstream IP guard (review H1): every upstream connection (intercept, passthrough, plain
     HTTP) is resolved ONCE here, refused if any address is internal (loopback, link-local
     incl. IMDS, RFC 1918, CGNAT, ULA...), and pinned to the checked address so mitmproxy
@@ -160,6 +163,8 @@ class SaferRunnerPolicy:
             deny=self.policy.deny_patterns,
             container_tls=self.policy.container_tls,
             container_port=self.container_port,
+            http_filter_hosts=len(self.policy.http_filter.hosts),
+            platform_auto_allowed=len(self.policy.http_filter.platform),
             pid=os.getpid(),
         )
 
@@ -288,6 +293,9 @@ class SaferRunnerPolicy:
         host = pc.norm_host(req.host_header)
         others = [req.authority, req.headers.get("host")]
         d = self.policy.decide_http(req.host_header, others=others, method=req.method, sni=sni)
+        f = self.policy.decide_filter(host, req.method, req.path) if d.action == "allow" else None
+        if f is not None and f.action == "block":
+            d = f  # http-filter: the host is allowed but this method/path is not
         verdict = self._verdict(d.action)
         meta = dict(
             ev="https" if sni else "http", verdict=verdict, reason=d.reason, layer="http",
@@ -295,6 +303,10 @@ class SaferRunnerPolicy:
             dst=state.get("dst"), client=addr(flow.client_conn.peername),
             source=state.get("source") or self.source(flow.client_conn),
         )
+        if f is not None:
+            platform = f.rule == pc.FILTER_PLATFORM
+            meta["filter"] = "platform" if platform else ("allow" if f.action == "allow" else "block")
+            meta["filter_rule"] = None if platform else f.rule
         if d.action == "block" and self.policy.enforce:
             self._refuse(flow, d.reason, host)
             meta["status"] = 403
