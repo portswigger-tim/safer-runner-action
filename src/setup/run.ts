@@ -49,15 +49,8 @@ import {
   writePolicy
 } from '../services/mitmproxy';
 import { dnsProbeName, runSelfTests } from './selftest';
-import {
-  createRandomDNSUser,
-  installCoreDns,
-  localHosts,
-  restartResolved,
-  setupDNSConfig,
-  startCoreDns,
-  writeCorefile
-} from '../services/coredns';
+import * as coredns from '../services/coredns';
+import { realHost, type Host } from '../system/host';
 import { resolveGitHubDomains } from '../config/github-domains';
 import { detectSudoFlavour, disableSudoForRunner, getSudoLoggingConfigFile, setupSudoLogging } from '../services/sudo';
 import {
@@ -76,9 +69,6 @@ import { CRITICAL_FILES, SystemValidator } from '../integrity/baseline';
 
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 export const SETUP_MARKER = '/etc/safer-runner/setup-complete';
-
-/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
-const DNS_READY_NAME = 'github.com';
 
 /**
  * Create /var/log/safer-runner directory with proper permissions
@@ -185,7 +175,7 @@ export async function applyDockerPolicy(
   return { requested: docker, access, state };
 }
 
-export async function runSetup(inputs: Inputs): Promise<void> {
+export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void> {
   const { mode } = inputs;
   core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
 
@@ -248,12 +238,12 @@ export async function runSetup(inputs: Inputs): Promise<void> {
 
   // 2. Install (parallel - both are network-bound)
   await timed('Install CoreDNS + mitmproxy', () =>
-    Promise.all([installPackages(), installCoreDns(), installMitmproxy()])
+    Promise.all([installPackages(), coredns.install(h), installMitmproxy()])
   );
 
   // 3. Users, addon, policy, CA
   await createLogDirectory();
-  const dnsUser = await createRandomDNSUser();
+  const dnsUser = await coredns.createUser(h);
   const proxyUid = await createProxyUser();
   core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
   await installAddon();
@@ -271,19 +261,23 @@ export async function runSetup(inputs: Inputs): Promise<void> {
     await installJavaTrust();
   });
 
-  // 6. DNS
-  await timed('Configure DNS', async () => {
-    // same names as the proxy: DNS and the proxy can never disagree about what is allowed
-    await writeCorefile({
-      mode,
-      allow: [...policy.allow, ...policy.passthrough],
-      deny: policy.deny,
-      upstreams: dnsServers,
-      hosts: await localHosts()
-    });
-    await startCoreDns(dnsUser.username, DNS_READY_NAME);
-    await setupDNSConfig();
-    await restartResolved();
+  // 6. DNS: CoreDNS answering first, then the system resolver points at it
+  // (`resolver` is the firewall step's precondition once iptables takes tokens)
+  const resolver = await timed('Configure DNS', async () => {
+    const dns = await coredns.start(
+      h,
+      coredns.render({
+        mode,
+        // same names as the proxy: DNS and the proxy can never disagree about what is allowed
+        allow: [...policy.allow, ...policy.passthrough],
+        deny: policy.deny,
+        upstreams: dnsServers,
+        // read before the cutover, while the VM's hostname still resolves the original way
+        hosts: await coredns.localHosts(),
+        user: dnsUser.username
+      })
+    );
+    return coredns.cutover(h, dns);
   });
 
   // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
