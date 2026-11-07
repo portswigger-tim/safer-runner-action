@@ -15,9 +15,7 @@ import {
   getSudoLoggingConfigFile,
   buildSudoRsyslogConfig,
   setupSudoLogging,
-  removeSudoLogging,
   disableSudoForRunner,
-  parseSudoLogs,
   readSudoUsage,
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_SUDOERS_FILE,
@@ -216,24 +214,6 @@ describe('sudo module', () => {
     });
   });
 
-  describe('removeSudoLogging', () => {
-    it('removes the classic sudo drop-in', async () => {
-      mockExistsSync.mockReturnValue(false);
-      await removeSudoLogging();
-      expect(sudoCalls()).toEqual([`rm -f ${SUDO_LOGGING_SUDOERS_FILE}`]);
-    });
-
-    it('removes the sudo-rs rsyslog rule and restarts rsyslog so pre-hook capture stops', async () => {
-      mockExistsSync.mockImplementation(p => p === SUDO_LOGGING_RSYSLOG_FILE);
-      await removeSudoLogging();
-      expect(sudoCalls()).toEqual([
-        `rm -f ${SUDO_LOGGING_SUDOERS_FILE}`,
-        `rm -f ${SUDO_LOGGING_RSYSLOG_FILE}`,
-        'systemctl restart rsyslog'
-      ]);
-    });
-  });
-
   describe('disableSudoForRunner', () => {
     it.each(['sudo', 'sudo-rs'] as const)('%s: writes a validation-only sudoers file', async flavour => {
       visudoResult(0);
@@ -264,7 +244,7 @@ describe('sudo module', () => {
     });
   });
 
-  describe('parseSudoLogs', () => {
+  describe('readSudoUsage: log formats', () => {
     let dir: string;
 
     beforeEach(() => {
@@ -275,7 +255,7 @@ describe('sudo module', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('sudo-rs (rsyslog) log: reports workflow commands and hides internal ones', () => {
+    it('sudo-rs (rsyslog) log: reports workflow commands and attributes internal ones', () => {
       const log = path.join(dir, 'main-sudo.log');
       fs.writeFileSync(
         log,
@@ -289,15 +269,17 @@ Nov  3 16:23:53 : runner :  PWD=/home/runner/work ; USER=nobody ; COMMAND=/usr/b
 `
       );
 
-      const commands = parseSudoLogs(log);
-      expect(commands.map(c => `${c.command} ${c.args}`.trim())).toEqual([
+      const u = readSudoUsage(log);
+      expect(u.ran.map(c => `${c.command} ${c.args}`.trim())).toEqual([
         '/usr/bin/apt-get install -y jq',
         '/usr/bin/true'
       ]);
-      expect(commands[1].targetUser).toBe('nobody');
+      expect(u.ran[1].targetUser).toBe('nobody');
+      expect(u.internal).toHaveLength(5);
+      expect(u.refused).toEqual([]);
     });
 
-    it('classic sudo log: handles wrapped entries and hides internal ones', () => {
+    it('classic sudo log: handles wrapped entries and attributes internal ones', () => {
       const log = path.join(dir, 'main-sudo.log');
       fs.writeFileSync(
         log,
@@ -310,10 +292,12 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
 `
       );
 
-      const commands = parseSudoLogs(log);
-      expect(commands).toHaveLength(1);
-      expect(commands[0].command).toBe('/usr/bin/id');
-      expect(commands[0].denied).toBe(true);
+      const u = readSudoUsage(log);
+      expect(u.ran).toEqual([]);
+      expect(u.internal).toHaveLength(2);
+      expect(u.refused).toHaveLength(1);
+      expect(u.refused[0].command).toBe('/usr/bin/id');
+      expect(u.refused[0].denied).toBe(true);
     });
 
     it('classic sudo log: reports refused attempts at internal commands', () => {
@@ -323,7 +307,9 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
         `Nov  3 16:24:32 : runner : a password is required ; PWD=/ ; USER=root ; COMMAND=/usr/bin/tee /tmp/runner-sudoers.tmp
 `
       );
-      expect(parseSudoLogs(log)).toHaveLength(1);
+      const u = readSudoUsage(log);
+      expect(u.refused).toHaveLength(1);
+      expect(u.internal).toEqual([]);
     });
 
     it('still reports same-named binaries outside system paths', () => {
@@ -332,11 +318,18 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
         log,
         'Nov  3 16:23:51 : runner :  PWD=/ ; USER=root ; COMMAND=/home/runner/cat /etc/resolv.conf\n'
       );
-      expect(parseSudoLogs(log)).toHaveLength(1);
+      expect(readSudoUsage(log).ran).toHaveLength(1);
     });
 
-    it('returns empty array for missing file', () => {
-      expect(parseSudoLogs(path.join(dir, 'missing.log'))).toEqual([]);
+    it('reports a workflow that removes the sudo logging config (the action never does)', () => {
+      const log = path.join(dir, 'main-sudo.log');
+      fs.writeFileSync(
+        log,
+        `Nov  3 16:23:51 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LOGGING_SUDOERS_FILE}
+Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LOGGING_RSYSLOG_FILE}
+`
+      );
+      expect(readSudoUsage(log).ran).toHaveLength(2);
     });
   });
 
@@ -374,8 +367,6 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
         '/usr/sbin/iptables-save'
       ]);
       expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv', '/opt/safer-runner/bin/teardown']);
-      // and the legacy filter no longer reports teardown as workflow usage
-      expect(parseSudoLogs(log).map(c => c.command)).not.toContain('/opt/safer-runner/bin/teardown');
     });
 
     it('only matches the teardown helper by its exact root-owned path', () => {

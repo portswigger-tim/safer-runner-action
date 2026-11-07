@@ -2512,17 +2512,14 @@ async function resolveGitHubDomains() {
 "use strict";
 
 /**
- * Parser for sudo log files
- * Extracts command execution patterns from /tmp/runner-sudo.log
+ * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
+ * syslog lines copied there by rsyslog in the same format (see sudo.ts)
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSudoLogLine = parseSudoLogLine;
 exports.deduplicateSudoCommands = deduplicateSudoCommands;
 exports.parseSudoLogsFromString = parseSudoLogsFromString;
-exports.filterInternalSudoCommands = filterInternalSudoCommands;
 exports.classifySudoCommands = classifySudoCommands;
-exports.isDangerousSudoCommand = isDangerousSudoCommand;
-exports.generateSudoersConfig = generateSudoersConfig;
 /**
  * Classic sudo prefixes refused commands with a reason, e.g.
  * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
@@ -2587,94 +2584,19 @@ function joinContinuationLines(content) {
     return joined;
 }
 /**
- * Parse sudo logs from string content
- * Handles both single-line and multi-line log formats
+ * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
+ * entry is matched as one line.
  */
 function parseSudoLogsFromString(content) {
-    const lines = joinContinuationLines(content);
     const commands = [];
-    // First try single-line format (older sudo versions)
-    for (const line of lines) {
+    for (const line of joinContinuationLines(content)) {
         const cmd = parseSudoLogLine(line);
         if (cmd) {
             commands.push(cmd);
         }
     }
-    // If no commands found, try multi-line format (newer sudo versions)
-    if (commands.length === 0) {
-        const multiLineCommands = parseMultiLineSudoLogs(content);
-        commands.push(...multiLineCommands);
-    }
     // Deduplicate and limit to 1000 commands
-    const deduplicated = deduplicateSudoCommands(commands);
-    return deduplicated.slice(0, 1000);
-}
-/**
- * Parse multi-line sudo log format (newer sudo versions)
- * Format:
- *   Oct  3 14:36:19 : runner :
- *       *** ; USER=root ;
- *       COMMAND=/usr/bin/docker --version
- */
-function parseMultiLineSudoLogs(content) {
-    const commands = [];
-    const lines = content.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        // Look for timestamp line
-        const timestampMatch = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:/);
-        if (!timestampMatch)
-            continue;
-        const [, timestamp, user] = timestampMatch;
-        // Look for USER= line (should be next line or within next few lines)
-        let targetUser = '';
-        let fullCommand = '';
-        for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
-            const nextLine = lines[j].trim();
-            // Extract USER
-            const userMatch = nextLine.match(/USER=(\w+)/);
-            if (userMatch) {
-                targetUser = userMatch[1];
-            }
-            // Extract COMMAND
-            const commandMatch = nextLine.match(/COMMAND=(.+)$/);
-            if (commandMatch) {
-                fullCommand = commandMatch[1].trim();
-                break;
-            }
-        }
-        if (targetUser && fullCommand) {
-            // Split command and args
-            const commandParts = fullCommand.split(/\s+/);
-            const command = commandParts[0];
-            const args = commandParts.slice(1).join(' ');
-            commands.push({
-                timestamp,
-                user,
-                targetUser,
-                command,
-                args
-            });
-        }
-    }
-    return commands;
-}
-/**
- * Remove the action's own (successful) sudo commands from parsed logs
- *
- * @param commands - Parsed sudo commands
- * @param internalCommands - Internal commands as "<basename> <args>" (e.g. "cat /etc/resolv.conf")
- * @returns Commands that were not run by the action itself
- */
-function filterInternalSudoCommands(commands, internalCommands) {
-    const internal = new Set(internalCommands);
-    return commands.filter(cmd => {
-        // Refused attempts are always reported, even if they mimic an internal command
-        if (cmd.denied) {
-            return true;
-        }
-        return !isInternal(cmd, internal);
-    });
+    return deduplicateSudoCommands(commands).slice(0, 1000);
 }
 /**
  * Whether a (successful) command is one of the action's own. System binaries match by
@@ -2702,166 +2624,6 @@ function classifySudoCommands(commands, internalCommands) {
             usage.ran.push(cmd);
     }
     return usage;
-}
-/**
- * Convert sudo commands to sudoers config format
- * Groups commands by executable and generates appropriate rules
- *
- * Note: No filtering needed - commands are captured after setup is complete
- */
-/**
- * Binaries that can typically be escalated to full root even when "restricted" via
- * sudoers - because they run arbitrary code (shells, interpreters, package/service
- * managers), write arbitrary files as root (tee/dd/cp/chmod/...), or offer a shell
- * escape (editors/pagers). Matched by basename so the path doesn't matter.
- *
- * When one of these appears in observed usage we emit the suggested rule COMMENTED OUT
- * with a warning, rather than presenting it as a safe restriction.
- */
-const DANGEROUS_SUDO_BASENAMES = new Set([
-    // shells / interpreters - arbitrary code execution
-    'sh',
-    'bash',
-    'zsh',
-    'dash',
-    'ksh',
-    'fish',
-    'csh',
-    'tcsh',
-    'perl',
-    'python',
-    'python2',
-    'python3',
-    'ruby',
-    'php',
-    'node',
-    'nodejs',
-    'lua',
-    'awk',
-    'gawk',
-    'tclsh',
-    'expect',
-    // arbitrary file write / ownership - trivial root via writing to system files
-    'tee',
-    'dd',
-    'cp',
-    'mv',
-    'chmod',
-    'chown',
-    'chgrp',
-    'install',
-    'truncate',
-    'ln',
-    'rsync',
-    'cpio',
-    // exec wrappers that can run any command
-    'env',
-    'nohup',
-    'setsid',
-    'xargs',
-    'find',
-    'nice',
-    'ionice',
-    'timeout',
-    'stdbuf',
-    'unshare',
-    'chroot',
-    'nsenter',
-    // editors / pagers - shell escape
-    'vi',
-    'vim',
-    'nvim',
-    'nano',
-    'emacs',
-    'less',
-    'more',
-    'man',
-    'ed',
-    'pico',
-    'view',
-    // package / build / service managers - run arbitrary code as root (hooks, scripts, units)
-    'apt',
-    'apt-get',
-    'aptitude',
-    'dpkg',
-    'snap',
-    'pip',
-    'pip2',
-    'pip3',
-    'gem',
-    'npm',
-    'npx',
-    'yarn',
-    'make',
-    'gcc',
-    'cc',
-    'systemctl',
-    'service',
-    'journalctl',
-    'docker',
-    'podman',
-    'ctr',
-    'nerdctl',
-    // privilege / account management
-    'su',
-    'sudo',
-    'visudo',
-    'useradd',
-    'usermod',
-    'adduser',
-    'passwd',
-    'crontab',
-    'at',
-    'chpasswd'
-]);
-/**
- * Whether a sudo command path is escalation-prone (see DANGEROUS_SUDO_BASENAMES).
- */
-function isDangerousSudoCommand(command) {
-    const base = command.split('/').pop() || command;
-    return DANGEROUS_SUDO_BASENAMES.has(base);
-}
-/**
- * Generate suggested sudoers rules from observed sudo usage.
- *
- * This is ADVISORY output (a starting point for a sudoers policy), not a
- * guarantee of safety. Design choices that make it least-privilege:
- * - run-as the exact target user observed (usually root), not `(ALL)`;
- * - pin the EXACT arguments observed. A bare command with no argument spec would
- *   allow ANY arguments in sudoers, so a no-argument invocation is emitted as
- *   `cmd ""` (require no args), never a bare `cmd`;
- * - escalation-prone binaries (shells, interpreters, file-writers, package/service
- *   managers, ...) are emitted COMMENTED OUT with a warning, because allowing them
- *   usually defeats the restriction.
- */
-function generateSudoersConfig(commands, username = 'runner') {
-    if (commands.length === 0) {
-        return '';
-    }
-    // De-duplicate on the exact (runAs, command, args) invocation
-    const seen = new Set();
-    const lines = [];
-    for (const cmd of commands) {
-        const runAs = cmd.targetUser || 'root';
-        const key = `${runAs}\u0000${cmd.command}\u0000${cmd.args}`;
-        if (seen.has(key)) {
-            continue;
-        }
-        seen.add(key);
-        // Pin exact args; `""` means "no arguments allowed" (a bare command allows any args).
-        const argSpec = cmd.args ? cmd.args : '""';
-        const rule = `${username} ALL=(${runAs}) NOPASSWD: ${cmd.command} ${argSpec}`;
-        if (isDangerousSudoCommand(cmd.command)) {
-            lines.push(`# WARNING: '${cmd.command}' can usually be escalated to full root (shell escape,`);
-            lines.push(`#   arbitrary file write, or running code as root). Uncomment only if you are sure`);
-            lines.push(`#   this exact invocation is safe - otherwise allowing it defeats the restriction.`);
-            lines.push(`# ${rule}`);
-        }
-        else {
-            lines.push(rule);
-        }
-    }
-    return lines.join('\n');
 }
 
 
@@ -3952,13 +3714,10 @@ exports.detectSudoFlavour = detectSudoFlavour;
 exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
 exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
 exports.setupSudoLogging = setupSudoLogging;
-exports.removeSudoLogging = removeSudoLogging;
 exports.getValidationSudoCommands = getValidationSudoCommands;
 exports.getRequiredSudoCommands = getRequiredSudoCommands;
 exports.disableSudoForRunner = disableSudoForRunner;
-exports.parseSudoLogs = parseSudoLogs;
 exports.readSudoUsage = readSudoUsage;
-exports.generateSudoSummarySection = generateSudoSummarySection;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
@@ -4055,19 +3814,6 @@ async function setupSudoLogging(logFile, flavour) {
     core.info(`✅ Sudo logging configured to ${logFile}`);
 }
 /**
- * Remove sudo logging configuration
- * Used to stop capturing sudo commands between pre-hook and main action
- */
-async function removeSudoLogging() {
-    core.info('Removing sudo logging configuration...');
-    await exec.exec('sudo', ['rm', '-f', exports.SUDO_LOGGING_SUDOERS_FILE]);
-    if (fs.existsSync(exports.SUDO_LOGGING_RSYSLOG_FILE)) {
-        await exec.exec('sudo', ['rm', '-f', exports.SUDO_LOGGING_RSYSLOG_FILE]);
-        await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
-    }
-    core.info('✅ Sudo logging removed');
-}
-/**
  * Commands run by post-action integrity validation (see validation.ts)
  * These are the only sudo commands the runner keeps after sudo is restricted.
  */
@@ -4100,9 +3846,7 @@ exports.INTERNAL_SUDO_COMMANDS = [
     `chown root:root ${SUDOERS_TEMP_FILE}`,
     `mv ${SUDOERS_TEMP_FILE} /etc/sudoers.d/${exports.RUNNER_USERNAME}`,
     `rm -f ${SUDOERS_TEMP_FILE}`,
-    // removeSudoLogging() / setupSudoLogging()
-    `rm -f ${exports.SUDO_LOGGING_SUDOERS_FILE}`,
-    `rm -f ${exports.SUDO_LOGGING_RSYSLOG_FILE}`,
+    // setupSudoLogging() on sudo-rs
     'systemctl restart rsyslog',
     // SystemValidator.writeBaseline()
     ...validation_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
@@ -4158,25 +3902,6 @@ ${getRequiredSudoCommands(exports.RUNNER_USERNAME)}`;
     core.info(`🔒 ${exports.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
 }
 /**
- * Parse sudo logs from a file
- *
- * @param logFile - Path to sudo log file
- * @returns Array of parsed sudo commands
- */
-function parseSudoLogs(logFile) {
-    try {
-        if (fs.existsSync(logFile)) {
-            const logContent = fs.readFileSync(logFile, 'utf-8');
-            return (0, sudo_parser_1.filterInternalSudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(logContent), exports.INTERNAL_SUDO_COMMANDS);
-        }
-        return [];
-    }
-    catch (error) {
-        core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
-        return [];
-    }
-}
-/**
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
  * action's own commands (so the report never counts the action's sudo as the workflow's).
  */
@@ -4190,30 +3915,6 @@ function readSudoUsage(logFile) {
         core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
     }
     return { ran: [], refused: [], internal: [] };
-}
-/**
- * Generate a job summary section for sudo commands
- *
- * @param commands - Array of sudo commands to display
- * @param title - Section title (e.g., "Workflow Sudo Commands" or "Pre-Hook Sudo Commands")
- * @returns Markdown string for job summary
- */
-function generateSudoSummarySection(commands, title) {
-    if (commands.length === 0) {
-        return '';
-    }
-    let report = `## ${title}\n\n`;
-    report += `Workflow executed **${commands.length}** sudo command${commands.length === 1 ? '' : 's'}:\n\n`;
-    report += `| Command | Arguments |\n`;
-    report += `|---------|----------|\n`;
-    for (const cmd of commands.slice(0, 50)) {
-        report += `| \`${cmd.command}\` | \`${cmd.args || '(none)'}\` |\n`;
-    }
-    if (commands.length > 50) {
-        report += `\n*Showing first 50 of ${commands.length} commands*\n`;
-    }
-    report += `\n`;
-    return report;
 }
 
 

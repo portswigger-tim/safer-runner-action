@@ -6,13 +6,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import {
-  parseSudoLogsFromString,
-  filterInternalSudoCommands,
-  classifySudoCommands,
-  type SudoCommand,
-  type SudoUsage
-} from './parsers/sudo-parser';
+import { parseSudoLogsFromString, classifySudoCommands, type SudoUsage } from './parsers/sudo-parser';
 import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
 import { DOCKER_DAEMON_JSON, TEARDOWN_BIN, VALIDATION_STATE_FILE } from './constants';
 
@@ -128,21 +122,6 @@ export async function setupSudoLogging(logFile: string, flavour?: SudoFlavour): 
 }
 
 /**
- * Remove sudo logging configuration
- * Used to stop capturing sudo commands between pre-hook and main action
- */
-export async function removeSudoLogging(): Promise<void> {
-  core.info('Removing sudo logging configuration...');
-  await exec.exec('sudo', ['rm', '-f', SUDO_LOGGING_SUDOERS_FILE]);
-
-  if (fs.existsSync(SUDO_LOGGING_RSYSLOG_FILE)) {
-    await exec.exec('sudo', ['rm', '-f', SUDO_LOGGING_RSYSLOG_FILE]);
-    await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
-  }
-  core.info('✅ Sudo logging removed');
-}
-
-/**
  * Commands run by post-action integrity validation (see validation.ts)
  * These are the only sudo commands the runner keeps after sudo is restricted.
  */
@@ -176,9 +155,7 @@ export const INTERNAL_SUDO_COMMANDS: string[] = [
   `chown root:root ${SUDOERS_TEMP_FILE}`,
   `mv ${SUDOERS_TEMP_FILE} /etc/sudoers.d/${RUNNER_USERNAME}`,
   `rm -f ${SUDOERS_TEMP_FILE}`,
-  // removeSudoLogging() / setupSudoLogging()
-  `rm -f ${SUDO_LOGGING_SUDOERS_FILE}`,
-  `rm -f ${SUDO_LOGGING_RSYSLOG_FILE}`,
+  // setupSudoLogging() on sudo-rs
   'systemctl restart rsyslog',
   // SystemValidator.writeBaseline()
   ...BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
@@ -244,25 +221,6 @@ ${getRequiredSudoCommands(RUNNER_USERNAME)}`;
 }
 
 /**
- * Parse sudo logs from a file
- *
- * @param logFile - Path to sudo log file
- * @returns Array of parsed sudo commands
- */
-export function parseSudoLogs(logFile: string): SudoCommand[] {
-  try {
-    if (fs.existsSync(logFile)) {
-      const logContent = fs.readFileSync(logFile, 'utf-8');
-      return filterInternalSudoCommands(parseSudoLogsFromString(logContent), INTERNAL_SUDO_COMMANDS);
-    }
-    return [];
-  } catch (error) {
-    core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
-    return [];
-  }
-}
-
-/**
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
  * action's own commands (so the report never counts the action's sudo as the workflow's).
  */
@@ -275,33 +233,4 @@ export function readSudoUsage(logFile: string): SudoUsage {
     core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
   }
   return { ran: [], refused: [], internal: [] };
-}
-
-/**
- * Generate a job summary section for sudo commands
- *
- * @param commands - Array of sudo commands to display
- * @param title - Section title (e.g., "Workflow Sudo Commands" or "Pre-Hook Sudo Commands")
- * @returns Markdown string for job summary
- */
-export function generateSudoSummarySection(commands: SudoCommand[], title: string): string {
-  if (commands.length === 0) {
-    return '';
-  }
-
-  let report = `## ${title}\n\n`;
-  report += `Workflow executed **${commands.length}** sudo command${commands.length === 1 ? '' : 's'}:\n\n`;
-  report += `| Command | Arguments |\n`;
-  report += `|---------|----------|\n`;
-
-  for (const cmd of commands.slice(0, 50)) {
-    report += `| \`${cmd.command}\` | \`${cmd.args || '(none)'}\` |\n`;
-  }
-
-  if (commands.length > 50) {
-    report += `\n*Showing first 50 of ${commands.length} commands*\n`;
-  }
-
-  report += `\n`;
-  return report;
 }
