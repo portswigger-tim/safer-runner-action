@@ -7,7 +7,7 @@
  *
  * Each scenario records the ordered transcript of every command, fetch, DNS lookup and exported
  * variable, plus the files setup left behind, and snapshots both. On top of the snapshots, the
- * setup and post-step ordering rules (L1-L23, see setupInvariants) are checked as executable
+ * setup and post-step ordering rules (L1-L24, see setupInvariants) are checked as executable
  * invariants, and a mutation check proves each rule fails when its order is broken.
  */
 
@@ -140,11 +140,15 @@ jest.mock('dns', () => {
 interface MockExecOptions {
   input?: Buffer;
   ignoreReturnCode?: boolean;
+  silent?: boolean;
   listeners?: { stdout?: (b: Buffer) => void };
 }
 interface Entry {
   argv: string[];
   input?: string;
+  /** run with ignoreReturnCode: a failure does not throw, so the call site must check the code */
+  ignore?: true;
+  silent?: true;
 }
 interface Result {
   code: number;
@@ -197,6 +201,8 @@ class FakeHost {
   dnsUp = false;
   sudoLogging = false;
   sudoRestricted = false;
+  /** ip6tables-restore fails (a kernel without ip6tables support) */
+  ip6RestoreFails = false;
   /** bumped on every ruleset applied, and by a tampering step */
   iptablesGeneration = 0;
 
@@ -244,7 +250,7 @@ class FakeHost {
   }
 
   async exec(cmd: string, args: string[], opts: MockExecOptions): Promise<number> {
-    const r = this.run(cmd, args, opts.input);
+    const r = this.run(cmd, args, opts);
     if (r.stdout && opts.listeners?.stdout) opts.listeners.stdout(Buffer.from(r.stdout));
     if (r.code !== 0 && !opts.ignoreReturnCode) {
       throw new Error(`The process '${cmd}' failed with exit code ${r.code}`);
@@ -264,8 +270,14 @@ class FakeHost {
 
   private lastResult: Result = { code: 0 };
 
-  private run(cmd: string, args: string[], input?: Buffer): Result {
-    this.record({ argv: [cmd, ...args], ...(input ? { input: input.toString('utf8') } : {}) });
+  private run(cmd: string, args: string[], opts: MockExecOptions): Result {
+    const { input } = opts;
+    this.record({
+      argv: [cmd, ...args],
+      ...(input ? { input: input.toString('utf8') } : {}),
+      ...(opts.ignoreReturnCode ? { ignore: true } : {}),
+      ...(opts.silent ? { silent: true } : {})
+    });
     let r: Result;
     if (cmd === 'sudo' && args[0] === '--version') {
       r = { code: 0, stdout: this.flavour === 'sudo-rs' ? 'sudo-rs 0.2.13-0ubuntu1.2\n' : 'Sudo version 1.9.15p5\n' };
@@ -371,6 +383,8 @@ class FakeHost {
         return this.iptables(a);
       case 'iptables-restore':
       case 'ip6tables-restore':
+        if (c === 'ip6tables-restore' && this.ip6RestoreFails)
+          return { code: 2, stderr: 'ip6tables-restore: line 3 failed' };
         this.iptablesGeneration++;
         return ok();
       case 'ip':
@@ -569,12 +583,14 @@ async function post(h: FakeHost): Promise<void> {
 const ts = (s: string) => s.replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g, '<ts>');
 const line = (e: Entry) => e.argv.join(' ');
 
+/** One line per entry; exec options as `[ignore-rc]` / `[silent]`, stdin as its size and hash. */
 function transcriptText(t: Entry[]): string {
   return t
     .map(e => {
-      if (e.input === undefined) return `$ ${line(e)}`;
+      const opts = `${e.ignore ? ' [ignore-rc]' : ''}${e.silent ? ' [silent]' : ''}`;
+      if (e.input === undefined) return `$ ${line(e)}${opts}`;
       const sha = createHash('sha256').update(ts(e.input)).digest('hex').slice(0, 12);
-      return `$ ${line(e)}  <<< ${Buffer.byteLength(e.input)} bytes, sha256:${sha}`;
+      return `$ ${line(e)}${opts}  <<< ${Buffer.byteLength(e.input)} bytes, sha256:${sha}`;
     })
     .join('\n');
 }
@@ -588,7 +604,7 @@ function writtenFiles(h: FakeHost): Record<string, string> {
   return out;
 }
 
-// ------------------------------------------------------------------ invariants (L1-L23)
+// ------------------------------------------------------------------ invariants (L1-L24)
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const re = (s: string) => new RegExp(`^${esc(s)}`);
@@ -654,6 +670,16 @@ const P = {
   baselineRead: re(`sudo -n cat ${VALIDATION_STATE_FILE}`),
   summary: re('<summary.write>')
 };
+
+/** Commands that apply the firewall or sudoers: a silent failure here would leave the job open. */
+const FAIL_CLOSED =
+  /^sudo (ip6?tables-restore |(tee|visudo -c -f|chmod 0440|chown root:root|mv) \/tmp\/(runner-sudoers|safer-runner-sudo-logging)\.tmp)/;
+/**
+ * Ignored on purpose because the caller checks the code: applyFirewall throws in enforce when
+ * ip6tables-restore fails (tested below); disableSudoForRunner throws when visudo rejects the
+ * file (services/sudo/index.test.ts).
+ */
+const CHECKED_IGNORES = [P.restore6, P.visudo];
 
 interface Expect {
   mode: 'analyze' | 'enforce';
@@ -783,6 +809,15 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
     before('L23', re(`sudo systemctl stop ${unit}`), re(`sudo systemd-run --unit=${unit}`));
     before('L23', re(`sudo systemctl reset-failed ${unit}`), re(`sudo systemd-run --unit=${unit}`));
   }
+
+  // L24: a command that applies the firewall or sudoers never ignores its exit code, unless the
+  // call site checks it itself (CHECKED_IGNORES, each with a test of its failure path)
+  for (const e of t) {
+    const l = line(e);
+    if (e.ignore && FAIL_CLOSED.test(l) && !CHECKED_IGNORES.some(r => r.test(l))) {
+      v.push(`L24: ${l} ignores its exit code`);
+    }
+  }
   return v;
 }
 
@@ -903,6 +938,25 @@ describe('setup transcript (runSetup on a recording fake runner)', () => {
     expect(transcriptText(t)).toMatchSnapshot('transcript');
   });
 
+  it.each([
+    ['enforce', ENFORCE.inputs],
+    ['analyze', { mode: 'analyze' }]
+  ])('%s: ip6tables-restore failing (its exit code is checked, L24)', async (mode, inputs) => {
+    const h = newHost({ ...ENFORCE, inputs });
+    h.ip6RestoreFails = true;
+    const setupRun = settle(runSetup(readInputs()));
+    if (mode === 'enforce') {
+      await expect(setupRun).rejects.toThrow('ip6tables rules could not be applied');
+      // fails before the self-tests, the marker or anything after the firewall
+      expect(first(h.transcript, P.curl)).toBe(-1);
+      expect(first(h.transcript, P.marker)).toBe(-1);
+    } else {
+      await setupRun;
+      expect(h.log).toContain('warning: ip6tables rules could not be applied');
+      expect(first(h.transcript, P.marker)).toBeGreaterThan(-1);
+    }
+  });
+
   it('trust: CA in the system store, every JDK and the exported variables', async () => {
     const h = await setup(ENFORCE);
     const t = h.transcript.map(line);
@@ -1011,6 +1065,13 @@ describe('invariants have teeth (mutation check)', () => {
     return out;
   }
 
+  function ignoreAt(t: Entry[], what: RegExp): Entry[] {
+    const out = [...t];
+    const i = first(out, what);
+    out[i] = { ...out[i], ignore: true };
+    return out;
+  }
+
   const ids = (v: string[]) => Array.from(new Set(v.map(s => s.split(':')[0])));
 
   it.each([
@@ -1033,7 +1094,9 @@ describe('invariants have teeth (mutation check)', () => {
       'a workflow-looking sudo command after logging started',
       (t: Entry[]) => [...t.slice(0, -1), { argv: ['sudo', 'cat', '/etc/shadow'] }, t[t.length - 1]]
     ],
-    ['L21', 'sudo restricted before the baseline', (t: Entry[]) => moveBefore(t, P.sudoersMv, P.baselineTouch)]
+    ['L21', 'sudo restricted before the baseline', (t: Entry[]) => moveBefore(t, P.sudoersMv, P.baselineTouch)],
+    ['L24', 'iptables-restore with its failure ignored', (t: Entry[]) => ignoreAt(t, P.restore4)],
+    ['L24', 'the sudoers move with its failure ignored', (t: Entry[]) => ignoreAt(t, P.sudoersMv)]
   ])('%s: %s', (id, _what, mutate) => {
     const v = setupInvariants(mutate(base), x);
     expect(ids(v)).toContain(id);
