@@ -16,7 +16,7 @@ import {
   validatePathPattern,
   validatePattern
 } from './policy';
-import { GITHUB_PLATFORM_ENDPOINTS } from './parsers/github-parser';
+import { GITHUB_PLATFORM_ENDPOINTS } from './config/github-domains';
 
 const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'proxy', 'test-vectors.json'), 'utf8'));
 

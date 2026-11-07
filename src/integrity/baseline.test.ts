@@ -1,5 +1,5 @@
-import { BASELINE_WRITE_COMMANDS, SystemValidator } from './validation';
-import { INTERNAL_SUDO_COMMANDS } from './sudo';
+import { BASELINE_WRITE_COMMANDS, SystemValidator } from './baseline';
+import { INTERNAL_SUDO_COMMANDS } from '../services/sudo';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';

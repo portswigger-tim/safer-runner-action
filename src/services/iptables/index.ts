@@ -22,8 +22,8 @@ import {
   LOG_PREFIX_CEGRESS,
   LOG_PREFIX_DROP,
   NAT_CHAIN
-} from './constants';
-import type { Mode } from './policy';
+} from '../../constants';
+import type { Mode } from '../../policy';
 
 export interface FirewallOptions {
   mode: Mode;
@@ -431,4 +431,45 @@ export async function logFirewall(): Promise<void> {
   await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', CONTAINER_NAT_CHAIN], opts);
   await exec.exec('sudo', ['iptables', '-S', CONTAINER_FWD_CHAIN], opts);
   await exec.exec('sudo', ['iptables', '-S', DOCKER_USER_CHAIN], opts);
+}
+
+/**
+ * Setup rsyslog to filter iptables logs to dedicated files
+ * This allows reading logs without sudo and provides clean separation
+ * between pre-hook and main action logs
+ *
+ * Creates separate config files for pre-hook and main action to avoid
+ * overwriting each other's configurations
+ */
+export async function setupIptablesLogging(
+  logFile: string,
+  logPrefixes: string[],
+  configSuffix: string = ''
+): Promise<void> {
+  // Build rsyslog configuration to filter iptables logs
+  // Filter by programname=kernel to only capture actual iptables log messages
+  // (not sudo commands that set up the logging rules)
+  const prefixArray = "['" + logPrefixes.join("', '") + "']";
+
+  const rsyslogConfig = `if $programname == 'kernel' and $msg contains ${prefixArray} then ${logFile}
+`;
+
+  // Use different config file names for pre-hook and main action
+  const configFile = configSuffix
+    ? `/etc/rsyslog.d/10-iptables-safer-runner-${configSuffix}.conf`
+    : '/etc/rsyslog.d/10-iptables-safer-runner.conf';
+
+  // Write rsyslog configuration
+  await exec.exec('sudo', ['tee', configFile], {
+    input: Buffer.from(rsyslogConfig)
+  });
+
+  // Create log file and set ownership to syslog user (rsyslog runs as syslog:adm)
+  // This allows rsyslog to write to the file
+  await exec.exec('sudo', ['touch', logFile]);
+  await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
+  await exec.exec('sudo', ['chmod', '644', logFile]);
+
+  // Restart rsyslog to apply configuration
+  await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
 }

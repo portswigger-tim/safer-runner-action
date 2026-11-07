@@ -3,7 +3,7 @@
  * query on the host (and from containers) here; only the resolver's uid may reach the
  * upstream servers. enforce: allowlisted names (exact / *.x / glob, the proxy's own pattern
  * set) are forwarded, everything else - including subdomains of exact entries - gets
- * NXDOMAIN locally and never leaves the VM. See src/config/corefile-builder.ts.
+ * NXDOMAIN locally and never leaves the VM. See ./config.ts.
  *
  * No DNS-rebind filtering: the proxy's upstream-IP guard (server_connect) refuses a strict
  * superset of internal answers and logs the address, and anything outside the proxy can
@@ -11,23 +11,15 @@
  */
 
 import * as core from '@actions/core';
+import * as crypto from 'crypto';
 import * as dns from 'dns';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as exec from '@actions/exec';
-import { COREDNS_BIN, COREDNS_SHA256, COREDNS_URL, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from './constants';
-import {
-  buildCorefile,
-  DNS_LISTEN,
-  parseHostsNames,
-  type CorefileOptions,
-  type LocalHosts
-} from './config/corefile-builder';
-import { installPinnedBinary } from './proxy';
-
-async function sudo(args: string[], opts: exec.ExecOptions = {}): Promise<number> {
-  return exec.exec('sudo', args, opts);
-}
+import { COREDNS_BIN, COREDNS_SHA256, COREDNS_URL, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from '../../constants';
+import { buildCorefile, DNS_LISTEN, parseHostsNames, type CorefileOptions, type LocalHosts } from './config';
+import { sudo } from '../../system/host';
+import { installPinnedBinary } from '../../system/install';
 
 export async function installCoreDns(): Promise<void> {
   await installPinnedBinary(COREDNS_URL, COREDNS_SHA256, 'coredns', COREDNS_BIN, 'coredns');
@@ -157,4 +149,57 @@ export async function startCoreDns(dnsUser: string, readinessName: string, timeo
   }
   await dumpDnsDiagnostics();
   throw new Error(`CoreDNS did not answer for ${readinessName} within ${timeoutMs / 1000}s (last: ${last})`);
+}
+
+export interface DnsUser {
+  username: string;
+  uid: number;
+}
+
+export async function createRandomDNSUser(): Promise<DnsUser> {
+  // Generate random username with 16 hex characters
+  const randomHex = crypto.randomBytes(8).toString('hex');
+  const username = `dns-${randomHex}`;
+
+  // Generate random UID in safe range (60000-65000 to avoid conflicts)
+  const uid = 60000 + Math.floor(Math.random() * 5000);
+
+  // Create system user with no login, no home directory
+  await exec.exec('sudo', [
+    'useradd',
+    '--system',
+    '--no-create-home',
+    '--shell',
+    '/usr/sbin/nologin',
+    '--uid',
+    uid.toString(),
+    username
+  ]);
+
+  return { username, uid };
+}
+
+export async function setupDNSConfig(): Promise<void> {
+  // Configure systemd-resolved to use our DNS server
+  await exec.exec('sudo', ['mkdir', '-p', '/etc/systemd/resolved.conf.d']);
+
+  const resolvedConfig = `[Resolve]
+DNS=127.0.0.1
+DNSSEC=yes
+DNSStubListener=no`;
+
+  await exec.exec('sudo', ['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'], {
+    input: Buffer.from(resolvedConfig)
+  });
+
+  // Update resolv.conf to use localhost
+  await exec.exec('sudo', ['unlink', '/etc/resolv.conf']);
+  await exec.exec('sudo', ['tee', '/etc/resolv.conf'], {
+    input: Buffer.from('nameserver 127.0.0.1\n')
+  });
+}
+
+/** Apply the resolved.conf drop-in written by setupDNSConfig (releases its stub listener). */
+export async function restartResolved(): Promise<void> {
+  await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
 }

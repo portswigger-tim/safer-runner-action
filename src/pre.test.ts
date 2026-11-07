@@ -1,8 +1,8 @@
 import * as core from '@actions/core';
-import { runSetup } from './egress';
+import { runSetup } from './setup/run';
 
 jest.mock('@actions/core');
-jest.mock('./egress', () => ({ runSetup: jest.fn() }));
+jest.mock('./setup/run', () => ({ runSetup: jest.fn() }));
 
 /** Load pre.ts (it runs on import) with these inputs and wait for it to finish. */
 async function runPre(values: Record<string, string>): Promise<void> {

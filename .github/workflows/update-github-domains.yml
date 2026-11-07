@@ -1,6 +1,6 @@
 name: Update GitHub domains
 
-# Regenerates src/parsers/github-domains.generated.ts (the offline fallback GitHub allowlist)
+# Regenerates src/config/github-domains.generated.ts (the offline fallback GitHub allowlist)
 # from api.github.com/meta .domains.actions and, if it changed, opens a PR. Never merges: the
 # PR diff is the human review gate (a new wildcard or storage account widens enforce mode).
 #
@@ -50,9 +50,9 @@ jobs:
       - name: Detect a real change
         id: diff
         run: |
-          if git diff -U0 -- src/parsers/github-domains.generated.ts | grep -E '^[+-]  ' >/dev/null; then
+          if git diff -U0 -- src/config/github-domains.generated.ts | grep -E '^[+-]  ' >/dev/null; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            git --no-pager diff -- src/parsers/github-domains.generated.ts
+            git --no-pager diff -- src/config/github-domains.generated.ts
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No change in .domains.actions."
@@ -67,13 +67,13 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -C "$BRANCH"
-          git add src/parsers/github-domains.generated.ts dist
+          git add src/config/github-domains.generated.ts dist
           git commit -m "chore: regenerate GitHub domains from api.github.com/meta"
           git push --force origin "$BRANCH"
           if [ -z "$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json number -q '.[].number')" ]; then
             gh pr create --base "$BASE" --head "$BRANCH" \
               --title "chore: regenerate GitHub domains from api.github.com/meta" \
-              --body "Automated refresh of the offline GitHub allowlist (src/parsers/github-domains.generated.ts) from \`api.github.com/meta\` \`.domains.actions\`.
+              --body "Automated refresh of the offline GitHub allowlist (src/config/github-domains.generated.ts) from \`api.github.com/meta\` \`.domains.actions\`.
 
           **Review before merging:** every added entry becomes allowed in enforce mode when the live meta fetch fails. Check new wildcards (\`*.x\` = a DNS channel to that zone) and new \`productionresultssa*\` accounts.
 

@@ -2,10 +2,10 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseFlowLog, parseFlowLogWithOffsets, type FlowRecord } from './flowlog';
-import { parseHttpFilter } from './inputs';
+import { parseHttpFilter } from './config/inputs';
 import { parse as parseYaml } from 'yaml';
 import { buildPolicyConfig, type PolicyConfig } from './policy';
-import { withoutSelfTests } from './selftest';
+import { withoutSelfTests } from './setup/selftest';
 import { suggestHttpFilter } from './suggest';
 import {
   ADVISORY_REPORT_NOTE,

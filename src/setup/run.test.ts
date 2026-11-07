@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { JOB_CONTAINER_MESSAGE, applyDockerPolicy, inJobContainer } from './egress';
+import { JOB_CONTAINER_MESSAGE, applyDockerPolicy, inJobContainer } from './run';
 
 jest.mock('@actions/core');
 jest.mock('@actions/exec');

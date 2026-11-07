@@ -21,7 +21,7 @@ import {
   GITHUB_PLATFORM_ENDPOINTS,
   PlatformEndpoint,
   RISKY_GITHUB_SUBDOMAINS
-} from './parsers/github-parser';
+} from './config/github-domains';
 import { FLOW_LOG } from './constants';
 
 export type Mode = 'analyze' | 'enforce';

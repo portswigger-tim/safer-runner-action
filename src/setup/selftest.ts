@@ -11,11 +11,11 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import { DNS_LOG, FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from './constants';
-import { FlowRecord, flowLogSize, ipOf, readFlowLog } from './flowlog';
-import { probe } from './dns';
-import { parseDnsLog } from './parsers/dns-parser';
-import { compilePattern, matchesAny, type Mode } from './policy';
+import { DNS_LOG, FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from '../constants';
+import { FlowRecord, flowLogSize, ipOf, readFlowLog } from '../flowlog';
+import { probe } from '../services/coredns';
+import { parseDnsLog } from '../parsers/dns-parser';
+import { compilePattern, matchesAny, type Mode } from '../policy';
 
 export interface SelfTestResult {
   name: string;

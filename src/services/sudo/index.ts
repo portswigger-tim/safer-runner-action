@@ -6,12 +6,12 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { parseSudoLogsFromString, classifySudoCommands, type SudoUsage } from './parsers/sudo-parser';
-import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from './validation';
-import { DOCKER_DAEMON_JSON, TEARDOWN_BIN, VALIDATION_STATE_FILE } from './constants';
+import { parseSudoLogsFromString, classifySudoCommands, type SudoUsage } from '../../parsers/sudo-parser';
+import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from '../../integrity/baseline';
+import { DOCKER_DAEMON_JSON, TEARDOWN_BIN, VALIDATION_STATE_FILE } from '../../constants';
 
 // Re-export SudoCommand type for convenience
-export type { SudoCommand, SudoUsage } from './parsers/sudo-parser';
+export type { SudoCommand, SudoUsage } from '../../parsers/sudo-parser';
 
 // Constants
 export const RUNNER_USERNAME = 'runner';
@@ -122,7 +122,7 @@ export async function setupSudoLogging(logFile: string, flavour?: SudoFlavour): 
 }
 
 /**
- * Commands run by post-action integrity validation (see validation.ts)
+ * Commands run by post-action integrity validation (see src/integrity/baseline.ts)
  * These are the only sudo commands the runner keeps after sudo is restricted.
  */
 export function getValidationSudoCommands(): string[] {

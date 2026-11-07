@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
-import { readInputs } from './inputs';
-import { runSetup, setupCompleted } from './egress';
+import { readInputs } from './config/inputs';
+import { runSetup, setupCompleted } from './setup/run';
 
 /**
  * Main step: normally a no-op because the pre step already applied everything. If pre did

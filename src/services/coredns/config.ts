@@ -20,7 +20,7 @@
  */
 
 import * as net from 'net';
-import { validatePattern, type Mode } from '../policy';
+import { validatePattern, type Mode } from '../../policy';
 
 export const DNS_LISTEN = '127.0.0.1';
 /** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
