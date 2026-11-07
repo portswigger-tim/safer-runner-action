@@ -26,7 +26,8 @@ import {
   PROXY_USER,
   TEARDOWN_BIN
 } from '../../constants';
-import { sudo, sudoWrite, timed } from '../../system/host';
+import { sudoWrite } from '../../system/files';
+import { sudo, timed } from '../../system/host';
 import { installPinnedBinary } from '../../system/install';
 import type { PolicyConfig } from '../../policy';
 

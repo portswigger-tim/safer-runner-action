@@ -3674,8 +3674,11 @@ exports.parseHostsNames = parseHostsNames;
 exports.patternsExpr = patternsExpr;
 exports.allowExpr = allowExpr;
 exports.buildCorefile = buildCorefile;
+exports.render = render;
 const net = __importStar(__nccwpck_require__(9278));
+const constants_1 = __nccwpck_require__(8729);
 const policy_1 = __nccwpck_require__(2224);
+const unit_1 = __nccwpck_require__(812);
 exports.DNS_LISTEN = '127.0.0.1';
 /** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
 exports.CACHE_TTL = 3600;
@@ -3803,6 +3806,33 @@ function buildCorefile(o) {
         : forwardBlock('WOULD_BLOCK', o.upstreams);
     return `${header}${forwardBlock('ALLOW', o.upstreams, view, o.hosts)}\n${deny}\n`;
 }
+/**
+ * Everything CoreDNS needs on disk, and its unit: as the DNS user with only CAP_NET_BIND_SERVICE
+ * (for :53). stdout - the `log` plugin - is appended by systemd to the world-readable DNS log the
+ * report reads; the log is pre-created root-owned 0644, and systemd's append keeps that mode.
+ */
+function render(f) {
+    return {
+        inert: [
+            { kind: 'dir', path: constants_1.ETC_DIR, mode: '0755', owner: 'root:root' },
+            { kind: 'file', path: constants_1.COREFILE, content: buildCorefile(f), mode: '0644', owner: 'root:root' },
+            { kind: 'touch', path: constants_1.DNS_LOG, mode: '0644', owner: 'root:root' }
+        ],
+        unit: {
+            unit: constants_1.DNS_UNIT,
+            description: 'safer-runner DNS resolver (CoreDNS)',
+            user: f.user,
+            props: [
+                'AmbientCapabilities=CAP_NET_BIND_SERVICE',
+                'CapabilityBoundingSet=CAP_NET_BIND_SERVICE',
+                ...unit_1.HARDENING,
+                `StandardOutput=append:${constants_1.DNS_LOG}`,
+                `StandardError=append:${constants_1.DNS_LOG}`
+            ],
+            argv: [constants_1.COREDNS_BIN, '-conf', constants_1.COREFILE]
+        }
+    };
+}
 
 
 /***/ }),
@@ -3857,29 +3887,38 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HOSTS_FILE = void 0;
-exports.installCoreDns = installCoreDns;
+exports.READY_NAME = exports.HOSTS_FILE = exports.render = void 0;
+exports.install = install;
+exports.createUser = createUser;
 exports.localHosts = localHosts;
-exports.writeCorefile = writeCorefile;
-exports.dnsSystemdRunArgs = dnsSystemdRunArgs;
-exports.dumpDnsDiagnostics = dumpDnsDiagnostics;
 exports.probe = probe;
-exports.startCoreDns = startCoreDns;
-exports.createRandomDNSUser = createRandomDNSUser;
-exports.setupDNSConfig = setupDNSConfig;
-exports.restartResolved = restartResolved;
+exports.start = start;
+exports.cutover = cutover;
 const core = __importStar(__nccwpck_require__(7484));
 const crypto = __importStar(__nccwpck_require__(6982));
 const dns = __importStar(__nccwpck_require__(2250));
 const fs = __importStar(__nccwpck_require__(9896));
 const os = __importStar(__nccwpck_require__(857));
-const exec = __importStar(__nccwpck_require__(5236));
 const constants_1 = __nccwpck_require__(8729);
-const config_1 = __nccwpck_require__(5744);
+const files_1 = __nccwpck_require__(3087);
 const host_1 = __nccwpck_require__(7020);
 const install_1 = __nccwpck_require__(1671);
-async function installCoreDns() {
-    await (0, install_1.installPinnedBinary)(constants_1.COREDNS_URL, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns');
+const unit_1 = __nccwpck_require__(812);
+const config_1 = __nccwpck_require__(5744);
+var config_2 = __nccwpck_require__(5744);
+Object.defineProperty(exports, "render", ({ enumerable: true, get: function () { return config_2.render; } }));
+async function install(h = host_1.realHost) {
+    await (0, install_1.installPinnedBinary)(constants_1.COREDNS_URL, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns', h);
+}
+/** The resolver's own system user: a random name and uid, no login, no home. */
+async function createUser(h) {
+    // Generate random username with 16 hex characters
+    const randomHex = crypto.randomBytes(8).toString('hex');
+    const username = `dns-${randomHex}`;
+    // Generate random UID in safe range (60000-65000 to avoid conflicts)
+    const uid = 60000 + Math.floor(Math.random() * 5000);
+    await (0, host_1.sudo)(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', '--uid', uid.toString(), username], {}, h);
+    return { username, uid };
 }
 exports.HOSTS_FILE = '/etc/hosts';
 /** Debian's address for the machine's own name when it has no other (`127.0.1.1 <hostname>`). */
@@ -3913,57 +3952,6 @@ async function localHosts() {
     }
     return { file: exports.HOSTS_FILE, names, inline };
 }
-async function writeCorefile(o) {
-    const corefile = (0, config_1.buildCorefile)(o);
-    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
-    await (0, host_1.sudo)(['tee', constants_1.COREFILE], { input: Buffer.from(corefile), silent: true });
-    await (0, host_1.sudo)(['chown', 'root:root', constants_1.COREFILE]);
-    await (0, host_1.sudo)(['chmod', '0644', constants_1.COREFILE]);
-}
-/**
- * systemd-run: outside the runner's process tree (its orphan cleanup would kill it), restarted
- * on any exit, as the random DNS user with only CAP_NET_BIND_SERVICE (for :53). stdout - the
- * `log` plugin - is appended by systemd to the world-readable DNS log the report reads.
- */
-function dnsSystemdRunArgs(dnsUser) {
-    return [
-        'systemd-run',
-        `--unit=${constants_1.DNS_UNIT}`,
-        '--description=safer-runner DNS resolver (CoreDNS)',
-        `--uid=${dnsUser}`,
-        `--gid=${dnsUser}`,
-        '-p',
-        'Restart=always',
-        '-p',
-        'RestartSec=1',
-        '-p',
-        'AmbientCapabilities=CAP_NET_BIND_SERVICE',
-        '-p',
-        'CapabilityBoundingSet=CAP_NET_BIND_SERVICE',
-        '-p',
-        'NoNewPrivileges=yes',
-        '-p',
-        'PrivateTmp=yes',
-        '-p',
-        'ProtectHome=yes',
-        '-p',
-        'ProtectSystem=strict',
-        '-p',
-        `StandardOutput=append:${constants_1.DNS_LOG}`,
-        '-p',
-        `StandardError=append:${constants_1.DNS_LOG}`,
-        constants_1.COREDNS_BIN,
-        '-conf',
-        constants_1.COREFILE
-    ];
-}
-async function dumpDnsDiagnostics() {
-    const opts = { ignoreReturnCode: true };
-    await (0, host_1.sudo)(['systemctl', 'status', constants_1.DNS_UNIT, '--no-pager', '-l'], opts);
-    await (0, host_1.sudo)(['journalctl', '-u', constants_1.DNS_UNIT, '--no-pager', '-n', '30'], opts);
-    await (0, host_1.sudo)(['tail', '-n', '30', constants_1.DNS_LOG], opts);
-    await (0, host_1.sudo)(['ss', '-lntup', 'sport = :53'], opts);
-}
 /** Resolve `name` (A) against our resolver. Returns 'ok', 'NXDOMAIN' or the error code. */
 async function probe(name, timeoutMs = 3000) {
     const r = new dns.promises.Resolver({ timeout: timeoutMs, tries: 1 });
@@ -3977,68 +3965,41 @@ async function probe(name, timeoutMs = 3000) {
         return code === dns.NOTFOUND ? 'NXDOMAIN' : code;
     }
 }
-/**
- * (Re)start CoreDNS and wait until it answers. The log file is pre-created 0644 root-owned:
- * systemd opens it as root and appends, so the mode sticks and the runner can read it.
- */
-async function startCoreDns(dnsUser, readinessName, timeoutMs = 20000) {
-    await (0, host_1.sudo)(['touch', constants_1.DNS_LOG]);
-    await (0, host_1.sudo)(['chown', 'root:root', constants_1.DNS_LOG]);
-    await (0, host_1.sudo)(['chmod', '0644', constants_1.DNS_LOG]);
-    await (0, host_1.sudo)(['systemctl', 'stop', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
-    await (0, host_1.sudo)(['systemctl', 'reset-failed', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
-    await (0, host_1.sudo)(dnsSystemdRunArgs(dnsUser));
-    const deadline = Date.now() + timeoutMs;
+/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
+exports.READY_NAME = 'github.com';
+const READY_TIMEOUT_MS = 20000;
+/** (Re)start CoreDNS with its rendered files and wait until it answers. */
+async function start(h, r) {
+    await (0, files_1.writeFiles)(h, r.inert);
     let last = '';
-    while (Date.now() < deadline) {
-        last = await probe(readinessName, 2000);
-        if (last === 'ok') {
-            core.info(`✅ CoreDNS up on ${config_1.DNS_LISTEN}:53 (${readinessName} resolved)`);
-            return;
-        }
-        await new Promise(r => setTimeout(r, 300));
-    }
-    await dumpDnsDiagnostics();
-    throw new Error(`CoreDNS did not answer for ${readinessName} within ${timeoutMs / 1000}s (last: ${last})`);
-}
-async function createRandomDNSUser() {
-    // Generate random username with 16 hex characters
-    const randomHex = crypto.randomBytes(8).toString('hex');
-    const username = `dns-${randomHex}`;
-    // Generate random UID in safe range (60000-65000 to avoid conflicts)
-    const uid = 60000 + Math.floor(Math.random() * 5000);
-    // Create system user with no login, no home directory
-    await exec.exec('sudo', [
-        'useradd',
-        '--system',
-        '--no-create-home',
-        '--shell',
-        '/usr/sbin/nologin',
-        '--uid',
-        uid.toString(),
-        username
-    ]);
-    return { username, uid };
-}
-async function setupDNSConfig() {
-    // Configure systemd-resolved to use our DNS server
-    await exec.exec('sudo', ['mkdir', '-p', '/etc/systemd/resolved.conf.d']);
-    const resolvedConfig = `[Resolve]
-DNS=127.0.0.1
-DNSSEC=yes
-DNSStubListener=no`;
-    await exec.exec('sudo', ['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'], {
-        input: Buffer.from(resolvedConfig)
+    await (0, unit_1.startUnit)(h, r.unit, {
+        ready: async () => (last = await probe(exports.READY_NAME, 2000)) === 'ok',
+        pollMs: 300,
+        timeoutMs: READY_TIMEOUT_MS,
+        diagnostics: [
+            ['systemctl', 'status', constants_1.DNS_UNIT, '--no-pager', '-l'],
+            ['journalctl', '-u', constants_1.DNS_UNIT, '--no-pager', '-n', '30'],
+            ['tail', '-n', '30', constants_1.DNS_LOG],
+            ['ss', '-lntup', 'sport = :53']
+        ],
+        timeoutError: () => new Error(`CoreDNS did not answer for ${exports.READY_NAME} within ${READY_TIMEOUT_MS / 1000}s (last: ${last})`)
     });
-    // Update resolv.conf to use localhost
-    await exec.exec('sudo', ['unlink', '/etc/resolv.conf']);
-    await exec.exec('sudo', ['tee', '/etc/resolv.conf'], {
-        input: Buffer.from('nameserver 127.0.0.1\n')
-    });
+    core.info(`✅ CoreDNS up on ${config_1.DNS_LISTEN}:53 (${exports.READY_NAME} resolved)`);
+    return Object.freeze({});
 }
-/** Apply the resolved.conf drop-in written by setupDNSConfig (releases its stub listener). */
-async function restartResolved() {
-    await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
+/**
+ * Point the system resolver at CoreDNS: a systemd-resolved drop-in (no stub listener, CoreDNS as
+ * its server), resolv.conf replaced, resolved restarted. Only once CoreDNS answers.
+ */
+async function cutover(h, _dns) {
+    await (0, host_1.sudo)(['mkdir', '-p', '/etc/systemd/resolved.conf.d'], {}, h);
+    await (0, host_1.sudo)(['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'], {
+        input: Buffer.from('[Resolve]\nDNS=127.0.0.1\nDNSSEC=yes\nDNSStubListener=no')
+    }, h);
+    await (0, host_1.sudo)(['unlink', '/etc/resolv.conf'], {}, h);
+    await (0, host_1.sudo)(['tee', '/etc/resolv.conf'], { input: Buffer.from('nameserver 127.0.0.1\n') }, h);
+    await (0, host_1.sudo)(['systemctl', 'restart', 'systemd-resolved'], {}, h);
+    return Object.freeze({});
 }
 
 
@@ -4857,6 +4818,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 const net = __importStar(__nccwpck_require__(9278));
 const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
+const files_1 = __nccwpck_require__(3087);
 const host_1 = __nccwpck_require__(7020);
 const install_1 = __nccwpck_require__(1671);
 /**
@@ -4918,7 +4880,7 @@ async function installAddon() {
 }
 async function writePolicy(config) {
     await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
-    await (0, host_1.sudoWrite)(constants_1.POLICY_FILE, JSON.stringify(config, null, 2) + '\n', '0644');
+    await (0, files_1.sudoWrite)(constants_1.POLICY_FILE, JSON.stringify(config, null, 2) + '\n', '0644');
     // The flow log is written by the proxy user and read (without sudo) by the post step.
     await (0, host_1.sudo)(['touch', constants_1.FLOW_LOG]);
     await (0, host_1.sudo)(['chown', `${constants_1.PROXY_USER}:${constants_1.PROXY_USER}`, constants_1.FLOW_LOG]);
@@ -4964,7 +4926,7 @@ async function installTeardownHelper() {
 # safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
 rm -f ${constants_1.PROXY_CA_KEY_FILE} ${constants_1.PROXY_CONF_DIR}/ca-key.pem ${constants_1.PROXY_CONF_DIR}/mitmproxy-ca.p12
 `;
-    await (0, host_1.sudoWrite)(constants_1.TEARDOWN_BIN, script, '0755');
+    await (0, files_1.sudoWrite)(constants_1.TEARDOWN_BIN, script, '0755');
 }
 function mitmdumpArgs(o) {
     return [
@@ -5550,7 +5512,8 @@ const iptables_1 = __nccwpck_require__(9374);
 const policy_1 = __nccwpck_require__(2224);
 const mitmproxy_1 = __nccwpck_require__(2145);
 const selftest_1 = __nccwpck_require__(42);
-const coredns_1 = __nccwpck_require__(5212);
+const coredns = __importStar(__nccwpck_require__(5212));
+const host_1 = __nccwpck_require__(7020);
 const github_domains_1 = __nccwpck_require__(2268);
 const sudo_1 = __nccwpck_require__(3275);
 const docker_1 = __nccwpck_require__(6362);
@@ -5558,8 +5521,6 @@ const trust_1 = __nccwpck_require__(6479);
 const baseline_1 = __nccwpck_require__(1333);
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
-/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
-const DNS_READY_NAME = 'github.com';
 /**
  * Create /var/log/safer-runner directory with proper permissions
  * This directory will contain all safer-runner log files (DNS, iptables, sudo)
@@ -5641,7 +5602,7 @@ async function applyDockerPolicy(inputs, ops = { disableDockerForRunner: docker_
     }
     return { requested: docker, access, state };
 }
-async function runSetup(inputs) {
+async function runSetup(inputs, h = host_1.realHost) {
     const { mode } = inputs;
     core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
     if (inJobContainer()) {
@@ -5692,10 +5653,10 @@ async function runSetup(inputs) {
     }
     const { dnsServers } = inputs;
     // 2. Install (parallel - both are network-bound)
-    await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), (0, coredns_1.installCoreDns)(), (0, mitmproxy_1.installMitmproxy)()]));
+    await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), coredns.install(h), (0, mitmproxy_1.installMitmproxy)()]));
     // 3. Users, addon, policy, CA
     await createLogDirectory();
-    const dnsUser = await (0, coredns_1.createRandomDNSUser)();
+    const dnsUser = await coredns.createUser(h);
     const proxyUid = await (0, mitmproxy_1.createProxyUser)();
     core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
     await (0, mitmproxy_1.installAddon)();
@@ -5710,19 +5671,20 @@ async function runSetup(inputs) {
         (0, trust_1.exportTrustEnv)();
         await (0, trust_1.installJavaTrust)();
     });
-    // 6. DNS
-    await timed('Configure DNS', async () => {
-        // same names as the proxy: DNS and the proxy can never disagree about what is allowed
-        await (0, coredns_1.writeCorefile)({
+    // 6. DNS: CoreDNS answering first, then the system resolver points at it
+    // (`resolver` is the firewall step's precondition once iptables takes tokens)
+    const resolver = await timed('Configure DNS', async () => {
+        const dns = await coredns.start(h, coredns.render({
             mode,
+            // same names as the proxy: DNS and the proxy can never disagree about what is allowed
             allow: [...policy.allow, ...policy.passthrough],
             deny: policy.deny,
             upstreams: dnsServers,
-            hosts: await (0, coredns_1.localHosts)()
-        });
-        await (0, coredns_1.startCoreDns)(dnsUser.username, DNS_READY_NAME);
-        await (0, coredns_1.setupDNSConfig)();
-        await (0, coredns_1.restartResolved)();
+            // read before the cutover, while the VM's hostname still resolves the original way
+            hosts: await coredns.localHosts(),
+            user: dnsUser.username
+        }));
+        return coredns.cutover(h, dns);
     });
     // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
     // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
@@ -5992,13 +5954,60 @@ function withoutSelfTests(records, offsets, window) {
 
 /***/ }),
 
+/***/ 3087:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * Writes the paths a service renders (FileSpec), as root, in the order given.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.writeFiles = writeFiles;
+exports.sudoWrite = sudoWrite;
+const host_1 = __nccwpck_require__(7020);
+/**
+ * Content goes in before owner and mode are set, so a file written here is briefly readable as
+ * root's default. Fine for world-readable files; a restricted one (the baseline, sudoers) must be
+ * its own named step that sets owner and mode first (touch, chown, chmod, then tee).
+ */
+function assertWorldReadable(f) {
+    if (f.kind === 'file' && (parseInt(f.mode, 8) & 0o004) === 0) {
+        throw new Error(`writeFiles: ${f.path} (${f.mode}) is restricted: write it in a named step, not as an inert file`);
+    }
+}
+async function writeFiles(h, files) {
+    files.forEach(assertWorldReadable);
+    for (const f of files) {
+        if (f.kind === 'dir') {
+            const [user, group] = f.owner.split(':');
+            await (0, host_1.sudo)(['install', '-d', '-m', f.mode, '-o', user, '-g', group, f.path], {}, h);
+            continue;
+        }
+        if (f.kind === 'file')
+            await (0, host_1.sudo)(['tee', f.path], { input: Buffer.from(f.content), silent: true }, h);
+        else
+            await (0, host_1.sudo)(['touch', f.path], {}, h);
+        await (0, host_1.sudo)(['chown', f.owner, f.path], {}, h);
+        await (0, host_1.sudo)(['chmod', f.mode, f.path], {}, h);
+    }
+}
+/** One root-owned file on the runner: content first, then owner and mode. */
+async function sudoWrite(file, content, mode, owner = 'root:root') {
+    await writeFiles(host_1.realHost, [{ kind: 'file', path: file, content, mode, owner }]);
+}
+
+
+/***/ }),
+
 /***/ 7020:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
 /**
- * Privileged-command helpers shared by the services (sudo, root-owned file writes, timing).
+ * The host port: every command the action runs on the runner goes through a Host, so a service's
+ * effects can be driven by a fake in tests. Plus the privileged-command helpers built on it.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -6034,18 +6043,19 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.realHost = void 0;
 exports.sudo = sudo;
-exports.sudoWrite = sudoWrite;
 exports.timed = timed;
+exports.sleep = sleep;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
-async function sudo(args, opts = {}) {
-    return exec.exec('sudo', args, opts);
-}
-async function sudoWrite(file, content, mode, owner = 'root:root') {
-    await sudo(['tee', file], { input: Buffer.from(content), silent: true });
-    await sudo(['chown', owner, file]);
-    await sudo(['chmod', mode, file]);
+/** The runner itself. */
+exports.realHost = {
+    run: (cmd, args, opts) => exec.exec(cmd, args, opts),
+    output: (cmd, args, opts) => exec.getExecOutput(cmd, args, opts)
+};
+async function sudo(args, opts = {}, h = exports.realHost) {
+    return h.run('sudo', args, opts);
 }
 async function timed(label, fn) {
     const t0 = Date.now();
@@ -6055,6 +6065,9 @@ async function timed(label, fn) {
     finally {
         core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     }
+}
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
 }
 
 
@@ -6105,7 +6118,6 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.downloadVerified = downloadVerified;
 exports.installPinnedBinary = installPinnedBinary;
 const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
@@ -6144,7 +6156,7 @@ async function downloadVerified(url, sha256, dest, label) {
  * Install one binary from a pinned, sha256-verified release tarball, root-owned 0755.
  * Skipped if the destination already exists (a re-run on the same VM).
  */
-async function installPinnedBinary(url, sha256, member, dest, label) {
+async function installPinnedBinary(url, sha256, member, dest, label, h = host_1.realHost) {
     if (fs.existsSync(dest)) {
         core.info(`${label} already installed at ${dest}`);
         return;
@@ -6153,11 +6165,63 @@ async function installPinnedBinary(url, sha256, member, dest, label) {
     const tarball = path.join(tmp, `${label}.tar.gz`);
     await downloadVerified(url, sha256, tarball, label);
     await (0, host_1.timed)(`extract ${label}`, async () => {
-        await exec.exec('tar', ['-xzf', tarball, '-C', tmp, member]);
-        await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)]);
-        await (0, host_1.sudo)(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest]);
+        await h.run('tar', ['-xzf', tarball, '-C', tmp, member]);
+        await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)], {}, h);
+        await (0, host_1.sudo)(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest], {}, h);
     });
     fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+
+/***/ }),
+
+/***/ 812:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * Transient systemd units: outside the runner's process tree (the runner's orphan cleanup
+ * would otherwise kill them before "Complete job"), restarted on any exit, sandboxed.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HARDENING = void 0;
+exports.transientUnitArgs = transientUnitArgs;
+exports.startUnit = startUnit;
+const host_1 = __nccwpck_require__(7020);
+/** Sandboxing every unit gets; a service puts it among its own props. */
+exports.HARDENING = ['NoNewPrivileges=yes', 'PrivateTmp=yes', 'ProtectHome=yes', 'ProtectSystem=strict'];
+function transientUnitArgs(u) {
+    return [
+        'systemd-run',
+        `--unit=${u.unit}`,
+        `--description=${u.description}`,
+        `--uid=${u.user}`,
+        `--gid=${u.user}`,
+        '-p',
+        'Restart=always',
+        '-p',
+        'RestartSec=1',
+        ...u.props.flatMap(p => ['-p', p]),
+        ...Object.entries(u.env ?? {}).map(([k, v]) => `--setenv=${k}=${v}`),
+        ...u.argv
+    ];
+}
+/** (Re)start the unit and wait until it is ready; on a timeout, print diagnostics and throw. */
+async function startUnit(h, u, r) {
+    const quiet = { ignoreReturnCode: true, silent: true };
+    await (0, host_1.sudo)(['systemctl', 'stop', u.unit], quiet, h);
+    await (0, host_1.sudo)(['systemctl', 'reset-failed', u.unit], quiet, h);
+    await (0, host_1.sudo)(transientUnitArgs(u), {}, h);
+    const deadline = Date.now() + r.timeoutMs;
+    while (Date.now() < deadline) {
+        if (await r.ready())
+            return;
+        await (0, host_1.sleep)(r.pollMs);
+    }
+    for (const d of r.diagnostics)
+        await (0, host_1.sudo)(d, { ignoreReturnCode: true }, h);
+    throw r.timeoutError();
 }
 
 

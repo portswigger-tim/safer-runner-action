@@ -15,14 +15,40 @@ import * as crypto from 'crypto';
 import * as dns from 'dns';
 import * as fs from 'fs';
 import * as os from 'os';
-import * as exec from '@actions/exec';
-import { COREDNS_BIN, COREDNS_SHA256, COREDNS_URL, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from '../../constants';
-import { buildCorefile, DNS_LISTEN, parseHostsNames, type CorefileOptions, type LocalHosts } from './config';
-import { sudo } from '../../system/host';
+import { COREDNS_BIN, COREDNS_SHA256, COREDNS_URL, DNS_LOG, DNS_UNIT } from '../../constants';
+import { writeFiles } from '../../system/files';
+import { realHost, sudo, type Host } from '../../system/host';
 import { installPinnedBinary } from '../../system/install';
+import type { Rendered } from '../../system/types';
+import { startUnit } from '../../system/unit';
+import { DNS_LISTEN, parseHostsNames, type LocalHosts } from './config';
 
-export async function installCoreDns(): Promise<void> {
-  await installPinnedBinary(COREDNS_URL, COREDNS_SHA256, 'coredns', COREDNS_BIN, 'coredns');
+export { render, type CoreDnsFacts } from './config';
+
+export async function install(h: Host = realHost): Promise<void> {
+  await installPinnedBinary(COREDNS_URL, COREDNS_SHA256, 'coredns', COREDNS_BIN, 'coredns', h);
+}
+
+export interface DnsUser {
+  username: string;
+  uid: number;
+}
+
+/** The resolver's own system user: a random name and uid, no login, no home. */
+export async function createUser(h: Host): Promise<DnsUser> {
+  // Generate random username with 16 hex characters
+  const randomHex = crypto.randomBytes(8).toString('hex');
+  const username = `dns-${randomHex}`;
+
+  // Generate random UID in safe range (60000-65000 to avoid conflicts)
+  const uid = 60000 + Math.floor(Math.random() * 5000);
+
+  await sudo(
+    ['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', '--uid', uid.toString(), username],
+    {},
+    h
+  );
+  return { username, uid };
 }
 
 export const HOSTS_FILE = '/etc/hosts';
@@ -58,60 +84,6 @@ export async function localHosts(): Promise<LocalHosts> {
   return { file: HOSTS_FILE, names, inline };
 }
 
-export async function writeCorefile(o: CorefileOptions): Promise<void> {
-  const corefile = buildCorefile(o);
-  await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', ETC_DIR]);
-  await sudo(['tee', COREFILE], { input: Buffer.from(corefile), silent: true });
-  await sudo(['chown', 'root:root', COREFILE]);
-  await sudo(['chmod', '0644', COREFILE]);
-}
-
-/**
- * systemd-run: outside the runner's process tree (its orphan cleanup would kill it), restarted
- * on any exit, as the random DNS user with only CAP_NET_BIND_SERVICE (for :53). stdout - the
- * `log` plugin - is appended by systemd to the world-readable DNS log the report reads.
- */
-export function dnsSystemdRunArgs(dnsUser: string): string[] {
-  return [
-    'systemd-run',
-    `--unit=${DNS_UNIT}`,
-    '--description=safer-runner DNS resolver (CoreDNS)',
-    `--uid=${dnsUser}`,
-    `--gid=${dnsUser}`,
-    '-p',
-    'Restart=always',
-    '-p',
-    'RestartSec=1',
-    '-p',
-    'AmbientCapabilities=CAP_NET_BIND_SERVICE',
-    '-p',
-    'CapabilityBoundingSet=CAP_NET_BIND_SERVICE',
-    '-p',
-    'NoNewPrivileges=yes',
-    '-p',
-    'PrivateTmp=yes',
-    '-p',
-    'ProtectHome=yes',
-    '-p',
-    'ProtectSystem=strict',
-    '-p',
-    `StandardOutput=append:${DNS_LOG}`,
-    '-p',
-    `StandardError=append:${DNS_LOG}`,
-    COREDNS_BIN,
-    '-conf',
-    COREFILE
-  ];
-}
-
-export async function dumpDnsDiagnostics(): Promise<void> {
-  const opts = { ignoreReturnCode: true };
-  await sudo(['systemctl', 'status', DNS_UNIT, '--no-pager', '-l'], opts);
-  await sudo(['journalctl', '-u', DNS_UNIT, '--no-pager', '-n', '30'], opts);
-  await sudo(['tail', '-n', '30', DNS_LOG], opts);
-  await sudo(['ss', '-lntup', 'sport = :53'], opts);
-}
-
 /** Resolve `name` (A) against our resolver. Returns 'ok', 'NXDOMAIN' or the error code. */
 export async function probe(name: string, timeoutMs = 3000): Promise<string> {
   const r = new dns.promises.Resolver({ timeout: timeoutMs, tries: 1 });
@@ -125,81 +97,54 @@ export async function probe(name: string, timeoutMs = 3000): Promise<string> {
   }
 }
 
-/**
- * (Re)start CoreDNS and wait until it answers. The log file is pre-created 0644 root-owned:
- * systemd opens it as root and appends, so the mode sticks and the runner can read it.
- */
-export async function startCoreDns(dnsUser: string, readinessName: string, timeoutMs = 20000): Promise<void> {
-  await sudo(['touch', DNS_LOG]);
-  await sudo(['chown', 'root:root', DNS_LOG]);
-  await sudo(['chmod', '0644', DNS_LOG]);
-  await sudo(['systemctl', 'stop', DNS_UNIT], { ignoreReturnCode: true, silent: true });
-  await sudo(['systemctl', 'reset-failed', DNS_UNIT], { ignoreReturnCode: true, silent: true });
-  await sudo(dnsSystemdRunArgs(dnsUser));
+declare const dnsReady: unique symbol;
+/** CoreDNS is up and answering. Minted only by start(). */
+export type DnsReady = { readonly [dnsReady]: true };
 
-  const deadline = Date.now() + timeoutMs;
+declare const resolverOn: unique symbol;
+/** The system resolver points at CoreDNS. Minted only by cutover(). */
+export type ResolverOn = { readonly [resolverOn]: true };
+
+/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
+export const READY_NAME = 'github.com';
+const READY_TIMEOUT_MS = 20000;
+
+/** (Re)start CoreDNS with its rendered files and wait until it answers. */
+export async function start(h: Host, r: Rendered): Promise<DnsReady> {
+  await writeFiles(h, r.inert);
   let last = '';
-  while (Date.now() < deadline) {
-    last = await probe(readinessName, 2000);
-    if (last === 'ok') {
-      core.info(`✅ CoreDNS up on ${DNS_LISTEN}:53 (${readinessName} resolved)`);
-      return;
-    }
-    await new Promise(r => setTimeout(r, 300));
-  }
-  await dumpDnsDiagnostics();
-  throw new Error(`CoreDNS did not answer for ${readinessName} within ${timeoutMs / 1000}s (last: ${last})`);
-}
-
-export interface DnsUser {
-  username: string;
-  uid: number;
-}
-
-export async function createRandomDNSUser(): Promise<DnsUser> {
-  // Generate random username with 16 hex characters
-  const randomHex = crypto.randomBytes(8).toString('hex');
-  const username = `dns-${randomHex}`;
-
-  // Generate random UID in safe range (60000-65000 to avoid conflicts)
-  const uid = 60000 + Math.floor(Math.random() * 5000);
-
-  // Create system user with no login, no home directory
-  await exec.exec('sudo', [
-    'useradd',
-    '--system',
-    '--no-create-home',
-    '--shell',
-    '/usr/sbin/nologin',
-    '--uid',
-    uid.toString(),
-    username
-  ]);
-
-  return { username, uid };
-}
-
-export async function setupDNSConfig(): Promise<void> {
-  // Configure systemd-resolved to use our DNS server
-  await exec.exec('sudo', ['mkdir', '-p', '/etc/systemd/resolved.conf.d']);
-
-  const resolvedConfig = `[Resolve]
-DNS=127.0.0.1
-DNSSEC=yes
-DNSStubListener=no`;
-
-  await exec.exec('sudo', ['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'], {
-    input: Buffer.from(resolvedConfig)
+  await startUnit(h, r.unit, {
+    ready: async () => (last = await probe(READY_NAME, 2000)) === 'ok',
+    pollMs: 300,
+    timeoutMs: READY_TIMEOUT_MS,
+    diagnostics: [
+      ['systemctl', 'status', DNS_UNIT, '--no-pager', '-l'],
+      ['journalctl', '-u', DNS_UNIT, '--no-pager', '-n', '30'],
+      ['tail', '-n', '30', DNS_LOG],
+      ['ss', '-lntup', 'sport = :53']
+    ],
+    timeoutError: () =>
+      new Error(`CoreDNS did not answer for ${READY_NAME} within ${READY_TIMEOUT_MS / 1000}s (last: ${last})`)
   });
-
-  // Update resolv.conf to use localhost
-  await exec.exec('sudo', ['unlink', '/etc/resolv.conf']);
-  await exec.exec('sudo', ['tee', '/etc/resolv.conf'], {
-    input: Buffer.from('nameserver 127.0.0.1\n')
-  });
+  core.info(`✅ CoreDNS up on ${DNS_LISTEN}:53 (${READY_NAME} resolved)`);
+  return Object.freeze({}) as DnsReady;
 }
 
-/** Apply the resolved.conf drop-in written by setupDNSConfig (releases its stub listener). */
-export async function restartResolved(): Promise<void> {
-  await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
+/**
+ * Point the system resolver at CoreDNS: a systemd-resolved drop-in (no stub listener, CoreDNS as
+ * its server), resolv.conf replaced, resolved restarted. Only once CoreDNS answers.
+ */
+export async function cutover(h: Host, _dns: DnsReady): Promise<ResolverOn> {
+  await sudo(['mkdir', '-p', '/etc/systemd/resolved.conf.d'], {}, h);
+  await sudo(
+    ['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'],
+    {
+      input: Buffer.from('[Resolve]\nDNS=127.0.0.1\nDNSSEC=yes\nDNSStubListener=no')
+    },
+    h
+  );
+  await sudo(['unlink', '/etc/resolv.conf'], {}, h);
+  await sudo(['tee', '/etc/resolv.conf'], { input: Buffer.from('nameserver 127.0.0.1\n') }, h);
+  await sudo(['systemctl', 'restart', 'systemd-resolved'], {}, h);
+  return Object.freeze({}) as ResolverOn;
 }

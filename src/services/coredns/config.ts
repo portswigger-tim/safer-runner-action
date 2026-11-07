@@ -20,7 +20,10 @@
  */
 
 import * as net from 'net';
+import { COREDNS_BIN, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from '../../constants';
 import { validatePattern, type Mode } from '../../policy';
+import type { Rendered } from '../../system/types';
+import { HARDENING } from '../../system/unit';
 
 export const DNS_LISTEN = '127.0.0.1';
 /** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
@@ -173,4 +176,37 @@ export function buildCorefile(o: CorefileOptions): string {
         ].join('\n')
       : forwardBlock('WOULD_BLOCK', o.upstreams);
   return `${header}${forwardBlock('ALLOW', o.upstreams, view, o.hosts)}\n${deny}\n`;
+}
+
+export interface CoreDnsFacts extends CorefileOptions {
+  /** the resolver's own (random) system user */
+  user: string;
+}
+
+/**
+ * Everything CoreDNS needs on disk, and its unit: as the DNS user with only CAP_NET_BIND_SERVICE
+ * (for :53). stdout - the `log` plugin - is appended by systemd to the world-readable DNS log the
+ * report reads; the log is pre-created root-owned 0644, and systemd's append keeps that mode.
+ */
+export function render(f: CoreDnsFacts): Rendered {
+  return {
+    inert: [
+      { kind: 'dir', path: ETC_DIR, mode: '0755', owner: 'root:root' },
+      { kind: 'file', path: COREFILE, content: buildCorefile(f), mode: '0644', owner: 'root:root' },
+      { kind: 'touch', path: DNS_LOG, mode: '0644', owner: 'root:root' }
+    ],
+    unit: {
+      unit: DNS_UNIT,
+      description: 'safer-runner DNS resolver (CoreDNS)',
+      user: f.user,
+      props: [
+        'AmbientCapabilities=CAP_NET_BIND_SERVICE',
+        'CapabilityBoundingSet=CAP_NET_BIND_SERVICE',
+        ...HARDENING,
+        `StandardOutput=append:${DNS_LOG}`,
+        `StandardError=append:${DNS_LOG}`
+      ],
+      argv: [COREDNS_BIN, '-conf', COREFILE]
+    }
+  };
 }

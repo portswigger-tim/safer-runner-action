@@ -3,11 +3,10 @@
  */
 
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { sudo, timed } from './host';
+import { realHost, sudo, timed, type Host } from './host';
 
 /**
  * Download a pinned release artefact and verify its sha256 before anything touches it
@@ -46,7 +45,8 @@ export async function installPinnedBinary(
   sha256: string,
   member: string,
   dest: string,
-  label: string
+  label: string,
+  h: Host = realHost
 ): Promise<void> {
   if (fs.existsSync(dest)) {
     core.info(`${label} already installed at ${dest}`);
@@ -56,9 +56,9 @@ export async function installPinnedBinary(
   const tarball = path.join(tmp, `${label}.tar.gz`);
   await downloadVerified(url, sha256, tarball, label);
   await timed(`extract ${label}`, async () => {
-    await exec.exec('tar', ['-xzf', tarball, '-C', tmp, member]);
-    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)]);
-    await sudo(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest]);
+    await h.run('tar', ['-xzf', tarball, '-C', tmp, member]);
+    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)], {}, h);
+    await sudo(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest], {}, h);
   });
   fs.rmSync(tmp, { recursive: true, force: true });
 }
