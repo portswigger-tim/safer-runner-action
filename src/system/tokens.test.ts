@@ -12,7 +12,11 @@ const SRC = path.join(__dirname, '..');
 /** token -> the file that declares and mints it, and the orchestration invariants that check its order */
 const TOKENS: Record<string, { owner: string; invariants: string[] }> = {
   DnsReady: { owner: 'services/coredns/index.ts', invariants: ['L11'] },
-  ResolverOn: { owner: 'services/coredns/index.ts', invariants: ['L11'] }
+  ResolverOn: { owner: 'services/coredns/index.ts', invariants: ['L11'] },
+  ProxyConfigWritten: { owner: 'services/mitmproxy/index.ts', invariants: ['L6', 'L7'] },
+  CaReady: { owner: 'services/mitmproxy/ca.ts', invariants: ['L8'] },
+  ProxyReady: { owner: 'services/mitmproxy/index.ts', invariants: ['L9'] },
+  TrustInstalled: { owner: 'services/mitmproxy/trust.ts', invariants: ['L10'] }
 };
 
 function sources(dir: string): string[] {

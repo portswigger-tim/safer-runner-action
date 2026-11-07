@@ -2,13 +2,22 @@
  * v2 CA trust injection (docs/DESIGN-v2.md section 5). Trust is not one store: the system
  * bundle covers OpenSSL/GnuTLS consumers (curl, git, python ssl, .NET), Node and several
  * language ecosystems need environment variables, and Java has its own keystores.
+ *
+ * This changes HOST-GLOBAL trust: the system store, every JDK keystore present, and variables
+ * exported to every later step. Its only purpose is the proxy's interception, so it lives with
+ * the proxy, as a named step of its own (distributeTrust).
  */
 
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CA_BUNDLE, CA_CERT_FILE, SYSTEM_CA_FILE } from '../../constants';
+import { sudo, type Host } from '../../system/host';
+import type { ProxyReady } from '.';
+
+declare const trustInstalled: unique symbol;
+/** Clients on the runner trust the proxy's CA. Minted only by distributeTrust(). */
+export type TrustInstalled = { readonly [trustInstalled]: true };
 
 const JAVA_ALIAS = 'safer-runner-ca';
 
@@ -29,9 +38,9 @@ export function trustEnv(): Record<string, string> {
   };
 }
 
-export async function installSystemTrust(): Promise<void> {
-  await exec.exec('sudo', ['install', '-m', '0644', '-o', 'root', '-g', 'root', CA_CERT_FILE, SYSTEM_CA_FILE]);
-  await exec.exec('sudo', ['update-ca-certificates'], { silent: true });
+async function installSystemTrust(h: Host): Promise<void> {
+  await sudo(['install', '-m', '0644', '-o', 'root', '-g', 'root', CA_CERT_FILE, SYSTEM_CA_FILE], {}, h);
+  await sudo(['update-ca-certificates'], { silent: true }, h);
   const bundle = fs.readFileSync(CA_BUNDLE, 'utf8');
   const ca = fs.readFileSync(CA_CERT_FILE, 'utf8').trim();
   if (!bundle.includes(ca.split('\n').slice(1, 3).join('\n'))) {
@@ -39,7 +48,7 @@ export async function installSystemTrust(): Promise<void> {
   }
 }
 
-export function exportTrustEnv(): void {
+function exportTrustEnv(): void {
   for (const [k, v] of Object.entries(trustEnv())) {
     core.exportVariable(k, v);
   }
@@ -66,7 +75,7 @@ export function cacertsPath(home: string): string | null {
  * Import the CA into the cacerts of every JDK present now. JDKs installed later (e.g. by
  * actions/setup-java) are not covered - a documented gap.
  */
-export async function installJavaTrust(): Promise<string[]> {
+async function installJavaTrust(h: Host): Promise<string[]> {
   const done = new Set<string>();
   for (const home of javaHomes()) {
     const store = cacertsPath(home);
@@ -76,16 +85,12 @@ export async function installJavaTrust(): Promise<string[]> {
     if (done.has(real)) continue;
     done.add(real);
     // -delete first so a re-run doesn't fail on an existing alias
-    await exec.exec(
-      'sudo',
+    await sudo(
       [keytool, '-delete', '-noprompt', '-keystore', real, '-storepass', 'changeit', '-alias', JAVA_ALIAS],
-      {
-        ignoreReturnCode: true,
-        silent: true
-      }
+      { ignoreReturnCode: true, silent: true },
+      h
     );
-    const rc = await exec.exec(
-      'sudo',
+    const rc = await sudo(
       [
         keytool,
         '-importcert',
@@ -99,7 +104,8 @@ export async function installJavaTrust(): Promise<string[]> {
         '-file',
         CA_CERT_FILE
       ],
-      { ignoreReturnCode: true, silent: true }
+      { ignoreReturnCode: true, silent: true },
+      h
     );
     if (rc === 0) {
       core.info(`Java: CA imported into ${real}`);
@@ -109,4 +115,16 @@ export async function installJavaTrust(): Promise<string[]> {
     }
   }
   return Array.from(done);
+}
+
+/**
+ * Make clients on the runner trust the proxy's CA: the system store (checked to contain it),
+ * the exported variables, every JDK present now. After the proxy is up, before any traffic is
+ * forced through it (the firewall step) and before dockerd is restarted to reload its roots.
+ */
+export async function distributeTrust(h: Host, _proxy: ProxyReady): Promise<TrustInstalled> {
+  await installSystemTrust(h);
+  exportTrustEnv();
+  await installJavaTrust(h);
+  return Object.freeze({}) as TrustInstalled;
 }

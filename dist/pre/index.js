@@ -3178,14 +3178,15 @@ async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
 
 /***/ }),
 
-/***/ 2145:
+/***/ 1345:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
 /**
- * v2 proxy lifecycle: install the pinned mitmdump, create the proxy user and its ephemeral
- * CA, write the policy, and run mitmdump under systemd outside the runner's process tree.
+ * The proxy's per-run CA: its TLS identity for intercepted connections. Generated as the proxy
+ * user straight into its tmpfs confdir; the private key is never written anywhere else, and
+ * never through writeFiles (it is not an inert file).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -3221,102 +3222,21 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.PROXY_PORT_BAND = void 0;
-exports.actionRoot = actionRoot;
-exports.allocateProxyPorts = allocateProxyPorts;
-exports.installMitmproxy = installMitmproxy;
-exports.createProxyUser = createProxyUser;
-exports.installAddon = installAddon;
-exports.writePolicy = writePolicy;
 exports.generateCa = generateCa;
-exports.installTeardownHelper = installTeardownHelper;
-exports.mitmdumpArgs = mitmdumpArgs;
-exports.systemdRunArgs = systemdRunArgs;
-exports.findStartRecord = findStartRecord;
-exports.dumpProxyDiagnostics = dumpProxyDiagnostics;
-exports.startProxy = startProxy;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const fs = __importStar(__nccwpck_require__(9896));
-const net = __importStar(__nccwpck_require__(9278));
+exports.teardownHelper = teardownHelper;
+exports.installTeardown = installTeardown;
 const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
 const files_1 = __nccwpck_require__(3087);
 const host_1 = __nccwpck_require__(7020);
-const install_1 = __nccwpck_require__(1671);
-/**
- * Root of the checked-out action (where proxy/policy.py lives). Derived from the running
- * script (<action>/dist/<entry>/index.js) rather than __dirname so the bundler can't
- * rewrite or relocate it.
- */
-function actionRoot() {
-    const script = process.argv[1] || '';
-    return path.resolve(path.dirname(script), '..', '..');
-}
-/**
- * Free-port band for the proxy listeners: above the registered ports dev servers favour
- * (3000, 5000, 8080, 9000...) and below Linux's ephemeral range (32768-60999), so an outgoing
- * connection's local port can never be the one we picked.
- */
-exports.PROXY_PORT_BAND = [20000, 32766];
-function canBind(port) {
-    return new Promise(resolve => {
-        const srv = net.createServer();
-        srv.once('error', () => resolve(false));
-        srv.listen({ host: constants_1.PROXY_LISTEN_HOST, port, exclusive: true }, () => srv.close(() => resolve(true)));
-    });
-}
-/**
- * Pick the proxy's two listener ports: host = P, container = P + 1, a random pair in
- * PROXY_PORT_BAND where both are free right now
- * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
- */
-async function allocateProxyPorts(probe = canBind, random = Math.random) {
-    const [lo, hi] = exports.PROXY_PORT_BAND;
-    for (let i = 0; i < 50; i++) {
-        const p = lo + Math.floor(random() * (hi - lo));
-        if ((await probe(p)) && (await probe(p + 1)))
-            return { port: p, containerPort: p + 1 };
-    }
-    throw new Error(`no free pair of loopback ports found in ${lo}-${hi + 1}`);
-}
-/** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
-async function installMitmproxy() {
-    await (0, install_1.installPinnedBinary)(constants_1.MITMPROXY_URL, constants_1.MITMPROXY_SHA256, 'mitmdump', constants_1.MITMDUMP_BIN, 'mitmproxy');
-}
-/** Create the proxy system user (idempotent). Returns its uid. */
-async function createProxyUser() {
-    const exists = await exec.exec('id', ['-u', constants_1.PROXY_USER], { ignoreReturnCode: true, silent: true });
-    if (exists !== 0) {
-        await (0, host_1.sudo)(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', constants_1.PROXY_USER]);
-    }
-    const { stdout } = await exec.getExecOutput('id', ['-u', constants_1.PROXY_USER], { silent: true });
-    return parseInt(stdout.trim(), 10);
-}
-/** Copy the addon out of the (runner-writable) action checkout into a root-owned directory. */
-async function installAddon() {
-    const src = path.join(actionRoot(), 'proxy');
-    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ADDON_DIR]);
-    for (const f of constants_1.ADDON_FILES) {
-        await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', path.join(src, f), path.join(constants_1.ADDON_DIR, f)]);
-    }
-}
-async function writePolicy(config) {
-    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
-    await (0, files_1.sudoWrite)(constants_1.POLICY_FILE, JSON.stringify(config, null, 2) + '\n', '0644');
-    // The flow log is written by the proxy user and read (without sudo) by the post step.
-    await (0, host_1.sudo)(['touch', constants_1.FLOW_LOG]);
-    await (0, host_1.sudo)(['chown', `${constants_1.PROXY_USER}:${constants_1.PROXY_USER}`, constants_1.FLOW_LOG]);
-    await (0, host_1.sudo)(['chmod', '0644', constants_1.FLOW_LOG]);
-}
 /**
  * Generate the per-run CA: RSA-2048 (broadest client compatibility), 3-day validity, key
  * only ever on tmpfs, 0600, owned by the proxy user. mitmproxy mints leaf certs from it.
  * Publishes the public certificate to CA_CERT_FILE.
  */
-async function generateCa() {
-    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(constants_1.PROXY_CONF_DIR)]);
-    await (0, host_1.sudo)(['install', '-d', '-m', '0700', '-o', constants_1.PROXY_USER, '-g', constants_1.PROXY_USER, constants_1.PROXY_CONF_DIR]);
+async function generateCa(h) {
+    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(constants_1.PROXY_CONF_DIR)], {}, h);
+    await (0, host_1.sudo)(['install', '-d', '-m', '0700', '-o', constants_1.PROXY_USER, '-g', constants_1.PROXY_USER, constants_1.PROXY_CONF_DIR], {}, h);
     const key = `${constants_1.PROXY_CONF_DIR}/ca-key.pem`;
     const cert = `${constants_1.PROXY_CONF_DIR}/ca-cert.pem`;
     const subject = `/O=safer-runner/CN=safer-runner ephemeral CA ${process.env.GITHUB_RUN_ID || ''}`.trim();
@@ -3334,23 +3254,45 @@ async function generateCa() {
         cert,
         subject,
         constants_1.PROXY_CA_KEY_FILE
-    ]);
+    ], {}, h);
     // mitmproxy looks for <confdir>/mitmproxy-ca.pem (key + cert)
-    await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', cert, constants_1.CA_CERT_FILE]);
+    await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', cert, constants_1.CA_CERT_FILE], {}, h);
+    return Object.freeze({});
 }
 /**
  * Root-owned teardown helper. The only privileged command the post step needs, so with
  * disable-sudo it is the single extra sudoers entry (exact path, no arguments).
  * Deleting the key on disk is all it does: the running proxy keeps the CA in memory so the
- * runner can still finish the job through it; the VM is destroyed afterwards.
+ * runner can still finish the job through it; the VM is destroyed afterwards. It removes
+ * exactly the key files generateCa() and mitmproxy create.
  */
-async function installTeardownHelper() {
+function teardownHelper() {
     const script = `#!/bin/sh
 # safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
 rm -f ${constants_1.PROXY_CA_KEY_FILE} ${constants_1.PROXY_CONF_DIR}/ca-key.pem ${constants_1.PROXY_CONF_DIR}/mitmproxy-ca.p12
 `;
-    await (0, files_1.sudoWrite)(constants_1.TEARDOWN_BIN, script, '0755');
+    return { kind: 'file', path: constants_1.TEARDOWN_BIN, content: script, mode: '0755', owner: 'root:root' };
 }
+async function installTeardown(h, _ca) {
+    await (0, files_1.writeFiles)(h, [teardownHelper()]);
+}
+
+
+/***/ }),
+
+/***/ 3475:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * The proxy's pure config: policy.json, the flow log, and the mitmdump unit. No I/O.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.mitmdumpArgs = mitmdumpArgs;
+exports.render = render;
+const constants_1 = __nccwpck_require__(8729);
+const unit_1 = __nccwpck_require__(812);
 function mitmdumpArgs(o) {
     return [
         constants_1.MITMDUMP_BIN,
@@ -3376,39 +3318,162 @@ function mitmdumpArgs(o) {
     ];
 }
 /**
- * systemd-run: a transient service OUTSIDE the runner's process tree (the runner's orphan
- * cleanup would otherwise kill it before "Complete job", which itself goes through the
- * proxy), restarted on any exit, sandboxed to what it needs.
+ * policy.json (read by the addon at every (re)start) and the flow log, which the proxy user
+ * writes and the post step reads without sudo. The unit runs mitmdump as the proxy user with
+ * UMask 0077, writable only where it must write: its confdir (the CA) and the flow log.
  */
-function systemdRunArgs(o) {
-    return [
-        'systemd-run',
-        `--unit=${constants_1.PROXY_UNIT}`,
-        '--description=safer-runner egress proxy',
-        `--uid=${constants_1.PROXY_USER}`,
-        `--gid=${constants_1.PROXY_USER}`,
-        '-p',
-        'Restart=always',
-        '-p',
-        'RestartSec=1',
-        '-p',
-        'UMask=0077',
-        '-p',
-        'NoNewPrivileges=yes',
-        '-p',
-        'PrivateTmp=yes',
-        '-p',
-        'ProtectHome=yes',
-        '-p',
-        'ProtectSystem=strict',
-        '-p',
-        `ReadWritePaths=${constants_1.PROXY_CONF_DIR} ${constants_1.FLOW_LOG}`,
-        '-p',
-        'LimitNOFILE=65536',
-        `--setenv=HOME=${constants_1.PROXY_CONF_DIR}`,
-        `--setenv=SAFER_RUNNER_POLICY=${constants_1.POLICY_FILE}`,
-        ...mitmdumpArgs(o)
-    ];
+function render(f) {
+    return {
+        inert: [
+            { kind: 'dir', path: constants_1.ETC_DIR, mode: '0755', owner: 'root:root' },
+            {
+                kind: 'file',
+                path: constants_1.POLICY_FILE,
+                content: JSON.stringify(f.policy, null, 2) + '\n',
+                mode: '0644',
+                owner: 'root:root'
+            },
+            { kind: 'touch', path: constants_1.FLOW_LOG, mode: '0644', owner: `${constants_1.PROXY_USER}:${constants_1.PROXY_USER}` }
+        ],
+        unit: {
+            unit: constants_1.PROXY_UNIT,
+            description: 'safer-runner egress proxy',
+            user: constants_1.PROXY_USER,
+            props: ['UMask=0077', ...unit_1.HARDENING, `ReadWritePaths=${constants_1.PROXY_CONF_DIR} ${constants_1.FLOW_LOG}`, 'LimitNOFILE=65536'],
+            env: { HOME: constants_1.PROXY_CONF_DIR, SAFER_RUNNER_POLICY: constants_1.POLICY_FILE },
+            argv: mitmdumpArgs(f.ports)
+        }
+    };
+}
+
+
+/***/ }),
+
+/***/ 2145:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 proxy lifecycle: install the pinned mitmdump, create the proxy user, copy the addon and
+ * write its config, then run mitmdump under systemd outside the runner's process tree.
+ * The CA is ./ca.ts; distributing trust in it is ./trust.ts.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.PROXY_PORT_BAND = exports.render = exports.mitmdumpArgs = void 0;
+exports.actionRoot = actionRoot;
+exports.allocateProxyPorts = allocateProxyPorts;
+exports.install = install;
+exports.ensureUser = ensureUser;
+exports.writeConfig = writeConfig;
+exports.findStartRecord = findStartRecord;
+exports.start = start;
+const core = __importStar(__nccwpck_require__(7484));
+const fs = __importStar(__nccwpck_require__(9896));
+const net = __importStar(__nccwpck_require__(9278));
+const path = __importStar(__nccwpck_require__(6928));
+const constants_1 = __nccwpck_require__(8729);
+const files_1 = __nccwpck_require__(3087);
+const host_1 = __nccwpck_require__(7020);
+const install_1 = __nccwpck_require__(1671);
+const unit_1 = __nccwpck_require__(812);
+var config_1 = __nccwpck_require__(3475);
+Object.defineProperty(exports, "mitmdumpArgs", ({ enumerable: true, get: function () { return config_1.mitmdumpArgs; } }));
+Object.defineProperty(exports, "render", ({ enumerable: true, get: function () { return config_1.render; } }));
+/**
+ * Root of the checked-out action (where proxy/policy.py lives). Derived from the running
+ * script (<action>/dist/<entry>/index.js) rather than __dirname so the bundler can't
+ * rewrite or relocate it.
+ */
+function actionRoot() {
+    const script = process.argv[1] || '';
+    return path.resolve(path.dirname(script), '..', '..');
+}
+/**
+ * Free-port band for the proxy listeners: above the registered ports dev servers favour
+ * (3000, 5000, 8080, 9000...) and below Linux's ephemeral range (32768-60999), so an outgoing
+ * connection's local port can never be the one we picked.
+ */
+exports.PROXY_PORT_BAND = [20000, 32766];
+function canBind(port) {
+    return new Promise(resolve => {
+        const srv = net.createServer();
+        srv.once('error', () => resolve(false));
+        srv.listen({ host: constants_1.PROXY_LISTEN_HOST, port, exclusive: true }, () => srv.close(() => resolve(true)));
+    });
+}
+/**
+ * Pick the proxy's two listener ports: host = P, container = P + 1, a random pair in
+ * PROXY_PORT_BAND where both are free right now
+ * (the proxy binds them seconds later; start() fails loudly if something took one meanwhile).
+ */
+async function allocateProxyPorts(probe = canBind, random = Math.random) {
+    const [lo, hi] = exports.PROXY_PORT_BAND;
+    for (let i = 0; i < 50; i++) {
+        const p = lo + Math.floor(random() * (hi - lo));
+        if ((await probe(p)) && (await probe(p + 1)))
+            return { port: p, containerPort: p + 1 };
+    }
+    throw new Error(`no free pair of loopback ports found in ${lo}-${hi + 1}`);
+}
+/** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
+async function install(h = host_1.realHost) {
+    await (0, install_1.installPinnedBinary)(constants_1.MITMPROXY_URL, constants_1.MITMPROXY_SHA256, 'mitmdump', constants_1.MITMDUMP_BIN, 'mitmproxy', h);
+}
+/** Create the proxy system user (idempotent). Returns its uid. */
+async function ensureUser(h) {
+    const exists = await h.run('id', ['-u', constants_1.PROXY_USER], { ignoreReturnCode: true, silent: true });
+    if (exists !== 0) {
+        await (0, host_1.sudo)(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', constants_1.PROXY_USER], {}, h);
+    }
+    const { stdout } = await h.output('id', ['-u', constants_1.PROXY_USER], { silent: true });
+    return parseInt(stdout.trim(), 10);
+}
+/**
+ * The addon, copied out of the (runner-writable) action checkout into a root-owned directory,
+ * and the rendered files (policy.json, the flow log).
+ */
+async function writeConfig(h, r) {
+    const src = path.join(actionRoot(), 'proxy');
+    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ADDON_DIR], {}, h);
+    for (const f of constants_1.ADDON_FILES) {
+        await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', path.join(src, f), path.join(constants_1.ADDON_DIR, f)], {}, h);
+    }
+    await (0, files_1.writeFiles)(h, r.inert);
+    return Object.freeze({});
 }
 /** Find the addon's startup record (written only after its own self-test passed). */
 function findStartRecord(flowLog) {
@@ -3427,37 +3492,30 @@ function findStartRecord(flowLog) {
     }
     return found;
 }
-async function isListening(port) {
-    const { stdout } = await exec.getExecOutput('ss', ['-Hltn', `sport = :${port}`], {
-        silent: true,
-        ignoreReturnCode: true
-    });
+async function isListening(h, port) {
+    const { stdout } = await h.output('ss', ['-Hltn', `sport = :${port}`], { silent: true, ignoreReturnCode: true });
     return stdout.includes(`${constants_1.PROXY_LISTEN_HOST}:${port}`);
 }
-async function dumpProxyDiagnostics() {
-    const opts = { ignoreReturnCode: true };
-    await (0, host_1.sudo)(['systemctl', 'status', constants_1.PROXY_UNIT, '--no-pager', '-l'], opts);
-    await (0, host_1.sudo)(['journalctl', '-u', constants_1.PROXY_UNIT, '--no-pager', '-n', '50'], opts);
-}
+const READY_TIMEOUT_MS = 90000;
 /** Start the proxy unit and wait until it listens and the policy addon reported a good start. */
-async function startProxy(o, timeoutMs = 90000) {
-    await (0, host_1.sudo)(['systemctl', 'stop', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
-    await (0, host_1.sudo)(['systemctl', 'reset-failed', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
-    await (0, host_1.sudo)(systemdRunArgs(o));
-    const deadline = Date.now() + timeoutMs;
-    await (0, host_1.timed)('proxy start', async () => {
-        while (Date.now() < deadline) {
-            const log = fs.existsSync(constants_1.FLOW_LOG) ? fs.readFileSync(constants_1.FLOW_LOG, 'utf8') : '';
-            const start = findStartRecord(log);
-            if (start && (await isListening(o.port)) && (await isListening(o.containerPort))) {
-                core.info(`✅ Proxy up (pid ${start.pid}, ${start.mode} policy loaded and self-tested)`);
-                return;
-            }
-            await new Promise(r => setTimeout(r, 500));
-        }
-        await dumpProxyDiagnostics();
-        throw new Error(`proxy did not become ready within ${timeoutMs / 1000}s`);
+async function start(h, r, ports, _config, _ca) {
+    let started = null;
+    await (0, unit_1.startUnit)(h, r.unit, {
+        ready: async () => {
+            started = findStartRecord(fs.existsSync(constants_1.FLOW_LOG) ? fs.readFileSync(constants_1.FLOW_LOG, 'utf8') : '');
+            return started !== null && (await isListening(h, ports.port)) && (await isListening(h, ports.containerPort));
+        },
+        pollMs: 500,
+        timeoutMs: READY_TIMEOUT_MS,
+        diagnostics: [
+            ['systemctl', 'status', constants_1.PROXY_UNIT, '--no-pager', '-l'],
+            ['journalctl', '-u', constants_1.PROXY_UNIT, '--no-pager', '-n', '50']
+        ],
+        timeoutError: () => new Error(`proxy did not become ready within ${READY_TIMEOUT_MS / 1000}s`)
     });
+    const s = started;
+    core.info(`✅ Proxy up (pid ${s?.pid}, ${s?.mode} policy loaded and self-tested)`);
+    return Object.freeze({});
 }
 
 
@@ -3472,6 +3530,10 @@ async function startProxy(o, timeoutMs = 90000) {
  * v2 CA trust injection (docs/DESIGN-v2.md section 5). Trust is not one store: the system
  * bundle covers OpenSSL/GnuTLS consumers (curl, git, python ssl, .NET), Node and several
  * language ecosystems need environment variables, and Java has its own keystores.
+ *
+ * This changes HOST-GLOBAL trust: the system store, every JDK keystore present, and variables
+ * exported to every later step. Its only purpose is the proxy's interception, so it lives with
+ * the proxy, as a named step of its own (distributeTrust).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -3508,16 +3570,14 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.trustEnv = trustEnv;
-exports.installSystemTrust = installSystemTrust;
-exports.exportTrustEnv = exportTrustEnv;
 exports.javaHomes = javaHomes;
 exports.cacertsPath = cacertsPath;
-exports.installJavaTrust = installJavaTrust;
+exports.distributeTrust = distributeTrust;
 const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
+const host_1 = __nccwpck_require__(7020);
 const JAVA_ALIAS = 'safer-runner-ca';
 /**
  * Environment exported to every later step via GITHUB_ENV. Set unconditionally whenever the
@@ -3535,9 +3595,9 @@ function trustEnv() {
         CURL_CA_BUNDLE: constants_1.CA_BUNDLE
     };
 }
-async function installSystemTrust() {
-    await exec.exec('sudo', ['install', '-m', '0644', '-o', 'root', '-g', 'root', constants_1.CA_CERT_FILE, constants_1.SYSTEM_CA_FILE]);
-    await exec.exec('sudo', ['update-ca-certificates'], { silent: true });
+async function installSystemTrust(h) {
+    await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', constants_1.CA_CERT_FILE, constants_1.SYSTEM_CA_FILE], {}, h);
+    await (0, host_1.sudo)(['update-ca-certificates'], { silent: true }, h);
     const bundle = fs.readFileSync(constants_1.CA_BUNDLE, 'utf8');
     const ca = fs.readFileSync(constants_1.CA_CERT_FILE, 'utf8').trim();
     if (!bundle.includes(ca.split('\n').slice(1, 3).join('\n'))) {
@@ -3569,7 +3629,7 @@ function cacertsPath(home) {
  * Import the CA into the cacerts of every JDK present now. JDKs installed later (e.g. by
  * actions/setup-java) are not covered - a documented gap.
  */
-async function installJavaTrust() {
+async function installJavaTrust(h) {
     const done = new Set();
     for (const home of javaHomes()) {
         const store = cacertsPath(home);
@@ -3581,11 +3641,8 @@ async function installJavaTrust() {
             continue;
         done.add(real);
         // -delete first so a re-run doesn't fail on an existing alias
-        await exec.exec('sudo', [keytool, '-delete', '-noprompt', '-keystore', real, '-storepass', 'changeit', '-alias', JAVA_ALIAS], {
-            ignoreReturnCode: true,
-            silent: true
-        });
-        const rc = await exec.exec('sudo', [
+        await (0, host_1.sudo)([keytool, '-delete', '-noprompt', '-keystore', real, '-storepass', 'changeit', '-alias', JAVA_ALIAS], { ignoreReturnCode: true, silent: true }, h);
+        const rc = await (0, host_1.sudo)([
             keytool,
             '-importcert',
             '-noprompt',
@@ -3597,7 +3654,7 @@ async function installJavaTrust() {
             JAVA_ALIAS,
             '-file',
             constants_1.CA_CERT_FILE
-        ], { ignoreReturnCode: true, silent: true });
+        ], { ignoreReturnCode: true, silent: true }, h);
         if (rc === 0) {
             core.info(`Java: CA imported into ${real}`);
         }
@@ -3607,6 +3664,17 @@ async function installJavaTrust() {
         }
     }
     return Array.from(done);
+}
+/**
+ * Make clients on the runner trust the proxy's CA: the system store (checked to contain it),
+ * the exported variables, every JDK present now. After the proxy is up, before any traffic is
+ * forced through it (the firewall step) and before dockerd is restarted to reload its roots.
+ */
+async function distributeTrust(h, _proxy) {
+    await installSystemTrust(h);
+    exportTrustEnv();
+    await installJavaTrust(h);
+    return Object.freeze({});
 }
 
 
@@ -3933,14 +4001,15 @@ const constants_1 = __nccwpck_require__(8729);
 const flowlog_1 = __nccwpck_require__(5422);
 const iptables_1 = __nccwpck_require__(9374);
 const policy_1 = __nccwpck_require__(2224);
-const mitmproxy_1 = __nccwpck_require__(2145);
+const mitmproxy = __importStar(__nccwpck_require__(2145));
+const ca_1 = __nccwpck_require__(1345);
+const trust_1 = __nccwpck_require__(6479);
 const selftest_1 = __nccwpck_require__(42);
 const coredns = __importStar(__nccwpck_require__(5212));
 const host_1 = __nccwpck_require__(7020);
 const github_domains_1 = __nccwpck_require__(2268);
 const sudo_1 = __nccwpck_require__(3275);
 const docker_1 = __nccwpck_require__(6362);
-const trust_1 = __nccwpck_require__(6479);
 const baseline_1 = __nccwpck_require__(1333);
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
@@ -4051,7 +4120,7 @@ async function runSetup(inputs, h = host_1.realHost) {
     }
     const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
     core.info(`sudo implementation: ${sudoFlavour}`);
-    const ports = await (0, mitmproxy_1.allocateProxyPorts)();
+    const ports = await mitmproxy.allocateProxyPorts();
     core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
     // 1. Allowlist - fetched while normal DNS and direct egress still work
     const { domains: githubDomains, source } = await (0, github_domains_1.resolveGitHubDomains)();
@@ -4076,24 +4145,21 @@ async function runSetup(inputs, h = host_1.realHost) {
     }
     const { dnsServers } = inputs;
     // 2. Install (parallel - both are network-bound)
-    await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), coredns.install(h), (0, mitmproxy_1.installMitmproxy)()]));
+    await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), coredns.install(h), mitmproxy.install(h)]));
     // 3. Users, addon, policy, CA
     await createLogDirectory();
     const dnsUser = await coredns.createUser(h);
-    const proxyUid = await (0, mitmproxy_1.createProxyUser)();
+    const proxyUid = await mitmproxy.ensureUser(h);
     core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
-    await (0, mitmproxy_1.installAddon)();
-    await (0, mitmproxy_1.writePolicy)(policy);
-    await (0, mitmproxy_1.generateCa)();
-    await (0, mitmproxy_1.installTeardownHelper)();
+    const proxyRendered = mitmproxy.render({ policy, ports });
+    const proxyConfig = await mitmproxy.writeConfig(h, proxyRendered);
+    const ca = await (0, ca_1.generateCa)(h);
+    await (0, ca_1.installTeardown)(h, ca);
     // 4. Proxy
-    await timed('Start proxy', () => (0, mitmproxy_1.startProxy)(ports));
-    // 5. Trust - before any traffic is forced through the proxy
-    await timed('Install CA trust', async () => {
-        await (0, trust_1.installSystemTrust)();
-        (0, trust_1.exportTrustEnv)();
-        await (0, trust_1.installJavaTrust)();
-    });
+    const proxy = await timed('Start proxy', () => mitmproxy.start(h, proxyRendered, ports, proxyConfig, ca));
+    // 5. Trust - before any traffic is forced through the proxy (`trust` is the dockerd restart's
+    // and the firewall step's precondition once those take tokens)
+    const trust = await timed('Install CA trust', () => (0, trust_1.distributeTrust)(h, proxy));
     // 6. DNS: CoreDNS answering first, then the system resolver points at it
     // (`resolver` is the firewall step's precondition once iptables takes tokens)
     const resolver = await timed('Configure DNS', async () => {

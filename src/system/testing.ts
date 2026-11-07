@@ -7,7 +7,10 @@
 import type { ExecOptions } from '@actions/exec';
 import type { Host } from './host';
 
-export function recordingHost(exitCode: (line: string) => number = () => 0): { host: Host; calls: string[] } {
+export function recordingHost(
+  exitCode: (line: string) => number = () => 0,
+  stdout: (line: string) => string = () => ''
+): { host: Host; calls: string[] } {
   const calls: string[] = [];
   const run = (cmd: string, args: string[], opts: ExecOptions = {}) => {
     const line = [cmd, ...args].join(' ');
@@ -20,7 +23,11 @@ export function recordingHost(exitCode: (line: string) => number = () => 0): { h
     calls,
     host: {
       run: async (cmd, args, opts) => run(cmd, args, opts),
-      output: async (cmd, args, opts) => ({ exitCode: run(cmd, args, opts), stdout: '', stderr: '' })
+      output: async (cmd, args, opts) => ({
+        exitCode: run(cmd, args, opts),
+        stdout: stdout([cmd, ...args].join(' ')),
+        stderr: ''
+      })
     }
   };
 }
