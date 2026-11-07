@@ -3091,13 +3091,13 @@ async function chainExists(h, bin, chain) {
  * Returns whether the container rules were applied. enforce fails closed instead of running
  * with containers outside the rules: it throws before anything is changed.
  */
-async function applyFirewall(h, o, hasChain) {
+async function applyFirewall(h, o) {
     let containerRules = false;
     let ip6Hook = 'FORWARD';
     if (o.containers) {
-        if (await hasChain('iptables', constants_1.DOCKER_USER_CHAIN)) {
+        if (await chainExists(h, 'iptables', constants_1.DOCKER_USER_CHAIN)) {
             containerRules = true;
-            if (await hasChain('ip6tables', constants_1.DOCKER_USER_CHAIN))
+            if (await chainExists(h, 'ip6tables', constants_1.DOCKER_USER_CHAIN))
                 ip6Hook = constants_1.DOCKER_USER_CHAIN;
         }
         else if (o.mode === 'enforce') {
@@ -3184,10 +3184,10 @@ async function logFirewall(h) {
  * and the CA is trusted, so nothing is forced through the proxy or the resolver before they
  * are ready for it.
  */
-async function configure(h, o, _after, hasChain = (bin, chain) => chainExists(h, bin, chain)) {
+async function configure(h, o, _after) {
     await setupLogging(h);
     await detectEgressInterface(h);
-    const { containerRules } = await applyFirewall(h, o, hasChain);
+    const { containerRules } = await applyFirewall(h, o);
     await killPreexistingConnections(h);
     if (containerRules)
         await flushContainerConntrack(h);

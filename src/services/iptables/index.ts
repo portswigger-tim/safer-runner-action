@@ -42,9 +42,6 @@ declare const firewallOn: unique symbol;
 /** The rules are in place: 80/443 to the proxy, :53 to CoreDNS, the rest rejected (enforce). Minted only by configure(). */
 export type FirewallOn = { readonly [firewallOn]: true };
 
-/** Whether a chain exists in the filter table (injectable for tests). */
-export type ChainCheck = (bin: 'iptables' | 'ip6tables', chain: string) => Promise<boolean>;
-
 /** Route the rules' LOG lines to the firewall log (rsyslog), readable without sudo. */
 async function setupLogging(h: Host): Promise<void> {
   await sudo(['tee', LOGGING_RULE_FILE], { input: Buffer.from(loggingRule(FIREWALL_LOG)) }, h);
@@ -136,13 +133,13 @@ async function chainExists(h: Host, bin: 'iptables' | 'ip6tables', chain: string
  * Returns whether the container rules were applied. enforce fails closed instead of running
  * with containers outside the rules: it throws before anything is changed.
  */
-async function applyFirewall(h: Host, o: FirewallOptions, hasChain: ChainCheck): Promise<{ containerRules: boolean }> {
+async function applyFirewall(h: Host, o: FirewallOptions): Promise<{ containerRules: boolean }> {
   let containerRules = false;
   let ip6Hook = 'FORWARD';
   if (o.containers) {
-    if (await hasChain('iptables', DOCKER_USER_CHAIN)) {
+    if (await chainExists(h, 'iptables', DOCKER_USER_CHAIN)) {
       containerRules = true;
-      if (await hasChain('ip6tables', DOCKER_USER_CHAIN)) ip6Hook = DOCKER_USER_CHAIN;
+      if (await chainExists(h, 'ip6tables', DOCKER_USER_CHAIN)) ip6Hook = DOCKER_USER_CHAIN;
     } else if (o.mode === 'enforce') {
       throw new Error(`${MISSING_DOCKER_USER_MESSAGE}. Use docker: stop, or mode: analyze.`);
     } else {
@@ -238,12 +235,11 @@ async function logFirewall(h: Host): Promise<void> {
 export async function configure(
   h: Host,
   o: FirewallOptions,
-  _after: { resolver: ResolverOn; trust: TrustInstalled },
-  hasChain: ChainCheck = (bin, chain) => chainExists(h, bin, chain)
+  _after: { resolver: ResolverOn; trust: TrustInstalled }
 ): Promise<{ containerRules: boolean; firewall: FirewallOn }> {
   await setupLogging(h);
   await detectEgressInterface(h);
-  const { containerRules } = await applyFirewall(h, o, hasChain);
+  const { containerRules } = await applyFirewall(h, o);
   await killPreexistingConnections(h);
   if (containerRules) await flushContainerConntrack(h);
   await logFirewall(h);
