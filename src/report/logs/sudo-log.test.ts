@@ -4,7 +4,7 @@ import {
   parseSudoLogsFromString,
   classifySudoCommands,
   type SudoCommand
-} from './sudo-parser';
+} from './sudo-log';
 
 describe('Sudo Parser', () => {
   describe('parseSudoLogLine', () => {

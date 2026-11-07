@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { parseSuggestion, suggestHttpFilter } from './suggest';
 
-const PROXY_DIR = path.join(__dirname, '..', 'proxy');
+const PROXY_DIR = path.join(__dirname, '..', '..', 'proxy');
 const ok = {
   hosts: [{ host: 'github.com', rules: [{ path: 'myorg/app/git-receive-pack', methods: ['POST'] }] }],
   requests: 1,

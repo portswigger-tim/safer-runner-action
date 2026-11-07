@@ -13,7 +13,9 @@ import {
 } from './redact';
 
 /** proxy/test-vectors.json "redact": also run by proxy/suggest_test.py (suggest.looks_encoded) */
-const VECTORS = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'proxy', 'test-vectors.json'), 'utf8')).redact;
+const VECTORS = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
+).redact;
 
 const b32 = (b: Buffer) => {
   const A = 'abcdefghijklmnopqrstuvwxyz234567';

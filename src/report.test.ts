@@ -6,7 +6,7 @@ import { parseHttpFilter } from './config/inputs';
 import { parse as parseYaml } from 'yaml';
 import { buildPolicyConfig, type PolicyConfig } from './policy';
 import { withoutSelfTests } from './setup/selftest';
-import { suggestHttpFilter } from './suggest';
+import { suggestHttpFilter } from './report';
 import {
   ADVISORY_REPORT_NOTE,
   addressClass,
