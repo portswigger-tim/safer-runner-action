@@ -4261,7 +4261,7 @@ function containerSection(containers, mode) {
     const { shown, note } = capped(containers);
     md += table(['Container', 'Allowed', enforce ? 'Blocked' : 'Would be blocked', 'Outside the proxy'], [':--', ':--', ':--', ':--'], shown.map(c => [
         c.name ? `${code(c.name)}<br><sub>${c.ip}</sub>` : code(c.ip),
-        c.allowed.map(n => (c.sniOnly.includes(n) ? `🔀 ${code(n)}` : code(n))).join(', ') || '—',
+        c.allowed.map(n => `${c.sniOnly.includes(n) ? '🔀 ' : ''}${code(blockedName(n))}`).join(', ') || '—',
         listCell(c.denied) || '—',
         c.firewall
             .slice(0, MAX_LIST)
