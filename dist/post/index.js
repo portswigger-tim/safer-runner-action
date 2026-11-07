@@ -1418,15 +1418,6 @@ exports.SystemValidator = SystemValidator;
 
 "use strict";
 
-/**
- * CoreDNS query log parser. Each server block's `log` format labels its own lines
- * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
- * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
- *
- *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
- *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
- *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
- */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -1438,186 +1429,38 @@ var __createBinding = (this && this.__createBinding) || (Object.create ? (functi
     if (k2 === undefined) k2 = k;
     o[k2] = m[k];
 }));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseDnsLog = parseDnsLog;
-exports.refusedNames = refusedNames;
-exports.readRefusedNames = readRefusedNames;
-const fs = __importStar(__nccwpck_require__(9896));
-// anchored on the plugin's own prefix: a query name can't inject a second verdict
-const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
-function parseDnsLog(text) {
-    const out = [];
-    for (const line of text.split('\n')) {
-        const m = LINE.exec(line);
-        if (!m)
-            continue;
-        out.push({
-            client: m[1],
-            verdict: m[2],
-            type: m[3],
-            name: m[4].toLowerCase().replace(/\.$/, ''),
-            rcode: m[5]
-        });
-    }
-    return out;
-}
-/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
-function refusedNames(queries) {
-    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
-}
-function readRefusedNames(file) {
-    try {
-        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
-    }
-    catch {
-        return [];
-    }
-}
+/** Moved to src/report/logs/dns-log.ts; kept so existing importers (selftest.ts) still resolve. */
+__exportStar(__nccwpck_require__(7039), exports);
 
 
 /***/ }),
 
 /***/ 7516:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
-/**
- * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
- * syslog lines copied there by rsyslog in the same format (see sudo.ts)
- */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseSudoLogLine = parseSudoLogLine;
-exports.deduplicateSudoCommands = deduplicateSudoCommands;
-exports.parseSudoLogsFromString = parseSudoLogsFromString;
-exports.classifySudoCommands = classifySudoCommands;
-/**
- * Classic sudo prefixes refused commands with a reason, e.g.
- * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
- */
-const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
-/**
- * Parse a single sudo log entry
- * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
- */
-function parseSudoLogLine(line) {
-    // Match sudo log format with timestamp
-    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
-    if (!match) {
-        return null;
-    }
-    const [, timestamp, user, targetUser, fullCommand] = match;
-    // Split command and args
-    const commandParts = fullCommand.trim().split(/\s+/);
-    const command = commandParts[0];
-    const args = commandParts.slice(1).join(' ');
-    return {
-        timestamp,
-        user,
-        targetUser,
-        command,
-        args,
-        ...(DENIED_PATTERN.test(line) && { denied: true })
-    };
-}
-/**
- * Deduplicate sudo commands by command+args combination
- */
-function deduplicateSudoCommands(commands) {
-    const seen = new Set();
-    const deduplicated = [];
-    for (const cmd of commands) {
-        const key = `${cmd.command} ${cmd.args}`;
-        if (!seen.has(key)) {
-            seen.add(key);
-            deduplicated.push(cmd);
-        }
-    }
-    return deduplicated;
-}
-/**
- * Join wrapped log entries back into single lines
- * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
- * continuation lines, which can split a command from its arguments:
- *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
- *       /etc/resolv.conf
- */
-function joinContinuationLines(content) {
-    const joined = [];
-    for (const line of content.split('\n')) {
-        if (/^\s+\S/.test(line) && joined.length > 0) {
-            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
-        }
-        else {
-            joined.push(line);
-        }
-    }
-    return joined;
-}
-/**
- * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
- * entry is matched as one line.
- */
-function parseSudoLogsFromString(content) {
-    const commands = [];
-    for (const line of joinContinuationLines(content)) {
-        const cmd = parseSudoLogLine(line);
-        if (cmd) {
-            commands.push(cmd);
-        }
-    }
-    // Deduplicate and limit to 1000 commands
-    return deduplicateSudoCommands(commands).slice(0, 1000);
-}
-/**
- * Whether a (successful) command is one of the action's own. System binaries match by
- * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
- * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
- */
-function isInternal(cmd, internal) {
-    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
-    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
-    if (match) {
-        return internal.has(withArgs(match[1]));
-    }
-    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
-}
-/** Split parsed sudo log entries by who ran them and whether they were allowed. */
-function classifySudoCommands(commands, internalCommands) {
-    const internal = new Set(internalCommands);
-    const usage = { ran: [], refused: [], internal: [] };
-    for (const cmd of commands) {
-        if (cmd.denied)
-            usage.refused.push(cmd);
-        else if (isInternal(cmd, internal))
-            usage.internal.push(cmd);
-        else
-            usage.ran.push(cmd);
-    }
-    return usage;
-}
+/** Moved to src/report/logs/sudo-log.ts; kept so existing importers (sudo.ts) still resolve. */
+__exportStar(__nccwpck_require__(8305), exports);
 
 
 /***/ }),
@@ -1953,13 +1796,10 @@ const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
 const run_1 = __nccwpck_require__(775);
 const flowlog_1 = __nccwpck_require__(5422);
-const dns_parser_1 = __nccwpck_require__(1106);
-const redact_1 = __nccwpck_require__(283);
-const report_1 = __nccwpck_require__(5444);
+const report_1 = __nccwpck_require__(4427);
 const docker_1 = __nccwpck_require__(6362);
 const mitmproxy_1 = __nccwpck_require__(2145);
 const selftest_1 = __nccwpck_require__(42);
-const suggest_1 = __nccwpck_require__(3146);
 const sudo_1 = __nccwpck_require__(3275);
 const baseline_1 = __nccwpck_require__(1333);
 const policy_1 = __nccwpck_require__(2224);
@@ -1980,7 +1820,7 @@ function readPlatformAutoAllowed() {
  */
 function suggestion(requests) {
     try {
-        return (0, suggest_1.suggestHttpFilter)(requests, path.join((0, mitmproxy_1.actionRoot)(), 'proxy'));
+        return (0, report_1.suggestHttpFilter)(requests, path.join((0, mitmproxy_1.actionRoot)(), 'proxy'));
     }
     catch (error) {
         core.warning(`No suggested http-filter: ${error}`);
@@ -2031,7 +1871,7 @@ async function run() {
         const httpFilter = (0, report_1.summarizeHttpFilter)(records, suggestion);
         const firewall = fs.existsSync(constants_1.FIREWALL_LOG) ? (0, report_1.parseFirewallLog)(fs.readFileSync(constants_1.FIREWALL_LOG, 'utf8')) : [];
         const containers = (0, report_1.summarizeContainers)(records, firewall, await (0, docker_1.containerAddresses)());
-        const dnsRefused = (0, dns_parser_1.readRefusedNames)(constants_1.DNS_LOG).filter(n => n !== marker.dnsSelfTestName);
+        const dnsRefused = (0, report_1.readRefusedNames)(constants_1.DNS_LOG).filter(n => n !== marker.dnsSelfTestName);
         let selfTests = [];
         try {
             selfTests = JSON.parse(fs.readFileSync(constants_1.SELFTEST_FILE, 'utf8'));
@@ -2045,7 +1885,7 @@ async function run() {
             core.info(`${h.verdict.padEnd(11)} ${(0, report_1.blockedName)(h.name)} conns=${h.connections} reqs=${h.requests} tries=${h.tries} ${h.reasons.join(',')}`);
         }
         for (const b of httpFilter.blocks) {
-            core.info(`${b.verdict.padEnd(11)} http-filter ${b.host} ${b.method} ${redact_1.PATH_HIDDEN} tries=${b.tries} ${b.reason}`);
+            core.info(`${b.verdict.padEnd(11)} http-filter ${b.host} ${b.method} ${report_1.PATH_HIDDEN} tries=${b.tries} ${b.reason}`);
         }
         const integrity = await validator.generateValidationDetails();
         const sudo = (0, sudo_1.readSudoUsage)(constants_1.SUDO_LOG);
@@ -2089,7 +1929,713 @@ run();
 
 /***/ }),
 
-/***/ 283:
+/***/ 7535:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/** Per-container egress (P2): the container listener's flow records and the container firewall chain. */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.summarizeContainers = summarizeContainers;
+exports.containerSection = containerSection;
+const flowlog_1 = __nccwpck_require__(5422);
+const firewall_log_1 = __nccwpck_require__(1504);
+const markdown_1 = __nccwpck_require__(4379);
+const flows_1 = __nccwpck_require__(2982);
+/**
+ * Per-container view of the flow log (records from the container listener) and of the
+ * container firewall chain (CDrop / CEgress). `names` maps container IPs to names.
+ */
+function summarizeContainers(records, firewall, names = new Map()) {
+    const by = new Map();
+    const get = (ip) => {
+        let c = by.get(ip);
+        if (!c) {
+            c = { ip, name: names.get(ip), allowed: [], denied: [], sniOnly: [], untrusted: [], firewall: [] };
+            by.set(ip, c);
+        }
+        return c;
+    };
+    for (const r of records) {
+        if (r.source !== 'container' || !r.client)
+            continue;
+        const ip = (0, flowlog_1.ipOf)(r.client);
+        if (r.ev === 'tls-client-fail') {
+            if (r.sni)
+                (0, flows_1.addUnique)(get(ip).untrusted, r.sni);
+            continue;
+        }
+        if (!flows_1.DECISIONS.has(r.ev) || !r.verdict)
+            continue;
+        const c = get(ip);
+        const name = (0, flows_1.nameOf)(r);
+        if (flows_1.DENIED.has(r.verdict))
+            (0, flows_1.addUnique)(c.denied, name);
+        else if (r.ev !== 'upstream')
+            (0, flows_1.addUnique)(c.allowed, name);
+        if (r.reason === 'container-sni-only')
+            (0, flows_1.addUnique)(c.sniOnly, name);
+    }
+    for (const e of firewall) {
+        if (!firewall_log_1.CONTAINER_PREFIXES.has(e.prefix) || !e.src)
+            continue;
+        const c = get(e.src);
+        const dst = `${e.dst}:${e.dport}`;
+        const row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
+        if (row)
+            row.n++;
+        else
+            c.firewall.push({ dst, proto: e.proto, n: 1, rejected: e.prefix === 'SaferRunner-CDrop' });
+    }
+    // a name both allowed and refused (e.g. an upstream refusal) is listed as refused only
+    for (const c of by.values())
+        c.allowed = c.allowed.filter(n => !c.denied.includes(n));
+    return Array.from(by.values()).sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
+}
+function listCell(names) {
+    if (!names.length)
+        return '';
+    const shown = names
+        .slice(0, flows_1.MAX_LIST)
+        .map(n => (0, markdown_1.code)((0, flows_1.blockedName)(n)))
+        .join(', ');
+    return names.length > flows_1.MAX_LIST ? `${shown} +${names.length - flows_1.MAX_LIST} more` : shown;
+}
+function containerSection(containers, mode) {
+    if (!containers.length)
+        return '';
+    const enforce = mode === 'enforce';
+    const untrusted = containers.filter(c => c.untrusted.length);
+    const outside = containers.reduce((a, c) => a + c.firewall.length, 0);
+    const summary = [(0, markdown_1.plural)(containers.length, 'container')];
+    if (untrusted.length)
+        summary.push(`⚠️ ${(0, markdown_1.plural)(untrusted.length, 'container')} did not trust the CA`);
+    if (outside)
+        summary.push(`${outside} outside the proxy ${enforce ? 'rejected' : 'allowed'}`);
+    let md = `<details${untrusted.length ? ' open' : ''}>\n<summary>🐳 <b>Container egress</b> — ${summary.join(' · ')}</summary>\n\n`;
+    md +=
+        '<sub>Traffic from Docker containers (service containers, `docker run`, `docker build`) goes through the same ' +
+            'proxy and DNS filter. 🔀 = checked by TLS name only, no CA needed in the container.</sub>\n\n';
+    const { shown, note } = (0, markdown_1.capped)(containers);
+    md += (0, markdown_1.table)(['Container', 'Allowed', enforce ? 'Blocked' : 'Would be blocked', 'Outside the proxy'], [':--', ':--', ':--', ':--'], shown.map(c => [
+        c.name ? `${(0, markdown_1.code)(c.name)}<br><sub>${c.ip}</sub>` : (0, markdown_1.code)(c.ip),
+        c.allowed.map(n => `${c.sniOnly.includes(n) ? '🔀 ' : ''}${(0, markdown_1.code)((0, flows_1.blockedName)(n))}`).join(', ') || '—',
+        listCell(c.denied) || '—',
+        c.firewall
+            .slice(0, flows_1.MAX_LIST)
+            .map(f => `${f.rejected ? '❌' : '⚠️'} ${(0, markdown_1.code)(f.dst)} ${f.proto}${f.n > 1 ? ` ×${f.n}` : ''}`)
+            .join('<br>') || '—'
+    ]));
+    md += note + '\n\n';
+    if (untrusted.length) {
+        md +=
+            '**TLS failed because the container did not trust the runtime CA:** ' +
+                untrusted.map(c => `${(0, markdown_1.code)(c.name ?? c.ip)} → ${listCell(c.untrusted)}`).join('; ') +
+                '. Containers need no CA, except for multi-tenant front doors (Azure ' +
+                'Storage): those stay intercepted so the Host check still stops fronting to another tenant. Reach them ' +
+                'from a step on the runner, or give the container the CA (`/etc/safer-runner/ca.pem`).\n\n';
+    }
+    return md + '</details>\n\n';
+}
+
+
+/***/ }),
+
+/***/ 2982:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * Flow log -> per-host summaries: records tied to client connections, one row per (name,
+ * denied?), and why each refused host was blocked.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FILTER_REASONS = exports.DENYLISTED = exports.NOT_LISTED = exports.DENIED = exports.DECISIONS = exports.MAX_LIST = void 0;
+exports.nameOf = nameOf;
+exports.addUnique = addUnique;
+exports.blockedName = blockedName;
+exports.summarizeFlows = summarizeFlows;
+exports.allowedRequests = allowedRequests;
+exports.categorize = categorize;
+exports.suggestedAllowlist = suggestedAllowlist;
+const flowlog_1 = __nccwpck_require__(5422);
+const policy_1 = __nccwpck_require__(2224);
+const redact_1 = __nccwpck_require__(8646);
+const RANK = { BLOCK: 4, WOULD_BLOCK: 3, PASSTHROUGH: 2, INTERCEPT: 1, ALLOW: 1 };
+exports.MAX_LIST = 5;
+exports.DECISIONS = new Set(['tls', 'http', 'https', 'upstream']);
+exports.DENIED = new Set(['BLOCK', 'WOULD_BLOCK']);
+function nameOf(r) {
+    return (r.ev === 'tls' ? r.sni : r.host || r.sni) || `(no name) ${r.dst ?? ''}`.trim();
+}
+/** The name the proxy connects upstream for (what the upstream IP guard checks). */
+function targetOf(r) {
+    const t = r.ev === 'tls' || r.ev === 'https' ? r.sni : r.host;
+    return t && !(0, policy_1.isIpLiteral)(t) ? t : '';
+}
+function addUnique(list, v) {
+    if (v && !list.includes(v))
+        list.push(v);
+}
+/**
+ * A refused name as printed: payload-looking labels redacted (src/report/redact.ts), because a
+ * blocked name can be the data a step tried to send. IP literals are shown as they are.
+ */
+function blockedName(name) {
+    return (0, policy_1.isIpLiteral)(name) || name.startsWith('(') ? name : (0, redact_1.redactName)(name);
+}
+/**
+ * Tie records to client connections. The flow log has one record per decision: a TLS
+ * ClientHello, each HTTP request, and an `upstream` record when the IP guard refuses the
+ * upstream. A ClientHello for an allowlisted name is logged as INTERCEPT/PASSTHROUGH *before*
+ * the guard runs, so without this a refused connection also showed up as allowed traffic.
+ * Connections are keyed by client address; a new ClientHello or a different target name
+ * starts a new one (client ports get reused over a long job).
+ */
+function assignConnections(records) {
+    const open = new Map();
+    return records.map(r => {
+        if (!exports.DECISIONS.has(r.ev) || !r.verdict)
+            return undefined;
+        const name = targetOf(r);
+        let c = r.client ? open.get(r.client) : undefined;
+        if (!c || r.ev === 'tls' || c.name !== name) {
+            c = { name };
+            if (r.client)
+                open.set(r.client, c);
+        }
+        if (r.ev === 'upstream' && exports.DENIED.has(r.verdict))
+            c.refused = r;
+        return c;
+    });
+}
+function emptySummary(name, verdict) {
+    return {
+        name,
+        verdict,
+        reasons: [],
+        layers: [],
+        kinds: [],
+        connections: 0,
+        requests: 0,
+        tries: 0,
+        reqBytes: 0,
+        respBytes: 0,
+        statuses: {},
+        dsts: [],
+        snis: [],
+        upstreamIps: []
+    };
+}
+/**
+ * One row per (name, denied?): a host can have both refused attempts (e.g. a fronting try
+ * with its name in the Host header) and allowed traffic; neither should hide the other.
+ * Anything on a connection the upstream IP guard refused counts as denied, never allowed,
+ * so allowed rows and totals only describe traffic that really left the runner.
+ */
+function summarizeFlows(records) {
+    const conns = assignConnections(records);
+    const byKey = new Map();
+    // per row: connection -> [refused at connection level, denied requests]
+    const attempts = new Map();
+    const seenConns = new Map();
+    records.forEach((rec, i) => {
+        const conn = conns[i];
+        if (!conn || !rec.verdict)
+            return;
+        let r = rec;
+        if (conn.refused && r.ev !== 'upstream' && !exports.DENIED.has(r.verdict)) {
+            // allowed by name, then refused upstream: report it under the refusal
+            r = { ...r, verdict: conn.refused.verdict, reason: conn.refused.reason, layer: conn.refused.layer };
+        }
+        const name = nameOf(r);
+        const denied = exports.DENIED.has(r.verdict);
+        const key = `${denied ? 'D' : 'A'} ${name}`;
+        let h = byKey.get(key);
+        if (!h) {
+            h = emptySummary(name, r.verdict);
+            byKey.set(key, h);
+            attempts.set(h, new Map());
+            seenConns.set(h, new Set());
+        }
+        if ((RANK[r.verdict] ?? 0) > (RANK[h.verdict] ?? 0))
+            h.verdict = r.verdict;
+        if (denied) {
+            addUnique(h.reasons, r.reason);
+            addUnique(h.layers, r.layer);
+        }
+        const isConnRecord = r.ev === 'tls' || r.ev === 'upstream';
+        if (isConnRecord)
+            seenConns.get(h).add(conn);
+        if (r.ev === 'upstream') {
+            // dst on an upstream record is the address the name resolved to, not what was dialled
+            if (h.upstreamIps.length < exports.MAX_LIST)
+                addUnique(h.upstreamIps, (0, flowlog_1.ipOf)(r.dst));
+        }
+        else if (r.ev === 'tls') {
+            addUnique(h.kinds, r.passthrough ? 'passthrough' : denied ? 'tls' : 'intercept');
+        }
+        else {
+            h.requests++;
+            h.reqBytes += r.req_bytes ?? 0;
+            h.respBytes += r.resp_bytes ?? 0;
+            if (r.status !== undefined)
+                h.statuses[String(r.status)] = (h.statuses[String(r.status)] ?? 0) + 1;
+            if (r.ev === 'http')
+                addUnique(h.kinds, 'http');
+            if (r.ev === 'https' && r.sni && r.sni !== r.host && h.snis.length < exports.MAX_LIST)
+                addUnique(h.snis, r.sni);
+        }
+        if (r.ev !== 'upstream' && r.dst && h.dsts.length < exports.MAX_LIST)
+            addUnique(h.dsts, (0, flowlog_1.ipOf)(r.dst));
+        if (denied) {
+            const a = attempts.get(h).get(conn) ?? [false, 0];
+            if (isConnRecord)
+                a[0] = true;
+            else
+                a[1]++;
+            attempts.get(h).set(conn, a);
+        }
+    });
+    for (const h of byKey.values()) {
+        h.connections = seenConns.get(h).size;
+        for (const [atConn, reqs] of attempts.get(h).values())
+            h.tries += Math.max(atConn ? 1 : 0, reqs);
+    }
+    return Array.from(byKey.values()).sort((a, b) => (RANK[b.verdict] ?? 0) - (RANK[a.verdict] ?? 0) || a.name.localeCompare(b.name));
+}
+/**
+ * Allowed intercepted requests (the only ones with a method and path), never on a connection the
+ * upstream IP guard refused, less what the built-in platform list allowed (`filter: platform`).
+ * A refused request never goes into a suggestion: that would quietly undo the user's own filter,
+ * and its path was chosen by whoever sent it. Names, methods and paths are checked by the
+ * suggester itself.
+ */
+function allowedRequests(records) {
+    const conns = assignConnections(records);
+    const out = [];
+    records.forEach((r, i) => {
+        if ((r.ev !== 'https' && r.ev !== 'http') || !r.verdict || conns[i]?.refused)
+            return;
+        if (exports.DENIED.has(r.verdict) || r.filter === 'platform')
+            return;
+        if (typeof r.host !== 'string' || !r.host || typeof r.method !== 'string' || typeof r.path !== 'string')
+            return;
+        out.push({ host: r.host, method: r.method, path: r.path });
+    });
+    return out;
+}
+const FRONTING = new Set(['host-sni-mismatch', 'authority-host-mismatch']);
+exports.NOT_LISTED = new Set(['sni-not-allowed', 'host-not-allowed']);
+exports.DENYLISTED = new Set(['sni-denied', 'host-denied']);
+const NO_NAME = new Set(['no-sni', 'ip-literal-sni', 'ip-literal-host', 'no-host']);
+/** Flow-log reasons for a request the http-filter refused (proxy/policy_core.py). */
+exports.FILTER_REASONS = new Set(['method-not-allowed', 'path-not-allowed']);
+/**
+ * An internal-address attempt is one the proxy's upstream IP guard refused (it logs the
+ * address). The resolver does no DNS-rebind filtering, so `upstream-unresolved` is just a name
+ * that did not resolve - calling a typo an attack would cost the report its credibility.
+ */
+function categorize(h) {
+    const r = h.reasons;
+    if (r.some(x => FRONTING.has(x)))
+        return 'fronting';
+    if (r.includes('upstream-ip-forbidden'))
+        return 'internal';
+    if (r.some(x => exports.NOT_LISTED.has(x) || exports.DENYLISTED.has(x)))
+        return 'not-allowed';
+    if (r.some(x => exports.FILTER_REASONS.has(x)))
+        return 'filtered';
+    if (r.includes('upstream-unresolved'))
+        return 'unresolved';
+    if (r.length > 0 && r.every(x => NO_NAME.has(x)))
+        return 'no-name';
+    return 'other';
+}
+const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)+$/;
+/**
+ * Names refused only because they're not on the allowlist - never fronting, internal
+ * addresses, IPs, the risky-subdomain denylist or the self-test - and only well-formed
+ * hostnames (they are pasted into YAML).
+ */
+function suggestedAllowlist(hosts) {
+    return Array.from(new Set(hosts
+        .filter(h => exports.DENIED.has(h.verdict) && categorize(h) === 'not-allowed')
+        .filter(h => h.reasons.some(r => exports.NOT_LISTED.has(r)) && !h.reasons.some(r => exports.DENYLISTED.has(r)))
+        .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid') && !(0, redact_1.needsRedaction)(h.name))
+        .map(h => h.name)));
+}
+
+
+/***/ }),
+
+/***/ 6774:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/** The http-filter part of the report: refused requests, and the suggested filter as YAML. */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.summarizeHttpFilter = summarizeHttpFilter;
+exports.httpFilterYaml = httpFilterYaml;
+const yaml_1 = __nccwpck_require__(8815);
+const redact_1 = __nccwpck_require__(8646);
+const flows_1 = __nccwpck_require__(2982);
+function isFilterBlock(r) {
+    return flows_1.DENIED.has(r.verdict) && flows_1.FILTER_REASONS.has(r.reason ?? '');
+}
+/**
+ * The http-filter part of the report: refused requests (host, method and why; never the path,
+ * which the sender chose and can carry data whatever its shape), and a suggested `http-filter`
+ * built by `suggest` from allowed traffic (proxy/suggest.py: observe → split reads from writes →
+ * template writes → union methods; design: "Suggested http-filter (report)"). Advisory: never
+ * applied. Without `suggest`, no suggestion.
+ */
+function summarizeHttpFilter(records, suggest) {
+    const byKey = new Map();
+    for (const r of records) {
+        if ((r.ev !== 'https' && r.ev !== 'http') || !isFilterBlock(r))
+            continue;
+        const b = {
+            host: (0, flows_1.blockedName)(r.host || r.sni || '(no host)'),
+            method: (0, redact_1.methodLabel)(r.method),
+            reason: r.reason,
+            verdict: r.verdict,
+            tries: 0
+        };
+        const key = [b.host, b.method, b.reason].join(' ');
+        const row = byKey.get(key) ?? b;
+        row.tries++;
+        byKey.set(key, row);
+    }
+    return {
+        blocks: [...byKey.values()].sort((a, b) => b.tries - a.tries || a.host.localeCompare(b.host)),
+        suggestion: suggest?.((0, flows_1.allowedRequests)(records))
+    };
+}
+/**
+ * The suggestion as the `http-filter` input, written by the `yaml` library that reads the input
+ * (inputs.ts parseHttpFilter), so a pasted suggestion reads back as printed. Names, path segments
+ * and methods are also checked before this (proxy/suggest.py, src/report/suggest.ts).
+ */
+function httpFilterYaml(s) {
+    const hosts = new yaml_1.YAMLMap();
+    for (const h of s.hosts) {
+        const rules = new yaml_1.YAMLMap();
+        for (const r of h.rules) {
+            // path patterns always in double quotes: `*` and `*/x` cannot be plain YAML
+            const path = new yaml_1.Scalar(r.path);
+            path.type = yaml_1.Scalar.QUOTE_DOUBLE;
+            rules.add(new yaml_1.Pair(path, new yaml_1.Scalar(r.methods.length ? r.methods.join(', ') : 'NONE')));
+        }
+        hosts.add(new yaml_1.Pair(new yaml_1.Scalar(h.host), rules));
+    }
+    const doc = new yaml_1.Document();
+    doc.contents = hosts;
+    const input = doc.toString({ lineWidth: 0 });
+    return (0, yaml_1.stringify)({ 'http-filter': input }, { blockQuote: 'literal', lineWidth: 0 }).replace(/\n$/, '');
+}
+
+
+/***/ }),
+
+/***/ 4427:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * The job summary, as a pure pipeline: logs/ parse the raw logs, aggregate/ turns flow records
+ * into summaries, render/ writes the Markdown. Every name or path a step chose goes through
+ * redact.ts before it is printed (the C5 disclosure boundary). suggest.ts runs proxy/suggest.py
+ * for the suggested http-filter.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+__exportStar(__nccwpck_require__(7039), exports);
+__exportStar(__nccwpck_require__(1504), exports);
+__exportStar(__nccwpck_require__(8305), exports);
+__exportStar(__nccwpck_require__(2982), exports);
+__exportStar(__nccwpck_require__(7535), exports);
+__exportStar(__nccwpck_require__(6774), exports);
+__exportStar(__nccwpck_require__(4379), exports);
+__exportStar(__nccwpck_require__(248), exports);
+__exportStar(__nccwpck_require__(8646), exports);
+__exportStar(__nccwpck_require__(9829), exports);
+
+
+/***/ }),
+
+/***/ 7039:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * CoreDNS query log parser. Each server block's `log` format labels its own lines
+ * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
+ * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
+ *
+ *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
+ *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
+ *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDnsLog = parseDnsLog;
+exports.refusedNames = refusedNames;
+exports.readRefusedNames = readRefusedNames;
+const fs = __importStar(__nccwpck_require__(9896));
+// anchored on the plugin's own prefix: a query name can't inject a second verdict
+const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
+function parseDnsLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        const m = LINE.exec(line);
+        if (!m)
+            continue;
+        out.push({
+            client: m[1],
+            verdict: m[2],
+            type: m[3],
+            name: m[4].toLowerCase().replace(/\.$/, ''),
+            rcode: m[5]
+        });
+    }
+    return out;
+}
+/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
+function refusedNames(queries) {
+    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
+}
+function readRefusedNames(file) {
+    try {
+        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
+    }
+    catch {
+        return [];
+    }
+}
+
+
+/***/ }),
+
+/***/ 1504:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/** Parser for the kernel LOG lines our filter chains write (firewall.ts), via rsyslog to firewall.log. */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CONTAINER_PREFIXES = void 0;
+exports.parseFirewallLog = parseFirewallLog;
+exports.firewallSummary = firewallSummary;
+/** Container egress (FORWARD via DOCKER-USER) firewall prefixes. */
+exports.CONTAINER_PREFIXES = new Set(['SaferRunner-CDrop', 'SaferRunner-CEgress']);
+const REJECT_PREFIXES = new Set(['SaferRunner-Drop', 'SaferRunner-CDrop']);
+/** Parse kernel LOG lines written by our filter chain (see firewall.ts). */
+function parseFirewallLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        const m = line.match(/(SaferRunner-\w+):/);
+        if (!m)
+            continue;
+        const field = (k) => line.match(new RegExp(`\\b${k}=(\\S*)`))?.[1] ?? '';
+        out.push({
+            prefix: m[1],
+            proto: field('PROTO'),
+            src: field('SRC'),
+            dst: field('DST'),
+            dport: field('DPT'),
+            uid: field('UID')
+        });
+    }
+    return out;
+}
+function firewallSummary(events) {
+    const seen = new Map();
+    for (const e of events) {
+        const k = `${e.prefix} ${e.proto} ${e.dst}:${e.dport} uid ${e.uid}`;
+        seen.set(k, { e, n: (seen.get(k)?.n ?? 0) + 1 });
+    }
+    const rows = Array.from(seen.values());
+    const rejected = rows.filter(r => REJECT_PREFIXES.has(r.e.prefix)).length;
+    return { rows, rejected, logged: rows.length - rejected };
+}
+
+
+/***/ }),
+
+/***/ 8305:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
+ * syslog lines copied there by rsyslog in the same format (see sudo.ts)
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSudoLogLine = parseSudoLogLine;
+exports.deduplicateSudoCommands = deduplicateSudoCommands;
+exports.parseSudoLogsFromString = parseSudoLogsFromString;
+exports.classifySudoCommands = classifySudoCommands;
+/**
+ * Classic sudo prefixes refused commands with a reason, e.g.
+ * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
+ */
+const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
+/**
+ * Parse a single sudo log entry
+ * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
+ */
+function parseSudoLogLine(line) {
+    // Match sudo log format with timestamp
+    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
+    if (!match) {
+        return null;
+    }
+    const [, timestamp, user, targetUser, fullCommand] = match;
+    // Split command and args
+    const commandParts = fullCommand.trim().split(/\s+/);
+    const command = commandParts[0];
+    const args = commandParts.slice(1).join(' ');
+    return {
+        timestamp,
+        user,
+        targetUser,
+        command,
+        args,
+        ...(DENIED_PATTERN.test(line) && { denied: true })
+    };
+}
+/**
+ * Deduplicate sudo commands by command+args combination
+ */
+function deduplicateSudoCommands(commands) {
+    const seen = new Set();
+    const deduplicated = [];
+    for (const cmd of commands) {
+        const key = `${cmd.command} ${cmd.args}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            deduplicated.push(cmd);
+        }
+    }
+    return deduplicated;
+}
+/**
+ * Join wrapped log entries back into single lines
+ * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
+ * continuation lines, which can split a command from its arguments:
+ *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
+ *       /etc/resolv.conf
+ */
+function joinContinuationLines(content) {
+    const joined = [];
+    for (const line of content.split('\n')) {
+        if (/^\s+\S/.test(line) && joined.length > 0) {
+            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
+        }
+        else {
+            joined.push(line);
+        }
+    }
+    return joined;
+}
+/**
+ * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
+ * entry is matched as one line.
+ */
+function parseSudoLogsFromString(content) {
+    const commands = [];
+    for (const line of joinContinuationLines(content)) {
+        const cmd = parseSudoLogLine(line);
+        if (cmd) {
+            commands.push(cmd);
+        }
+    }
+    // Deduplicate and limit to 1000 commands
+    return deduplicateSudoCommands(commands).slice(0, 1000);
+}
+/**
+ * Whether a (successful) command is one of the action's own. System binaries match by
+ * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
+ * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
+ */
+function isInternal(cmd, internal) {
+    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
+    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+    if (match) {
+        return internal.has(withArgs(match[1]));
+    }
+    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
+}
+/** Split parsed sudo log entries by who ran them and whether they were allowed. */
+function classifySudoCommands(commands, internalCommands) {
+    const internal = new Set(internalCommands);
+    const usage = { ran: [], refused: [], internal: [] };
+    for (const cmd of commands) {
+        if (cmd.denied)
+            usage.refused.push(cmd);
+        else if (isInternal(cmd, internal))
+            usage.internal.push(cmd);
+        else
+            usage.ran.push(cmd);
+    }
+    return usage;
+}
+
+
+/***/ }),
+
+/***/ 8646:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -2210,7 +2756,71 @@ exports.PATH_HIDDEN = '‹path hidden›';
 
 /***/ }),
 
-/***/ 5444:
+/***/ 4379:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/** Small Markdown helpers for the job summary. Untrusted text goes through code() / codeBlock(). */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.humanBytes = humanBytes;
+exports.code = code;
+exports.table = table;
+exports.capped = capped;
+exports.plural = plural;
+exports.codeBlock = codeBlock;
+const MAX_ROWS = 300;
+function humanBytes(n) {
+    if (n < 1024)
+        return `${n} B`;
+    const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+    let v = n / 1024;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i++;
+    }
+    return `${v.toFixed(1)} ${units[i]}`;
+}
+/** Untrusted text (hostnames come from the job's own Host headers) as a code span in a table. */
+function code(s) {
+    return ('`' +
+        s
+            .slice(0, 253)
+            .replace(/`/g, "'")
+            .replace(/\|/g, '\\|')
+            .replace(/[\r\n]/g, ' ') +
+        '`');
+}
+function table(header, align, rows) {
+    return [`| ${header.join(' | ')} |`, `|${align.join('|')}|`, ...rows.map(r => `| ${r.join(' | ')} |`)].join('\n');
+}
+/** The first MAX_ROWS rows, and a note saying how many more are only in the job log. */
+function capped(rows) {
+    if (rows.length <= MAX_ROWS)
+        return { shown: rows, note: '' };
+    return {
+        shown: rows.slice(0, MAX_ROWS),
+        note: `\n\n**+${rows.length - MAX_ROWS} more not shown here** - the full list is in the post step's job log.`
+    };
+}
+function plural(n, one, many = `${one}s`) {
+    return `${n} ${n === 1 ? one : many}`;
+}
+/** Longest backtick run + 1, so untrusted text can't close the fence early. */
+function fenceFor(text) {
+    const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(m => m.length));
+    return '`'.repeat(Math.max(3, longest + 1));
+}
+function codeBlock(lang, text) {
+    const f = fenceFor(text);
+    return `${f}${lang}\n${text}\n${f}`;
+}
+
+
+/***/ }),
+
+/***/ 248:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -2221,209 +2831,25 @@ exports.PATH_HIDDEN = '‹path hidden›';
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ADVISORY_REPORT_NOTE = void 0;
-exports.summarizeFlows = summarizeFlows;
-exports.parseFirewallLog = parseFirewallLog;
-exports.categorize = categorize;
 exports.addressClass = addressClass;
-exports.humanBytes = humanBytes;
-exports.blockedName = blockedName;
-exports.statusSummary = statusSummary;
-exports.summarizeContainers = summarizeContainers;
-exports.containerSection = containerSection;
-exports.allowedRequests = allowedRequests;
-exports.summarizeHttpFilter = summarizeHttpFilter;
-exports.httpFilterYaml = httpFilterYaml;
-exports.suggestedAllowlist = suggestedAllowlist;
 exports.modeLabel = modeLabel;
+exports.statusSummary = statusSummary;
 exports.buildReport = buildReport;
-const flowlog_1 = __nccwpck_require__(5422);
 const policy_1 = __nccwpck_require__(2224);
-const redact_1 = __nccwpck_require__(283);
-const yaml_1 = __nccwpck_require__(8815);
-const RANK = { BLOCK: 4, WOULD_BLOCK: 3, PASSTHROUGH: 2, INTERCEPT: 1, ALLOW: 1 };
-const MAX_ROWS = 300;
-const MAX_LIST = 5;
-const DECISIONS = new Set(['tls', 'http', 'https', 'upstream']);
-const DENIED = new Set(['BLOCK', 'WOULD_BLOCK']);
-function nameOf(r) {
-    return (r.ev === 'tls' ? r.sni : r.host || r.sni) || `(no name) ${r.dst ?? ''}`.trim();
-}
-/** The name the proxy connects upstream for (what the upstream IP guard checks). */
-function targetOf(r) {
-    const t = r.ev === 'tls' || r.ev === 'https' ? r.sni : r.host;
-    return t && !(0, policy_1.isIpLiteral)(t) ? t : '';
-}
-function addUnique(list, v) {
-    if (v && !list.includes(v))
-        list.push(v);
-}
+const containers_1 = __nccwpck_require__(7535);
+const flows_1 = __nccwpck_require__(2982);
+const http_filter_1 = __nccwpck_require__(6774);
+const firewall_log_1 = __nccwpck_require__(1504);
+const redact_1 = __nccwpck_require__(8646);
+const markdown_1 = __nccwpck_require__(4379);
 /**
- * Tie records to client connections. The flow log has one record per decision: a TLS
- * ClientHello, each HTTP request, and an `upstream` record when the IP guard refuses the
- * upstream. A ClientHello for an allowlisted name is logged as INTERCEPT/PASSTHROUGH *before*
- * the guard runs, so without this a refused connection also showed up as allowed traffic.
- * Connections are keyed by client address; a new ClientHello or a different target name
- * starts a new one (client ports get reused over a long job).
+ * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
+ * the action's files on the runner, which the job's own steps can write to. Say so in the report.
  */
-function assignConnections(records) {
-    const open = new Map();
-    return records.map(r => {
-        if (!DECISIONS.has(r.ev) || !r.verdict)
-            return undefined;
-        const name = targetOf(r);
-        let c = r.client ? open.get(r.client) : undefined;
-        if (!c || r.ev === 'tls' || c.name !== name) {
-            c = { name };
-            if (r.client)
-                open.set(r.client, c);
-        }
-        if (r.ev === 'upstream' && DENIED.has(r.verdict))
-            c.refused = r;
-        return c;
-    });
-}
-function emptySummary(name, verdict) {
-    return {
-        name,
-        verdict,
-        reasons: [],
-        layers: [],
-        kinds: [],
-        connections: 0,
-        requests: 0,
-        tries: 0,
-        reqBytes: 0,
-        respBytes: 0,
-        statuses: {},
-        dsts: [],
-        snis: [],
-        upstreamIps: []
-    };
-}
-/**
- * One row per (name, denied?): a host can have both refused attempts (e.g. a fronting try
- * with its name in the Host header) and allowed traffic; neither should hide the other.
- * Anything on a connection the upstream IP guard refused counts as denied, never allowed,
- * so allowed rows and totals only describe traffic that really left the runner.
- */
-function summarizeFlows(records) {
-    const conns = assignConnections(records);
-    const byKey = new Map();
-    // per row: connection -> [refused at connection level, denied requests]
-    const attempts = new Map();
-    const seenConns = new Map();
-    records.forEach((rec, i) => {
-        const conn = conns[i];
-        if (!conn || !rec.verdict)
-            return;
-        let r = rec;
-        if (conn.refused && r.ev !== 'upstream' && !DENIED.has(r.verdict)) {
-            // allowed by name, then refused upstream: report it under the refusal
-            r = { ...r, verdict: conn.refused.verdict, reason: conn.refused.reason, layer: conn.refused.layer };
-        }
-        const name = nameOf(r);
-        const denied = DENIED.has(r.verdict);
-        const key = `${denied ? 'D' : 'A'} ${name}`;
-        let h = byKey.get(key);
-        if (!h) {
-            h = emptySummary(name, r.verdict);
-            byKey.set(key, h);
-            attempts.set(h, new Map());
-            seenConns.set(h, new Set());
-        }
-        if ((RANK[r.verdict] ?? 0) > (RANK[h.verdict] ?? 0))
-            h.verdict = r.verdict;
-        if (denied) {
-            addUnique(h.reasons, r.reason);
-            addUnique(h.layers, r.layer);
-        }
-        const isConnRecord = r.ev === 'tls' || r.ev === 'upstream';
-        if (isConnRecord)
-            seenConns.get(h).add(conn);
-        if (r.ev === 'upstream') {
-            // dst on an upstream record is the address the name resolved to, not what was dialled
-            if (h.upstreamIps.length < MAX_LIST)
-                addUnique(h.upstreamIps, (0, flowlog_1.ipOf)(r.dst));
-        }
-        else if (r.ev === 'tls') {
-            addUnique(h.kinds, r.passthrough ? 'passthrough' : denied ? 'tls' : 'intercept');
-        }
-        else {
-            h.requests++;
-            h.reqBytes += r.req_bytes ?? 0;
-            h.respBytes += r.resp_bytes ?? 0;
-            if (r.status !== undefined)
-                h.statuses[String(r.status)] = (h.statuses[String(r.status)] ?? 0) + 1;
-            if (r.ev === 'http')
-                addUnique(h.kinds, 'http');
-            if (r.ev === 'https' && r.sni && r.sni !== r.host && h.snis.length < MAX_LIST)
-                addUnique(h.snis, r.sni);
-        }
-        if (r.ev !== 'upstream' && r.dst && h.dsts.length < MAX_LIST)
-            addUnique(h.dsts, (0, flowlog_1.ipOf)(r.dst));
-        if (denied) {
-            const a = attempts.get(h).get(conn) ?? [false, 0];
-            if (isConnRecord)
-                a[0] = true;
-            else
-                a[1]++;
-            attempts.get(h).set(conn, a);
-        }
-    });
-    for (const h of byKey.values()) {
-        h.connections = seenConns.get(h).size;
-        for (const [atConn, reqs] of attempts.get(h).values())
-            h.tries += Math.max(atConn ? 1 : 0, reqs);
-    }
-    return Array.from(byKey.values()).sort((a, b) => (RANK[b.verdict] ?? 0) - (RANK[a.verdict] ?? 0) || a.name.localeCompare(b.name));
-}
-/** Container egress (FORWARD via DOCKER-USER) firewall prefixes. */
-const CONTAINER_PREFIXES = new Set(['SaferRunner-CDrop', 'SaferRunner-CEgress']);
-const REJECT_PREFIXES = new Set(['SaferRunner-Drop', 'SaferRunner-CDrop']);
-/** Parse kernel LOG lines written by our filter chain (see firewall.ts). */
-function parseFirewallLog(text) {
-    const out = [];
-    for (const line of text.split('\n')) {
-        const m = line.match(/(SaferRunner-\w+):/);
-        if (!m)
-            continue;
-        const field = (k) => line.match(new RegExp(`\\b${k}=(\\S*)`))?.[1] ?? '';
-        out.push({
-            prefix: m[1],
-            proto: field('PROTO'),
-            src: field('SRC'),
-            dst: field('DST'),
-            dport: field('DPT'),
-            uid: field('UID')
-        });
-    }
-    return out;
-}
-const FRONTING = new Set(['host-sni-mismatch', 'authority-host-mismatch']);
-const NOT_LISTED = new Set(['sni-not-allowed', 'host-not-allowed']);
-const DENYLISTED = new Set(['sni-denied', 'host-denied']);
-const NO_NAME = new Set(['no-sni', 'ip-literal-sni', 'ip-literal-host', 'no-host']);
-/**
- * An internal-address attempt is one the proxy's upstream IP guard refused (it logs the
- * address). The resolver does no DNS-rebind filtering, so `upstream-unresolved` is just a name
- * that did not resolve - calling a typo an attack would cost the report its credibility.
- */
-function categorize(h) {
-    const r = h.reasons;
-    if (r.some(x => FRONTING.has(x)))
-        return 'fronting';
-    if (r.includes('upstream-ip-forbidden'))
-        return 'internal';
-    if (r.some(x => NOT_LISTED.has(x) || DENYLISTED.has(x)))
-        return 'not-allowed';
-    if (r.some(x => FILTER_REASONS.has(x)))
-        return 'filtered';
-    if (r.includes('upstream-unresolved'))
-        return 'unresolved';
-    if (r.length > 0 && r.every(x => NO_NAME.has(x)))
-        return 'no-name';
-    return 'other';
-}
+exports.ADVISORY_REPORT_NOTE = '<sub>The tamper check and this summary come from the post step, which runs as the runner user from ' +
+    "files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls " +
+    "themselves are root-owned and don't depend on it.</sub>";
+// ---------------------------------------------------------------- words
 function inCidr4(ip, base, bits) {
     const n = (s) => s.split('.').reduce((a, o) => a * 256 + Number(o), 0);
     const size = 2 ** (32 - bits);
@@ -2475,313 +2901,21 @@ const PORT_NAMES = {
     '8080': 'HTTP-alt',
     '9418': 'git'
 };
-// ---------------------------------------------------------------- formatting
-function humanBytes(n) {
-    if (n < 1024)
-        return `${n} B`;
-    const units = ['KiB', 'MiB', 'GiB', 'TiB'];
-    let v = n / 1024;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-        v /= 1024;
-        i++;
-    }
-    return `${v.toFixed(1)} ${units[i]}`;
-}
-/** Untrusted text (hostnames come from the job's own Host headers) as a code span in a table. */
-function code(s) {
-    return ('`' +
-        s
-            .slice(0, 253)
-            .replace(/`/g, "'")
-            .replace(/\|/g, '\\|')
-            .replace(/[\r\n]/g, ' ') +
-        '`');
-}
-/** The same, inside raw HTML (<summary>). */
-function codeHtml(s) {
-    const h = s.slice(0, 253).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return `<code>${h}</code>`;
-}
-function table(header, align, rows) {
-    return [`| ${header.join(' | ')} |`, `|${align.join('|')}|`, ...rows.map(r => `| ${r.join(' | ')} |`)].join('\n');
-}
-function capped(rows) {
-    if (rows.length <= MAX_ROWS)
-        return { shown: rows, note: '' };
-    return {
-        shown: rows.slice(0, MAX_ROWS),
-        note: `\n\n**+${rows.length - MAX_ROWS} more not shown here** - the full list is in the post step's job log.`
-    };
-}
-/**
- * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
- * the action's files on the runner, which the job's own steps can write to. Say so in the report.
- */
-exports.ADVISORY_REPORT_NOTE = '<sub>The tamper check and this summary come from the post step, which runs as the runner user from ' +
-    "files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls " +
-    "themselves are root-owned and don't depend on it.</sub>";
-function plural(n, one, many = `${one}s`) {
-    return `${n} ${n === 1 ? one : many}`;
-}
-function nameList(hosts) {
-    const names = hosts.slice(0, MAX_LIST).map(h => code(blockedName(displayName(h))));
-    return names.join(', ') + (hosts.length > MAX_LIST ? `, +${hosts.length - MAX_LIST} more` : '');
-}
-/**
- * A refused name as printed: payload-looking labels redacted (src/redact.ts), because a blocked
- * name can be the data a step tried to send. IP literals are shown as they are.
- */
-function blockedName(name) {
-    return (0, policy_1.isIpLiteral)(name) || name.startsWith('(') ? name : (0, redact_1.redactName)(name);
-}
-function displayName(h) {
-    return h.name.replace(/^\(no name\) /, '');
-}
-function isPassthroughOnly(h) {
-    return h.requests === 0 && h.kinds.includes('passthrough');
-}
-/** Passthrough is never decrypted: no request or byte counts exist, so never print 0. */
-function requestsCell(h) {
-    return isPassthroughOnly(h) ? '—' : String(h.requests);
-}
-function dataCell(h) {
-    if (isPassthroughOnly(h))
-        return 'n/a';
-    const parts = [];
-    if (h.reqBytes > 0)
-        parts.push(`↑ ${humanBytes(h.reqBytes)}`);
-    if (h.respBytes > 0)
-        parts.push(`↓ ${humanBytes(h.respBytes)}`);
-    return parts.join(' ') || '—';
-}
-/** Grouped by class, one per line: "2xx (45)<br>3xx (4)<br>5xx (1)". */
-function statusSummary(h) {
-    if (isPassthroughOnly(h))
-        return 'n/a';
-    const byClass = new Map();
-    let answered = 0;
-    for (const [k, n] of Object.entries(h.statuses)) {
-        answered += n;
-        const cls = /^[1-5]\d\d$/.test(k) ? `${k[0]}xx` : k;
-        byClass.set(cls, (byClass.get(cls) ?? 0) + n);
-    }
-    const parts = [...byClass.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cls, n]) => `${cls} (${n})`);
-    if (h.requests > answered)
-        parts.push(`no response (${h.requests - answered})`);
-    return parts.join('<br>') || '—';
-}
-function hostCell(h) {
-    let c = code(blockedName(h.name));
-    if (h.kinds.includes('passthrough'))
-        c += ' <sub>🔀 passthrough</sub>';
-    else if (h.kinds.length === 1 && h.kinds[0] === 'http')
-        c += ' <sub>plain HTTP</sub>';
-    return c;
-}
-/** Longest backtick run + 1, so untrusted text can't close the fence early. */
-function fenceFor(text) {
-    const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(m => m.length));
-    return '`'.repeat(Math.max(3, longest + 1));
-}
-function codeBlock(lang, text) {
-    const f = fenceFor(text);
-    return `${f}${lang}\n${text}\n${f}`;
-}
-/**
- * Per-container view of the flow log (records from the container listener) and of the
- * container firewall chain (CDrop / CEgress). `names` maps container IPs to names.
- */
-function summarizeContainers(records, firewall, names = new Map()) {
-    const by = new Map();
-    const get = (ip) => {
-        let c = by.get(ip);
-        if (!c) {
-            c = { ip, name: names.get(ip), allowed: [], denied: [], sniOnly: [], untrusted: [], firewall: [] };
-            by.set(ip, c);
-        }
-        return c;
-    };
-    for (const r of records) {
-        if (r.source !== 'container' || !r.client)
-            continue;
-        const ip = (0, flowlog_1.ipOf)(r.client);
-        if (r.ev === 'tls-client-fail') {
-            if (r.sni)
-                addUnique(get(ip).untrusted, r.sni);
-            continue;
-        }
-        if (!DECISIONS.has(r.ev) || !r.verdict)
-            continue;
-        const c = get(ip);
-        const name = nameOf(r);
-        if (DENIED.has(r.verdict))
-            addUnique(c.denied, name);
-        else if (r.ev !== 'upstream')
-            addUnique(c.allowed, name);
-        if (r.reason === 'container-sni-only')
-            addUnique(c.sniOnly, name);
-    }
-    for (const e of firewall) {
-        if (!CONTAINER_PREFIXES.has(e.prefix) || !e.src)
-            continue;
-        const c = get(e.src);
-        const dst = `${e.dst}:${e.dport}`;
-        const row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
-        if (row)
-            row.n++;
-        else
-            c.firewall.push({ dst, proto: e.proto, n: 1, rejected: e.prefix === 'SaferRunner-CDrop' });
-    }
-    // a name both allowed and refused (e.g. an upstream refusal) is listed as refused only
-    for (const c of by.values())
-        c.allowed = c.allowed.filter(n => !c.denied.includes(n));
-    return Array.from(by.values()).sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
-}
-function listCell(names) {
-    if (!names.length)
-        return '';
-    const shown = names
-        .slice(0, MAX_LIST)
-        .map(n => code(blockedName(n)))
-        .join(', ');
-    return names.length > MAX_LIST ? `${shown} +${names.length - MAX_LIST} more` : shown;
-}
-function containerSection(containers, mode) {
-    if (!containers.length)
-        return '';
-    const enforce = mode === 'enforce';
-    const untrusted = containers.filter(c => c.untrusted.length);
-    const outside = containers.reduce((a, c) => a + c.firewall.length, 0);
-    const summary = [plural(containers.length, 'container')];
-    if (untrusted.length)
-        summary.push(`⚠️ ${plural(untrusted.length, 'container')} did not trust the CA`);
-    if (outside)
-        summary.push(`${outside} outside the proxy ${enforce ? 'rejected' : 'allowed'}`);
-    let md = `<details${untrusted.length ? ' open' : ''}>\n<summary>🐳 <b>Container egress</b> — ${summary.join(' · ')}</summary>\n\n`;
-    md +=
-        '<sub>Traffic from Docker containers (service containers, `docker run`, `docker build`) goes through the same ' +
-            'proxy and DNS filter. 🔀 = checked by TLS name only, no CA needed in the container.</sub>\n\n';
-    const { shown, note } = capped(containers);
-    md += table(['Container', 'Allowed', enforce ? 'Blocked' : 'Would be blocked', 'Outside the proxy'], [':--', ':--', ':--', ':--'], shown.map(c => [
-        c.name ? `${code(c.name)}<br><sub>${c.ip}</sub>` : code(c.ip),
-        c.allowed.map(n => `${c.sniOnly.includes(n) ? '🔀 ' : ''}${code(blockedName(n))}`).join(', ') || '—',
-        listCell(c.denied) || '—',
-        c.firewall
-            .slice(0, MAX_LIST)
-            .map(f => `${f.rejected ? '❌' : '⚠️'} ${code(f.dst)} ${f.proto}${f.n > 1 ? ` ×${f.n}` : ''}`)
-            .join('<br>') || '—'
-    ]));
-    md += note + '\n\n';
-    if (untrusted.length) {
-        md +=
-            '**TLS failed because the container did not trust the runtime CA:** ' +
-                untrusted.map(c => `${code(c.name ?? c.ip)} → ${listCell(c.untrusted)}`).join('; ') +
-                '. Containers need no CA, except for multi-tenant front doors (Azure ' +
-                'Storage): those stay intercepted so the Host check still stops fronting to another tenant. Reach them ' +
-                'from a step on the runner, or give the container the CA (`/etc/safer-runner/ca.pem`).\n\n';
-    }
-    return md + '</details>\n\n';
-}
-// ---------------------------------------------------------------- http-filter
-/** Flow-log reasons for a request the http-filter refused (proxy/policy_core.py). */
-const FILTER_REASONS = new Set(['method-not-allowed', 'path-not-allowed']);
 const FILTER_REASON_TEXT = {
     'method-not-allowed': 'method not allowed on this path',
     'path-not-allowed': 'path not allowed'
 };
-function isFilterBlock(r) {
-    return DENIED.has(r.verdict) && FILTER_REASONS.has(r.reason ?? '');
-}
-/**
- * Allowed intercepted requests (the only ones with a method and path), never on a connection the
- * upstream IP guard refused, less what the built-in platform list allowed (`filter: platform`).
- * A refused request never goes into a suggestion: that would quietly undo the user's own filter,
- * and its path was chosen by whoever sent it. Names, methods and paths are checked by the
- * suggester itself.
- */
-function allowedRequests(records) {
-    const conns = assignConnections(records);
-    const out = [];
-    records.forEach((r, i) => {
-        if ((r.ev !== 'https' && r.ev !== 'http') || !r.verdict || conns[i]?.refused)
-            return;
-        if (DENIED.has(r.verdict) || r.filter === 'platform')
-            return;
-        if (typeof r.host !== 'string' || !r.host || typeof r.method !== 'string' || typeof r.path !== 'string')
-            return;
-        out.push({ host: r.host, method: r.method, path: r.path });
-    });
-    return out;
-}
-/**
- * The http-filter part of the report: refused requests (host, method and why; never the path,
- * which the sender chose and can carry data whatever its shape), and a suggested `http-filter`
- * built by `suggest` from allowed traffic (proxy/suggest.py: observe → split reads from writes →
- * template writes → union methods; design: "Suggested http-filter (report)"). Advisory: never
- * applied. Without `suggest`, no suggestion.
- */
-function summarizeHttpFilter(records, suggest) {
-    const byKey = new Map();
-    for (const r of records) {
-        if ((r.ev !== 'https' && r.ev !== 'http') || !isFilterBlock(r))
-            continue;
-        const b = {
-            host: blockedName(r.host || r.sni || '(no host)'),
-            method: (0, redact_1.methodLabel)(r.method),
-            reason: r.reason,
-            verdict: r.verdict,
-            tries: 0
-        };
-        const key = [b.host, b.method, b.reason].join(' ');
-        const row = byKey.get(key) ?? b;
-        row.tries++;
-        byKey.set(key, row);
-    }
-    return {
-        blocks: [...byKey.values()].sort((a, b) => b.tries - a.tries || a.host.localeCompare(b.host)),
-        suggestion: suggest?.(allowedRequests(records))
-    };
-}
-/**
- * The suggestion as the `http-filter` input, written by the `yaml` library that reads the input
- * (inputs.ts parseHttpFilter), so a pasted suggestion reads back as printed. Names, path segments
- * and methods are also checked before this (proxy/suggest.py, src/suggest.ts).
- */
-function httpFilterYaml(s) {
-    const hosts = new yaml_1.YAMLMap();
-    for (const h of s.hosts) {
-        const rules = new yaml_1.YAMLMap();
-        for (const r of h.rules) {
-            // path patterns always in double quotes: `*` and `*/x` cannot be plain YAML
-            const path = new yaml_1.Scalar(r.path);
-            path.type = yaml_1.Scalar.QUOTE_DOUBLE;
-            rules.add(new yaml_1.Pair(path, new yaml_1.Scalar(r.methods.length ? r.methods.join(', ') : 'NONE')));
-        }
-        hosts.add(new yaml_1.Pair(new yaml_1.Scalar(h.host), rules));
-    }
-    const doc = new yaml_1.Document();
-    doc.contents = hosts;
-    const input = doc.toString({ lineWidth: 0 });
-    return (0, yaml_1.stringify)({ 'http-filter': input }, { blockQuote: 'literal', lineWidth: 0 }).replace(/\n$/, '');
-}
-function compressionText(s) {
-    return (`collapsed ${plural(s.requests, 'request')} → ${plural(s.rules, 'rule')} (level B)` +
-        (s.specific ? `; ${plural(s.specific, 'write endpoint')} kept specific` : ''));
-}
-const HOSTNAME = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)+$/;
-/**
- * Names refused only because they're not on the allowlist - never fronting, internal
- * addresses, IPs, the risky-subdomain denylist or the self-test - and only well-formed
- * hostnames (they are pasted into YAML).
- */
-function suggestedAllowlist(hosts) {
-    return Array.from(new Set(hosts
-        .filter(h => DENIED.has(h.verdict) && categorize(h) === 'not-allowed')
-        .filter(h => h.reasons.some(r => NOT_LISTED.has(r)) && !h.reasons.some(r => DENYLISTED.has(r)))
-        .filter(h => HOSTNAME.test(h.name) && !h.name.endsWith('.invalid') && !(0, redact_1.needsRedaction)(h.name))
-        .map(h => h.name)));
-}
+const NO_NAME_TEXT = {
+    'no-sni': 'TLS with no SNI',
+    'ip-literal-sni': 'TLS with an IP address as SNI',
+    'ip-literal-host': 'HTTP request with an IP literal as the Host',
+    'no-host': 'HTTP request with no Host'
+};
+const DOCKER_ACCESS_TEXT = {
+    retained: 'runner user can use docker',
+    'group-removed': 'runner user removed from the docker group, socket root-only',
+    'not-running': 'docker daemon not running'
+};
 /**
  * The post-run tamper check as a chip. It is advisory (ADVISORY_REPORT_NOTE), and a check that
  * could not run is unknown, never a pass.
@@ -2807,11 +2941,84 @@ function modeLabel(mode, sudoRetained = false, dockerRetained = false) {
     const what = retained(sudoRetained, dockerRetained);
     return what ? `⚠️ ENFORCE (ADVISORY — ${what} retained, not an enforced boundary)` : '🔒 ENFORCE';
 }
-const DOCKER_ACCESS_TEXT = {
-    retained: 'runner user can use docker',
-    'group-removed': 'runner user removed from the docker group, socket root-only',
-    'not-running': 'docker daemon not running'
-};
+function compressionText(s) {
+    return (`collapsed ${(0, markdown_1.plural)(s.requests, 'request')} → ${(0, markdown_1.plural)(s.rules, 'rule')} (level B)` +
+        (s.specific ? `; ${(0, markdown_1.plural)(s.specific, 'write endpoint')} kept specific` : ''));
+}
+// ---------------------------------------------------------------- cells
+function displayName(h) {
+    return h.name.replace(/^\(no name\) /, '');
+}
+function nameList(hosts) {
+    const names = hosts.slice(0, flows_1.MAX_LIST).map(h => (0, markdown_1.code)((0, flows_1.blockedName)(displayName(h))));
+    return names.join(', ') + (hosts.length > flows_1.MAX_LIST ? `, +${hosts.length - flows_1.MAX_LIST} more` : '');
+}
+function isPassthroughOnly(h) {
+    return h.requests === 0 && h.kinds.includes('passthrough');
+}
+/** Passthrough is never decrypted: no request or byte counts exist, so never print 0. */
+function requestsCell(h) {
+    return isPassthroughOnly(h) ? '—' : String(h.requests);
+}
+function dataCell(h) {
+    if (isPassthroughOnly(h))
+        return 'n/a';
+    const parts = [];
+    if (h.reqBytes > 0)
+        parts.push(`↑ ${(0, markdown_1.humanBytes)(h.reqBytes)}`);
+    if (h.respBytes > 0)
+        parts.push(`↓ ${(0, markdown_1.humanBytes)(h.respBytes)}`);
+    return parts.join(' ') || '—';
+}
+/** Grouped by class, one per line: "2xx (45)<br>3xx (4)<br>5xx (1)". */
+function statusSummary(h) {
+    if (isPassthroughOnly(h))
+        return 'n/a';
+    const byClass = new Map();
+    let answered = 0;
+    for (const [k, n] of Object.entries(h.statuses)) {
+        answered += n;
+        const cls = /^[1-5]\d\d$/.test(k) ? `${k[0]}xx` : k;
+        byClass.set(cls, (byClass.get(cls) ?? 0) + n);
+    }
+    const parts = [...byClass.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cls, n]) => `${cls} (${n})`);
+    if (h.requests > answered)
+        parts.push(`no response (${h.requests - answered})`);
+    return parts.join('<br>') || '—';
+}
+function hostCell(h) {
+    let c = (0, markdown_1.code)((0, flows_1.blockedName)(h.name));
+    if (h.kinds.includes('passthrough'))
+        c += ' <sub>🔀 passthrough</sub>';
+    else if (h.kinds.length === 1 && h.kinds[0] === 'http')
+        c += ' <sub>plain HTTP</sub>';
+    return c;
+}
+function frontingCell(h, verb) {
+    const what = h.reasons.includes('host-sni-mismatch')
+        ? '🎭 **Host/SNI mismatch** (domain fronting)'
+        : '🎭 **Conflicting Host / authority**';
+    const notes = [];
+    if (h.snis.length)
+        notes.push(`sent inside TLS for ${h.snis.map(n => (0, markdown_1.code)((0, flows_1.blockedName)(n))).join(', ')}`);
+    if (h.reasons.some(r => flows_1.NOT_LISTED.has(r)))
+        notes.push('also not on allowlist');
+    if (h.dsts.length)
+        notes.push(`dialled ${h.dsts.map(markdown_1.code).join(', ')}`);
+    return what + (verb ? `, ${verb}` : '') + (notes.length ? `<br><sub>${notes.join(' · ')}</sub>` : '');
+}
+function internalCell(h, verb) {
+    if (h.upstreamIps.length) {
+        const ips = h.upstreamIps.map(ip => `${(0, markdown_1.code)(ip)} (${addressClass(ip)})`).join(', ');
+        return `🕳️ **Internal address** → ${ips}, ${verb}`;
+    }
+    return `🕳️ **Internal address**, ${verb}`;
+}
+function destinationText(e) {
+    const likely = PORT_NAMES[e.dport];
+    return `${likely ? `${likely} to ` : ''}${(0, markdown_1.code)(`${e.dst}:${e.dport}`)}`;
+}
+// ---------------------------------------------------------------- allowed tables
 function compileUserPatterns(patterns) {
     const out = [];
     for (const p of patterns.flatMap(policy_1.expandPattern)) {
@@ -2828,8 +3035,8 @@ function byData(a, b) {
     return (b.reqBytes + b.respBytes - (a.reqBytes + a.respBytes) || b.requests - a.requests || a.name.localeCompare(b.name));
 }
 function allowedTable(rows) {
-    const { shown, note } = capped([...rows].sort(byData));
-    let md = table(['Host', 'Requests', 'Data', 'Responses'], [':--', '--:', '--:', ':--'], shown.map(h => [hostCell(h), requestsCell(h), dataCell(h), statusSummary(h)]));
+    const { shown, note } = (0, markdown_1.capped)([...rows].sort(byData));
+    let md = (0, markdown_1.table)(['Host', 'Requests', 'Data', 'Responses'], [':--', '--:', '--:', ':--'], shown.map(h => [hostCell(h), requestsCell(h), dataCell(h), statusSummary(h)]));
     md += note + '\n\n';
     if (shown.some(h => h.kinds.includes('passthrough'))) {
         md += '<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>\n\n';
@@ -2842,55 +3049,12 @@ function totals(rows) {
         bytes: rows.reduce((a, h) => a + h.reqBytes + h.respBytes, 0)
     };
 }
-function frontingCell(h, verb) {
-    const what = h.reasons.includes('host-sni-mismatch')
-        ? '🎭 **Host/SNI mismatch** (domain fronting)'
-        : '🎭 **Conflicting Host / authority**';
-    const notes = [];
-    if (h.snis.length)
-        notes.push(`sent inside TLS for ${h.snis.map(n => code(blockedName(n))).join(', ')}`);
-    if (h.reasons.some(r => NOT_LISTED.has(r)))
-        notes.push('also not on allowlist');
-    if (h.dsts.length)
-        notes.push(`dialled ${h.dsts.map(code).join(', ')}`);
-    return what + (verb ? `, ${verb}` : '') + (notes.length ? `<br><sub>${notes.join(' · ')}</sub>` : '');
-}
-function internalCell(h, verb) {
-    if (h.upstreamIps.length) {
-        const ips = h.upstreamIps.map(ip => `${code(ip)} (${addressClass(ip)})`).join(', ');
-        return `🕳️ **Internal address** → ${ips}, ${verb}`;
-    }
-    return `🕳️ **Internal address**, ${verb}`;
-}
-const NO_NAME_TEXT = {
-    'no-sni': 'TLS with no SNI',
-    'ip-literal-sni': 'TLS with an IP address as SNI',
-    'ip-literal-host': 'HTTP request with an IP literal as the Host',
-    'no-host': 'HTTP request with no Host'
-};
-function firewallSummary(events) {
-    const seen = new Map();
-    for (const e of events) {
-        const k = `${e.prefix} ${e.proto} ${e.dst}:${e.dport} uid ${e.uid}`;
-        seen.set(k, { e, n: (seen.get(k)?.n ?? 0) + 1 });
-    }
-    const rows = Array.from(seen.values());
-    const rejected = rows.filter(r => REJECT_PREFIXES.has(r.e.prefix)).length;
-    return { rows, rejected, logged: rows.length - rejected };
-}
-function destinationText(e) {
-    const likely = PORT_NAMES[e.dport];
-    return `${likely ? `${likely} to ` : ''}${code(`${e.dst}:${e.dport}`)}`;
-}
-function buildReport(input) {
+function facts(input) {
     const { mode } = input;
     const enforce = mode === 'enforce';
     const advisoryWhat = enforce ? retained(input.sudoRetained === true, input.dockerRetained === true) : '';
-    const advisory = advisoryWhat !== '';
-    const dnsRefused = new Set(input.dnsRefused.map(n => n.toLowerCase()));
-    const blockedWord = enforce ? 'blocked' : 'would be blocked';
-    const denied = input.hosts.filter(h => DENIED.has(h.verdict));
-    const allowed = input.hosts.filter(h => !DENIED.has(h.verdict));
+    const denied = input.hosts.filter(h => flows_1.DENIED.has(h.verdict));
+    const allowed = input.hosts.filter(h => !flows_1.DENIED.has(h.verdict));
     const groups = {
         fronting: [],
         internal: [],
@@ -2901,11 +3065,10 @@ function buildReport(input) {
         other: []
     };
     for (const h of denied)
-        groups[categorize(h)].push(h);
+        groups[(0, flows_1.categorize)(h)].push(h);
     const byTries = (a, b) => b.tries - a.tries || a.name.localeCompare(b.name);
     for (const g of Object.values(groups))
         g.sort(byTries);
-    const bypass = [...groups.fronting, ...groups.internal];
     let jobHosts = allowed;
     let platform = [];
     if (input.userDomains) {
@@ -2913,23 +3076,39 @@ function buildReport(input) {
         jobHosts = allowed.filter(h => (0, policy_1.matchesAny)(h.name, user));
         platform = allowed.filter(h => !jobHosts.includes(h));
     }
-    const all = totals(allowed);
-    const plat = totals(platform);
-    const selfOk = input.selfTests.filter(t => t.ok).length;
-    const selfFailed = input.selfTests.filter(t => !t.ok);
-    const tampered = input.integrity?.status === 'tampered';
-    // container firewall events are reported in the container section, with their source
-    const fw = firewallSummary(input.firewall.filter(e => !CONTAINER_PREFIXES.has(e.prefix)));
-    const sudoRan = input.sudo?.ran.length ?? 0;
-    const suggest = suggestedAllowlist(denied);
     const filterBlocks = input.httpFilter?.blocks ?? [];
-    const filtered = filterBlocks.length
-        ? filterBlocks.reduce((a, b) => a + b.tries, 0)
-        : groups.filtered.reduce((a, h) => a + h.requests, 0);
-    const hostsDenied = denied.length - groups.filtered.length;
-    // ---- title + chips
-    let md = `## 🛡️ Safer Runner — egress${advisory ? ` — enforce (ADVISORY — ${advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
-    const chips = [advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
+    return {
+        input,
+        mode,
+        enforce,
+        advisoryWhat,
+        advisory: advisoryWhat !== '',
+        dnsRefused: new Set(input.dnsRefused.map(n => n.toLowerCase())),
+        blockedWord: enforce ? 'blocked' : 'would be blocked',
+        denied,
+        allowed,
+        groups,
+        bypass: [...groups.fronting, ...groups.internal],
+        jobHosts,
+        platform,
+        all: totals(allowed),
+        plat: totals(platform),
+        selfOk: input.selfTests.filter(t => t.ok).length,
+        selfFailed: input.selfTests.filter(t => !t.ok),
+        tampered: input.integrity?.status === 'tampered',
+        // container firewall events are reported in the container section, with their source
+        fw: (0, firewall_log_1.firewallSummary)(input.firewall.filter(e => !firewall_log_1.CONTAINER_PREFIXES.has(e.prefix))),
+        sudoRan: input.sudo?.ran.length ?? 0,
+        suggest: (0, flows_1.suggestedAllowlist)(denied),
+        filterBlocks,
+        filtered: filterBlocks.reduce((a, b) => a + b.tries, 0),
+        hostsDenied: denied.length - groups.filtered.length
+    };
+}
+function titleAndChips(f) {
+    const { input, enforce } = f;
+    let md = `## 🛡️ Safer Runner — egress${f.advisory ? ` — enforce (ADVISORY — ${f.advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
+    const chips = [f.advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
     if (enforce) {
         if (input.sudoRetained)
             chips.push('⚠️ sudo retained');
@@ -2940,36 +3119,40 @@ function buildReport(input) {
         chips.push(integrityChip(input.integrity?.status));
     }
     else {
-        if (hostsDenied)
-            chips.push(`${plural(hostsDenied, 'host')} would be blocked`);
-        if (filtered)
-            chips.push(`${plural(filtered, 'request')} the http-filter would refuse`);
-        if (!hostsDenied && !filtered)
+        if (f.hostsDenied)
+            chips.push(`${(0, markdown_1.plural)(f.hostsDenied, 'host')} would be blocked`);
+        if (f.filtered)
+            chips.push(`${(0, markdown_1.plural)(f.filtered, 'request')} the http-filter would refuse`);
+        if (!f.hostsDenied && !f.filtered)
             chips.push('nothing would be blocked');
     }
     if (input.selfTests.length) {
-        chips.push(`${selfFailed.length ? '❌' : '🧪'} self-tests ${selfOk}/${input.selfTests.length}`);
+        chips.push(`${f.selfFailed.length ? '❌' : '🧪'} self-tests ${f.selfOk}/${input.selfTests.length}`);
     }
-    md += chips.map(c => `<kbd>${c}</kbd>`).join(' ') + '\n\n';
-    // ---- verdict alerts (top level only: alerts don't render inside <details>)
+    return md + chips.map(c => `<kbd>${c}</kbd>`).join(' ') + '\n\n';
+}
+/** Verdict alerts (top level only: alerts don't render inside <details>). */
+function alerts(f) {
+    const { input, enforce, groups, bypass, filtered, suggest, sudoRan } = f;
+    let md = '';
     const critical = [];
     if (bypass.length) {
         const kinds = [];
         if (groups.fronting.length)
-            kinds.push(plural(groups.fronting.length, 'Host/SNI spoof'));
+            kinds.push((0, markdown_1.plural)(groups.fronting.length, 'Host/SNI spoof'));
         if (groups.internal.length) {
-            kinds.push(`${plural(groups.internal.length, 'name')} that point${groups.internal.length === 1 ? 's' : ''} at internal addresses`);
+            kinds.push(`${(0, markdown_1.plural)(groups.internal.length, 'name')} that point${groups.internal.length === 1 ? 's' : ''} at internal addresses`);
         }
         critical.push(enforce
-            ? `**Bypass attempts to ${plural(bypass.length, 'host')} were blocked** — ${kinds.join(' and ')}.\n` +
+            ? `**Bypass attempts to ${(0, markdown_1.plural)(bypass.length, 'host')} were blocked** — ${kinds.join(' and ')}.\n` +
                 '> Nothing in a normal build does this. Check the steps that ran before the post step.'
-            : `**Bypass attempts to ${plural(bypass.length, 'host')} were seen and NOT blocked** (analyze mode) — ${kinds.join(' and ')}.\n` +
+            : `**Bypass attempts to ${(0, markdown_1.plural)(bypass.length, 'host')} were seen and NOT blocked** (analyze mode) — ${kinds.join(' and ')}.\n` +
                 '> Enforce would block them. Nothing in a normal build does this: check the steps that ran.');
     }
-    if (selfFailed.length) {
-        critical.push(`**Self-test failed:** ${selfFailed.map(t => `\`${t.name}\``).join(', ')} — the proxy may not be enforcing as designed on this runner.`);
+    if (f.selfFailed.length) {
+        critical.push(`**Self-test failed:** ${f.selfFailed.map(t => `\`${t.name}\``).join(', ')} — the proxy may not be enforcing as designed on this runner.`);
     }
-    if (tampered) {
+    if (f.tampered) {
         critical.push('**Safer Runner configuration changed during the job** — see the config file check under Diagnostics.');
     }
     if (critical.length)
@@ -2996,20 +3179,20 @@ function buildReport(input) {
         const n = groups['not-allowed'].length;
         const what = [];
         if (n)
-            what.push(`${plural(n, 'host')} not on the allowlist ${n === 1 ? 'was' : 'were'} blocked`);
+            what.push(`${(0, markdown_1.plural)(n, 'host')} not on the allowlist ${n === 1 ? 'was' : 'were'} blocked`);
         if (filtered)
-            what.push(`${plural(filtered, 'request')} ${filtered === 1 ? 'was' : 'were'} refused by \`http-filter\``);
+            what.push(`${(0, markdown_1.plural)(filtered, 'request')} ${filtered === 1 ? 'was' : 'were'} refused by \`http-filter\``);
         md += '> [!IMPORTANT]\n' + `> **${what.join('; ')}.** If this job failed, this is probably why — see below.\n\n`;
     }
     if (!enforce && (suggest.length || sudoRan)) {
         md += '> [!IMPORTANT]\n';
         if (suggest.length) {
-            md += `> **Enforce would block ${plural(suggest.length, 'host')} this job used.** Add ${suggest.length === 1 ? 'it' : 'them'} to run this job under \`mode: enforce\` (review each one first):\n>\n`;
+            md += `> **Enforce would block ${(0, markdown_1.plural)(suggest.length, 'host')} this job used.** Add ${suggest.length === 1 ? 'it' : 'them'} to run this job under \`mode: enforce\` (review each one first):\n>\n`;
             const ref = input.actionRef?.trim() || 'v2.0.0';
             const yaml = `- uses: portswigger-tim/safer-runner-action@${ref} # pin an exact version or commit SHA\n  with:\n    mode: enforce\n    allowed-domains: |\n` +
                 suggest.map(s => `      ${s}`).join('\n');
             md +=
-                codeBlock('yaml', yaml)
+                (0, markdown_1.codeBlock)('yaml', yaml)
                     .split('\n')
                     .map(l => `> ${l}`)
                     .join('\n') + '\n';
@@ -3018,98 +3201,104 @@ function buildReport(input) {
             if (suggest.length)
                 md += '>\n';
             md +=
-                `> **This job ran ${plural(sudoRan, 'sudo command')}.** Enforce removes sudo — drop that usage, ` +
+                `> **This job ran ${(0, markdown_1.plural)(sudoRan, 'sudo command')}.** Enforce removes sudo — drop that usage, ` +
                     'or add `disable-sudo: false` (which makes enforce ADVISORY: sudo can remove the controls).\n';
         }
         md += '\n';
     }
-    // ---- scorecard, or the one-line clean verdict
-    const platNote = platform.length && plat.bytes ? ` <sub>(${humanBytes(plat.bytes)} of it GitHub platform)</sub>` : '';
-    const allowedLine = `${plural(allowed.length, 'host')} · ${plural(all.requests, 'request')} · ${humanBytes(all.bytes)}`;
-    if (denied.length === 0 && fw.rows.length === 0) {
-        md += enforce
+    return md;
+}
+/** The scorecard, or the one-line clean verdict. */
+function scorecard(f) {
+    const { enforce, groups, bypass, blockedWord, fw, platform, plat, all } = f;
+    const platNote = platform.length && plat.bytes ? ` <sub>(${(0, markdown_1.humanBytes)(plat.bytes)} of it GitHub platform)</sub>` : '';
+    const allowedLine = `${(0, markdown_1.plural)(f.allowed.length, 'host')} · ${(0, markdown_1.plural)(all.requests, 'request')} · ${(0, markdown_1.humanBytes)(all.bytes)}`;
+    if (f.denied.length === 0 && fw.rows.length === 0) {
+        return enforce
             ? `**✅ Nothing blocked.** ${allowedLine} through the proxy.\n\n`
             : `**✅ Nothing would be blocked.** ${allowedLine} through the proxy.` +
-                (sudoRan ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
+                (f.sudoRan ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
     }
-    else {
-        const rows = [];
-        if (bypass.length)
-            rows.push(['🚨 **Bypass attempts**', `**${plural(bypass.length, 'host')} ${blockedWord}**`]);
-        if (groups['not-allowed'].length) {
-            rows.push([
-                '🚫 **Not on allowlist**',
-                `**${groups['not-allowed'].length} ${blockedWord}** — ${nameList(groups['not-allowed'])}`
-            ]);
-        }
-        if (groups.filtered.length || filterBlocks.length) {
-            rows.push(['🔒 **HTTP filter**', `${plural(filtered, 'request')} ${blockedWord} — ${nameList(groups.filtered)}`]);
-        }
-        if (groups.unresolved.length) {
-            rows.push([
-                '❔ **Did not resolve**',
-                `${groups.unresolved.length} ${blockedWord} — ${nameList(groups.unresolved)}`
-            ]);
-        }
-        if (groups['no-name'].length) {
-            rows.push(['🔢 **No hostname**', `${groups['no-name'].length} ${blockedWord} (raw IP / no SNI)`]);
-        }
-        if (groups.other.length)
-            rows.push(['⚙️ **Other**', `${groups.other.length} ${blockedWord}`]);
-        rows.push(['✅ **Allowed**', allowedLine + platNote]);
-        if (fw.rows.length) {
-            const parts = [];
-            if (fw.rejected)
-                parts.push(`${fw.rejected} rejected`);
-            if (fw.logged)
-                parts.push(`${fw.logged} allowed, not proxied`);
-            const one = fw.rows.length === 1 ? ` (${destinationText(fw.rows[0].e)})` : '';
-            rows.push(['🧱 **Outside the proxy**', parts.join(' · ') + one]);
-        }
-        md += table(['', ''], [':--', ':--'], rows) + '\n\n';
+    const rows = [];
+    if (bypass.length)
+        rows.push(['🚨 **Bypass attempts**', `**${(0, markdown_1.plural)(bypass.length, 'host')} ${blockedWord}**`]);
+    if (groups['not-allowed'].length) {
+        rows.push([
+            '🚫 **Not on allowlist**',
+            `**${groups['not-allowed'].length} ${blockedWord}** — ${nameList(groups['not-allowed'])}`
+        ]);
     }
-    // ---- blocked, grouped by cause, attacks first
+    if (f.filterBlocks.length) {
+        rows.push(['🔒 **HTTP filter**', `${(0, markdown_1.plural)(f.filtered, 'request')} ${blockedWord} — ${nameList(groups.filtered)}`]);
+    }
+    if (groups.unresolved.length) {
+        rows.push([
+            '❔ **Did not resolve**',
+            `${groups.unresolved.length} ${blockedWord} — ${nameList(groups.unresolved)}`
+        ]);
+    }
+    if (groups['no-name'].length) {
+        rows.push(['🔢 **No hostname**', `${groups['no-name'].length} ${blockedWord} (raw IP / no SNI)`]);
+    }
+    if (groups.other.length)
+        rows.push(['⚙️ **Other**', `${groups.other.length} ${blockedWord}`]);
+    rows.push(['✅ **Allowed**', allowedLine + platNote]);
+    if (fw.rows.length) {
+        const parts = [];
+        if (fw.rejected)
+            parts.push(`${fw.rejected} rejected`);
+        if (fw.logged)
+            parts.push(`${fw.logged} allowed, not proxied`);
+        const one = fw.rows.length === 1 ? ` (${destinationText(fw.rows[0].e)})` : '';
+        rows.push(['🧱 **Outside the proxy**', parts.join(' · ') + one]);
+    }
+    return (0, markdown_1.table)(['', ''], [':--', ':--'], rows) + '\n\n';
+}
+/** A `### title (n)` table of blocked hosts; the last column is right-aligned. */
+function hostSection(f, title, rows, header, cells) {
+    const { shown, note } = (0, markdown_1.capped)(rows);
+    return (`### ${title} (${rows.length})${f.enforce ? '' : ' — would be blocked'}\n\n` +
+        (0, markdown_1.table)(header, header.map((_, i) => (i === header.length - 1 ? '--:' : ':--')), shown.map(cells)) +
+        note +
+        '\n\n');
+}
+/** Blocked, grouped by cause, attacks first: bypass attempts, not on the allowlist, refused by http-filter. */
+function blockedSections(f) {
+    const { enforce, groups, bypass, suggest, filterBlocks } = f;
     const verb = enforce ? 'refused' : 'would be refused';
-    const suffix = enforce ? '' : ' — would be blocked';
-    const section = (title, rows, header, cells) => {
-        const { shown, note } = capped(rows);
-        return (`### ${title} (${rows.length})${suffix}\n\n` +
-            table(header, header.map((_, i) => (i === header.length - 1 ? '--:' : ':--')), shown.map(cells)) +
-            note +
-            '\n\n');
-    };
+    let md = '';
     if (bypass.length) {
-        md += section('🚨 Bypass attempts', bypass, ['Host', 'What happened', 'Tries'], h => [
-            code(blockedName(h.name)),
-            categorize(h) === 'fronting' ? frontingCell(h, enforce ? '' : 'not blocked (analyze)') : internalCell(h, verb),
+        md += hostSection(f, '🚨 Bypass attempts', bypass, ['Host', 'What happened', 'Tries'], h => [
+            (0, markdown_1.code)((0, flows_1.blockedName)(h.name)),
+            (0, flows_1.categorize)(h) === 'fronting' ? frontingCell(h, enforce ? '' : 'not blocked (analyze)') : internalCell(h, verb),
             String(h.tries)
         ]);
     }
     if (groups['not-allowed'].length) {
-        md += section('🚫 Not on the allowlist', groups['not-allowed'], ['Host', 'Seen as', 'Tries'], h => {
+        md += hostSection(f, '🚫 Not on the allowlist', groups['not-allowed'], ['Host', 'Seen as', 'Tries'], h => {
             const seen = [];
             if (h.reasons.includes('sni-not-allowed'))
                 seen.push('HTTPS (SNI)');
             if (h.reasons.includes('host-not-allowed'))
                 seen.push('plain HTTP');
-            if (h.reasons.some(r => DENYLISTED.has(r)))
+            if (h.reasons.some(r => flows_1.DENYLISTED.has(r)))
                 seen.push('on the risky-subdomain denylist');
-            if (dnsRefused.has(h.name))
+            if (f.dnsRefused.has(h.name))
                 seen.push('DNS also refused');
-            return [code(blockedName(h.name)), seen.join(' · '), String(h.tries)];
+            return [(0, markdown_1.code)((0, flows_1.blockedName)(h.name)), seen.join(' · '), String(h.tries)];
         });
         if (enforce && suggest.length) {
             md += 'If the job needs them, add them (review each one first):\n\n';
-            md += codeBlock('yaml', 'allowed-domains: |\n' + suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
+            md += (0, markdown_1.codeBlock)('yaml', 'allowed-domains: |\n' + suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
         }
     }
     if (filterBlocks.length) {
-        const { shown, note } = capped(filterBlocks);
-        md += `### 🔒 Refused by \`http-filter\` (${filterBlocks.length})${suffix}\n\n`;
-        md += table(['Host', 'Request', 'Why', 'Tries'], [':--', ':--', ':--', '--:'], shown.map(b => [
-            code(b.host),
-            `${code(b.method)} ${redact_1.PATH_HIDDEN}`,
-            FILTER_REASON_TEXT[b.reason] ?? code(b.reason),
+        const { shown, note } = (0, markdown_1.capped)(filterBlocks);
+        md += `### 🔒 Refused by \`http-filter\` (${filterBlocks.length})${enforce ? '' : ' — would be blocked'}\n\n`;
+        md += (0, markdown_1.table)(['Host', 'Request', 'Why', 'Tries'], [':--', ':--', ':--', '--:'], shown.map(b => [
+            (0, markdown_1.code)(b.host),
+            `${(0, markdown_1.code)(b.method)} ${redact_1.PATH_HIDDEN}`,
+            FILTER_REASON_TEXT[b.reason] ?? (0, markdown_1.code)(b.reason),
             String(b.tries)
         ]));
         md += note + '\n\n';
@@ -3119,38 +3308,40 @@ function buildReport(input) {
                 'the suggested `http-filter` then covers it. Review the rule before you add it: a write is how data ' +
                 'leaves.</sub>\n\n';
     }
-    else if (groups.filtered.length) {
-        md += section('🔒 Refused by `http-filter`', groups.filtered, ['Host', 'Reason', 'Tries'], h => [
-            code(blockedName(h.name)),
-            h.reasons.map(r => FILTER_REASON_TEXT[r] ?? code(r)).join(' · '),
-            String(h.tries)
-        ]);
+    return md;
+}
+function httpFilterSuggestion(f) {
+    const { enforce, filtered } = f;
+    const sug = f.input.httpFilter?.suggestion;
+    if (!sug?.hosts.length || (enforce && !filtered))
+        return '';
+    let md = `<details${filtered && !enforce ? ' open' : ''}>\n<summary>🧰 <b>Suggested <code>http-filter</code></b> — ${compressionText(sug)}</summary>\n\n`;
+    md +=
+        "<sub>Advisory, built from this job's intercepted traffic — never applied for you. Reads collapse to one " +
+            '`"*"` line per host; write paths keep their structure, with ids and hashes as `*`; git push and fetch stay ' +
+            'pinned to the repos this job used. GitHub platform hosts are left out (the built-in platform allowlist covers ' +
+            'them). Add each host to `allowed-domains` too: a filter never grants access.</sub>\n\n';
+    if (sug.coarse) {
+        md += '**⚠️ Coarse — review.** A write rule had to start with `*`, so it allows that write on any path.\n\n';
     }
-    const sug = input.httpFilter?.suggestion;
-    if (sug?.hosts.length && (!enforce || filtered)) {
-        md += `<details${filtered && !enforce ? ' open' : ''}>\n<summary>🧰 <b>Suggested <code>http-filter</code></b> — ${compressionText(sug)}</summary>\n\n`;
-        md +=
-            "<sub>Advisory, built from this job's intercepted traffic — never applied for you. Reads collapse to one " +
-                '`"*"` line per host; write paths keep their structure, with ids and hashes as `*`; git push and fetch stay ' +
-                'pinned to the repos this job used. GitHub platform hosts are left out (the built-in platform allowlist covers ' +
-                'them). Add each host to `allowed-domains` too: a filter never grants access.</sub>\n\n';
-        if (sug.coarse) {
-            md += '**⚠️ Coarse — review.** A write rule had to start with `*`, so it allows that write on any path.\n\n';
-        }
-        md += codeBlock('yaml', httpFilterYaml(sug)) + '\n\n</details>\n\n';
-    }
+    return md + (0, markdown_1.codeBlock)('yaml', (0, http_filter_1.httpFilterYaml)(sug)) + '\n\n</details>\n\n';
+}
+/** The rest of the blocked hosts: did not resolve, no hostname, other. */
+function otherBlockedSections(f) {
+    const { groups, blockedWord } = f;
+    let md = '';
     if (groups.unresolved.length) {
-        md += section('❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
-            code(blockedName(h.name)),
+        md += hostSection(f, '❔ Did not resolve', groups.unresolved, ['Host', 'What happened', 'Tries'], h => [
+            (0, markdown_1.code)((0, flows_1.blockedName)(h.name)),
             'allowed name, but the proxy could not resolve it, so nothing was sent',
             String(h.tries)
         ]);
     }
     if (groups['no-name'].length) {
-        const { shown, note } = capped(groups['no-name']);
+        const { shown, note } = (0, markdown_1.capped)(groups['no-name']);
         md += `<details>\n<summary>🔢 <b>No hostname</b> — ${groups['no-name'].length} ${blockedWord} (raw IP / no SNI)</summary>\n\n`;
-        md += table(['Destination', 'What happened', 'Tries'], [':--', ':--', '--:'], shown.map(h => [
-            code(blockedName(displayName(h))),
+        md += (0, markdown_1.table)(['Destination', 'What happened', 'Tries'], [':--', ':--', '--:'], shown.map(h => [
+            (0, markdown_1.code)((0, flows_1.blockedName)(displayName(h))),
             h.reasons.map(r => NO_NAME_TEXT[r] ?? r).join(' · '),
             String(h.tries)
         ]));
@@ -3158,34 +3349,42 @@ function buildReport(input) {
     }
     if (groups.other.length) {
         // unknown reasons are never dropped: show the raw code
-        md += section('⚙️ Other', groups.other, ['Host', 'Reason', 'Tries'], h => [
-            code(blockedName(h.name)),
-            h.reasons.map(code).join(', '),
+        md += hostSection(f, '⚙️ Other', groups.other, ['Host', 'Reason', 'Tries'], h => [
+            (0, markdown_1.code)((0, flows_1.blockedName)(h.name)),
+            h.reasons.map(markdown_1.code).join(', '),
             String(h.tries)
         ]);
     }
-    // ---- allowed: the job's own hosts open, GitHub platform collapsed
-    if (input.userDomains) {
+    return md;
+}
+/** Allowed: the job's own hosts open, GitHub platform collapsed. */
+function allowedSections(f) {
+    const { jobHosts, platform, plat, allowed } = f;
+    let md = '';
+    if (f.input.userDomains) {
         if (jobHosts.length)
             md += `### Allowed — this job's hosts (${jobHosts.length})\n\n` + allowedTable(jobHosts);
         if (platform.length) {
-            md += `<details>\n<summary>🐙 <b>GitHub platform</b> — ${plural(platform.length, 'host')} · ${plural(plat.requests, 'request')} · ${humanBytes(plat.bytes)} · expected for every job</summary>\n\n`;
+            md += `<details>\n<summary>🐙 <b>GitHub platform</b> — ${(0, markdown_1.plural)(platform.length, 'host')} · ${(0, markdown_1.plural)(plat.requests, 'request')} · ${(0, markdown_1.humanBytes)(plat.bytes)} · expected for every job</summary>\n\n`;
             md += allowedTable(platform) + '</details>\n\n';
         }
     }
     else if (allowed.length) {
         md += `### Allowed (${allowed.length})\n\n` + allowedTable(allowed);
     }
-    md += containerSection(input.containers ?? [], mode);
-    // ---- diagnostics: one collapsed section, every part states its result
+    return md;
+}
+/** Diagnostics: one collapsed section, every part states its result. */
+function diagnostics(f) {
+    const { input, enforce, fw } = f;
     const diag = [];
     let body = '';
     if (input.selfTests.length) {
-        diag.push(`self-tests ${selfOk}/${input.selfTests.length} ${selfFailed.length ? '✗' : '✓'}`);
+        diag.push(`self-tests ${f.selfOk}/${input.selfTests.length} ${f.selfFailed.length ? '✗' : '✓'}`);
         body += '**Self-tests**\n\n';
         body +=
             input.selfTests
-                .map(t => `- ${t.ok ? '✅' : '❌'} ${code(t.name)} — ${t.detail.replace(/[<>|`*_[\]]/g, '\\$&')}`)
+                .map(t => `- ${t.ok ? '✅' : '❌'} ${(0, markdown_1.code)(t.name)} — ${t.detail.replace(/[<>|`*_[\]]/g, '\\$&')}`)
                 .join('\n') + '\n\n';
     }
     else {
@@ -3198,11 +3397,11 @@ function buildReport(input) {
         if (fw.logged)
             p.push(`${fw.logged} allowed outside the proxy`);
         diag.push(p.join(' · '));
-        const { shown, note } = capped(fw.rows);
+        const { shown, note } = (0, markdown_1.capped)(fw.rows);
         body +=
             '**Outside the proxy** <sub>(only TCP 80/443 is proxied; new connections only; logging rate-limited to 60/min)</sub>\n\n';
-        body += table(['Destination', 'Proto', 'Likely', 'UID', 'Packets', 'Result'], [':--', ':--', ':--', '--:', '--:', ':--'], shown.map(({ e, n }) => [
-            code(`${e.dst}:${e.dport}`),
+        body += (0, markdown_1.table)(['Destination', 'Proto', 'Likely', 'UID', 'Packets', 'Result'], [':--', ':--', ':--', '--:', '--:', ':--'], shown.map(({ e, n }) => [
+            (0, markdown_1.code)(`${e.dst}:${e.dport}`),
             e.proto,
             PORT_NAMES[e.dport] ?? '',
             e.uid,
@@ -3215,36 +3414,36 @@ function buildReport(input) {
         diag.push('nothing bypassed the proxy');
     }
     if (input.platformEndpoints) {
-        diag.push(`${plural(input.platformEndpoints, 'platform endpoint')} auto-allowed`);
+        diag.push(`${(0, markdown_1.plural)(input.platformEndpoints, 'platform endpoint')} auto-allowed`);
         body +=
-            `**http-filter** — ${plural(input.platformEndpoints, 'GitHub platform endpoint')} auto-allowed on filtered ` +
+            `**http-filter** — ${(0, markdown_1.plural)(input.platformEndpoints, 'GitHub platform endpoint')} auto-allowed on filtered ` +
                 'hosts by the built-in platform allowlist (`allow-github-platform: false` turns it off)\n\n';
     }
     if (input.dnsRefused.length) {
-        diag.push(plural(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
-        const shownAbove = new Set(denied.map(h => h.name));
+        diag.push((0, markdown_1.plural)(input.dnsRefused.length, enforce ? 'DNS refusal' : 'DNS lookup enforce would refuse'));
+        const shownAbove = new Set(f.denied.map(h => h.name));
         const rest = input.dnsRefused.filter(d => !shownAbove.has(d.toLowerCase()));
-        const { shown, note } = capped(rest);
+        const { shown, note } = (0, markdown_1.capped)(rest);
         body += `**DNS ${enforce ? 'refused' : 'would refuse'}** (${input.dnsRefused.length}): `;
         body += rest.length
-            ? shown.map(n => code(blockedName(n))).join(', ') + note
+            ? shown.map(n => (0, markdown_1.code)((0, flows_1.blockedName)(n))).join(', ') + note
             : 'all of them are listed with their blocked connection above';
         body += '\n\n';
     }
     if (input.sudo) {
         const { ran, refused, internal } = input.sudo;
-        diag.push((ran.length === 0 ? 'no workflow sudo' : `workflow ran ${plural(ran.length, 'sudo command')}`) +
+        diag.push((ran.length === 0 ? 'no workflow sudo' : `workflow ran ${(0, markdown_1.plural)(ran.length, 'sudo command')}`) +
             (internal.length ? ` (${internal.length} by Safer Runner)` : '') +
-            (refused.length ? ` · ${plural(refused.length, 'sudo attempt')} refused` : ''));
+            (refused.length ? ` · ${(0, markdown_1.plural)(refused.length, 'sudo attempt')} refused` : ''));
         const lines = (cmds) => cmds
             .slice(0, 50)
             .map(c => `$ sudo ${c.targetUser && c.targetUser !== 'root' ? `-u ${c.targetUser} ` : ''}${c.command}${c.args ? ` ${c.args}` : ''}`)
             .join('\n') + (cmds.length > 50 ? `\n# ... +${cmds.length - 50} more (job log)` : '');
-        body += `**Sudo** — the workflow ran ${ran.length ? plural(ran.length, 'command') : 'none'}`;
+        body += `**Sudo** — the workflow ran ${ran.length ? (0, markdown_1.plural)(ran.length, 'command') : 'none'}`;
         body += internal.length ? `; Safer Runner itself ran ${internal.length} (setup, integrity checks, teardown)` : '';
-        body += ran.length ? ':\n\n' + codeBlock('console', lines(ran)) + '\n\n' : '.\n\n';
+        body += ran.length ? ':\n\n' + (0, markdown_1.codeBlock)('console', lines(ran)) + '\n\n' : '.\n\n';
         if (refused.length) {
-            body += `Refused by sudo (${refused.length}):\n\n` + codeBlock('console', lines(refused)) + '\n\n';
+            body += `Refused by sudo (${refused.length}):\n\n` + (0, markdown_1.codeBlock)('console', lines(refused)) + '\n\n';
         }
     }
     if (input.docker) {
@@ -3262,10 +3461,150 @@ function buildReport(input) {
     for (const s of input.extraSections ?? [])
         if (s)
             body += s + '\n\n';
-    md += `<details>\n<summary>🔧 <b>Diagnostics</b> — ${diag.join(' · ')}</summary>\n\n${body}</details>\n\n`;
-    const now = (input.now ?? new Date()).toISOString().replace('T', ' ').slice(0, 16);
-    md += `<sub>${mode} · job ${code(input.job)} · ${now} UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>\n`;
-    return md;
+    return `<details>\n<summary>🔧 <b>Diagnostics</b> — ${diag.join(' · ')}</summary>\n\n${body}</details>\n\n`;
+}
+function footer(f) {
+    const now = (f.input.now ?? new Date()).toISOString().replace('T', ' ').slice(0, 16);
+    return `<sub>${f.mode} · job ${(0, markdown_1.code)(f.input.job)} · ${now} UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>\n`;
+}
+function buildReport(input) {
+    const f = facts(input);
+    return [
+        titleAndChips(f),
+        alerts(f),
+        scorecard(f),
+        blockedSections(f),
+        httpFilterSuggestion(f),
+        otherBlockedSections(f),
+        allowedSections(f),
+        (0, containers_1.containerSection)(input.containers ?? [], f.mode),
+        diagnostics(f),
+        footer(f)
+    ].join('');
+}
+
+
+/***/ }),
+
+/***/ 9829:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Runs the http-filter suggester (proxy/suggest.py) for the report.
+ *
+ * The suggestion is built in Python, next to the matcher that enforces it, so there is one copy
+ * of the path matching and of the path-segment redaction a suggestion needs. This side only
+ * passes the allowed requests in and checks that what comes back is safe to print as YAML.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.defaultPython = defaultPython;
+exports.parseSuggestion = parseSuggestion;
+exports.suggestHttpFilter = suggestHttpFilter;
+const child_process_1 = __nccwpck_require__(5317);
+const fs = __importStar(__nccwpck_require__(9896));
+const redact_1 = __nccwpck_require__(8646);
+/** The system interpreter when there is one: a job's own PATH (setup-python, GITHUB_PATH) can't swap it. */
+function defaultPython() {
+    return fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : 'python3';
+}
+/** -I: no PYTHON* variables, user site or current directory (the job's workspace) on the path. */
+const RUN = 'import sys; sys.path.insert(0, sys.argv[1]); import suggest; suggest.main()';
+const TIMEOUT_MS = 60_000;
+const EMPTY = { hosts: [], requests: 0, rules: 0, specific: 0, coarse: false };
+/** what suggest.py can print: well-formed names, templated paths, standard methods */
+const HOST = /^[a-z0-9_.-]+$/;
+const PATH = /^[A-Za-z0-9._~@+*/-]+$/;
+function isCount(n) {
+    return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+}
+/** The suggestion, or throws when anything in it is not what suggest.py prints. */
+function parseSuggestion(value) {
+    const s = value;
+    const ok = typeof s === 'object' &&
+        s !== null &&
+        Array.isArray(s.hosts) &&
+        isCount(s.requests) &&
+        isCount(s.rules) &&
+        isCount(s.specific) &&
+        typeof s.coarse === 'boolean' &&
+        s.hosts.every(h => typeof h?.host === 'string' &&
+            HOST.test(h.host) &&
+            Array.isArray(h.rules) &&
+            h.rules.every(r => typeof r?.path === 'string' &&
+                PATH.test(r.path) &&
+                Array.isArray(r.methods) &&
+                r.methods.every(m => typeof m === 'string' && redact_1.STANDARD_METHODS.includes(m))));
+    if (!ok)
+        throw new Error('unexpected output from suggest.py');
+    return {
+        hosts: s.hosts.map(h => ({ host: h.host, rules: h.rules.map(r => ({ path: r.path, methods: [...r.methods] })) })),
+        requests: s.requests,
+        rules: s.rules,
+        specific: s.specific,
+        coarse: s.coarse
+    };
+}
+/**
+ * The suggested http-filter for these allowed requests, from proxy/suggest.py in `proxyDir`.
+ * Throws when it can't be built: the caller reports without a suggestion.
+ */
+function suggestHttpFilter(requests, proxyDir, python = defaultPython()) {
+    if (!requests.length)
+        return { ...EMPTY, hosts: [] };
+    const run = (0, child_process_1.spawnSync)(python, ['-I', '-c', RUN, proxyDir], {
+        input: JSON.stringify({ requests }),
+        encoding: 'utf8',
+        timeout: TIMEOUT_MS,
+        maxBuffer: 64 * 1024 * 1024
+    });
+    if (run.error)
+        throw run.error;
+    // stderr is not passed on: an error message can quote a request path, and the job log is public
+    if (run.status !== 0)
+        throw new Error(`suggest.py exited ${run.status ?? run.signal}`);
+    let out;
+    try {
+        out = JSON.parse(run.stdout);
+    }
+    catch {
+        throw new Error('suggest.py printed no JSON');
+    }
+    return parseSuggestion(out);
 }
 
 
@@ -5648,130 +5987,6 @@ function withoutSelfTests(records, offsets, window) {
             return !(r.sni === constants_1.SELFTEST_HOST || r.host === constants_1.SELFTEST_HOST);
         return !(offsets[i] >= window[0] && offsets[i] < window[1]);
     });
-}
-
-
-/***/ }),
-
-/***/ 3146:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * Runs the http-filter suggester (proxy/suggest.py) for the report.
- *
- * The suggestion is built in Python, next to the matcher that enforces it, so there is one copy
- * of the path matching and of the path-segment redaction a suggestion needs. This side only
- * passes the allowed requests in and checks that what comes back is safe to print as YAML.
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.defaultPython = defaultPython;
-exports.parseSuggestion = parseSuggestion;
-exports.suggestHttpFilter = suggestHttpFilter;
-const child_process_1 = __nccwpck_require__(5317);
-const fs = __importStar(__nccwpck_require__(9896));
-const redact_1 = __nccwpck_require__(283);
-/** The system interpreter when there is one: a job's own PATH (setup-python, GITHUB_PATH) can't swap it. */
-function defaultPython() {
-    return fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : 'python3';
-}
-/** -I: no PYTHON* variables, user site or current directory (the job's workspace) on the path. */
-const RUN = 'import sys; sys.path.insert(0, sys.argv[1]); import suggest; suggest.main()';
-const TIMEOUT_MS = 60_000;
-const EMPTY = { hosts: [], requests: 0, rules: 0, specific: 0, coarse: false };
-/** what suggest.py can print: well-formed names, templated paths, standard methods */
-const HOST = /^[a-z0-9_.-]+$/;
-const PATH = /^[A-Za-z0-9._~@+*/-]+$/;
-function isCount(n) {
-    return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
-}
-/** The suggestion, or throws when anything in it is not what suggest.py prints. */
-function parseSuggestion(value) {
-    const s = value;
-    const ok = typeof s === 'object' &&
-        s !== null &&
-        Array.isArray(s.hosts) &&
-        isCount(s.requests) &&
-        isCount(s.rules) &&
-        isCount(s.specific) &&
-        typeof s.coarse === 'boolean' &&
-        s.hosts.every(h => typeof h?.host === 'string' &&
-            HOST.test(h.host) &&
-            Array.isArray(h.rules) &&
-            h.rules.every(r => typeof r?.path === 'string' &&
-                PATH.test(r.path) &&
-                Array.isArray(r.methods) &&
-                r.methods.every(m => typeof m === 'string' && redact_1.STANDARD_METHODS.includes(m))));
-    if (!ok)
-        throw new Error('unexpected output from suggest.py');
-    return {
-        hosts: s.hosts.map(h => ({ host: h.host, rules: h.rules.map(r => ({ path: r.path, methods: [...r.methods] })) })),
-        requests: s.requests,
-        rules: s.rules,
-        specific: s.specific,
-        coarse: s.coarse
-    };
-}
-/**
- * The suggested http-filter for these allowed requests, from proxy/suggest.py in `proxyDir`.
- * Throws when it can't be built: the caller reports without a suggestion.
- */
-function suggestHttpFilter(requests, proxyDir, python = defaultPython()) {
-    if (!requests.length)
-        return { ...EMPTY, hosts: [] };
-    const run = (0, child_process_1.spawnSync)(python, ['-I', '-c', RUN, proxyDir], {
-        input: JSON.stringify({ requests }),
-        encoding: 'utf8',
-        timeout: TIMEOUT_MS,
-        maxBuffer: 64 * 1024 * 1024
-    });
-    if (run.error)
-        throw run.error;
-    // stderr is not passed on: an error message can quote a request path, and the job log is public
-    if (run.status !== 0)
-        throw new Error(`suggest.py exited ${run.status ?? run.signal}`);
-    let out;
-    try {
-        out = JSON.parse(run.stdout);
-    }
-    catch {
-        throw new Error('suggest.py printed no JSON');
-    }
-    return parseSuggestion(out);
 }
 
 

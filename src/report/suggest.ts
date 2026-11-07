@@ -8,7 +8,8 @@
 
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
-import type { AllowedRequest, HttpFilterSuggestion } from './report';
+import type { AllowedRequest } from './aggregate/flows';
+import type { HttpFilterSuggestion } from './aggregate/http-filter';
 import { STANDARD_METHODS } from './redact';
 
 /** The system interpreter when there is one: a job's own PATH (setup-python, GITHUB_PATH) can't swap it. */
