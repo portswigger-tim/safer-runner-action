@@ -3,7 +3,7 @@ import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
-import { SETUP_MARKER } from './egress';
+import { SETUP_MARKER } from './setup/run';
 import { parseFlowLogWithOffsets } from './flowlog';
 import { readRefusedNames } from './parsers/dns-parser';
 import { PATH_HIDDEN } from './redact';
@@ -17,14 +17,14 @@ import {
   type AllowedRequest,
   type HttpFilterSuggestion
 } from './report';
-import { containerAddresses } from './docker';
-import { actionRoot } from './proxy';
-import { type SelfTestWindow, withoutSelfTests } from './selftest';
+import { containerAddresses } from './services/docker';
+import { actionRoot } from './services/mitmproxy';
+import { type SelfTestWindow, withoutSelfTests } from './setup/selftest';
 import { suggestHttpFilter } from './suggest';
-import { readSudoUsage } from './sudo';
-import { SystemValidator } from './validation';
+import { readSudoUsage } from './services/sudo';
+import { SystemValidator } from './integrity/baseline';
 import { parseAllowedDomains, type Mode } from './policy';
-import { effectiveFailOnTampering } from './inputs';
+import { effectiveFailOnTampering } from './config/inputs';
 
 interface SetupMarker {
   mode: Mode;

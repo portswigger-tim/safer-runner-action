@@ -1,5 +1,5 @@
 /**
- * Tests for sudo.ts - covers both classic sudo (Ubuntu 24.04) and sudo-rs (Ubuntu 25.10+ / 26.04)
+ * Tests for the sudo service - covers both classic sudo (Ubuntu 24.04) and sudo-rs (Ubuntu 25.10+ / 26.04)
  */
 
 import * as core from '@actions/core';
@@ -20,7 +20,7 @@ import {
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_SUDOERS_FILE,
   SUDO_LOGGING_RSYSLOG_FILE
-} from './sudo';
+} from '.';
 
 jest.mock('@actions/core');
 jest.mock('@actions/exec');

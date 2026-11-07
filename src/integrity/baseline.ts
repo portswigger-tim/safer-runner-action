@@ -17,7 +17,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
-import { VALIDATION_STATE_FILE } from './constants';
+import { VALIDATION_STATE_FILE } from '../constants';
 
 interface FileChecksum {
   path: string;

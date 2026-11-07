@@ -381,7 +381,7 @@ describe('parseHttpFilter: strict YAML (fails closed)', () => {
 
 describe('path pattern validation (shared vectors with proxy/policy_core.py)', () => {
   const vectors = JSON.parse(
-    require('fs').readFileSync(require('path').join(__dirname, '..', 'proxy', 'test-vectors.json'), 'utf8')
+    require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
   );
   it.each(vectors.invalid_path_patterns as string[])('rejects %p', p => {
     expect(() => parseHttpFilter(JSON.stringify({ 'example.org': { [p]: 'GET' } }))).toThrow();

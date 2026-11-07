@@ -1,4 +1,4 @@
-import { PROXY_PORT_BAND, allocateProxyPorts, mitmdumpArgs } from './proxy';
+import { PROXY_PORT_BAND, allocateProxyPorts, mitmdumpArgs } from '.';
 
 describe('mitmdumpArgs', () => {
   const args = mitmdumpArgs({ port: 8080, containerPort: 8081 });

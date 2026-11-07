@@ -26,17 +26,18 @@ import {
   LOG_PREFIX_DROP,
   SELFTEST_FILE,
   SUDO_LOG
-} from './constants';
-import { flowLogSize } from './flowlog';
+} from '../constants';
+import { flowLogSize } from '../flowlog';
 import {
   applyFirewall,
   detectEgressInterface,
   flushContainerConntrack,
   killPreexistingConnections,
-  logFirewall
-} from './firewall';
-import type { DockerPolicy, Inputs } from './inputs';
-import { CONTAINER_TLS, buildPolicyConfig } from './policy';
+  logFirewall,
+  setupIptablesLogging
+} from '../services/iptables';
+import type { DockerPolicy, Inputs } from '../config/inputs';
+import { CONTAINER_TLS, buildPolicyConfig } from '../policy';
 import {
   allocateProxyPorts,
   createProxyUser,
@@ -46,18 +47,19 @@ import {
   installTeardownHelper,
   startProxy,
   writePolicy
-} from './proxy';
+} from '../services/mitmproxy';
 import { dnsProbeName, runSelfTests } from './selftest';
 import {
-  createLogDirectory,
   createRandomDNSUser,
+  installCoreDns,
+  localHosts,
   restartResolved,
   setupDNSConfig,
-  setupIptablesLogging
-} from './setup';
-import { installCoreDns, localHosts, startCoreDns, writeCorefile } from './dns';
-import { resolveGitHubDomains } from './parsers/github-parser';
-import { detectSudoFlavour, disableSudoForRunner, getSudoLoggingConfigFile, setupSudoLogging } from './sudo';
+  startCoreDns,
+  writeCorefile
+} from '../services/coredns';
+import { resolveGitHubDomains } from '../config/github-domains';
+import { detectSudoFlavour, disableSudoForRunner, getSudoLoggingConfigFile, setupSudoLogging } from '../services/sudo';
 import {
   type DockerAccess,
   type DockerState,
@@ -68,15 +70,32 @@ import {
   restartDockerForCaTrust,
   runningContainers,
   stopDockerService
-} from './docker';
-import { exportTrustEnv, installJavaTrust, installSystemTrust } from './trust';
-import { CRITICAL_FILES, SystemValidator } from './validation';
+} from '../services/docker';
+import { exportTrustEnv, installJavaTrust, installSystemTrust } from '../services/mitmproxy/trust';
+import { CRITICAL_FILES, SystemValidator } from '../integrity/baseline';
 
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 export const SETUP_MARKER = '/etc/safer-runner/setup-complete';
 
 /** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
 const DNS_READY_NAME = 'github.com';
+
+/**
+ * Create /var/log/safer-runner directory with proper permissions
+ * This directory will contain all safer-runner log files (DNS, iptables, sudo)
+ */
+async function createLogDirectory(): Promise<void> {
+  const logDir = '/var/log/safer-runner';
+
+  // Create directory
+  await exec.exec('sudo', ['mkdir', '-p', logDir]);
+
+  // Set ownership to syslog:adm (rsyslog runs as syslog, runner is in adm group)
+  await exec.exec('sudo', ['chown', 'syslog:adm', logDir]);
+
+  // Make directory readable by all (so runner can read logs without sudo)
+  await exec.exec('sudo', ['chmod', '755', logDir]);
+}
 
 export function setupCompleted(): boolean {
   return fs.existsSync(SETUP_MARKER);

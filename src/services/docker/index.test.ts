@@ -1,5 +1,5 @@
 /**
- * Tests for docker.ts
+ * Tests for the docker service
  */
 
 import * as core from '@actions/core';
@@ -18,7 +18,7 @@ import {
   DOCKER_SOCKET,
   mergeLiveRestore,
   parseContainerAddresses
-} from './docker';
+} from '.';
 
 jest.mock('@actions/core');
 jest.mock('@actions/exec');

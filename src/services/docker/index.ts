@@ -5,7 +5,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { DOCKER_DAEMON_JSON } from './constants';
+import { DOCKER_DAEMON_JSON } from '../../constants';
 
 // Constants
 export const RUNNER_USERNAME = 'runner';

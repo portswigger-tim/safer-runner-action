@@ -28,15 +28,15 @@ import {
   TEARDOWN_BIN,
   VALIDATION_STATE_FILE
 } from './constants';
-import { runSetup, SETUP_MARKER } from './egress';
-import { readInputs } from './inputs';
+import { runSetup, SETUP_MARKER } from './setup/run';
+import { readInputs } from './config/inputs';
 import { classifySudoCommands, type SudoCommand } from './parsers/sudo-parser';
 import {
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_RSYSLOG_FILE,
   SUDO_LOGGING_SUDOERS_FILE,
   getValidationSudoCommands
-} from './sudo';
+} from './services/sudo';
 
 // ------------------------------------------------------------------ external boundaries
 

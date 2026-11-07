@@ -11,7 +11,7 @@ import {
   buildNatRules,
   parseDefaultRouteInterfaces,
   parseDockerSubnets
-} from './firewall';
+} from '.';
 
 jest.mock('@actions/core');
 jest.mock('@actions/exec');

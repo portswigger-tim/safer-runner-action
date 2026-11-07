@@ -1,11 +1,11 @@
 import * as exec from '@actions/exec';
-import { setupIptablesLogging } from './setup';
+import { setupIptablesLogging } from './index';
 
 // Mock @actions/exec
 jest.mock('@actions/exec');
 jest.mock('@actions/core');
 
-describe('setup.ts', () => {
+describe('setupIptablesLogging', () => {
   let execSpy: jest.SpyInstance;
   let capturedCommands: Array<{ program: string; args: string[] }>;
 

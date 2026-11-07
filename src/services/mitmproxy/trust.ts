@@ -8,7 +8,7 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as path from 'path';
-import { CA_BUNDLE, CA_CERT_FILE, SYSTEM_CA_FILE } from './constants';
+import { CA_BUNDLE, CA_CERT_FILE, SYSTEM_CA_FILE } from '../../constants';
 
 const JAVA_ALIAS = 'safer-runner-ca';
 

@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { allowExpr, buildCorefile, parseHostsNames, patternsExpr } from './corefile-builder';
-import { compilePattern, matchesAny, normHost } from '../policy';
+import { allowExpr, buildCorefile, parseHostsNames, patternsExpr } from './config';
+import { compilePattern, matchesAny, normHost } from '../../policy';
 
-const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8'));
+const vectors = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
+);
 
 /**
  * Evaluate the subset of expr-lang the builder emits, the way CoreDNS's view plugin does

@@ -1,1619 +1,456 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 6100:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * Corefile builder for the CoreDNS resolver (replaces dnsmasq). Pure functions, no I/O.
- *
- * enforce: one server block selected by a `view` expression that mirrors the proxy's pattern
- * set exactly (src/policy.ts compilePattern / proxy/policy_core.py compile_pattern; all three
- * are checked against proxy/test-vectors.json), forwarding to the upstreams; and a catch-all
- * block that answers NXDOMAIN locally. So a subdomain of an exact entry
- * (`<secret>.example.com`) is refused on the host and never forwarded: default-deny, fail
- * closed (a view that matches nothing denies; a Corefile that doesn't parse means nothing
- * listens on :53).
- *
- * analyze: both blocks forward. The second one labels what enforce would refuse.
- *
- * /etc/hosts names (+ the VM's hostname) are routed to the allow block and answered there by
- * the `hosts` plugin (it runs after `template` in CoreDNS's plugin order, so it can't live in
- * the deny block).
- *
- * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
- * format, so the report parser never has to infer a verdict (src/parsers/dns-parser.ts).
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CACHE_TTL = exports.DNS_LISTEN = void 0;
-exports.parseHostsNames = parseHostsNames;
-exports.patternsExpr = patternsExpr;
-exports.allowExpr = allowExpr;
-exports.buildCorefile = buildCorefile;
-const net = __importStar(__nccwpck_require__(9278));
-const policy_1 = __nccwpck_require__(2224);
-exports.DNS_LISTEN = '127.0.0.1';
-/** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
-exports.CACHE_TTL = 3600;
-const LOCAL_NAME = /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/;
-/** Hostnames from an /etc/hosts file (lower-cased, unique; comments and odd names skipped). */
-function parseHostsNames(text) {
-    const out = new Set();
-    for (const raw of text.split('\n')) {
-        const fields = raw.replace(/#.*/, '').trim().split(/\s+/);
-        if (fields.length < 2 || net.isIP(fields[0]) === 0)
-            continue;
-        for (const n of fields.slice(1)) {
-            const name = n.toLowerCase().replace(/\.$/, '');
-            if (LOCAL_NAME.test(name))
-                out.add(name);
-        }
-    }
-    return Array.from(out);
-}
-const LOG_ALLOW = '{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}';
-const logLine = (label) => `{remote} ${label} {type} {name} {rcode} upstream={/forward/upstream} {duration}`;
-/** expr string literal for a DNS name (CoreDNS's name() is lower-case and fully qualified). */
-function lit(s, allowed = /^[a-z0-9_.-]+$/) {
-    // validatePattern restricts the charset to [a-z0-9_*.-]; refuse anything that could break
-    // out of the quoted literal (a quote, a backslash, whitespace), whatever the caller passed
-    if (!allowed.test(s))
-        throw new Error(`unsafe DNS name for the Corefile: '${s}'`);
-    return `'${s}'`;
-}
-function regexFor(globPattern) {
-    const body = globPattern
-        .split('*')
-        .map(part => part.replace(/\./g, '[.]'))
-        .join('[a-z0-9_-]*');
-    return `^${body}[.]$`;
-}
-/**
- * The expr clause for a set of patterns: exact names batched into one `in [...]`, `*.x` as
- * `endsWith '.x.'`, a single-label glob as an anchored regex.
- */
-function patternsExpr(patterns) {
-    const exact = [];
-    const terms = [];
-    for (const raw of patterns) {
-        const p = (0, policy_1.validatePattern)(raw);
-        if (p.startsWith('*.')) {
-            terms.push(`name() endsWith ${lit('.' + p.slice(2) + '.')}`);
-        }
-        else if (p.includes('*')) {
-            terms.push(`name() matches ${lit(regexFor(p), /^\^[a-z0-9_.\[\]*-]+\$$/)}`);
-        }
-        else {
-            exact.push(lit(p + '.'));
-        }
-    }
-    if (exact.length)
-        terms.unshift(`name() in [${Array.from(new Set(exact)).join(', ')}]`);
-    return terms.length ? terms.join(' || ') : 'false';
-}
-/** The full `view` expression: allowed and not denied. */
-function allowExpr(allow, deny) {
-    const a = `(${patternsExpr(allow)})`;
-    return deny.length ? `${a} && !(${patternsExpr(deny)})` : a;
-}
-function hostsLines(h) {
-    if (!/^\/[A-Za-z0-9_./-]+$/.test(h.file))
-        throw new Error(`invalid hosts file path: '${h.file}'`);
-    const inline = h.inline.map(({ ip, name }) => {
-        if (net.isIP(ip) === 0 || !LOCAL_NAME.test(name))
-            throw new Error(`invalid hosts entry: '${ip} ${name}'`);
-        return `    ${ip} ${name}`;
-    });
-    // fallthrough: allowlisted names not in the file go on to forward
-    return [`  hosts ${h.file} {`, ...inline, `    fallthrough`, `  }`];
-}
-/** dns-servers order matters: the first is the primary, the rest are tried in order after it. */
-function forwardLines(upstreams) {
-    if (upstreams.length === 1)
-        return [`  forward . ${upstreams[0]}`];
-    return [`  forward . ${upstreams.join(' ')} {`, `    policy sequential`, `  }`];
-}
-function forwardBlock(label, upstreams, view, hosts) {
-    return [
-        `.:53 {`,
-        `  bind ${exports.DNS_LISTEN}`,
-        ...(view ? [`  view allow {`, `    expr ${view}`, `  }`] : []),
-        `  metadata`,
-        `  log . "${label === 'ALLOW' ? LOG_ALLOW : logLine(label)}"`,
-        `  errors`,
-        ...(hosts ? hostsLines(hosts) : []),
-        `  cache ${exports.CACHE_TTL} {`,
-        `    serve_stale 1h`,
-        `  }`,
-        ...forwardLines(upstreams),
-        `}`
-    ].join('\n');
-}
-function buildCorefile(o) {
-    if (!o.upstreams.length)
-        throw new Error('no upstream DNS servers');
-    for (const u of o.upstreams) {
-        if (!/^[0-9a-f.:]+$/i.test(u))
-            throw new Error(`invalid upstream DNS server: '${u}'`);
-    }
-    let view = allowExpr(o.allow, o.deny);
-    const local = o.hosts
-        ? Array.from(new Set([...o.hosts.names, ...o.hosts.inline.map(e => e.name)].map(n => n.toLowerCase())))
-        : [];
-    if (local.length) {
-        view = `(${view}) || name() in [${local.map(n => lit(n + '.', /^[a-z0-9_.-]+$/)).join(', ')}]`;
-    }
-    const header = `# safer-runner CoreDNS resolver (${o.mode}). Generated - do not edit.\n` +
-        '# Blocks are tried in order: the first whose view matches answers the query.\n';
-    const deny = o.mode === 'enforce'
-        ? [
-            `.:53 {`,
-            `  bind ${exports.DNS_LISTEN}`,
-            `  log . "{remote} BLOCK {type} {name} {rcode}"`,
-            `  errors`,
-            `  template ANY ANY {`,
-            `    rcode NXDOMAIN`,
-            `  }`,
-            `}`
-        ].join('\n')
-        : forwardBlock('WOULD_BLOCK', o.upstreams);
-    return `${header}${forwardBlock('ALLOW', o.upstreams, view, o.hosts)}\n${deny}\n`;
-}
-
-
-/***/ }),
-
-/***/ 8729:
+/***/ 5863:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
-/**
- * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
- */
+// GENERATED by `npm run gen:domains` from api.github.com/meta .domains.actions +
+// .domains.artifact_attestations on 2026-11-05
+// - do not edit by hand. Verbatim; github-domains.ts normalises it like the live list (offline fallback).
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
-/** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
-exports.MITMPROXY_VERSION = '12.3.1';
-exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
-/** sha256 of the tarball above (verified before anything is extracted). */
-exports.MITMPROXY_SHA256 = 'f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5';
-/**
- * CoreDNS is the resolver (replaced dnsmasq): stock upstream release, sha256-pinned. It is
- * not in the Ubuntu 24.04/26.04 archives. amd64 only, like mitmproxy above.
- */
-exports.COREDNS_VERSION = '1.15.0';
-exports.COREDNS_URL = `https://github.com/coredns/coredns/releases/download/v${exports.COREDNS_VERSION}/coredns_${exports.COREDNS_VERSION}_linux_amd64.tgz`;
-/** sha256 of the tarball above (matches upstream's published .sha256). */
-exports.COREDNS_SHA256 = '2495c5b8f3fab6d0a336c397f1227b75406d86e6ec7125744a29df9e936ab8cd';
-exports.DNS_UNIT = 'safer-runner-dns';
-/** Dedicated system user the proxy runs as. Its UID is exempt from the REDIRECT. */
-exports.PROXY_USER = 'safer-runner-proxy';
-exports.PROXY_UNIT = 'safer-runner-proxy';
-exports.PROXY_LISTEN_HOST = '127.0.0.1';
-/** mitmproxy stream_large_bodies: larger bodies are streamed instead of buffered. */
-exports.PROXY_STREAM_LARGE_BODIES = '1m';
-/** Root-owned install location: the runner user must not be able to change what the proxy loads. */
-exports.INSTALL_DIR = '/opt/safer-runner';
-exports.MITMDUMP_BIN = `${exports.INSTALL_DIR}/bin/mitmdump`;
-exports.ADDON_DIR = `${exports.INSTALL_DIR}/proxy`;
-exports.ADDON_FILES = ['policy.py', 'policy_core.py'];
-exports.TEARDOWN_BIN = `${exports.INSTALL_DIR}/bin/teardown`;
-exports.COREDNS_BIN = `${exports.INSTALL_DIR}/bin/coredns`;
-/** Root-owned config. policy.json is read by the addon at (re)start. */
-exports.ETC_DIR = '/etc/safer-runner';
-exports.POLICY_FILE = `${exports.ETC_DIR}/policy.json`;
-/** CoreDNS config: root:root 0644 (holds only the allowlist, which policy.json already shows). */
-exports.COREFILE = `${exports.ETC_DIR}/Corefile`;
-/** Public CA certificate (world-readable) - what NODE_EXTRA_CA_CERTS points at. */
-exports.CA_CERT_FILE = `${exports.ETC_DIR}/ca.pem`;
-/**
- * Integrity baseline for fail-on-tampering: root:root 0600, so the runner user can neither
- * read nor rewrite it to match a tampered state (review M1). The post step reads it through
- * an exact `sudo cat` entry that stays allowed with disable-sudo.
- */
-exports.VALIDATION_STATE_FILE = `${exports.ETC_DIR}/validation-state.json`;
-exports.SYSTEM_CA_FILE = '/usr/local/share/ca-certificates/safer-runner-ca.crt';
-/** Regenerated by update-ca-certificates: system roots + our CA. */
-exports.CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
-/** Proxy confdir holding the CA private key: tmpfs, 0700, owned by the proxy user. */
-exports.PROXY_CONF_DIR = '/run/safer-runner/proxy';
-exports.PROXY_CA_KEY_FILE = `${exports.PROXY_CONF_DIR}/mitmproxy-ca.pem`;
-exports.LOG_DIR = '/var/log/safer-runner';
-exports.FLOW_LOG = `${exports.LOG_DIR}/proxy-flows.jsonl`;
-exports.DNS_LOG = `${exports.LOG_DIR}/dns.log`;
-exports.SUDO_LOG = `${exports.LOG_DIR}/sudo.log`;
-exports.FIREWALL_LOG = `${exports.LOG_DIR}/firewall.log`;
-exports.SELFTEST_FILE = `${exports.LOG_DIR}/selftest.json`;
-/** iptables chains we own (filter + nat), and the LOG prefixes they use. */
-exports.FILTER_CHAIN = 'SAFER_RUNNER_OUT';
-exports.NAT_CHAIN = 'SAFER_RUNNER_NAT';
-exports.LOG_PREFIX_DROP = 'SaferRunner-Drop: ';
-exports.LOG_PREFIX_ANALYZE = 'SaferRunner-Egress: ';
-/** Container egress (P2): nat PREROUTING DNAT + a filter chain jumped to from DOCKER-USER. */
-exports.CONTAINER_NAT_CHAIN = 'SAFER_RUNNER_CNAT';
-exports.CONTAINER_FWD_CHAIN = 'SAFER_RUNNER_CFWD';
-exports.LOG_PREFIX_CDROP = 'SaferRunner-CDrop: ';
-exports.LOG_PREFIX_CEGRESS = 'SaferRunner-CEgress: ';
-/** Chain Docker creates and promises never to touch (it re-inserts its own FORWARD jumps on restart). */
-exports.DOCKER_USER_CHAIN = 'DOCKER-USER';
-/**
- * dockerd config: setup merges live-restore into it (F1), and it is where a runtime or proxy
- * override would be planted, so it joins the integrity baseline when setup wrote it.
- */
-exports.DOCKER_DAEMON_JSON = '/etc/docker/daemon.json';
-/** Azure platform endpoints every hosted runner needs (scoped to the ports they use). */
-exports.AZURE_IMDS = '169.254.169.254';
-exports.AZURE_WIRESERVER = '168.63.129.16';
-/** Hostname used by the runtime self-test. `.invalid` never resolves (RFC 6761). */
-exports.SELFTEST_HOST = 'selftest.safer-runner.invalid';
-/** TEST-NET-1 (RFC 5737): never routed. Used to prove the proxy ignores the client's IP. */
-exports.SELFTEST_BOGUS_IP = '192.0.2.1';
+exports.GITHUB_ACTIONS_DOMAINS = void 0;
+exports.GITHUB_ACTIONS_DOMAINS = [
+    'github.com',
+    '*.github.com',
+    '*.githubapp.com',
+    'ghcr.io',
+    'objects.githubusercontent.com',
+    'objects-origin.githubusercontent.com',
+    'github-releases.githubusercontent.com',
+    'github-registry-files.githubusercontent.com',
+    'release-assets.githubusercontent.com',
+    '*.actions.githubusercontent.com',
+    'productionresultssa0.blob.core.windows.net',
+    'productionresultssa1.blob.core.windows.net',
+    'productionresultssa2.blob.core.windows.net',
+    'productionresultssa3.blob.core.windows.net',
+    'productionresultssa4.blob.core.windows.net',
+    'productionresultssa5.blob.core.windows.net',
+    'productionresultssa6.blob.core.windows.net',
+    'productionresultssa7.blob.core.windows.net',
+    'productionresultssa8.blob.core.windows.net',
+    'productionresultssa9.blob.core.windows.net',
+    'productionresultssa10.blob.core.windows.net',
+    'productionresultssa11.blob.core.windows.net',
+    'productionresultssa12.blob.core.windows.net',
+    'productionresultssa13.blob.core.windows.net',
+    'productionresultssa14.blob.core.windows.net',
+    'productionresultssa15.blob.core.windows.net',
+    'productionresultssa16.blob.core.windows.net',
+    'productionresultssa17.blob.core.windows.net',
+    'productionresultssa18.blob.core.windows.net',
+    'productionresultssa19.blob.core.windows.net',
+    'productionresultssa30.blob.core.windows.net',
+    'productionresultssa31.blob.core.windows.net',
+    'productionresultssa32.blob.core.windows.net',
+    'productionresultssa33.blob.core.windows.net',
+    'productionresultssa34.blob.core.windows.net',
+    'productionresultssa35.blob.core.windows.net',
+    'productionresultssa36.blob.core.windows.net',
+    'productionresultssa37.blob.core.windows.net',
+    'productionresultssa38.blob.core.windows.net',
+    'productionresultssa39.blob.core.windows.net',
+    'productionresultssa40.blob.core.windows.net',
+    'productionresultssa41.blob.core.windows.net',
+    'productionresultssa42.blob.core.windows.net',
+    'productionresultssa43.blob.core.windows.net',
+    'productionresultssa44.blob.core.windows.net',
+    'productionresultssa45.blob.core.windows.net',
+    'productionresultssa46.blob.core.windows.net',
+    'productionresultssa47.blob.core.windows.net',
+    'productionresultssa48.blob.core.windows.net',
+    'productionresultssa49.blob.core.windows.net',
+    'productionresultssa100.blob.core.windows.net',
+    'productionresultssa101.blob.core.windows.net',
+    'productionresultssa102.blob.core.windows.net',
+    'productionresultssa103.blob.core.windows.net',
+    'productionresultssa104.blob.core.windows.net',
+    'productionresultssa105.blob.core.windows.net',
+    'productionresultssa106.blob.core.windows.net',
+    'productionresultssa107.blob.core.windows.net',
+    'productionresultssa108.blob.core.windows.net',
+    'productionresultssa109.blob.core.windows.net',
+    'productionresultssa110.blob.core.windows.net',
+    'productionresultssa111.blob.core.windows.net',
+    'productionresultssa112.blob.core.windows.net',
+    'productionresultssa113.blob.core.windows.net',
+    'productionresultssa114.blob.core.windows.net',
+    'productionresultssa115.blob.core.windows.net',
+    'productionresultssa116.blob.core.windows.net',
+    'productionresultssa117.blob.core.windows.net',
+    'productionresultssa118.blob.core.windows.net',
+    'productionresultssa119.blob.core.windows.net',
+    'productionresultssa120.blob.core.windows.net',
+    'productionresultssa121.blob.core.windows.net',
+    'productionresultssa122.blob.core.windows.net',
+    'productionresultssa123.blob.core.windows.net',
+    'productionresultssa124.blob.core.windows.net',
+    'productionresultssa125.blob.core.windows.net',
+    'productionresultssa126.blob.core.windows.net',
+    'productionresultssa127.blob.core.windows.net',
+    'productionresultssa128.blob.core.windows.net',
+    'productionresultssa129.blob.core.windows.net',
+    'productionresultssa130.blob.core.windows.net',
+    'productionresultssa131.blob.core.windows.net',
+    'productionresultssa132.blob.core.windows.net',
+    'productionresultssa133.blob.core.windows.net',
+    'productionresultssa134.blob.core.windows.net',
+    'productionresultssa135.blob.core.windows.net',
+    'productionresultssa136.blob.core.windows.net',
+    'productionresultssa137.blob.core.windows.net',
+    'productionresultssa138.blob.core.windows.net',
+    'productionresultssa139.blob.core.windows.net',
+    'productionresultssa140.blob.core.windows.net',
+    'productionresultssa141.blob.core.windows.net',
+    'productionresultssa142.blob.core.windows.net',
+    'productionresultssa143.blob.core.windows.net',
+    'productionresultssa144.blob.core.windows.net',
+    'productionresultssa145.blob.core.windows.net',
+    'productionresultssa146.blob.core.windows.net',
+    'productionresultssa147.blob.core.windows.net',
+    'productionresultssa148.blob.core.windows.net',
+    'productionresultssa149.blob.core.windows.net',
+    'productionresultssa150.blob.core.windows.net',
+    'productionresultssa151.blob.core.windows.net',
+    'productionresultssa152.blob.core.windows.net',
+    'productionresultssa153.blob.core.windows.net',
+    'productionresultssa154.blob.core.windows.net',
+    'productionresultssa155.blob.core.windows.net',
+    'productionresultssa156.blob.core.windows.net',
+    'productionresultssa157.blob.core.windows.net',
+    'productionresultssa158.blob.core.windows.net',
+    'productionresultssa159.blob.core.windows.net',
+    'productionresultssa160.blob.core.windows.net',
+    'productionresultssa161.blob.core.windows.net',
+    'productionresultssa162.blob.core.windows.net',
+    'productionresultssa163.blob.core.windows.net',
+    'productionresultssa164.blob.core.windows.net',
+    'productionresultssa165.blob.core.windows.net',
+    'productionresultssa166.blob.core.windows.net',
+    'productionresultssa167.blob.core.windows.net',
+    'productionresultssa168.blob.core.windows.net',
+    'productionresultssa169.blob.core.windows.net',
+    'productionresultssa170.blob.core.windows.net',
+    'productionresultssa171.blob.core.windows.net',
+    'productionresultssa172.blob.core.windows.net',
+    'productionresultssa173.blob.core.windows.net',
+    'productionresultssa174.blob.core.windows.net',
+    'productionresultssa175.blob.core.windows.net',
+    'productionresultssa176.blob.core.windows.net',
+    'productionresultssa177.blob.core.windows.net',
+    'productionresultssa178.blob.core.windows.net',
+    'productionresultssa179.blob.core.windows.net',
+    'productionresultssa180.blob.core.windows.net',
+    'productionresultssa181.blob.core.windows.net',
+    'productionresultssa182.blob.core.windows.net',
+    'productionresultssa183.blob.core.windows.net',
+    'productionresultssa184.blob.core.windows.net',
+    'productionresultssa185.blob.core.windows.net',
+    'productionresultssa186.blob.core.windows.net',
+    'productionresultssa187.blob.core.windows.net',
+    'productionresultssa188.blob.core.windows.net',
+    'productionresultssa189.blob.core.windows.net',
+    'productionresultssa190.blob.core.windows.net',
+    'productionresultssa191.blob.core.windows.net',
+    'productionresultssa192.blob.core.windows.net',
+    'productionresultssa193.blob.core.windows.net',
+    'productionresultssa194.blob.core.windows.net',
+    'productionresultssa195.blob.core.windows.net',
+    'productionresultssa196.blob.core.windows.net',
+    'productionresultssa197.blob.core.windows.net',
+    'productionresultssa198.blob.core.windows.net',
+    'productionresultssa199.blob.core.windows.net',
+    'mpsghub.actions.githubusercontent.com',
+    'pipelinesghubeus1.actions.githubusercontent.com',
+    'pipelinesghubeus10.actions.githubusercontent.com',
+    'pipelinesghubeus11.actions.githubusercontent.com',
+    'pipelinesghubeus12.actions.githubusercontent.com',
+    'pipelinesghubeus13.actions.githubusercontent.com',
+    'pipelinesghubeus14.actions.githubusercontent.com',
+    'pipelinesghubeus15.actions.githubusercontent.com',
+    'pipelinesghubeus2.actions.githubusercontent.com',
+    'pipelinesghubeus20.actions.githubusercontent.com',
+    'pipelinesghubeus21.actions.githubusercontent.com',
+    'pipelinesghubeus22.actions.githubusercontent.com',
+    'pipelinesghubeus23.actions.githubusercontent.com',
+    'pipelinesghubeus24.actions.githubusercontent.com',
+    'pipelinesghubeus25.actions.githubusercontent.com',
+    'pipelinesghubeus26.actions.githubusercontent.com',
+    'pipelinesghubeus3.actions.githubusercontent.com',
+    'pipelinesghubeus4.actions.githubusercontent.com',
+    'pipelinesghubeus5.actions.githubusercontent.com',
+    'pipelinesghubeus6.actions.githubusercontent.com',
+    'pipelinesghubeus7.actions.githubusercontent.com',
+    'pipelinesghubeus8.actions.githubusercontent.com',
+    'pipelinesghubeus9.actions.githubusercontent.com',
+    'pipelinesproxcnc1.actions.githubusercontent.com',
+    'pipelinesproxcus1.actions.githubusercontent.com',
+    'pipelinesproxeau1.actions.githubusercontent.com',
+    'pipelinesproxjpw1.actions.githubusercontent.com',
+    'pipelinesproxsdc1.actions.githubusercontent.com',
+    'pipelinesproxweu1.actions.githubusercontent.com',
+    'pipelinesproxwus31.actions.githubusercontent.com',
+    'pipelinesproxwus32.actions.githubusercontent.com',
+    'runnerghubeus1.actions.githubusercontent.com',
+    'runnerghubeus20.actions.githubusercontent.com',
+    'runnerghubeus21.actions.githubusercontent.com',
+    'runnerghubwus31.actions.githubusercontent.com',
+    'runnerproxcnc1.actions.githubusercontent.com',
+    'runnerproxcus1.actions.githubusercontent.com',
+    'runnerproxeau1.actions.githubusercontent.com',
+    'runnerproxjpw1.actions.githubusercontent.com',
+    'runnerproxsdc1.actions.githubusercontent.com',
+    'runnerproxweu1.actions.githubusercontent.com',
+    'tokenghub.actions.githubusercontent.com',
+    'tuf-repo.github.com',
+    'fulcio.githubapp.com',
+    'timestamp.githubapp.com'
+];
 
 
 /***/ }),
 
-/***/ 8439:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+/***/ 2268:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 /**
- * v2 resolver: CoreDNS on 127.0.0.1:53 (replaced dnsmasq). The firewall sends every :53
- * query on the host (and from containers) here; only the resolver's uid may reach the
- * upstream servers. enforce: allowlisted names (exact / *.x / glob, the proxy's own pattern
- * set) are forwarded, everything else - including subdomains of exact entries - gets
- * NXDOMAIN locally and never leaves the VM. See src/config/corefile-builder.ts.
- *
- * No DNS-rebind filtering: the proxy's upstream-IP guard (server_connect) refuses a strict
- * superset of internal answers and logs the address, and anything outside the proxy can
- * only reach addresses a step could dial by IP anyway. See docs/DNS-COREDNS.md.
+ * The GitHub allowlist: api.github.com/meta .domains.actions (live, else the generated
+ * snapshot) + a tiny hand-curated GITHUB_EXTRAS, with the guards that keep meta from ever
+ * widening it into a shared namespace.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HOSTS_FILE = void 0;
-exports.installCoreDns = installCoreDns;
-exports.localHosts = localHosts;
-exports.writeCorefile = writeCorefile;
-exports.dnsSystemdRunArgs = dnsSystemdRunArgs;
-exports.dumpDnsDiagnostics = dumpDnsDiagnostics;
-exports.probe = probe;
-exports.startCoreDns = startCoreDns;
-const core = __importStar(__nccwpck_require__(7484));
-const dns = __importStar(__nccwpck_require__(2250));
-const fs = __importStar(__nccwpck_require__(9896));
-const os = __importStar(__nccwpck_require__(857));
-const exec = __importStar(__nccwpck_require__(5236));
-const constants_1 = __nccwpck_require__(8729);
-const corefile_builder_1 = __nccwpck_require__(6100);
-const proxy_1 = __nccwpck_require__(3828);
-async function sudo(args, opts = {}) {
-    return exec.exec('sudo', args, opts);
-}
-async function installCoreDns() {
-    await (0, proxy_1.installPinnedBinary)(constants_1.COREDNS_URL, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns');
-}
-exports.HOSTS_FILE = '/etc/hosts';
-/** Debian's address for the machine's own name when it has no other (`127.0.1.1 <hostname>`). */
-const OWN_NAME_FALLBACK = '127.0.1.1';
+exports.DANGEROUS_BROAD_DOMAINS = exports.GITHUB_PLATFORM_ENDPOINTS = exports.RISKY_GITHUB_SUBDOMAINS = exports.GITHUB_EXTRAS = void 0;
+exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
+exports.normalizeMetaDomain = normalizeMetaDomain;
+exports.metaDomainGroups = metaDomainGroups;
+exports.fetchGitHubActionsDomains = fetchGitHubActionsDomains;
+exports.resolveGitHubDomains = resolveGitHubDomains;
+const github_domains_generated_1 = __nccwpck_require__(5863);
 /**
- * /etc/hosts names, plus the VM's hostname if /etc/hosts lacks it (AWS-hosted runners: it
- * resolved through the VPC resolver, and without it every sudo warns "unable to resolve
- * host"). Call BEFORE resolv.conf points at us, so the hostname resolves the original way.
- */
-async function localHosts() {
-    let names = [];
-    try {
-        names = (0, corefile_builder_1.parseHostsNames)(fs.readFileSync(exports.HOSTS_FILE, 'utf8'));
-    }
-    catch {
-        // no /etc/hosts: nothing to serve
-    }
-    const inline = [];
-    const own = os.hostname().toLowerCase();
-    if (own && !names.includes(own) && /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/.test(own)) {
-        let addrs = [];
-        try {
-            addrs = (await dns.promises.lookup(own, { all: true })).map(a => a.address);
-        }
-        catch {
-            // unresolvable before we started too
-        }
-        for (const ip of addrs.length ? addrs : [OWN_NAME_FALLBACK])
-            inline.push({ ip, name: own });
-        core.info(`hostname ${own} is not in ${exports.HOSTS_FILE}: the resolver answers it with ${inline.map(e => e.ip).join(', ')}`);
-    }
-    return { file: exports.HOSTS_FILE, names, inline };
-}
-async function writeCorefile(o) {
-    const corefile = (0, corefile_builder_1.buildCorefile)(o);
-    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
-    await sudo(['tee', constants_1.COREFILE], { input: Buffer.from(corefile), silent: true });
-    await sudo(['chown', 'root:root', constants_1.COREFILE]);
-    await sudo(['chmod', '0644', constants_1.COREFILE]);
-}
-/**
- * systemd-run: outside the runner's process tree (its orphan cleanup would kill it), restarted
- * on any exit, as the random DNS user with only CAP_NET_BIND_SERVICE (for :53). stdout - the
- * `log` plugin - is appended by systemd to the world-readable DNS log the report reads.
- */
-function dnsSystemdRunArgs(dnsUser) {
-    return [
-        'systemd-run',
-        `--unit=${constants_1.DNS_UNIT}`,
-        '--description=safer-runner DNS resolver (CoreDNS)',
-        `--uid=${dnsUser}`,
-        `--gid=${dnsUser}`,
-        '-p',
-        'Restart=always',
-        '-p',
-        'RestartSec=1',
-        '-p',
-        'AmbientCapabilities=CAP_NET_BIND_SERVICE',
-        '-p',
-        'CapabilityBoundingSet=CAP_NET_BIND_SERVICE',
-        '-p',
-        'NoNewPrivileges=yes',
-        '-p',
-        'PrivateTmp=yes',
-        '-p',
-        'ProtectHome=yes',
-        '-p',
-        'ProtectSystem=strict',
-        '-p',
-        `StandardOutput=append:${constants_1.DNS_LOG}`,
-        '-p',
-        `StandardError=append:${constants_1.DNS_LOG}`,
-        constants_1.COREDNS_BIN,
-        '-conf',
-        constants_1.COREFILE
-    ];
-}
-async function dumpDnsDiagnostics() {
-    const opts = { ignoreReturnCode: true };
-    await sudo(['systemctl', 'status', constants_1.DNS_UNIT, '--no-pager', '-l'], opts);
-    await sudo(['journalctl', '-u', constants_1.DNS_UNIT, '--no-pager', '-n', '30'], opts);
-    await sudo(['tail', '-n', '30', constants_1.DNS_LOG], opts);
-    await sudo(['ss', '-lntup', 'sport = :53'], opts);
-}
-/** Resolve `name` (A) against our resolver. Returns 'ok', 'NXDOMAIN' or the error code. */
-async function probe(name, timeoutMs = 3000) {
-    const r = new dns.promises.Resolver({ timeout: timeoutMs, tries: 1 });
-    r.setServers([corefile_builder_1.DNS_LISTEN]);
-    try {
-        await r.resolve4(name);
-        return 'ok';
-    }
-    catch (e) {
-        const code = e.code ?? String(e);
-        return code === dns.NOTFOUND ? 'NXDOMAIN' : code;
-    }
-}
-/**
- * (Re)start CoreDNS and wait until it answers. The log file is pre-created 0644 root-owned:
- * systemd opens it as root and appends, so the mode sticks and the runner can read it.
- */
-async function startCoreDns(dnsUser, readinessName, timeoutMs = 20000) {
-    await sudo(['touch', constants_1.DNS_LOG]);
-    await sudo(['chown', 'root:root', constants_1.DNS_LOG]);
-    await sudo(['chmod', '0644', constants_1.DNS_LOG]);
-    await sudo(['systemctl', 'stop', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
-    await sudo(['systemctl', 'reset-failed', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
-    await sudo(dnsSystemdRunArgs(dnsUser));
-    const deadline = Date.now() + timeoutMs;
-    let last = '';
-    while (Date.now() < deadline) {
-        last = await probe(readinessName, 2000);
-        if (last === 'ok') {
-            core.info(`✅ CoreDNS up on ${corefile_builder_1.DNS_LISTEN}:53 (${readinessName} resolved)`);
-            return;
-        }
-        await new Promise(r => setTimeout(r, 300));
-    }
-    await dumpDnsDiagnostics();
-    throw new Error(`CoreDNS did not answer for ${readinessName} within ${timeoutMs / 1000}s (last: ${last})`);
-}
-
-
-/***/ }),
-
-/***/ 2306:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * Docker access control (the `docker` input) and dockerd handling for the proxy CA.
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
-exports.disableDockerForRunner = disableDockerForRunner;
-exports.stopDockerService = stopDockerService;
-exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
-exports.dockerAccess = dockerAccess;
-exports.readDockerState = readDockerState;
-exports.mergeLiveRestore = mergeLiveRestore;
-exports.isDockerActive = isDockerActive;
-exports.runningContainers = runningContainers;
-exports.restartDockerForCaTrust = restartDockerForCaTrust;
-exports.parseContainerAddresses = parseContainerAddresses;
-exports.containerAddresses = containerAddresses;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const fs = __importStar(__nccwpck_require__(9896));
-const constants_1 = __nccwpck_require__(8729);
-// Constants
-exports.RUNNER_USERNAME = 'runner';
-exports.DOCKER_GROUP = 'docker';
-exports.DOCKER_SOCKET = '/var/run/docker.sock';
-async function run(args) {
-    const rc = await exec.exec('sudo', args, { ignoreReturnCode: true });
-    return rc === 0 ? null : `sudo ${args.join(' ')} exited ${rc}`;
-}
-/**
- * docker: remove-group. Removes the runner user from the docker group (new sessions) and locks
- * the socket to root:root 0600 (the current session keeps the group in its credentials, so
- * the group change alone would not stop it). Idempotent: a runner already outside the group,
- * or without a socket, is left alone.
+ * Hosts the runner needs that api.github.com/meta .domains.actions does not list. Hand-curated
+ * and kept tiny: everything GitHub states it needs comes from meta (live at runtime, else the
+ * generated snapshot in github-domains.generated.ts - `npm run gen:domains`).
  *
- * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
- * afterwards - the caller fails closed on that, not on these messages.
+ * Patterns are v2 allowlist syntax: a bare name is EXACT and `*.name` covers every subdomain.
+ * NO wildcards here: a wildcard is a DNS channel to that zone. The only wildcards are the ones
+ * meta itself lists (*.github.com, *.githubapp.com, *.actions.githubusercontent.com). A new
+ * entry needs observed real-runner traffic and a one-line reason. Not even an apex "because it
+ * costs nothing": meta lists github.com's apex but not actions.githubusercontent.com's or
+ * githubapp.com's, so those aren't contacted.
  */
-async function disableDockerForRunner(socket = exports.DOCKER_SOCKET) {
-    core.info('Removing the runner user from the docker group and locking the docker socket...');
-    const failed = [];
-    if (await isRunnerInDockerGroup()) {
-        const err = await run(['gpasswd', '-d', exports.RUNNER_USERNAME, exports.DOCKER_GROUP]);
-        if (err)
-            failed.push(err);
+exports.GITHUB_EXTRAS = [
+    // ghcr.io (in meta) answers blob/layer GETs with a 307 to this host: every ghcr pull
+    'pkg-containers.githubusercontent.com'
+];
+/**
+ * Risky GitHub subdomains that serve arbitrary user content (malicious payloads), refused in
+ * enforce mode when block-risky-github-subdomains is on: a deny override, so `*.github.com`
+ * does not let them through.
+ */
+exports.RISKY_GITHUB_SUBDOMAINS = [
+    'gist.github.com', // Gist web interface
+    'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
+    'raw.githubusercontent.com' // Common vector for serving malicious raw file content
+];
+/**
+ * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
+ * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
+ * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
+ * is on) only on a host the job filters. Essential entries always apply: step/job log
+ * metadata RPCs, the live-log stream, job lease renewal and completion, and OIDC. The rest
+ * yield to any matching rule of the job's: step-status updates, the artifact and cache
+ * services, and all blob storage (artifacts, cache, and the job's stored logs + step summary).
+ * Blocking that optional traffic loses those features but does not fail or hang the job
+ * (verified on real runners).
+ *
+ * EXPLICIT (host, path, methods) only, reads included - never a blanket "*": GET, HEAD, which
+ * would trust far more than the platform uses. Workflow-chosen writes (e.g. SARIF upload) are
+ * NOT platform and stay user-controlled. Grow it from observed real-runner traffic (the proxy
+ * flow log); a missing entry only breaks that job's platform step, never enforcement.
+ */
+exports.GITHUB_PLATFORM_ENDPOINTS = [
+    // results service RPCs the runner itself makes: step + job log metadata (Receiver service)
+    {
+        host: 'results-receiver.actions.githubusercontent.com',
+        path: '/twirp/results.services.receiver.Receiver/*',
+        methods: ['POST'],
+        essential: true
+    },
+    // runner live-log stream (websocket upgrade)
+    {
+        host: 'results-receiver.actions.githubusercontent.com',
+        path: '/_ws/ingest.sock',
+        methods: ['GET'],
+        essential: true
+    },
+    // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
+    {
+        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+        path: '*/idtoken/*',
+        methods: ['GET'],
+        essential: true
+    },
+    // job lease renewal (/<n>/renewjob) - refusing it ends the job
+    {
+        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+        path: '*/renewjob',
+        methods: ['POST'],
+        essential: true
+    },
+    // job completion, sent through the proxy after the last post step - refusing it hangs the job
+    {
+        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
+        path: '*/completejob',
+        methods: ['POST'],
+        essential: true
+    },
+    // other results service RPCs (optional - a matching user rule wins): artifact and cache
+    // services (actions/upload-artifact, actions/cache) AND step-status (WorkflowStepUpdateService)
+    { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'], essential: false },
+    // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
+    // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
+    {
+        host: 'productionresultssa*.blob.core.windows.net',
+        path: '/actions-results/*',
+        methods: ['GET', 'HEAD', 'PUT'],
+        essential: false
+    },
+    {
+        host: 'productionresultssa*.blob.core.windows.net',
+        path: '/actions-cache/*',
+        methods: ['GET', 'HEAD', 'PUT'],
+        essential: false
     }
-    if (fs.existsSync(socket)) {
-        for (const args of [
-            ['chown', 'root:root', socket],
-            ['chmod', '600', socket]
-        ]) {
-            const err = await run(args);
-            if (err)
-                failed.push(err);
-        }
-    }
-    return failed;
+];
+/**
+ * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
+ * even if a future api.github.com/meta response lists them. These are shared global
+ * namespaces (anyone can create a sibling name under them), so allowing the bare
+ * suffix would turn enforce mode into an open exfiltration channel. Specific names
+ * under them (e.g. productionresultssa100.blob.core.windows.net) are fine; the bare
+ * suffix is not.
+ */
+exports.DANGEROUS_BROAD_DOMAINS = new Set([
+    'windows.net',
+    'core.windows.net',
+    'blob.core.windows.net',
+    'githubusercontent.com', // we curate specific subdomains and block raw./gist. explicitly
+    'amazonaws.com',
+    's3.amazonaws.com',
+    'blob.storage.azure.net'
+]);
+/**
+ * The offline GitHub allowlist: the generated meta snapshot plus GITHUB_EXTRAS. Used when the
+ * live api.github.com/meta list cannot be fetched (see resolveGitHubDomains()).
+ *
+ * SECURITY: the snapshot enumerates the productionresultssa* storage accounts exactly as meta
+ * lists them; never pad or range-fill them. Azure storage account names are a global,
+ * first-come namespace, so an unregistered name would be an exfil channel. A stale snapshot
+ * fails safe (a new account is blocked until regenerated).
+ */
+function getGitHubRequiredDomains() {
+    const snapshot = github_domains_generated_1.GITHUB_ACTIONS_DOMAINS.map(normalizeMetaDomain).filter((d) => d !== null);
+    return Array.from(new Set([...snapshot, ...exports.GITHUB_EXTRAS]));
 }
 /**
- * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
- * running containers). Returns the steps that failed; readDockerState() is the verdict.
+ * Normalise a domain from api.github.com/meta into an allowlist pattern, or return null if
+ * it must be dropped.
+ *
+ * - A leading "*." is KEPT: meta's `*.github.com` means "subdomains of github.com", which is
+ *   exactly what the v2 pattern `*.github.com` means (meta lists the apex separately).
+ * - Any other wildcard, an empty entry, or an over-broad shared suffix
+ *   (DANGEROUS_BROAD_DOMAINS, checked on the part after "*.") is dropped.
  */
-async function stopDockerService() {
-    core.info('Stopping and disabling the docker daemon...');
-    const failed = [];
-    for (const verb of ['stop', 'disable']) {
-        for (const unit of ['docker.socket', 'docker.service']) {
-            const err = await run(['systemctl', verb, unit]);
-            if (err)
-                failed.push(err);
-        }
-    }
-    return failed;
+function normalizeMetaDomain(raw) {
+    const d = raw.trim().toLowerCase();
+    const base = d.startsWith('*.') ? d.slice(2) : d;
+    if (!base || base.includes('*'))
+        return null;
+    if (exports.DANGEROUS_BROAD_DOMAINS.has(base))
+        return null;
+    return d;
 }
 /**
- * Whether the runner user is in the docker group (`id -nG runner`, i.e. what a new session
- * gets). Fails closed: if membership cannot be read, it is assumed.
+ * The meta groups the GitHub list is built from, raw (no normalisation): `.domains.actions`
+ * (required) + `.domains.artifact_attestations` (GitHub's Sigstore for actions/attest-*; an
+ * array, or an object with a `services` array). Null when `.domains.actions` is missing/empty.
+ * Shared by the live fetch and `npm run gen:domains` so the snapshot matches the live path.
  */
-async function isRunnerInDockerGroup() {
-    const { stdout, exitCode } = await exec.getExecOutput('id', ['-nG', exports.RUNNER_USERNAME], {
-        ignoreReturnCode: true,
-        silent: true
-    });
-    if (exitCode !== 0) {
-        core.warning(`Could not read the groups of ${exports.RUNNER_USERNAME} (id exit ${exitCode}); assuming docker membership`);
-        return true;
-    }
-    return stdout.trim().split(/\s+/).includes(exports.DOCKER_GROUP);
+function metaDomainGroups(data) {
+    const domains = data?.domains;
+    const actions = domains?.actions;
+    if (!Array.isArray(actions) || actions.length === 0)
+        return null;
+    const att = domains?.artifact_attestations;
+    const services = Array.isArray(att) ? att : att?.services;
+    return [...actions, ...(Array.isArray(services) ? services : [])];
 }
-function dockerAccess(s) {
-    if (!s.daemonActive && !s.socketUnitActive)
-        return 'not-running';
-    if (!s.runnerInGroup && !s.socketAccessible)
-        return 'group-removed';
-    return 'retained';
-}
-function canUseSocket(socket) {
+/**
+ * Fetch the GitHub Actions domain allowlist from api.github.com/meta.
+ *
+ * Uses the `.domains.actions` section (+ artifact attestations, see metaDomainGroups) -
+ * GitHub's recommended middle tier, which
+ * wildcards GitHub-owned domains but enumerates shared-namespace ones (e.g. the
+ * productionresultssa* storage accounts) specifically. We deliberately do NOT use
+ * `.domains.actions_inbound.wildcard_domains`, which contains *.core.windows.net and
+ * *.githubusercontent.com and would re-open the exfiltration surface.
+ *
+ * @returns the normalised domain list, or null on any failure (caller falls back to static).
+ */
+async function fetchGitHubActionsDomains(timeoutMs = 10000) {
     try {
-        fs.accessSync(socket, fs.constants.R_OK | fs.constants.W_OK);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
-async function unitActive(unit) {
-    return (await exec.exec('systemctl', ['is-active', '--quiet', unit], { ignoreReturnCode: true, silent: true })) === 0;
-}
-async function readDockerState(socket = exports.DOCKER_SOCKET) {
-    return {
-        daemonActive: await unitActive('docker.service'),
-        socketUnitActive: await unitActive('docker.socket'),
-        runnerInGroup: await isRunnerInDockerGroup(),
-        socketAccessible: canUseSocket(socket)
-    };
-}
-/**
- * Merge `live-restore: true` into a daemon.json body. Returns null when the existing file is
- * not a JSON object (never overwrite a config we can't parse - dockerd would refuse to start).
- */
-function mergeLiveRestore(existing) {
-    let cfg = {};
-    if (existing.trim() !== '') {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        let res;
         try {
-            const parsed = JSON.parse(existing);
-            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
-                return null;
-            cfg = parsed;
+            res = await fetch('https://api.github.com/meta', {
+                signal: controller.signal,
+                headers: {
+                    accept: 'application/vnd.github+json',
+                    'user-agent': 'safer-runner-action'
+                }
+            });
         }
-        catch {
+        finally {
+            clearTimeout(timer);
+        }
+        if (!res.ok)
             return null;
-        }
-    }
-    if (cfg['live-restore'] === true)
-        return { json: existing, changed: false };
-    return { json: JSON.stringify({ ...cfg, 'live-restore': true }, null, 2) + '\n', changed: true };
-}
-/** `systemctl is-active docker`. */
-async function isDockerActive() {
-    const rc = await exec.exec('systemctl', ['is-active', '--quiet', 'docker'], { ignoreReturnCode: true, silent: true });
-    return rc === 0;
-}
-/** IDs of running containers (empty when docker is not reachable). */
-async function runningContainers() {
-    const { stdout, exitCode } = await exec.getExecOutput('sudo', ['docker', 'ps', '-q', '--no-trunc'], {
-        ignoreReturnCode: true,
-        silent: true
-    });
-    return exitCode === 0 ? stdout.split('\n').filter(Boolean) : [];
-}
-async function waitForDocker(timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        const rc = await exec.exec('sudo', ['docker', 'info', '--format', '{{.ServerVersion}}'], {
-            ignoreReturnCode: true,
-            silent: true
-        });
-        if (rc === 0)
-            return true;
-        await new Promise(r => setTimeout(r, 500));
-    }
-    return false;
-}
-/**
- * F1: dockerd is Go and caches the system roots on its first TLS handshake. When the runner
- * pulled a service/job container image before the action ran, those roots predate our CA and
- * every later `docker pull` through the proxy fails with x509 - in every mode. Restarting
- * dockerd reloads the roots; live-restore (reloadable by SIGHUP) keeps the running service
- * containers alive across the restart. Must run after the CA is in the system store and
- * before the firewall (Docker rebuilds its own chains on restart).
- *
- * Returns true when daemon.json was written (it then belongs in the integrity baseline).
- */
-async function restartDockerForCaTrust() {
-    const before = await runningContainers();
-    const { stdout: existing } = await exec.getExecOutput('sudo', ['cat', constants_1.DOCKER_DAEMON_JSON], {
-        ignoreReturnCode: true,
-        silent: true
-    });
-    const merged = mergeLiveRestore(existing);
-    if (merged === null) {
-        core.warning(`${constants_1.DOCKER_DAEMON_JSON} is not a JSON object: dockerd not restarted, so a dockerd that pulled images ` +
-            'before this action may not trust the proxy CA (docker pull: x509 errors)');
-        return false;
-    }
-    if (merged.changed) {
-        await exec.exec('sudo', ['install', '-d', '-m', '0755', '/etc/docker']);
-        await exec.exec('sudo', ['tee', constants_1.DOCKER_DAEMON_JSON], { input: Buffer.from(merged.json), silent: true });
-        // live-restore is one of the options dockerd reloads on SIGHUP (ExecReload)
-        await exec.exec('sudo', ['systemctl', 'reload', 'docker']);
-        await new Promise(r => setTimeout(r, 500));
-    }
-    const t0 = Date.now();
-    await exec.exec('sudo', ['systemctl', 'restart', 'docker']);
-    if (!(await waitForDocker(30000))) {
-        throw new Error('dockerd did not come back within 30s after restart (F1 CA trust reload)');
-    }
-    const after = new Set(await runningContainers());
-    const lost = before.filter(id => !after.has(id));
-    core.info(`dockerd restarted to trust the proxy CA in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
-        `(${before.length} running container(s) kept: ${before.length - lost.length})`);
-    if (lost.length > 0) {
-        core.warning(`${lost.length} container(s) stopped across the dockerd restart: ${lost.map(i => i.slice(0, 12)).join(', ')}`);
-    }
-    return true;
-}
-/**
- * Parse `docker inspect --format '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}'`
- * output into container IP -> name.
- */
-function parseContainerAddresses(output) {
-    const out = new Map();
-    for (const line of output.split('\n')) {
-        const [rawName, ...ips] = line.trim().split(/\s+/);
-        if (!rawName)
-            continue;
-        const name = rawName.replace(/^\//, '');
-        for (const ip of ips)
-            if (ip && !out.has(ip))
-                out.set(ip, name);
-    }
-    return out;
-}
-/**
- * Container IP -> name for the report. Without sudo: under the default enforce the runner has
- * lost docker access, and the report then shows addresses only. Containers already removed
- * (`docker run --rm`) are not listed either.
- */
-async function containerAddresses() {
-    const opts = { ignoreReturnCode: true, silent: true };
-    const ids = await exec.getExecOutput('docker', ['ps', '-aq'], opts);
-    const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];
-    if (!list.length)
-        return new Map();
-    const fmt = '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}';
-    const { stdout, exitCode } = await exec.getExecOutput('docker', ['inspect', '--format', fmt, ...list], opts);
-    return exitCode === 0 ? parseContainerAddresses(stdout) : new Map();
-}
-
-
-/***/ }),
-
-/***/ 765:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * v2 setup orchestration. Runs once per job - in the pre step (so the policy is enforced for
- * every later action's pre-hook too, review H2), or in the main step if pre did not run.
- *
- * Order (each step depends on the previous):
- *   allowlist (api.github.com/meta, before DNS changes) -> install (pinned CoreDNS + pinned
- *   mitmdump + conntrack, in parallel) -> users -> addon + policy + CA -> start proxy (waits for
- *   the addon's own self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS (CoreDNS up
- *   first, then resolv.conf points at it) -> dockerd restart so it
- *   trusts the CA (F1) -> firewall (nat REDIRECT + filter, plus the container DNAT /
- *   DOCKER-USER rules when docker runs) -> kill pre-existing :443 and container flows ->
- *   live self-tests -> docker access -> sudo logging -> integrity baseline -> sudo
- *   restriction (last).
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
-exports.setupCompleted = setupCompleted;
-exports.installPackages = installPackages;
-exports.inJobContainer = inJobContainer;
-exports.applyDockerPolicy = applyDockerPolicy;
-exports.runSetup = runSetup;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const fs = __importStar(__nccwpck_require__(9896));
-const constants_1 = __nccwpck_require__(8729);
-const flowlog_1 = __nccwpck_require__(5422);
-const firewall_1 = __nccwpck_require__(8094);
-const policy_1 = __nccwpck_require__(2224);
-const proxy_1 = __nccwpck_require__(3828);
-const selftest_1 = __nccwpck_require__(3180);
-const setup_1 = __nccwpck_require__(1413);
-const dns_1 = __nccwpck_require__(8439);
-const github_parser_1 = __nccwpck_require__(9170);
-const sudo_1 = __nccwpck_require__(1279);
-const docker_1 = __nccwpck_require__(2306);
-const trust_1 = __nccwpck_require__(7578);
-const validation_1 = __nccwpck_require__(8449);
-/** Root-owned marker written when setup completed; checked by main (pre may not have run). */
-exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
-/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
-const DNS_READY_NAME = 'github.com';
-function setupCompleted() {
-    return fs.existsSync(exports.SETUP_MARKER);
-}
-async function timed(label, fn) {
-    const t0 = Date.now();
-    try {
-        return await core.group(label, fn);
-    }
-    finally {
-        core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    }
-}
-/**
- * apt packages: conntrack only (flushes container flows that predate the container rules; not
- * on the image). Only refreshes the apt index if a plain install fails (saves ~10s).
- */
-async function installPackages() {
-    const opts = { ignoreReturnCode: true };
-    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
-    const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'conntrack'];
-    if ((await exec.exec('sudo', ['-E', ...install], { ...opts, env })) === 0)
-        return;
-    await exec.exec('sudo', ['apt-get', 'update', '-qq']);
-    await exec.exec('sudo', ['-E', ...install], { env });
-}
-/**
- * F3: with a job `container:`, JS actions run INSIDE that container (as root, no sudo, no
- * access to the host's iptables), so the action cannot apply anything to the runner VM.
- */
-function inJobContainer(exists = fs.existsSync) {
-    return exists('/.dockerenv') || exists('/run/.containerenv');
-}
-exports.JOB_CONTAINER_MESSAGE = 'safer-runner cannot protect a job that runs in a job `container:` - the action runs inside the ' +
-    'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
-    '`services:` and `docker run` steps instead (their egress is controlled).';
-/**
- * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
- * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
- * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
- */
-async function applyDockerPolicy(inputs, ops = { disableDockerForRunner: docker_1.disableDockerForRunner, stopDockerService: docker_1.stopDockerService, readDockerState: docker_1.readDockerState }) {
-    const { mode, docker } = inputs;
-    const failures = docker === 'stop'
-        ? await ops.stopDockerService()
-        : docker === 'remove-group'
-            ? await ops.disableDockerForRunner()
-            : [];
-    const state = await ops.readDockerState();
-    const access = (0, docker_1.dockerAccess)(state);
-    core.info(`docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
-        `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`);
-    if (docker !== 'keep' && access === 'retained') {
-        const msg = `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
-            (failures.length ? `: ${failures.join('; ')}` : '');
-        if (mode === 'enforce')
-            throw new Error(msg);
-        core.warning(msg);
-    }
-    else if (failures.length) {
-        core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
-    }
-    if (mode === 'enforce' && access === 'retained') {
-        core.warning('enforce is ADVISORY in this job: docker is retained (docker: keep), and docker access is root-equivalent, ' +
-            'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
-            'or docker: stop unless the job needs docker.', { title: 'safer-runner: enforce (ADVISORY - docker retained)' });
-    }
-    return { requested: docker, access, state };
-}
-async function runSetup(inputs) {
-    const { mode } = inputs;
-    core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
-    if (inJobContainer()) {
-        if (mode === 'enforce')
-            throw new Error(exports.JOB_CONTAINER_MESSAGE);
-        core.warning(`${exports.JOB_CONTAINER_MESSAGE} Analyze mode: nothing is monitored in this job.`, {
-            title: 'safer-runner: job container not supported'
-        });
-        return;
-    }
-    // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
-    const sudoRetained = mode === 'enforce' && !inputs.disableSudo;
-    if (sudoRetained) {
-        core.warning('enforce is ADVISORY in this job: sudo is retained (disable-sudo: false), so any step can use it to ' +
-            'remove the egress controls. This is not an enforced boundary. Remove disable-sudo: false to make ' +
-            'enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo retained)' });
-    }
-    else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
-        core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
-    }
-    if (mode === 'enforce' && inputs.dockerDefaulted) {
-        core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
-    }
-    const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
-    core.info(`sudo implementation: ${sudoFlavour}`);
-    const ports = await (0, proxy_1.allocateProxyPorts)();
-    core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
-    // 1. Allowlist - fetched while normal DNS and direct egress still work
-    const { domains: githubDomains, source } = await (0, github_parser_1.resolveGitHubDomains)();
-    core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
-    const { config: policy, warnings } = (0, policy_1.buildPolicyConfig)({
-        mode,
-        githubDomains,
-        allowedDomains: inputs.allowedDomains,
-        passthroughDomains: inputs.passthroughDomains,
-        blockRiskySubdomains: inputs.blockRiskySubdomains,
-        containerPort: ports.containerPort,
-        httpFilter: inputs.httpFilter,
-        allowGithubPlatform: inputs.allowGithubPlatform
-    });
-    for (const w of warnings)
-        core.warning(w);
-    core.info(`Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`);
-    if (policy.http_filter.hosts.length) {
-        core.info(`http-filter: ${policy.http_filter.hosts.length} filtered host(s) [${policy.http_filter.hosts.map(h => h.host).join(', ')}], ` +
-            `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed, ` +
-            `${policy.http_filter.platform_optional} more unless a rule of the job's matches`);
-    }
-    const { dnsServers } = inputs;
-    // 2. Install (parallel - both are network-bound)
-    await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), (0, dns_1.installCoreDns)(), (0, proxy_1.installMitmproxy)()]));
-    // 3. Users, addon, policy, CA
-    await (0, setup_1.createLogDirectory)();
-    const dnsUser = await (0, setup_1.createRandomDNSUser)();
-    const proxyUid = await (0, proxy_1.createProxyUser)();
-    core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
-    await (0, proxy_1.installAddon)();
-    await (0, proxy_1.writePolicy)(policy);
-    await (0, proxy_1.generateCa)();
-    await (0, proxy_1.installTeardownHelper)();
-    // 4. Proxy
-    await timed('Start proxy', () => (0, proxy_1.startProxy)(ports));
-    // 5. Trust - before any traffic is forced through the proxy
-    await timed('Install CA trust', async () => {
-        await (0, trust_1.installSystemTrust)();
-        (0, trust_1.exportTrustEnv)();
-        await (0, trust_1.installJavaTrust)();
-    });
-    // 6. DNS
-    await timed('Configure DNS', async () => {
-        // same names as the proxy: DNS and the proxy can never disagree about what is allowed
-        await (0, dns_1.writeCorefile)({
-            mode,
-            allow: [...policy.allow, ...policy.passthrough],
-            deny: policy.deny,
-            upstreams: dnsServers,
-            hosts: await (0, dns_1.localHosts)()
-        });
-        await (0, dns_1.startCoreDns)(dnsUser.username, DNS_READY_NAME);
-        await (0, setup_1.setupDNSConfig)();
-        await (0, setup_1.restartResolved)();
-    });
-    // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
-    // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
-    const dockerActive = inputs.docker !== 'stop' && (await (0, docker_1.isDockerActive)());
-    let dockerConfigWritten = false;
-    if (dockerActive) {
-        const services = await (0, docker_1.runningContainers)();
-        if (inputs.docker === 'keep' || services.length > 0) {
-            dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => (0, docker_1.restartDockerForCaTrust)());
-        }
-    }
-    // 8. Firewall
-    let containerRules = false;
-    await timed('Configure firewall', async () => {
-        const prefixes = [constants_1.LOG_PREFIX_DROP, constants_1.LOG_PREFIX_ANALYZE, constants_1.LOG_PREFIX_CDROP, constants_1.LOG_PREFIX_CEGRESS].map(p => p.trim());
-        await (0, setup_1.setupIptablesLogging)(constants_1.FIREWALL_LOG, prefixes, 'v2');
-        await (0, firewall_1.detectEgressInterface)();
-        ({ containerRules } = await (0, firewall_1.applyFirewall)({
-            mode,
-            proxyUid,
-            dnsUid: dnsUser.uid,
-            proxyPort: ports.port,
-            containerProxyPort: ports.containerPort,
-            containers: dockerActive,
-            dnsServers
-        }));
-        await (0, firewall_1.killPreexistingConnections)();
-        if (containerRules)
-            await (0, firewall_1.flushContainerConntrack)();
-        await (0, firewall_1.logFirewall)();
-    });
-    // 9. Prove it on this runner
-    const selfTestFrom = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
-    const dnsSelfTestName = (0, selftest_1.dnsProbeName)([...policy.allow, ...policy.passthrough]);
-    const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode, dnsSelfTestName));
-    await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
-    const selfTestWindow = [selfTestFrom, (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG)];
-    await exec.exec('sudo', ['tee', constants_1.SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
-    await exec.exec('sudo', ['chmod', '0644', constants_1.SELFTEST_FILE]);
-    const failed = results.filter(r => !r.ok);
-    if (failed.length > 0) {
-        const msg = `self-test failed: ${failed.map(f => `${f.name} (${f.detail})`).join('; ')}`;
-        if (mode === 'enforce')
-            throw new Error(msg);
-        core.warning(msg);
-    }
-    // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-    const docker = await applyDockerPolicy(inputs);
-    await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
-        input: Buffer.from(JSON.stringify({
-            mode,
-            sudoRetained,
-            dockerRetained: docker.access === 'retained',
-            docker,
-            failOnTampering: inputs.failOnTampering,
-            containerTls: policy_1.CONTAINER_TLS,
-            containerRules,
-            proxyPorts: [ports.port, ports.containerPort],
-            selfTestWindow,
-            dnsSelfTestName,
-            at: new Date().toISOString()
-        }) + '\n'),
-        silent: true
-    });
-    await (0, sudo_1.setupSudoLogging)(constants_1.SUDO_LOG, sudoFlavour);
-    const validator = new validation_1.SystemValidator([
-        ...validation_1.CRITICAL_FILES,
-        (0, sudo_1.getSudoLoggingConfigFile)(sudoFlavour),
-        ...(dockerConfigWritten ? [constants_1.DOCKER_DAEMON_JSON] : [])
-    ]);
-    await validator.capturePostSetupBaseline();
-    if (inputs.disableSudo) {
-        await (0, sudo_1.disableSudoForRunner)(sudoFlavour);
-    }
-    core.info(`✅ safer-runner v2 active in ${mode} mode`);
-}
-
-
-/***/ }),
-
-/***/ 8094:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * v2 iptables: force 80/443 through the proxy, force all DNS through the resolver (CoreDNS), and (enforce)
- * deny everything else. Rulesets are generated as iptables-restore text (pure functions,
- * unit-tested) and applied atomically with `iptables-restore --noflush` into chains we own,
- * jumped to from position 1 of OUTPUT, so the image's own rules are left alone.
- *
- * Rules are interface-agnostic ("allow lo + the proxy path, deny the rest") rather than
- * `-o eth0`-scoped, so a renamed or extra NIC fails closed instead of open (review M3).
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MISSING_DOCKER_USER_MESSAGE = void 0;
-exports.buildNatRules = buildNatRules;
-exports.buildFilterRules = buildFilterRules;
-exports.buildIp6FilterRules = buildIp6FilterRules;
-exports.buildContainerNatRules = buildContainerNatRules;
-exports.buildContainerForwardRules = buildContainerForwardRules;
-exports.buildIp6ContainerForwardRules = buildIp6ContainerForwardRules;
-exports.parseDefaultRouteInterfaces = parseDefaultRouteInterfaces;
-exports.detectEgressInterface = detectEgressInterface;
-exports.removeFirewall = removeFirewall;
-exports.applyFirewall = applyFirewall;
-exports.parseDockerSubnets = parseDockerSubnets;
-exports.flushContainerConntrack = flushContainerConntrack;
-exports.killPreexistingConnections = killPreexistingConnections;
-exports.logFirewall = logFirewall;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const constants_1 = __nccwpck_require__(8729);
-/** Local bridges (docker0, user-defined networks). */
-const LOCAL_BRIDGES = ['docker0', 'br-+'];
-/** Private destinations a container may reach on its own bridge (container <-> container). */
-const RFC1918 = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
-/**
- * nat OUTPUT: send DNS to the resolver and 80/443 to the proxy. Exempt: the proxy and the resolver
- * uids (their own upstream connections), loopback, local bridges and the Azure platform IPs.
- */
-function buildNatRules(o) {
-    const c = constants_1.NAT_CHAIN;
-    const lines = [
-        '*nat',
-        `:${c} - [0:0]`,
-        `-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`,
-        `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`,
-        // Every resolver, whatever address it is aimed at (8.8.8.8, 168.63.129.16, GitHub's
-        // 127.0.0.100 egress resolver...), is answered by our resolver (fixes C1/M4).
-        `-A ${c} -p udp --dport 53 -j REDIRECT --to-ports 53`,
-        `-A ${c} -p tcp --dport 53 -j REDIRECT --to-ports 53`,
-        `-A ${c} -d 127.0.0.0/8 -j RETURN`,
-        `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -j RETURN`,
-        `-A ${c} -d ${constants_1.AZURE_WIRESERVER}/32 -j RETURN`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
-        `-A ${c} -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports ${o.proxyPort}`,
-        `-I OUTPUT 1 -j ${c}`,
-        'COMMIT',
-        ''
-    ];
-    return lines.join('\n');
-}
-function commonFilterAllows(c) {
-    return [
-        `-A ${c} -o lo -j RETURN`,
-        // REDIRECTed packets (to the proxy / the resolver): after nat OUTPUT the destination is
-        // 127.0.0.1, but `-o` still reports the ORIGINAL route (e.g. eth0), so `-o lo` alone
-        // never matches them. A 127/8 destination cannot leave the host.
-        `-A ${c} -d 127.0.0.0/8 -j RETURN`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
-        // Azure platform: IMDS and wireserver (WALinuxAgent, health) only on the ports they use.
-        // 168.63.129.16:53 is NOT allowed - it is an open recursive resolver (C1).
-        `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -p tcp --dport 80 -j RETURN`,
-        `-A ${c} -d ${constants_1.AZURE_WIRESERVER}/32 -p tcp -m multiport --dports 80,32526 -j RETURN`
-    ];
-}
-/**
- * filter OUTPUT.
- * - enforce: allow lo, the proxy uid on 80/443, the resolver's uid to its upstream servers on 53,
- *   the Azure platform; reject everything else. A hole in the REDIRECT therefore still
- *   fails closed, and so does any non-80/443 egress.
- * - analyze: allow everything, but reject QUIC (UDP/443) so HTTP/3 clients fall back to TCP
- *   through the proxy, and log new non-proxied connections for the report.
- */
-function buildFilterRules(o) {
-    const c = constants_1.FILTER_CHAIN;
-    const lines = ['*filter', `:${c} - [0:0]`, ...commonFilterAllows(c)];
-    if (o.mode === 'enforce') {
-        lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -p tcp -m multiport --dports 80,443 -j RETURN`);
-        for (const server of o.dnsServers) {
-            for (const proto of ['udp', 'tcp']) {
-                lines.push(`-A ${c} -m owner --uid-owner ${o.dnsUid} -d ${server}/32 -p ${proto} --dport 53 -j RETURN`);
-            }
-        }
-        lines.push(`-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`, 
-        // log new connections only: packets of flows that predate the cutover (and ownerless
-        // RST/FIN of sockets ss -K closed) are rejected too, but are just noise in the report
-        `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_DROP}" --log-uid`, `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp-port-unreachable`);
-    }
-    else {
-        lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`, `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable`, `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_ANALYZE}" --log-uid`);
-    }
-    lines.push(`-I OUTPUT 1 -j ${c}`, 'COMMIT', '');
-    return lines.join('\n');
-}
-/**
- * ip6tables: there is no IPv6 path through the proxy. enforce rejects all non-loopback IPv6
- * egress (except neighbour discovery); analyze rejects 80/443 (+QUIC) so clients fall back
- * to IPv4 and through the proxy.
- */
-function buildIp6FilterRules(o) {
-    const c = constants_1.FILTER_CHAIN;
-    const lines = ['*filter', `:${c} - [0:0]`, `-A ${c} -o lo -j RETURN`, `-A ${c} -d ::1/128 -j RETURN`];
-    if (o.mode === 'enforce') {
-        lines.push(...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`));
-        for (const t of ['router-solicitation', 'neighbour-solicitation', 'neighbour-advertisement']) {
-            lines.push(`-A ${c} -p ipv6-icmp --icmpv6-type ${t} -j RETURN`);
-        }
-        lines.push(`-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp6-port-unreachable`);
-    }
-    else {
-        lines.push(`-A ${c} -p tcp -m multiport --dports 80,443 -j REJECT --reject-with tcp-reset`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp6-port-unreachable`);
-    }
-    lines.push(`-I OUTPUT 1 -j ${c}`, 'COMMIT', '');
-    return lines.join('\n');
-}
-/**
- * nat PREROUTING for traffic containers send off their bridge (docker0, user networks): DNS
- * to the resolver and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
- * route_localnet). Container -> host services and container <-> container (bridged traffic
- * traverses PREROUTING once Docker loads br_netfilter) are left alone; anything they don't
- * cover falls through to the DOCKER-USER chain below.
- */
-function buildContainerNatRules(o) {
-    const c = constants_1.CONTAINER_NAT_CHAIN;
-    return [
-        '*nat',
-        `:${c} - [0:0]`,
-        `-A ${c} -m addrtype --dst-type LOCAL -j RETURN`,
-        `-A ${c} -d ${RFC1918} -j RETURN`,
-        `-A ${c} -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
-        `-A ${c} -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
-        `-A ${c} -p tcp -m multiport --dports 80,443 -j DNAT --to-destination 127.0.0.1:${o.containerProxyPort}`,
-        ...LOCAL_BRIDGES.map(b => `-I PREROUTING 1 -i ${b} -j ${c}`),
-        'COMMIT',
-        ''
-    ].join('\n');
-}
-function containerForwardTail(c, o, icmpReject) {
-    if (o.mode === 'enforce') {
-        return [
-            `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_CDROP}"`,
-            `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`,
-            `-A ${c} -j REJECT --reject-with ${icmpReject}`
-        ];
-    }
-    return [
-        // QUIC: make HTTP/3 clients fall back to TCP, through the proxy (as on the host)
-        `-A ${c} -p udp --dport 443 -j REJECT --reject-with ${icmpReject}`,
-        `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_CEGRESS}"`
-    ];
-}
-/**
- * filter DOCKER-USER: everything a container forwards off-host that the DNAT did not send to
- * the proxy or the resolver. enforce rejects it (so a hole in the DNAT still fails closed), analyze
- * logs it. DOCKER-USER, not FORWARD: Docker re-inserts its FORWARD jumps ahead of ours on
- * every restart, but never touches DOCKER-USER.
- */
-function buildContainerForwardRules(o) {
-    const c = constants_1.CONTAINER_FWD_CHAIN;
-    return [
-        '*filter',
-        `:${c} - [0:0]`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
-        `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
-        ...containerForwardTail(c, o, 'icmp-port-unreachable'),
-        ...LOCAL_BRIDGES.map(b => `-I ${constants_1.DOCKER_USER_CHAIN} 1 -i ${b} -j ${c}`),
-        'COMMIT',
-        ''
-    ].join('\n');
-}
-/**
- * ip6tables counterpart: there is no IPv6 path through the proxy, so an IPv6-enabled container
- * network fails closed (enforce) or is pushed back to IPv4 for 80/443 (analyze). `hook` is
- * DOCKER-USER when Docker manages ip6tables, otherwise FORWARD.
- */
-function buildIp6ContainerForwardRules(o, hook = constants_1.DOCKER_USER_CHAIN) {
-    const c = constants_1.CONTAINER_FWD_CHAIN;
-    const tail = o.mode === 'enforce'
-        ? containerForwardTail(c, o, 'icmp6-port-unreachable')
-        : [
-            `-A ${c} -p tcp -m multiport --dports 80,443 -j REJECT --reject-with tcp-reset`,
-            ...containerForwardTail(c, o, 'icmp6-port-unreachable')
-        ];
-    return [
-        '*filter',
-        `:${c} - [0:0]`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
-        `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
-        ...tail,
-        ...LOCAL_BRIDGES.map(b => `-I ${hook} 1 -i ${b} -j ${c}`),
-        'COMMIT',
-        ''
-    ].join('\n');
-}
-/** Parse `ip -4 route show default` output into the interface names carrying the default route. */
-function parseDefaultRouteInterfaces(output) {
-    const out = [];
-    for (const line of output.split('\n')) {
-        const m = line.match(/^default\b.*\bdev\s+(\S+)/);
-        if (m)
-            out.push(m[1]);
-    }
-    return Array.from(new Set(out));
-}
-/**
- * Report where egress actually goes. Our rules are interface-agnostic so they fail closed
- * whatever the NIC is called; this is a loud diagnostic for the unexpected cases.
- */
-async function detectEgressInterface() {
-    const { stdout } = await exec.getExecOutput('ip', ['-4', 'route', 'show', 'default'], {
-        silent: true,
-        ignoreReturnCode: true
-    });
-    const ifaces = parseDefaultRouteInterfaces(stdout);
-    if (ifaces.length === 0) {
-        core.warning('No IPv4 default route found - egress rules are interface-agnostic and still apply.');
-    }
-    else if (ifaces.length > 1 || ifaces[0] !== 'eth0') {
-        core.warning(`Default route via ${ifaces.join(', ')} (expected eth0). Egress rules are interface-agnostic ` +
-            '(allow loopback + proxy path, reject the rest), so they still fail closed.');
-    }
-    else {
-        core.info('Default route via eth0');
-    }
-    return ifaces;
-}
-async function restore(binary, rules) {
-    await exec.exec('sudo', [binary, '--noflush'], { input: Buffer.from(rules) });
-}
-/** Remove our chains and jumps if present (idempotency for a re-run in the main step). */
-async function removeFirewall() {
-    const opts = { ignoreReturnCode: true, silent: true };
-    for (const [bin, table, chain] of [
-        ['iptables', 'nat', constants_1.NAT_CHAIN],
-        ['iptables', 'filter', constants_1.FILTER_CHAIN],
-        ['ip6tables', 'filter', constants_1.FILTER_CHAIN]
-    ]) {
-        // -D removes one jump per call; loop until none remain.
-        for (let i = 0; i < 5; i++) {
-            if ((await exec.exec('sudo', [bin, '-t', table, '-D', 'OUTPUT', '-j', chain], opts)) !== 0)
-                break;
-        }
-        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
-        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
-    }
-    const jumps = [
-        ['iptables', 'nat', 'PREROUTING', constants_1.CONTAINER_NAT_CHAIN],
-        ['iptables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
-        ['ip6tables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
-        ['ip6tables', 'filter', 'FORWARD', constants_1.CONTAINER_FWD_CHAIN]
-    ];
-    for (const [bin, table, from, chain] of jumps) {
-        for (const b of LOCAL_BRIDGES) {
-            for (let i = 0; i < 5; i++) {
-                if ((await exec.exec('sudo', [bin, '-t', table, '-D', from, '-i', b, '-j', chain], opts)) !== 0)
-                    break;
-            }
-        }
-    }
-    for (const [bin, table, chain] of [
-        ['iptables', 'nat', constants_1.CONTAINER_NAT_CHAIN],
-        ['iptables', 'filter', constants_1.CONTAINER_FWD_CHAIN],
-        ['ip6tables', 'filter', constants_1.CONTAINER_FWD_CHAIN]
-    ]) {
-        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
-        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
-    }
-}
-/** True if `chain` exists in the filter table of `bin`. */
-async function chainExists(bin, chain) {
-    const rc = await exec.exec('sudo', [bin, '-t', 'filter', '-n', '-L', chain], {
-        ignoreReturnCode: true,
-        silent: true
-    });
-    return rc === 0;
-}
-exports.MISSING_DOCKER_USER_MESSAGE = 'Docker is running but the DOCKER-USER chain is missing (Docker started with iptables disabled, or a ' +
-    'firewall backend other than iptables), so the container egress rules cannot be applied';
-/**
- * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
- * table; IPv6 last. The proxy must already be listening.
- *
- * Returns whether the container rules were applied. enforce fails closed instead of running
- * with containers outside the rules: it throws before anything is changed.
- */
-async function applyFirewall(o, hasChain = chainExists) {
-    let containerRules = false;
-    let ip6Hook = 'FORWARD';
-    if (o.containers) {
-        if (await hasChain('iptables', constants_1.DOCKER_USER_CHAIN)) {
-            containerRules = true;
-            if (await hasChain('ip6tables', constants_1.DOCKER_USER_CHAIN))
-                ip6Hook = constants_1.DOCKER_USER_CHAIN;
-        }
-        else if (o.mode === 'enforce') {
-            throw new Error(`${exports.MISSING_DOCKER_USER_MESSAGE}. Use docker: stop, or mode: analyze.`);
-        }
-        else {
-            core.warning(`${exports.MISSING_DOCKER_USER_MESSAGE}: container egress is not monitored`);
-        }
-    }
-    await removeFirewall();
-    // REDIRECT to 127.0.0.1 of packets that were routed to another interface
-    await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
-    let v4 = buildNatRules(o) + buildFilterRules(o);
-    let v6 = buildIp6FilterRules(o);
-    if (containerRules) {
-        v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
-        v6 += buildIp6ContainerForwardRules(o, ip6Hook);
-    }
-    await restore('iptables-restore', v4);
-    const rc6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
-        input: Buffer.from(v6),
-        ignoreReturnCode: true
-    });
-    if (rc6 !== 0) {
-        const msg = 'ip6tables rules could not be applied';
-        if (o.mode === 'enforce')
-            throw new Error(msg);
-        core.warning(msg);
-    }
-    return { containerRules };
-}
-/** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
-function parseDockerSubnets(json) {
-    const out = [];
-    try {
-        const nets = JSON.parse(json);
-        for (const n of nets) {
-            if (n.Driver !== 'bridge')
-                continue;
-            for (const cfg of n.IPAM?.Config || [])
-                if (cfg.Subnet)
-                    out.push(cfg.Subnet);
-        }
+        const actions = metaDomainGroups(await res.json());
+        if (!actions)
+            return null;
+        const normalized = actions
+            .filter((d) => typeof d === 'string')
+            .map(normalizeMetaDomain)
+            .filter((d) => d !== null);
+        return normalized.length > 0 ? Array.from(new Set(normalized)) : null;
     }
     catch {
-        // not JSON (docker error): no subnets
+        return null;
     }
-    return Array.from(new Set(out));
 }
 /**
- * Drop conntrack entries of flows sourced from the container networks. Without this, a
- * service container's connections that predate the rules keep going via ESTABLISHED (the
- * forwarded-traffic counterpart of killPreexistingConnections).
+ * Resolve the GitHub allowlist, preferring the live api.github.com/meta list and falling back
+ * to the generated snapshot if the fetch fails. GITHUB_EXTRAS are added either way. On
+ * success the snapshot is NOT merged in, so the storage accounts match exactly what GitHub
+ * registers today.
  */
-async function flushContainerConntrack() {
-    const opts = { ignoreReturnCode: true, silent: true };
-    const ids = await exec.getExecOutput('sudo', ['docker', 'network', 'ls', '-q', '--filter', 'driver=bridge'], opts);
-    const netIds = ids.stdout.split('\n').filter(Boolean);
-    let subnets = ['172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8'];
-    if (netIds.length > 0) {
-        const inspect = await exec.getExecOutput('sudo', ['docker', 'network', 'inspect', ...netIds], opts);
-        const found = parseDockerSubnets(inspect.stdout);
-        if (found.length > 0)
-            subnets = found;
+async function resolveGitHubDomains() {
+    const fetched = await fetchGitHubActionsDomains();
+    if (fetched && fetched.length > 0) {
+        return { domains: Array.from(new Set([...fetched, ...exports.GITHUB_EXTRAS])), source: 'meta' };
     }
-    if ((await exec.exec('sh', ['-c', 'command -v conntrack'], opts)) !== 0) {
-        core.warning('conntrack not installed: container connections that predate the rules may continue');
-        return;
-    }
-    for (const s of subnets) {
-        // exit 1 = nothing matched
-        await exec.exec('sudo', ['conntrack', '-D', '-f', s.includes(':') ? 'ipv6' : 'ipv4', '-s', s], opts);
-    }
-    core.info(`Flushed container conntrack entries for ${subnets.join(', ')}`);
-}
-/**
- * Kill established :80/:443 connections that predate the REDIRECT (runner long-polls etc.),
- * so the cutover is immediate: they reconnect through the proxy instead of being rejected
- * mid-stream later.
- */
-async function killPreexistingConnections() {
-    const rc = await exec.exec('sudo', ['ss', '-K', 'state', 'established', '( dport = :443 or dport = :80 )'], {
-        ignoreReturnCode: true,
-        silent: true
-    });
-    if (rc !== 0)
-        core.warning('ss -K failed: pre-existing connections will be cut off by the firewall instead');
-}
-/** Human-readable dump of what we installed (job log). */
-async function logFirewall() {
-    const opts = { ignoreReturnCode: true };
-    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.NAT_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-S', constants_1.FILTER_CHAIN], opts);
-    await exec.exec('sudo', ['ip6tables', '-S', constants_1.FILTER_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.CONTAINER_NAT_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-S', constants_1.CONTAINER_FWD_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-S', constants_1.DOCKER_USER_CHAIN], opts);
+    return { domains: getGitHubRequiredDomains(), source: 'static' };
 }
 
 
 /***/ }),
 
-/***/ 5422:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * Reader for the proxy's JSONL flow log (written by proxy/policy.py).
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseFlowLog = parseFlowLog;
-exports.parseFlowLogWithOffsets = parseFlowLogWithOffsets;
-exports.readFlowLog = readFlowLog;
-exports.flowLogSize = flowLogSize;
-exports.ipOf = ipOf;
-const fs = __importStar(__nccwpck_require__(9896));
-function parseFlowLog(text) {
-    const out = [];
-    for (const line of text.split('\n')) {
-        if (!line.trim())
-            continue;
-        try {
-            out.push(JSON.parse(line));
-        }
-        catch {
-            // a partially written last line
-        }
-    }
-    return out;
-}
-/** Records plus the byte offset each one starts at (to tell which phase of the job wrote it). */
-function parseFlowLogWithOffsets(text) {
-    const records = [];
-    const offsets = [];
-    let at = 0;
-    for (const line of text.split('\n')) {
-        const start = at;
-        at += Buffer.byteLength(line, 'utf8') + 1;
-        if (!line.trim())
-            continue;
-        try {
-            records.push(JSON.parse(line));
-            offsets.push(start);
-        }
-        catch {
-            // a partially written last line
-        }
-    }
-    return { records, offsets };
-}
-function readFlowLog(file, fromByte = 0) {
-    if (!fs.existsSync(file))
-        return [];
-    const buf = fs.readFileSync(file);
-    return parseFlowLog(buf.subarray(Math.min(fromByte, buf.length)).toString('utf8'));
-}
-function flowLogSize(file) {
-    return fs.existsSync(file) ? fs.statSync(file).size : 0;
-}
-/** The IP part of an `ip:port` string. */
-function ipOf(hostport) {
-    if (!hostport)
-        return '';
-    const i = hostport.lastIndexOf(':');
-    return i > 0 ? hostport.slice(0, i) : hostport;
-}
-
-
-/***/ }),
-
-/***/ 6107:
+/***/ 9058:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -1971,83 +808,103 @@ function readInputs() {
 
 /***/ }),
 
-/***/ 5915:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+/***/ 8729:
+/***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const core = __importStar(__nccwpck_require__(7484));
-const inputs_1 = __nccwpck_require__(6107);
-const egress_1 = __nccwpck_require__(765);
 /**
- * Main step: normally a no-op because the pre step already applied everything. If pre did
- * not run (e.g. a local `uses: ./` action) or failed in analyze mode, set up here.
+ * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
  */
-async function run() {
-    try {
-        if ((0, egress_1.setupCompleted)()) {
-            core.info('✅ safer-runner v2 already active (configured in the pre step)');
-            return;
-        }
-        core.info('Pre step did not complete setup - configuring now');
-        await (0, egress_1.runSetup)((0, inputs_1.readInputs)());
-    }
-    catch (error) {
-        core.setFailed(`safer-runner setup failed: ${error}`);
-    }
-}
-run();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+/** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
+exports.MITMPROXY_VERSION = '12.3.1';
+exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
+/** sha256 of the tarball above (verified before anything is extracted). */
+exports.MITMPROXY_SHA256 = 'f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5';
+/**
+ * CoreDNS is the resolver (replaced dnsmasq): stock upstream release, sha256-pinned. It is
+ * not in the Ubuntu 24.04/26.04 archives. amd64 only, like mitmproxy above.
+ */
+exports.COREDNS_VERSION = '1.15.0';
+exports.COREDNS_URL = `https://github.com/coredns/coredns/releases/download/v${exports.COREDNS_VERSION}/coredns_${exports.COREDNS_VERSION}_linux_amd64.tgz`;
+/** sha256 of the tarball above (matches upstream's published .sha256). */
+exports.COREDNS_SHA256 = '2495c5b8f3fab6d0a336c397f1227b75406d86e6ec7125744a29df9e936ab8cd';
+exports.DNS_UNIT = 'safer-runner-dns';
+/** Dedicated system user the proxy runs as. Its UID is exempt from the REDIRECT. */
+exports.PROXY_USER = 'safer-runner-proxy';
+exports.PROXY_UNIT = 'safer-runner-proxy';
+exports.PROXY_LISTEN_HOST = '127.0.0.1';
+/** mitmproxy stream_large_bodies: larger bodies are streamed instead of buffered. */
+exports.PROXY_STREAM_LARGE_BODIES = '1m';
+/** Root-owned install location: the runner user must not be able to change what the proxy loads. */
+exports.INSTALL_DIR = '/opt/safer-runner';
+exports.MITMDUMP_BIN = `${exports.INSTALL_DIR}/bin/mitmdump`;
+exports.ADDON_DIR = `${exports.INSTALL_DIR}/proxy`;
+exports.ADDON_FILES = ['policy.py', 'policy_core.py'];
+exports.TEARDOWN_BIN = `${exports.INSTALL_DIR}/bin/teardown`;
+exports.COREDNS_BIN = `${exports.INSTALL_DIR}/bin/coredns`;
+/** Root-owned config. policy.json is read by the addon at (re)start. */
+exports.ETC_DIR = '/etc/safer-runner';
+exports.POLICY_FILE = `${exports.ETC_DIR}/policy.json`;
+/** CoreDNS config: root:root 0644 (holds only the allowlist, which policy.json already shows). */
+exports.COREFILE = `${exports.ETC_DIR}/Corefile`;
+/** Public CA certificate (world-readable) - what NODE_EXTRA_CA_CERTS points at. */
+exports.CA_CERT_FILE = `${exports.ETC_DIR}/ca.pem`;
+/**
+ * Integrity baseline for fail-on-tampering: root:root 0600, so the runner user can neither
+ * read nor rewrite it to match a tampered state (review M1). The post step reads it through
+ * an exact `sudo cat` entry that stays allowed with disable-sudo.
+ */
+exports.VALIDATION_STATE_FILE = `${exports.ETC_DIR}/validation-state.json`;
+exports.SYSTEM_CA_FILE = '/usr/local/share/ca-certificates/safer-runner-ca.crt';
+/** Regenerated by update-ca-certificates: system roots + our CA. */
+exports.CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+/** Proxy confdir holding the CA private key: tmpfs, 0700, owned by the proxy user. */
+exports.PROXY_CONF_DIR = '/run/safer-runner/proxy';
+exports.PROXY_CA_KEY_FILE = `${exports.PROXY_CONF_DIR}/mitmproxy-ca.pem`;
+exports.LOG_DIR = '/var/log/safer-runner';
+exports.FLOW_LOG = `${exports.LOG_DIR}/proxy-flows.jsonl`;
+exports.DNS_LOG = `${exports.LOG_DIR}/dns.log`;
+exports.SUDO_LOG = `${exports.LOG_DIR}/sudo.log`;
+exports.FIREWALL_LOG = `${exports.LOG_DIR}/firewall.log`;
+exports.SELFTEST_FILE = `${exports.LOG_DIR}/selftest.json`;
+/** iptables chains we own (filter + nat), and the LOG prefixes they use. */
+exports.FILTER_CHAIN = 'SAFER_RUNNER_OUT';
+exports.NAT_CHAIN = 'SAFER_RUNNER_NAT';
+exports.LOG_PREFIX_DROP = 'SaferRunner-Drop: ';
+exports.LOG_PREFIX_ANALYZE = 'SaferRunner-Egress: ';
+/** Container egress (P2): nat PREROUTING DNAT + a filter chain jumped to from DOCKER-USER. */
+exports.CONTAINER_NAT_CHAIN = 'SAFER_RUNNER_CNAT';
+exports.CONTAINER_FWD_CHAIN = 'SAFER_RUNNER_CFWD';
+exports.LOG_PREFIX_CDROP = 'SaferRunner-CDrop: ';
+exports.LOG_PREFIX_CEGRESS = 'SaferRunner-CEgress: ';
+/** Chain Docker creates and promises never to touch (it re-inserts its own FORWARD jumps on restart). */
+exports.DOCKER_USER_CHAIN = 'DOCKER-USER';
+/**
+ * dockerd config: setup merges live-restore into it (F1), and it is where a runtime or proxy
+ * override would be planted, so it joins the integrity baseline when setup wrote it.
+ */
+exports.DOCKER_DAEMON_JSON = '/etc/docker/daemon.json';
+/** Azure platform endpoints every hosted runner needs (scoped to the ports they use). */
+exports.AZURE_IMDS = '169.254.169.254';
+exports.AZURE_WIRESERVER = '168.63.129.16';
+/** Hostname used by the runtime self-test. `.invalid` never resolves (RFC 6761). */
+exports.SELFTEST_HOST = 'selftest.safer-runner.invalid';
+/** TEST-NET-1 (RFC 5737): never routed. Used to prove the proxy ignores the client's IP. */
+exports.SELFTEST_BOGUS_IP = '192.0.2.1';
 
 
 /***/ }),
 
-/***/ 1106:
+/***/ 5422:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
 /**
- * CoreDNS query log parser. Each server block's `log` format labels its own lines
- * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
- * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
- *
- *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
- *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
- *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
+ * Reader for the proxy's JSONL flow log (written by proxy/policy.py).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2083,1983 +940,67 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseDnsLog = parseDnsLog;
-exports.refusedNames = refusedNames;
-exports.readRefusedNames = readRefusedNames;
+exports.parseFlowLog = parseFlowLog;
+exports.parseFlowLogWithOffsets = parseFlowLogWithOffsets;
+exports.readFlowLog = readFlowLog;
+exports.flowLogSize = flowLogSize;
+exports.ipOf = ipOf;
 const fs = __importStar(__nccwpck_require__(9896));
-// anchored on the plugin's own prefix: a query name can't inject a second verdict
-const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
-function parseDnsLog(text) {
+function parseFlowLog(text) {
     const out = [];
     for (const line of text.split('\n')) {
-        const m = LINE.exec(line);
-        if (!m)
+        if (!line.trim())
             continue;
-        out.push({
-            client: m[1],
-            verdict: m[2],
-            type: m[3],
-            name: m[4].toLowerCase().replace(/\.$/, ''),
-            rcode: m[5]
-        });
+        try {
+            out.push(JSON.parse(line));
+        }
+        catch {
+            // a partially written last line
+        }
     }
     return out;
 }
-/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
-function refusedNames(queries) {
-    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
-}
-function readRefusedNames(file) {
-    try {
-        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
-    }
-    catch {
-        return [];
-    }
-}
-
-
-/***/ }),
-
-/***/ 3251:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-// GENERATED by `npm run gen:domains` from api.github.com/meta .domains.actions +
-// .domains.artifact_attestations on 2026-11-05
-// - do not edit by hand. Verbatim; github-parser.ts normalises it like the live list (offline fallback).
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.GITHUB_ACTIONS_DOMAINS = void 0;
-exports.GITHUB_ACTIONS_DOMAINS = [
-    'github.com',
-    '*.github.com',
-    '*.githubapp.com',
-    'ghcr.io',
-    'objects.githubusercontent.com',
-    'objects-origin.githubusercontent.com',
-    'github-releases.githubusercontent.com',
-    'github-registry-files.githubusercontent.com',
-    'release-assets.githubusercontent.com',
-    '*.actions.githubusercontent.com',
-    'productionresultssa0.blob.core.windows.net',
-    'productionresultssa1.blob.core.windows.net',
-    'productionresultssa2.blob.core.windows.net',
-    'productionresultssa3.blob.core.windows.net',
-    'productionresultssa4.blob.core.windows.net',
-    'productionresultssa5.blob.core.windows.net',
-    'productionresultssa6.blob.core.windows.net',
-    'productionresultssa7.blob.core.windows.net',
-    'productionresultssa8.blob.core.windows.net',
-    'productionresultssa9.blob.core.windows.net',
-    'productionresultssa10.blob.core.windows.net',
-    'productionresultssa11.blob.core.windows.net',
-    'productionresultssa12.blob.core.windows.net',
-    'productionresultssa13.blob.core.windows.net',
-    'productionresultssa14.blob.core.windows.net',
-    'productionresultssa15.blob.core.windows.net',
-    'productionresultssa16.blob.core.windows.net',
-    'productionresultssa17.blob.core.windows.net',
-    'productionresultssa18.blob.core.windows.net',
-    'productionresultssa19.blob.core.windows.net',
-    'productionresultssa30.blob.core.windows.net',
-    'productionresultssa31.blob.core.windows.net',
-    'productionresultssa32.blob.core.windows.net',
-    'productionresultssa33.blob.core.windows.net',
-    'productionresultssa34.blob.core.windows.net',
-    'productionresultssa35.blob.core.windows.net',
-    'productionresultssa36.blob.core.windows.net',
-    'productionresultssa37.blob.core.windows.net',
-    'productionresultssa38.blob.core.windows.net',
-    'productionresultssa39.blob.core.windows.net',
-    'productionresultssa40.blob.core.windows.net',
-    'productionresultssa41.blob.core.windows.net',
-    'productionresultssa42.blob.core.windows.net',
-    'productionresultssa43.blob.core.windows.net',
-    'productionresultssa44.blob.core.windows.net',
-    'productionresultssa45.blob.core.windows.net',
-    'productionresultssa46.blob.core.windows.net',
-    'productionresultssa47.blob.core.windows.net',
-    'productionresultssa48.blob.core.windows.net',
-    'productionresultssa49.blob.core.windows.net',
-    'productionresultssa100.blob.core.windows.net',
-    'productionresultssa101.blob.core.windows.net',
-    'productionresultssa102.blob.core.windows.net',
-    'productionresultssa103.blob.core.windows.net',
-    'productionresultssa104.blob.core.windows.net',
-    'productionresultssa105.blob.core.windows.net',
-    'productionresultssa106.blob.core.windows.net',
-    'productionresultssa107.blob.core.windows.net',
-    'productionresultssa108.blob.core.windows.net',
-    'productionresultssa109.blob.core.windows.net',
-    'productionresultssa110.blob.core.windows.net',
-    'productionresultssa111.blob.core.windows.net',
-    'productionresultssa112.blob.core.windows.net',
-    'productionresultssa113.blob.core.windows.net',
-    'productionresultssa114.blob.core.windows.net',
-    'productionresultssa115.blob.core.windows.net',
-    'productionresultssa116.blob.core.windows.net',
-    'productionresultssa117.blob.core.windows.net',
-    'productionresultssa118.blob.core.windows.net',
-    'productionresultssa119.blob.core.windows.net',
-    'productionresultssa120.blob.core.windows.net',
-    'productionresultssa121.blob.core.windows.net',
-    'productionresultssa122.blob.core.windows.net',
-    'productionresultssa123.blob.core.windows.net',
-    'productionresultssa124.blob.core.windows.net',
-    'productionresultssa125.blob.core.windows.net',
-    'productionresultssa126.blob.core.windows.net',
-    'productionresultssa127.blob.core.windows.net',
-    'productionresultssa128.blob.core.windows.net',
-    'productionresultssa129.blob.core.windows.net',
-    'productionresultssa130.blob.core.windows.net',
-    'productionresultssa131.blob.core.windows.net',
-    'productionresultssa132.blob.core.windows.net',
-    'productionresultssa133.blob.core.windows.net',
-    'productionresultssa134.blob.core.windows.net',
-    'productionresultssa135.blob.core.windows.net',
-    'productionresultssa136.blob.core.windows.net',
-    'productionresultssa137.blob.core.windows.net',
-    'productionresultssa138.blob.core.windows.net',
-    'productionresultssa139.blob.core.windows.net',
-    'productionresultssa140.blob.core.windows.net',
-    'productionresultssa141.blob.core.windows.net',
-    'productionresultssa142.blob.core.windows.net',
-    'productionresultssa143.blob.core.windows.net',
-    'productionresultssa144.blob.core.windows.net',
-    'productionresultssa145.blob.core.windows.net',
-    'productionresultssa146.blob.core.windows.net',
-    'productionresultssa147.blob.core.windows.net',
-    'productionresultssa148.blob.core.windows.net',
-    'productionresultssa149.blob.core.windows.net',
-    'productionresultssa150.blob.core.windows.net',
-    'productionresultssa151.blob.core.windows.net',
-    'productionresultssa152.blob.core.windows.net',
-    'productionresultssa153.blob.core.windows.net',
-    'productionresultssa154.blob.core.windows.net',
-    'productionresultssa155.blob.core.windows.net',
-    'productionresultssa156.blob.core.windows.net',
-    'productionresultssa157.blob.core.windows.net',
-    'productionresultssa158.blob.core.windows.net',
-    'productionresultssa159.blob.core.windows.net',
-    'productionresultssa160.blob.core.windows.net',
-    'productionresultssa161.blob.core.windows.net',
-    'productionresultssa162.blob.core.windows.net',
-    'productionresultssa163.blob.core.windows.net',
-    'productionresultssa164.blob.core.windows.net',
-    'productionresultssa165.blob.core.windows.net',
-    'productionresultssa166.blob.core.windows.net',
-    'productionresultssa167.blob.core.windows.net',
-    'productionresultssa168.blob.core.windows.net',
-    'productionresultssa169.blob.core.windows.net',
-    'productionresultssa170.blob.core.windows.net',
-    'productionresultssa171.blob.core.windows.net',
-    'productionresultssa172.blob.core.windows.net',
-    'productionresultssa173.blob.core.windows.net',
-    'productionresultssa174.blob.core.windows.net',
-    'productionresultssa175.blob.core.windows.net',
-    'productionresultssa176.blob.core.windows.net',
-    'productionresultssa177.blob.core.windows.net',
-    'productionresultssa178.blob.core.windows.net',
-    'productionresultssa179.blob.core.windows.net',
-    'productionresultssa180.blob.core.windows.net',
-    'productionresultssa181.blob.core.windows.net',
-    'productionresultssa182.blob.core.windows.net',
-    'productionresultssa183.blob.core.windows.net',
-    'productionresultssa184.blob.core.windows.net',
-    'productionresultssa185.blob.core.windows.net',
-    'productionresultssa186.blob.core.windows.net',
-    'productionresultssa187.blob.core.windows.net',
-    'productionresultssa188.blob.core.windows.net',
-    'productionresultssa189.blob.core.windows.net',
-    'productionresultssa190.blob.core.windows.net',
-    'productionresultssa191.blob.core.windows.net',
-    'productionresultssa192.blob.core.windows.net',
-    'productionresultssa193.blob.core.windows.net',
-    'productionresultssa194.blob.core.windows.net',
-    'productionresultssa195.blob.core.windows.net',
-    'productionresultssa196.blob.core.windows.net',
-    'productionresultssa197.blob.core.windows.net',
-    'productionresultssa198.blob.core.windows.net',
-    'productionresultssa199.blob.core.windows.net',
-    'mpsghub.actions.githubusercontent.com',
-    'pipelinesghubeus1.actions.githubusercontent.com',
-    'pipelinesghubeus10.actions.githubusercontent.com',
-    'pipelinesghubeus11.actions.githubusercontent.com',
-    'pipelinesghubeus12.actions.githubusercontent.com',
-    'pipelinesghubeus13.actions.githubusercontent.com',
-    'pipelinesghubeus14.actions.githubusercontent.com',
-    'pipelinesghubeus15.actions.githubusercontent.com',
-    'pipelinesghubeus2.actions.githubusercontent.com',
-    'pipelinesghubeus20.actions.githubusercontent.com',
-    'pipelinesghubeus21.actions.githubusercontent.com',
-    'pipelinesghubeus22.actions.githubusercontent.com',
-    'pipelinesghubeus23.actions.githubusercontent.com',
-    'pipelinesghubeus24.actions.githubusercontent.com',
-    'pipelinesghubeus25.actions.githubusercontent.com',
-    'pipelinesghubeus26.actions.githubusercontent.com',
-    'pipelinesghubeus3.actions.githubusercontent.com',
-    'pipelinesghubeus4.actions.githubusercontent.com',
-    'pipelinesghubeus5.actions.githubusercontent.com',
-    'pipelinesghubeus6.actions.githubusercontent.com',
-    'pipelinesghubeus7.actions.githubusercontent.com',
-    'pipelinesghubeus8.actions.githubusercontent.com',
-    'pipelinesghubeus9.actions.githubusercontent.com',
-    'pipelinesproxcnc1.actions.githubusercontent.com',
-    'pipelinesproxcus1.actions.githubusercontent.com',
-    'pipelinesproxeau1.actions.githubusercontent.com',
-    'pipelinesproxjpw1.actions.githubusercontent.com',
-    'pipelinesproxsdc1.actions.githubusercontent.com',
-    'pipelinesproxweu1.actions.githubusercontent.com',
-    'pipelinesproxwus31.actions.githubusercontent.com',
-    'pipelinesproxwus32.actions.githubusercontent.com',
-    'runnerghubeus1.actions.githubusercontent.com',
-    'runnerghubeus20.actions.githubusercontent.com',
-    'runnerghubeus21.actions.githubusercontent.com',
-    'runnerghubwus31.actions.githubusercontent.com',
-    'runnerproxcnc1.actions.githubusercontent.com',
-    'runnerproxcus1.actions.githubusercontent.com',
-    'runnerproxeau1.actions.githubusercontent.com',
-    'runnerproxjpw1.actions.githubusercontent.com',
-    'runnerproxsdc1.actions.githubusercontent.com',
-    'runnerproxweu1.actions.githubusercontent.com',
-    'tokenghub.actions.githubusercontent.com',
-    'tuf-repo.github.com',
-    'fulcio.githubapp.com',
-    'timestamp.githubapp.com'
-];
-
-
-/***/ }),
-
-/***/ 9170:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-/**
- * The GitHub allowlist: api.github.com/meta .domains.actions (live, else the generated
- * snapshot) + a tiny hand-curated GITHUB_EXTRAS, with the guards that keep meta from ever
- * widening it into a shared namespace.
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DANGEROUS_BROAD_DOMAINS = exports.GITHUB_PLATFORM_ENDPOINTS = exports.RISKY_GITHUB_SUBDOMAINS = exports.GITHUB_EXTRAS = void 0;
-exports.getGitHubRequiredDomains = getGitHubRequiredDomains;
-exports.normalizeMetaDomain = normalizeMetaDomain;
-exports.metaDomainGroups = metaDomainGroups;
-exports.fetchGitHubActionsDomains = fetchGitHubActionsDomains;
-exports.resolveGitHubDomains = resolveGitHubDomains;
-const github_domains_generated_1 = __nccwpck_require__(3251);
-/**
- * Hosts the runner needs that api.github.com/meta .domains.actions does not list. Hand-curated
- * and kept tiny: everything GitHub states it needs comes from meta (live at runtime, else the
- * generated snapshot in github-domains.generated.ts - `npm run gen:domains`).
- *
- * Patterns are v2 allowlist syntax: a bare name is EXACT and `*.name` covers every subdomain.
- * NO wildcards here: a wildcard is a DNS channel to that zone. The only wildcards are the ones
- * meta itself lists (*.github.com, *.githubapp.com, *.actions.githubusercontent.com). A new
- * entry needs observed real-runner traffic and a one-line reason. Not even an apex "because it
- * costs nothing": meta lists github.com's apex but not actions.githubusercontent.com's or
- * githubapp.com's, so those aren't contacted.
- */
-exports.GITHUB_EXTRAS = [
-    // ghcr.io (in meta) answers blob/layer GETs with a 307 to this host: every ghcr pull
-    'pkg-containers.githubusercontent.com'
-];
-/**
- * Risky GitHub subdomains that serve arbitrary user content (malicious payloads), refused in
- * enforce mode when block-risky-github-subdomains is on: a deny override, so `*.github.com`
- * does not let them through.
- */
-exports.RISKY_GITHUB_SUBDOMAINS = [
-    'gist.github.com', // Gist web interface
-    'gist.githubusercontent.com', // CVE-2025-30066: tj-actions downloaded malicious Python from this exact domain
-    'raw.githubusercontent.com' // Common vector for serving malicious raw file content
-];
-/**
- * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
- * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
- * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
- * is on) only on a host the job filters. Essential entries always apply: step/job log
- * metadata RPCs, the live-log stream, job lease renewal and completion, and OIDC. The rest
- * yield to any matching rule of the job's: step-status updates, the artifact and cache
- * services, and all blob storage (artifacts, cache, and the job's stored logs + step summary).
- * Blocking that optional traffic loses those features but does not fail or hang the job
- * (verified on real runners).
- *
- * EXPLICIT (host, path, methods) only, reads included - never a blanket "*": GET, HEAD, which
- * would trust far more than the platform uses. Workflow-chosen writes (e.g. SARIF upload) are
- * NOT platform and stay user-controlled. Grow it from observed real-runner traffic (the proxy
- * flow log); a missing entry only breaks that job's platform step, never enforcement.
- */
-exports.GITHUB_PLATFORM_ENDPOINTS = [
-    // results service RPCs the runner itself makes: step + job log metadata (Receiver service)
-    {
-        host: 'results-receiver.actions.githubusercontent.com',
-        path: '/twirp/results.services.receiver.Receiver/*',
-        methods: ['POST'],
-        essential: true
-    },
-    // runner live-log stream (websocket upgrade)
-    {
-        host: 'results-receiver.actions.githubusercontent.com',
-        path: '/_ws/ingest.sock',
-        methods: ['GET'],
-        essential: true
-    },
-    // OIDC token request (ACTIONS_ID_TOKEN_REQUEST_URL)
-    {
-        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
-        path: '*/idtoken/*',
-        methods: ['GET'],
-        essential: true
-    },
-    // job lease renewal (/<n>/renewjob) - refusing it ends the job
-    {
-        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
-        path: '*/renewjob',
-        methods: ['POST'],
-        essential: true
-    },
-    // job completion, sent through the proxy after the last post step - refusing it hangs the job
-    {
-        host: 'run-actions-*-azure-*.actions.githubusercontent.com',
-        path: '*/completejob',
-        methods: ['POST'],
-        essential: true
-    },
-    // other results service RPCs (optional - a matching user rule wins): artifact and cache
-    // services (actions/upload-artifact, actions/cache) AND step-status (WorkflowStepUpdateService)
-    { host: 'results-receiver.actions.githubusercontent.com', path: '/twirp/*', methods: ['POST'], essential: false },
-    // artifact / log / cache blobs via the signed URLs the results service hands out: uploads
-    // (PUT: Put Blob / Put Block / Put Block List) and downloads (GET, HEAD for properties)
-    {
-        host: 'productionresultssa*.blob.core.windows.net',
-        path: '/actions-results/*',
-        methods: ['GET', 'HEAD', 'PUT'],
-        essential: false
-    },
-    {
-        host: 'productionresultssa*.blob.core.windows.net',
-        path: '/actions-cache/*',
-        methods: ['GET', 'HEAD', 'PUT'],
-        essential: false
-    }
-];
-/**
- * Over-broad, multi-tenant domain suffixes that must NEVER be allowlisted wholesale,
- * even if a future api.github.com/meta response lists them. These are shared global
- * namespaces (anyone can create a sibling name under them), so allowing the bare
- * suffix would turn enforce mode into an open exfiltration channel. Specific names
- * under them (e.g. productionresultssa100.blob.core.windows.net) are fine; the bare
- * suffix is not.
- */
-exports.DANGEROUS_BROAD_DOMAINS = new Set([
-    'windows.net',
-    'core.windows.net',
-    'blob.core.windows.net',
-    'githubusercontent.com', // we curate specific subdomains and block raw./gist. explicitly
-    'amazonaws.com',
-    's3.amazonaws.com',
-    'blob.storage.azure.net'
-]);
-/**
- * The offline GitHub allowlist: the generated meta snapshot plus GITHUB_EXTRAS. Used when the
- * live api.github.com/meta list cannot be fetched (see resolveGitHubDomains()).
- *
- * SECURITY: the snapshot enumerates the productionresultssa* storage accounts exactly as meta
- * lists them; never pad or range-fill them. Azure storage account names are a global,
- * first-come namespace, so an unregistered name would be an exfil channel. A stale snapshot
- * fails safe (a new account is blocked until regenerated).
- */
-function getGitHubRequiredDomains() {
-    const snapshot = github_domains_generated_1.GITHUB_ACTIONS_DOMAINS.map(normalizeMetaDomain).filter((d) => d !== null);
-    return Array.from(new Set([...snapshot, ...exports.GITHUB_EXTRAS]));
-}
-/**
- * Normalise a domain from api.github.com/meta into an allowlist pattern, or return null if
- * it must be dropped.
- *
- * - A leading "*." is KEPT: meta's `*.github.com` means "subdomains of github.com", which is
- *   exactly what the v2 pattern `*.github.com` means (meta lists the apex separately).
- * - Any other wildcard, an empty entry, or an over-broad shared suffix
- *   (DANGEROUS_BROAD_DOMAINS, checked on the part after "*.") is dropped.
- */
-function normalizeMetaDomain(raw) {
-    const d = raw.trim().toLowerCase();
-    const base = d.startsWith('*.') ? d.slice(2) : d;
-    if (!base || base.includes('*'))
-        return null;
-    if (exports.DANGEROUS_BROAD_DOMAINS.has(base))
-        return null;
-    return d;
-}
-/**
- * The meta groups the GitHub list is built from, raw (no normalisation): `.domains.actions`
- * (required) + `.domains.artifact_attestations` (GitHub's Sigstore for actions/attest-*; an
- * array, or an object with a `services` array). Null when `.domains.actions` is missing/empty.
- * Shared by the live fetch and `npm run gen:domains` so the snapshot matches the live path.
- */
-function metaDomainGroups(data) {
-    const domains = data?.domains;
-    const actions = domains?.actions;
-    if (!Array.isArray(actions) || actions.length === 0)
-        return null;
-    const att = domains?.artifact_attestations;
-    const services = Array.isArray(att) ? att : att?.services;
-    return [...actions, ...(Array.isArray(services) ? services : [])];
-}
-/**
- * Fetch the GitHub Actions domain allowlist from api.github.com/meta.
- *
- * Uses the `.domains.actions` section (+ artifact attestations, see metaDomainGroups) -
- * GitHub's recommended middle tier, which
- * wildcards GitHub-owned domains but enumerates shared-namespace ones (e.g. the
- * productionresultssa* storage accounts) specifically. We deliberately do NOT use
- * `.domains.actions_inbound.wildcard_domains`, which contains *.core.windows.net and
- * *.githubusercontent.com and would re-open the exfiltration surface.
- *
- * @returns the normalised domain list, or null on any failure (caller falls back to static).
- */
-async function fetchGitHubActionsDomains(timeoutMs = 10000) {
-    try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        let res;
+/** Records plus the byte offset each one starts at (to tell which phase of the job wrote it). */
+function parseFlowLogWithOffsets(text) {
+    const records = [];
+    const offsets = [];
+    let at = 0;
+    for (const line of text.split('\n')) {
+        const start = at;
+        at += Buffer.byteLength(line, 'utf8') + 1;
+        if (!line.trim())
+            continue;
         try {
-            res = await fetch('https://api.github.com/meta', {
-                signal: controller.signal,
-                headers: {
-                    accept: 'application/vnd.github+json',
-                    'user-agent': 'safer-runner-action'
-                }
-            });
+            records.push(JSON.parse(line));
+            offsets.push(start);
         }
-        finally {
-            clearTimeout(timer);
-        }
-        if (!res.ok)
-            return null;
-        const actions = metaDomainGroups(await res.json());
-        if (!actions)
-            return null;
-        const normalized = actions
-            .filter((d) => typeof d === 'string')
-            .map(normalizeMetaDomain)
-            .filter((d) => d !== null);
-        return normalized.length > 0 ? Array.from(new Set(normalized)) : null;
-    }
-    catch {
-        return null;
-    }
-}
-/**
- * Resolve the GitHub allowlist, preferring the live api.github.com/meta list and falling back
- * to the generated snapshot if the fetch fails. GITHUB_EXTRAS are added either way. On
- * success the snapshot is NOT merged in, so the storage accounts match exactly what GitHub
- * registers today.
- */
-async function resolveGitHubDomains() {
-    const fetched = await fetchGitHubActionsDomains();
-    if (fetched && fetched.length > 0) {
-        return { domains: Array.from(new Set([...fetched, ...exports.GITHUB_EXTRAS])), source: 'meta' };
-    }
-    return { domains: getGitHubRequiredDomains(), source: 'static' };
-}
-
-
-/***/ }),
-
-/***/ 7516:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-/**
- * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
- * syslog lines copied there by rsyslog in the same format (see sudo.ts)
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseSudoLogLine = parseSudoLogLine;
-exports.deduplicateSudoCommands = deduplicateSudoCommands;
-exports.parseSudoLogsFromString = parseSudoLogsFromString;
-exports.classifySudoCommands = classifySudoCommands;
-/**
- * Classic sudo prefixes refused commands with a reason, e.g.
- * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
- */
-const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
-/**
- * Parse a single sudo log entry
- * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
- */
-function parseSudoLogLine(line) {
-    // Match sudo log format with timestamp
-    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
-    if (!match) {
-        return null;
-    }
-    const [, timestamp, user, targetUser, fullCommand] = match;
-    // Split command and args
-    const commandParts = fullCommand.trim().split(/\s+/);
-    const command = commandParts[0];
-    const args = commandParts.slice(1).join(' ');
-    return {
-        timestamp,
-        user,
-        targetUser,
-        command,
-        args,
-        ...(DENIED_PATTERN.test(line) && { denied: true })
-    };
-}
-/**
- * Deduplicate sudo commands by command+args combination
- */
-function deduplicateSudoCommands(commands) {
-    const seen = new Set();
-    const deduplicated = [];
-    for (const cmd of commands) {
-        const key = `${cmd.command} ${cmd.args}`;
-        if (!seen.has(key)) {
-            seen.add(key);
-            deduplicated.push(cmd);
+        catch {
+            // a partially written last line
         }
     }
-    return deduplicated;
+    return { records, offsets };
 }
-/**
- * Join wrapped log entries back into single lines
- * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
- * continuation lines, which can split a command from its arguments:
- *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
- *       /etc/resolv.conf
- */
-function joinContinuationLines(content) {
-    const joined = [];
-    for (const line of content.split('\n')) {
-        if (/^\s+\S/.test(line) && joined.length > 0) {
-            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
-        }
-        else {
-            joined.push(line);
-        }
-    }
-    return joined;
+function readFlowLog(file, fromByte = 0) {
+    if (!fs.existsSync(file))
+        return [];
+    const buf = fs.readFileSync(file);
+    return parseFlowLog(buf.subarray(Math.min(fromByte, buf.length)).toString('utf8'));
 }
-/**
- * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
- * entry is matched as one line.
- */
-function parseSudoLogsFromString(content) {
-    const commands = [];
-    for (const line of joinContinuationLines(content)) {
-        const cmd = parseSudoLogLine(line);
-        if (cmd) {
-            commands.push(cmd);
-        }
-    }
-    // Deduplicate and limit to 1000 commands
-    return deduplicateSudoCommands(commands).slice(0, 1000);
+function flowLogSize(file) {
+    return fs.existsSync(file) ? fs.statSync(file).size : 0;
 }
-/**
- * Whether a (successful) command is one of the action's own. System binaries match by
- * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
- * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
- */
-function isInternal(cmd, internal) {
-    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
-    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
-    if (match) {
-        return internal.has(withArgs(match[1]));
-    }
-    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
-}
-/** Split parsed sudo log entries by who ran them and whether they were allowed. */
-function classifySudoCommands(commands, internalCommands) {
-    const internal = new Set(internalCommands);
-    const usage = { ran: [], refused: [], internal: [] };
-    for (const cmd of commands) {
-        if (cmd.denied)
-            usage.refused.push(cmd);
-        else if (isInternal(cmd, internal))
-            usage.internal.push(cmd);
-        else
-            usage.ran.push(cmd);
-    }
-    return usage;
-}
-
-
-/***/ }),
-
-/***/ 2224:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-/**
- * v2 hostname policy: builds the policy.json the proxy addon enforces, and mirrors the
- * addon's pattern matching (proxy/policy_core.py) for the report and DNS config.
- *
- * Pattern semantics (identical in Python; both are checked against proxy/test-vectors.json):
- *  - `example.com`     -> exactly example.com (no subdomains)
- *  - `*.example.com`   -> any subdomain of example.com (not the apex)
- *  - `a-*.example.com` -> `*` matches within ONE label; the rest must match exactly
- *
- * Input shorthand (expanded before validation, never reaches the addon or the Corefile):
- *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
- *
- * http-filter path patterns use the same glob with `/` in the role of `.`: a segment that is
- * exactly `*` spans any depth (empty segments included), a `*` inside a segment stays within
- * it, and a lone `*` matches every path. Matched by the addon (policy_core.HttpFilter) against
- * the request path without its query string, percent-decoded once.
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.GIT_HOSTS = exports.MAX_PATH_PATTERN = exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = exports.CONTAINER_TLS = void 0;
-exports.normHost = normHost;
-exports.isIpLiteral = isIpLiteral;
-exports.parseAllowedDomains = parseAllowedDomains;
-exports.validatePattern = validatePattern;
-exports.expandPattern = expandPattern;
-exports.compilePattern = compilePattern;
-exports.matchesAny = matchesAny;
-exports.validatePathPattern = validatePathPattern;
-exports.gitPatternKey = gitPatternKey;
-exports.patternsOverlap = patternsOverlap;
-exports.isDangerouslyBroad = isDangerouslyBroad;
-exports.buildHttpFilter = buildHttpFilter;
-exports.buildPolicyConfig = buildPolicyConfig;
-const github_parser_1 = __nccwpck_require__(9170);
-const constants_1 = __nccwpck_require__(8729);
-/** The only posture implemented: `intercept` needs the CA injected into every container (P3). */
-exports.CONTAINER_TLS = 'sni-only';
-/**
- * Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
- * SNI-only check would allow fronting to any tenant. Under container sni-only these stay
- * intercepted for containers in enforce. Mirrors FRONT_DOORS in proxy/policy_core.py (both
- * are checked against proxy/test-vectors.json).
- */
-exports.FRONT_DOORS = [
-    '*.blob.core.windows.net',
-    '*.dfs.core.windows.net',
-    '*.file.core.windows.net',
-    '*.queue.core.windows.net',
-    '*.table.core.windows.net',
-    '*.web.core.windows.net'
-];
-/**
- * Hosts that MUST be passed through (SNI-only, never decrypted). Empirical (P0 spike): the
- * Go hosted-compute agent loads system roots at boot and can never trust a CA added later,
- * and it runs as the same uid as job steps, so it cannot be exempted by uid instead.
- */
-exports.MANDATORY_PASSTHROUGH = ['hosted-compute-*.githubapp.com'];
-const LABEL = /^[a-z0-9_*]([a-z0-9_*-]*[a-z0-9_*])?$/;
-function normHost(host) {
-    if (!host)
+/** The IP part of an `ip:port` string. */
+function ipOf(hostport) {
+    if (!hostport)
         return '';
-    let h = String(host).trim().toLowerCase();
-    if (h.startsWith('[')) {
-        const end = h.indexOf(']');
-        return end > 0 ? h.slice(1, end) : h;
-    }
-    if ((h.match(/:/g) || []).length === 1)
-        h = h.slice(0, h.lastIndexOf(':'));
-    return h.replace(/\.+$/, '');
-}
-function isIpLiteral(host) {
-    return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
-}
-/** Split an allowlist input on whitespace, newlines and commas. */
-function parseAllowedDomains(allowedDomains) {
-    if (!allowedDomains)
-        return [];
-    return allowedDomains
-        .split(/[\s,]+/)
-        .map(d => d.trim())
-        .filter(d => d.length > 0);
-}
-/** Return the normalised pattern, or throw with a reason. */
-function validatePattern(pattern) {
-    const p = normHost(pattern);
-    if (!p || !p.includes('.'))
-        throw new Error(`not a domain pattern: '${pattern}'`);
-    if (isIpLiteral(p))
-        throw new Error(`IP literals are not allowed in patterns: '${pattern}'`);
-    const labels = p.split('.');
-    if (!labels.every(l => LABEL.test(l)))
-        throw new Error(`invalid domain pattern: '${pattern}'`);
-    if (labels.slice(-2).some(l => l.includes('*'))) {
-        throw new Error(`wildcard too broad (in the registrable part): '${pattern}'`);
-    }
-    if (p.startsWith('*.') && p.slice(2).includes('*')) {
-        throw new Error(`only one wildcard form per pattern: '${pattern}'`);
-    }
-    return p;
-}
-/**
- * Expand the `.host` shorthand into `host` + `*.host`; anything else is returned as is. The
- * result still has to pass validatePattern.
- */
-function expandPattern(entry) {
-    const e = entry.trim();
-    if (e.startsWith('.') && !e.startsWith('..'))
-        return [e.slice(1), `*${e}`];
-    return [e];
-}
-function escapeRegex(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-function compilePattern(pattern) {
-    const p = validatePattern(pattern);
-    let body;
-    if (p.startsWith('*.')) {
-        body = '(?:[a-z0-9_-]+\\.)+' + escapeRegex(p.slice(2));
-    }
-    else if (p.includes('*')) {
-        body = p.split('*').map(escapeRegex).join('[a-z0-9_-]*');
-    }
-    else {
-        body = escapeRegex(p);
-    }
-    return new RegExp('^' + body + '$');
-}
-function matchesAny(host, compiled) {
-    const h = normHost(host);
-    return h !== '' && compiled.some(c => c.test(h));
-}
-exports.MAX_PATH_PATTERN = 512;
-/**
- * Return the normalised http-filter path pattern (one leading `/` stripped; `''` is the root),
- * or throw. Mirrors validate_path_pattern in proxy/policy_core.py (shared vectors). Patterns
- * are written decoded (`@scope/*`, not `@scope%2f*`): the addon matches the decoded path.
- */
-function validatePathPattern(pattern) {
-    let p = String(pattern).trim();
-    if (p.startsWith('/'))
-        p = p.slice(1);
-    if (p === '')
-        return p;
-    if (p.length > exports.MAX_PATH_PATTERN || !/^[\x21-\x7e]*$/.test(p) || /[?#%\\]/.test(p)) {
-        throw new Error(`invalid path pattern: '${pattern}'`);
-    }
-    if (p.split('/').some(s => s === '' || s === '.' || s === '..')) {
-        throw new Error(`empty, '.' or '..' segment in path pattern: '${pattern}'`);
-    }
-    if (p.includes('**')) {
-        throw new Error(`'**' is not supported (a lone '*' segment already spans any depth): '${pattern}'`);
-    }
-    return p;
-}
-/**
- * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
- * case-insensitive and .git is optional, so the addon lower-cases paths and patterns there and
- * drops one ".git" from every segment of both before matching (`*.git` is then a one-segment
- * `*`, and the suffix never adds to a rule's specificity). Mirrors GIT_HOSTS in
- * proxy/policy_core.py.
- */
-exports.GIT_HOSTS = ['github.com'];
-function stripGit(seg) {
-    return seg.endsWith('.git') && seg.length > 4 ? seg.slice(0, -4) : seg;
-}
-/** Identity of a path pattern on a git host: two patterns with one key are duplicates. */
-function gitPatternKey(pattern) {
-    const p = validatePathPattern(pattern).toLowerCase();
-    return p
-        .split('/')
-        .map(s => (stripGit(s) === '*' ? s : stripGit(s)))
-        .join('/');
-}
-/**
- * Whether two domain patterns can match a common name (approximate: each is tried against a
- * concrete instance of the other). Used for warnings and to pick which platform endpoints to
- * ship - never as an allow decision itself (the addon still matches every request).
- */
-function patternsOverlap(a, b) {
-    const concrete = (p) => p.replace(/\*/g, 'x');
-    return matchesAny(concrete(b), [compilePattern(a)]) || matchesAny(concrete(a), [compilePattern(b)]);
-}
-/** A pattern that would allow a whole shared namespace (anyone can register a sibling name). */
-function isDangerouslyBroad(pattern) {
-    const base = pattern.startsWith('*.') ? pattern.slice(2) : pattern;
-    return github_parser_1.DANGEROUS_BROAD_DOMAINS.has(base);
-}
-function uniq(xs) {
-    return Array.from(new Set(xs));
-}
-/** Validate user patterns, dropping (and reporting) anything invalid or dangerously broad. */
-function cleanUserPatterns(raw, inputName, warnings) {
-    const out = [];
-    for (const entry of parseAllowedDomains(raw).flatMap(expandPattern)) {
-        try {
-            const p = validatePattern(entry);
-            if (isDangerouslyBroad(p)) {
-                warnings.push(`${inputName}: '${entry}' is a shared multi-tenant namespace and was ignored`);
-                continue;
-            }
-            out.push(p);
-        }
-        catch (e) {
-            warnings.push(`${inputName}: ${e.message} - ignored`);
-        }
-    }
-    return out;
-}
-/**
- * Compile http-filter for policy.json: the user's rules plus the platform endpoints in force,
- * with the guardrail warnings (a filter on a host that isn't reachable is inert; a passthrough
- * host is never decrypted, so it cannot be path-filtered).
- */
-function buildHttpFilter(hosts, allowGithubPlatform, reachable, passthrough, warnings) {
-    for (const { host } of hosts) {
-        if (!reachable.some(a => patternsOverlap(host, a))) {
-            warnings.push(`http-filter: '${host}' is not in allowed-domains, so this filter has no effect ` +
-                '(http-filter only narrows hosts that are already allowed); add the host to allowed-domains');
-        }
-        const pt = passthrough.find(p => patternsOverlap(host, p));
-        if (pt) {
-            warnings.push(`http-filter: '${host}' matches passthrough-domains entry '${pt}' (SNI-only, never decrypted), ` +
-                'so those requests cannot be path-filtered');
-        }
-    }
-    const platform = allowGithubPlatform
-        ? github_parser_1.GITHUB_PLATFORM_ENDPOINTS.filter(e => hosts.some(h => patternsOverlap(h.host, e.host))).map(e => ({
-            host: validatePattern(e.host),
-            path: validatePathPattern(e.path),
-            methods: [...e.methods],
-            essential: e.essential
-        }))
-        : [];
-    const essential = platform.filter(e => e.essential).length;
-    return {
-        hosts,
-        allow_github_platform: allowGithubPlatform,
-        platform,
-        platform_auto_allowed: essential,
-        platform_optional: platform.length - essential
-    };
-}
-function buildPolicyConfig(opts) {
-    const warnings = [];
-    const github = [];
-    for (const d of opts.githubDomains) {
-        try {
-            github.push(validatePattern(d));
-        }
-        catch {
-            // the meta/static lists are normalised already; skip anything odd rather than fail
-        }
-    }
-    const user = cleanUserPatterns(opts.allowedDomains, 'allowed-domains', warnings);
-    const passthrough = uniq([
-        ...exports.MANDATORY_PASSTHROUGH,
-        ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
-    ]);
-    const deny = opts.blockRiskySubdomains ? [...github_parser_1.RISKY_GITHUB_SUBDOMAINS] : [];
-    const allow = uniq([...github, ...user]);
-    const httpFilter = buildHttpFilter(opts.httpFilter ?? [], opts.allowGithubPlatform ?? true, [...allow, ...passthrough], passthrough, warnings);
-    return {
-        config: {
-            version: 1,
-            mode: opts.mode,
-            allow,
-            passthrough,
-            deny,
-            flow_log: constants_1.FLOW_LOG,
-            // TODO P3: re-add container-tls input when intercept (CA-into-container) ships
-            container_tls: exports.CONTAINER_TLS,
-            container_port: opts.containerPort,
-            http_filter: httpFilter
-        },
-        warnings
-    };
+    const i = hostport.lastIndexOf(':');
+    return i > 0 ? hostport.slice(0, i) : hostport;
 }
 
 
 /***/ }),
 
-/***/ 3828:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * v2 proxy lifecycle: install the pinned mitmdump, create the proxy user and its ephemeral
- * CA, write the policy, and run mitmdump under systemd outside the runner's process tree.
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.PROXY_PORT_BAND = void 0;
-exports.actionRoot = actionRoot;
-exports.allocateProxyPorts = allocateProxyPorts;
-exports.downloadVerified = downloadVerified;
-exports.installPinnedBinary = installPinnedBinary;
-exports.installMitmproxy = installMitmproxy;
-exports.createProxyUser = createProxyUser;
-exports.installAddon = installAddon;
-exports.writePolicy = writePolicy;
-exports.generateCa = generateCa;
-exports.installTeardownHelper = installTeardownHelper;
-exports.mitmdumpArgs = mitmdumpArgs;
-exports.systemdRunArgs = systemdRunArgs;
-exports.findStartRecord = findStartRecord;
-exports.dumpProxyDiagnostics = dumpProxyDiagnostics;
-exports.startProxy = startProxy;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const crypto = __importStar(__nccwpck_require__(6982));
-const fs = __importStar(__nccwpck_require__(9896));
-const net = __importStar(__nccwpck_require__(9278));
-const path = __importStar(__nccwpck_require__(6928));
-const constants_1 = __nccwpck_require__(8729);
-/**
- * Root of the checked-out action (where proxy/policy.py lives). Derived from the running
- * script (<action>/dist/<entry>/index.js) rather than __dirname so the bundler can't
- * rewrite or relocate it.
- */
-function actionRoot() {
-    const script = process.argv[1] || '';
-    return path.resolve(path.dirname(script), '..', '..');
-}
-/**
- * Free-port band for the proxy listeners: above the registered ports dev servers favour
- * (3000, 5000, 8080, 9000...) and below Linux's ephemeral range (32768-60999), so an outgoing
- * connection's local port can never be the one we picked.
- */
-exports.PROXY_PORT_BAND = [20000, 32766];
-function canBind(port) {
-    return new Promise(resolve => {
-        const srv = net.createServer();
-        srv.once('error', () => resolve(false));
-        srv.listen({ host: constants_1.PROXY_LISTEN_HOST, port, exclusive: true }, () => srv.close(() => resolve(true)));
-    });
-}
-/**
- * Pick the proxy's two listener ports: host = P, container = P + 1, a random pair in
- * PROXY_PORT_BAND where both are free right now
- * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
- */
-async function allocateProxyPorts(probe = canBind, random = Math.random) {
-    const [lo, hi] = exports.PROXY_PORT_BAND;
-    for (let i = 0; i < 50; i++) {
-        const p = lo + Math.floor(random() * (hi - lo));
-        if ((await probe(p)) && (await probe(p + 1)))
-            return { port: p, containerPort: p + 1 };
-    }
-    throw new Error(`no free pair of loopback ports found in ${lo}-${hi + 1}`);
-}
-async function sudo(args, opts = {}) {
-    return exec.exec('sudo', args, opts);
-}
-async function sudoWrite(file, content, mode, owner = 'root:root') {
-    await sudo(['tee', file], { input: Buffer.from(content), silent: true });
-    await sudo(['chown', owner, file]);
-    await sudo(['chmod', mode, file]);
-}
-async function timed(label, fn) {
-    const t0 = Date.now();
-    try {
-        return await fn();
-    }
-    finally {
-        core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    }
-}
-/**
- * Download a pinned release artefact and verify its sha256 before anything touches it
- * (3 attempts on network errors; a digest mismatch fails immediately).
- */
-async function downloadVerified(url, sha256, dest, label) {
-    await timed(`download ${label}`, async () => {
-        let lastError;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-                const res = await fetch(url);
-                if (!res.ok)
-                    throw new Error(`HTTP ${res.status}`);
-                const buf = Buffer.from(await res.arrayBuffer());
-                const digest = crypto.createHash('sha256').update(buf).digest('hex');
-                if (digest !== sha256) {
-                    throw new Error(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
-                }
-                fs.writeFileSync(dest, buf);
-                return;
-            }
-            catch (e) {
-                lastError = e;
-                if (String(e).includes('sha256 mismatch'))
-                    break;
-                core.warning(`${label} download attempt ${attempt} failed: ${e}`);
-            }
-        }
-        throw new Error(`could not download ${label}: ${lastError}`);
-    });
-}
-/**
- * Install one binary from a pinned, sha256-verified release tarball, root-owned 0755.
- * Skipped if the destination already exists (a re-run on the same VM).
- */
-async function installPinnedBinary(url, sha256, member, dest, label) {
-    if (fs.existsSync(dest)) {
-        core.info(`${label} already installed at ${dest}`);
-        return;
-    }
-    const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
-    const tarball = path.join(tmp, `${label}.tar.gz`);
-    await downloadVerified(url, sha256, tarball, label);
-    await timed(`extract ${label}`, async () => {
-        await exec.exec('tar', ['-xzf', tarball, '-C', tmp, member]);
-        await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)]);
-        await sudo(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest]);
-    });
-    fs.rmSync(tmp, { recursive: true, force: true });
-}
-/** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
-async function installMitmproxy() {
-    await installPinnedBinary(constants_1.MITMPROXY_URL, constants_1.MITMPROXY_SHA256, 'mitmdump', constants_1.MITMDUMP_BIN, 'mitmproxy');
-}
-/** Create the proxy system user (idempotent). Returns its uid. */
-async function createProxyUser() {
-    const exists = await exec.exec('id', ['-u', constants_1.PROXY_USER], { ignoreReturnCode: true, silent: true });
-    if (exists !== 0) {
-        await sudo(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', constants_1.PROXY_USER]);
-    }
-    const { stdout } = await exec.getExecOutput('id', ['-u', constants_1.PROXY_USER], { silent: true });
-    return parseInt(stdout.trim(), 10);
-}
-/** Copy the addon out of the (runner-writable) action checkout into a root-owned directory. */
-async function installAddon() {
-    const src = path.join(actionRoot(), 'proxy');
-    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ADDON_DIR]);
-    for (const f of constants_1.ADDON_FILES) {
-        await sudo(['install', '-m', '0644', '-o', 'root', '-g', 'root', path.join(src, f), path.join(constants_1.ADDON_DIR, f)]);
-    }
-}
-async function writePolicy(config) {
-    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
-    await sudoWrite(constants_1.POLICY_FILE, JSON.stringify(config, null, 2) + '\n', '0644');
-    // The flow log is written by the proxy user and read (without sudo) by the post step.
-    await sudo(['touch', constants_1.FLOW_LOG]);
-    await sudo(['chown', `${constants_1.PROXY_USER}:${constants_1.PROXY_USER}`, constants_1.FLOW_LOG]);
-    await sudo(['chmod', '0644', constants_1.FLOW_LOG]);
-}
-/**
- * Generate the per-run CA: RSA-2048 (broadest client compatibility), 3-day validity, key
- * only ever on tmpfs, 0600, owned by the proxy user. mitmproxy mints leaf certs from it.
- * Publishes the public certificate to CA_CERT_FILE.
- */
-async function generateCa() {
-    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(constants_1.PROXY_CONF_DIR)]);
-    await sudo(['install', '-d', '-m', '0700', '-o', constants_1.PROXY_USER, '-g', constants_1.PROXY_USER, constants_1.PROXY_CONF_DIR]);
-    const key = `${constants_1.PROXY_CONF_DIR}/ca-key.pem`;
-    const cert = `${constants_1.PROXY_CONF_DIR}/ca-cert.pem`;
-    const subject = `/O=safer-runner/CN=safer-runner ephemeral CA ${process.env.GITHUB_RUN_ID || ''}`.trim();
-    await sudo([
-        '-u',
-        constants_1.PROXY_USER,
-        'sh',
-        '-c',
-        'umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 ' +
-            `-keyout "$1" -out "$2" -subj "$3" ` +
-            '-addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign ' +
-            `&& cat "$1" "$2" > "$4" && rm -f "$1"`,
-        'sh',
-        key,
-        cert,
-        subject,
-        constants_1.PROXY_CA_KEY_FILE
-    ]);
-    // mitmproxy looks for <confdir>/mitmproxy-ca.pem (key + cert)
-    await sudo(['install', '-m', '0644', '-o', 'root', '-g', 'root', cert, constants_1.CA_CERT_FILE]);
-}
-/**
- * Root-owned teardown helper. The only privileged command the post step needs, so with
- * disable-sudo it is the single extra sudoers entry (exact path, no arguments).
- * Deleting the key on disk is all it does: the running proxy keeps the CA in memory so the
- * runner can still finish the job through it; the VM is destroyed afterwards.
- */
-async function installTeardownHelper() {
-    const script = `#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f ${constants_1.PROXY_CA_KEY_FILE} ${constants_1.PROXY_CONF_DIR}/ca-key.pem ${constants_1.PROXY_CONF_DIR}/mitmproxy-ca.p12
-`;
-    await sudoWrite(constants_1.TEARDOWN_BIN, script, '0755');
-}
-function mitmdumpArgs(o) {
-    return [
-        constants_1.MITMDUMP_BIN,
-        // two transparent listeners: a connection's listener tells host from container traffic
-        '--mode',
-        `transparent@${constants_1.PROXY_LISTEN_HOST}:${o.port}`,
-        '--mode',
-        `transparent@${constants_1.PROXY_LISTEN_HOST}:${o.containerPort}`,
-        '--set',
-        `confdir=${constants_1.PROXY_CONF_DIR}`,
-        '--set',
-        'connection_strategy=lazy',
-        '--set',
-        `stream_large_bodies=${constants_1.PROXY_STREAM_LARGE_BODIES}`,
-        '--set',
-        'block_global=false',
-        '--set',
-        'flow_detail=0',
-        '--set',
-        'termlog_verbosity=warn',
-        '-s',
-        `${constants_1.ADDON_DIR}/policy.py`
-    ];
-}
-/**
- * systemd-run: a transient service OUTSIDE the runner's process tree (the runner's orphan
- * cleanup would otherwise kill it before "Complete job", which itself goes through the
- * proxy), restarted on any exit, sandboxed to what it needs.
- */
-function systemdRunArgs(o) {
-    return [
-        'systemd-run',
-        `--unit=${constants_1.PROXY_UNIT}`,
-        '--description=safer-runner egress proxy',
-        `--uid=${constants_1.PROXY_USER}`,
-        `--gid=${constants_1.PROXY_USER}`,
-        '-p',
-        'Restart=always',
-        '-p',
-        'RestartSec=1',
-        '-p',
-        'UMask=0077',
-        '-p',
-        'NoNewPrivileges=yes',
-        '-p',
-        'PrivateTmp=yes',
-        '-p',
-        'ProtectHome=yes',
-        '-p',
-        'ProtectSystem=strict',
-        '-p',
-        `ReadWritePaths=${constants_1.PROXY_CONF_DIR} ${constants_1.FLOW_LOG}`,
-        '-p',
-        'LimitNOFILE=65536',
-        `--setenv=HOME=${constants_1.PROXY_CONF_DIR}`,
-        `--setenv=SAFER_RUNNER_POLICY=${constants_1.POLICY_FILE}`,
-        ...mitmdumpArgs(o)
-    ];
-}
-/** Find the addon's startup record (written only after its own self-test passed). */
-function findStartRecord(flowLog) {
-    let found = null;
-    for (const line of flowLog.split('\n')) {
-        if (!line.includes('"ev": "start"'))
-            continue;
-        try {
-            const rec = JSON.parse(line);
-            if (rec.ev === 'start' && rec.ok === true)
-                found = rec;
-        }
-        catch {
-            // partial line
-        }
-    }
-    return found;
-}
-async function isListening(port) {
-    const { stdout } = await exec.getExecOutput('ss', ['-Hltn', `sport = :${port}`], {
-        silent: true,
-        ignoreReturnCode: true
-    });
-    return stdout.includes(`${constants_1.PROXY_LISTEN_HOST}:${port}`);
-}
-async function dumpProxyDiagnostics() {
-    const opts = { ignoreReturnCode: true };
-    await sudo(['systemctl', 'status', constants_1.PROXY_UNIT, '--no-pager', '-l'], opts);
-    await sudo(['journalctl', '-u', constants_1.PROXY_UNIT, '--no-pager', '-n', '50'], opts);
-}
-/** Start the proxy unit and wait until it listens and the policy addon reported a good start. */
-async function startProxy(o, timeoutMs = 90000) {
-    await sudo(['systemctl', 'stop', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
-    await sudo(['systemctl', 'reset-failed', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
-    await sudo(systemdRunArgs(o));
-    const deadline = Date.now() + timeoutMs;
-    await timed('proxy start', async () => {
-        while (Date.now() < deadline) {
-            const log = fs.existsSync(constants_1.FLOW_LOG) ? fs.readFileSync(constants_1.FLOW_LOG, 'utf8') : '';
-            const start = findStartRecord(log);
-            if (start && (await isListening(o.port)) && (await isListening(o.containerPort))) {
-                core.info(`✅ Proxy up (pid ${start.pid}, ${start.mode} policy loaded and self-tested)`);
-                return;
-            }
-            await new Promise(r => setTimeout(r, 500));
-        }
-        await dumpProxyDiagnostics();
-        throw new Error(`proxy did not become ready within ${timeoutMs / 1000}s`);
-    });
-}
-
-
-/***/ }),
-
-/***/ 3180:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * Runtime self-tests, run on every job right after the firewall is in place. They prove on
- * the live runner that (1) the SNI-level check actually fires (not just the Host check -
- * the P0 spike once had SNI enforcement silently off for a whole run) and (2) the proxy
- * repoints: it ignores the IP the client dialled and connects to the name instead; and (3) the
- * resolver applies exact-FQDN semantics: a random subdomain of an exact entry is refused on
- * the runner (enforce) and labelled in the DNS log.
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.REPOINT_PATH = exports.REPOINT_HOST = void 0;
-exports.sniBlockSelfTest = sniBlockSelfTest;
-exports.repointSelfTest = repointSelfTest;
-exports.dnsProbeName = dnsProbeName;
-exports.dnsExactSelfTest = dnsExactSelfTest;
-exports.runSelfTests = runSelfTests;
-exports.isSelfTestRecord = isSelfTestRecord;
-exports.withoutSelfTests = withoutSelfTests;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const crypto = __importStar(__nccwpck_require__(6982));
-const fs = __importStar(__nccwpck_require__(9896));
-const constants_1 = __nccwpck_require__(8729);
-const flowlog_1 = __nccwpck_require__(5422);
-const dns_1 = __nccwpck_require__(8439);
-const dns_parser_1 = __nccwpck_require__(1106);
-const policy_1 = __nccwpck_require__(2224);
-/**
- * The repoint probe: a bodiless GET of this fixed public file. The addon recognises exactly this
- * request dialled at SELFTEST_BOGUS_IP (policy_core.is_selftest_probe) and exempts it from
- * http-filter, so a job's filter on this host cannot fail setup. Checked against
- * proxy/test-vectors.json "selftest_probe".
- */
-exports.REPOINT_HOST = 'github.com';
-exports.REPOINT_PATH = '/robots.txt';
-async function curl(args) {
-    const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
-        ignoreReturnCode: true,
-        silent: true
-    });
-    return { code: r.exitCode, out: (r.stdout + r.stderr).trim() };
-}
-async function waitFor(from, pred, ms = 5000) {
-    const deadline = Date.now() + ms;
-    while (Date.now() < deadline) {
-        const hit = (0, flowlog_1.readFlowLog)(constants_1.FLOW_LOG, from).find(pred);
-        if (hit)
-            return hit;
-        await new Promise(r => setTimeout(r, 200));
-    }
-    return null;
-}
-async function sniBlockSelfTest(mode) {
-    const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
-    const want = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
-    const r = await curl(['--resolve', `${constants_1.SELFTEST_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`, `https://${constants_1.SELFTEST_HOST}/`]);
-    const rec = await waitFor(from, x => x.ev === 'tls' && x.sni === constants_1.SELFTEST_HOST && x.layer === 'sni');
-    const ok = rec !== null && rec.verdict === want && (mode === 'analyze' || r.code !== 0);
-    return {
-        name: 'sni-block',
-        ok,
-        detail: rec
-            ? `SNI ${constants_1.SELFTEST_HOST} -> ${rec.verdict} (${rec.reason}); curl exit ${r.code}`
-            : `no SNI-layer record (curl: ${r.out})`
-    };
-}
-async function repointSelfTest() {
-    const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
-    const r = await curl([
-        '--resolve',
-        `${exports.REPOINT_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`,
-        `https://${exports.REPOINT_HOST}${exports.REPOINT_PATH}`
-    ]);
-    const rec = await waitFor(from, x => (x.ev === 'https' || x.ev === 'http') && x.host === exports.REPOINT_HOST && (0, flowlog_1.ipOf)(x.dst) === constants_1.SELFTEST_BOGUS_IP);
-    const upstream = (0, flowlog_1.ipOf)(rec?.upstream);
-    const ok = r.out === '200' && rec !== null && upstream !== '' && upstream !== constants_1.SELFTEST_BOGUS_IP;
-    return {
-        name: 'repoint',
-        ok,
-        detail: rec
-            ? `client dialled ${constants_1.SELFTEST_BOGUS_IP}, proxy connected to ${rec.upstream} (HTTP ${r.out})`
-            : `no flow record for the repoint probe (curl: ${r.out})`
-    };
-}
-/** Preferred parent for the DNS probe: exact in the GitHub list, under no wildcard. */
-const DNS_PROBE_PARENT = 'objects.githubusercontent.com';
-/**
- * A fresh name under an exact allowlist entry that no pattern allows - what a step would use to
- * tunnel data through an allowlisted zone. Null if every exact entry sits under a wildcard.
- */
-function dnsProbeName(allow, rand = crypto.randomBytes(6).toString('hex')) {
-    const compiled = allow.map(policy_1.compilePattern);
-    const exact = allow.filter(p => !p.includes('*'));
-    const parents = [...exact.filter(p => p === DNS_PROBE_PARENT), ...exact];
-    for (const parent of parents) {
-        const name = `srst-${rand}.${parent}`;
-        if (!(0, policy_1.matchesAny)(name, compiled))
-            return name;
-    }
-    return null;
-}
-async function dnsExactSelfTest(mode, name) {
-    if (!name)
-        return { name: 'dns-exact', ok: true, detail: 'no exact allowlist entry to probe (skipped)' };
-    const want = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
-    const answer = await (0, dns_1.probe)(name);
-    let logged = false;
-    for (let i = 0; i < 15 && !logged; i++) {
-        const log = fs.existsSync(constants_1.DNS_LOG) ? fs.readFileSync(constants_1.DNS_LOG, 'utf8') : '';
-        logged = (0, dns_parser_1.parseDnsLog)(log).some(q => q.name === name && q.verdict === want);
-        if (!logged)
-            await new Promise(r => setTimeout(r, 200));
-    }
-    const ok = logged && (mode === 'analyze' || answer === 'NXDOMAIN');
-    return {
-        name: 'dns-exact',
-        ok,
-        detail: `${name} -> ${answer}; DNS log ${logged ? `labels it ${want}` : `has no ${want} line`}`
-    };
-}
-async function runSelfTests(mode, dnsName) {
-    const results = [await sniBlockSelfTest(mode), await repointSelfTest(), await dnsExactSelfTest(mode, dnsName)];
-    for (const t of results) {
-        (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
-    }
-    return results;
-}
-/** The decision records the two probes above produce. */
-function isSelfTestRecord(r) {
-    if (r.sni === constants_1.SELFTEST_HOST || r.host === constants_1.SELFTEST_HOST)
-        return true;
-    return (0, flowlog_1.ipOf)(r.dst) === constants_1.SELFTEST_BOGUS_IP && (r.sni === exports.REPOINT_HOST || r.host === exports.REPOINT_HOST);
-}
-/**
- * Flow records without the action's own self-test probes, so the report doesn't list them as
- * the job's traffic. Only records inside the self-test window (written before any job step
- * ran) are dropped - otherwise a step could hide traffic by dialling 192.0.2.1. Without a
- * window only the `.invalid` probe name is dropped: it never resolves and carries nothing.
- */
-function withoutSelfTests(records, offsets, window) {
-    return records.filter((r, i) => {
-        if (!isSelfTestRecord(r))
-            return true;
-        if (!window)
-            return !(r.sni === constants_1.SELFTEST_HOST || r.host === constants_1.SELFTEST_HOST);
-        return !(offsets[i] >= window[0] && offsets[i] < window[1]);
-    });
-}
-
-
-/***/ }),
-
-/***/ 1413:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * DNS plumbing and logging helpers carried over from v1. The resolver itself (CoreDNS) lives
- * in src/dns.ts; this points the system at it (resolv.conf, systemd-resolved).
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createLogDirectory = createLogDirectory;
-exports.createRandomDNSUser = createRandomDNSUser;
-exports.setupIptablesLogging = setupIptablesLogging;
-exports.setupDNSConfig = setupDNSConfig;
-exports.restartResolved = restartResolved;
-const exec = __importStar(__nccwpck_require__(5236));
-const crypto = __importStar(__nccwpck_require__(6982));
-/**
- * Create /var/log/safer-runner directory with proper permissions
- * This directory will contain all safer-runner log files (DNS, iptables, sudo)
- */
-async function createLogDirectory() {
-    const logDir = '/var/log/safer-runner';
-    // Create directory
-    await exec.exec('sudo', ['mkdir', '-p', logDir]);
-    // Set ownership to syslog:adm (rsyslog runs as syslog, runner is in adm group)
-    await exec.exec('sudo', ['chown', 'syslog:adm', logDir]);
-    // Make directory readable by all (so runner can read logs without sudo)
-    await exec.exec('sudo', ['chmod', '755', logDir]);
-}
-async function createRandomDNSUser() {
-    // Generate random username with 16 hex characters
-    const randomHex = crypto.randomBytes(8).toString('hex');
-    const username = `dns-${randomHex}`;
-    // Generate random UID in safe range (60000-65000 to avoid conflicts)
-    const uid = 60000 + Math.floor(Math.random() * 5000);
-    // Create system user with no login, no home directory
-    await exec.exec('sudo', [
-        'useradd',
-        '--system',
-        '--no-create-home',
-        '--shell',
-        '/usr/sbin/nologin',
-        '--uid',
-        uid.toString(),
-        username
-    ]);
-    return { username, uid };
-}
-/**
- * Setup rsyslog to filter iptables logs to dedicated files
- * This allows reading logs without sudo and provides clean separation
- * between pre-hook and main action logs
- *
- * Creates separate config files for pre-hook and main action to avoid
- * overwriting each other's configurations
- */
-async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
-    // Build rsyslog configuration to filter iptables logs
-    // Filter by programname=kernel to only capture actual iptables log messages
-    // (not sudo commands that set up the logging rules)
-    const prefixArray = "['" + logPrefixes.join("', '") + "']";
-    const rsyslogConfig = `if $programname == 'kernel' and $msg contains ${prefixArray} then ${logFile}
-`;
-    // Use different config file names for pre-hook and main action
-    const configFile = configSuffix
-        ? `/etc/rsyslog.d/10-iptables-safer-runner-${configSuffix}.conf`
-        : '/etc/rsyslog.d/10-iptables-safer-runner.conf';
-    // Write rsyslog configuration
-    await exec.exec('sudo', ['tee', configFile], {
-        input: Buffer.from(rsyslogConfig)
-    });
-    // Create log file and set ownership to syslog user (rsyslog runs as syslog:adm)
-    // This allows rsyslog to write to the file
-    await exec.exec('sudo', ['touch', logFile]);
-    await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
-    await exec.exec('sudo', ['chmod', '644', logFile]);
-    // Restart rsyslog to apply configuration
-    await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
-}
-async function setupDNSConfig() {
-    // Configure systemd-resolved to use our DNS server
-    await exec.exec('sudo', ['mkdir', '-p', '/etc/systemd/resolved.conf.d']);
-    const resolvedConfig = `[Resolve]
-DNS=127.0.0.1
-DNSSEC=yes
-DNSStubListener=no`;
-    await exec.exec('sudo', ['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'], {
-        input: Buffer.from(resolvedConfig)
-    });
-    // Update resolv.conf to use localhost
-    await exec.exec('sudo', ['unlink', '/etc/resolv.conf']);
-    await exec.exec('sudo', ['tee', '/etc/resolv.conf'], {
-        input: Buffer.from('nameserver 127.0.0.1\n')
-    });
-}
-/** Apply the resolved.conf drop-in written by setupDNSConfig (releases its stub listener). */
-async function restartResolved() {
-    await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
-}
-
-
-/***/ }),
-
-/***/ 1279:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * Sudo logging and configuration module
- * Handles sudo logging setup and removing the runner user's sudo (disable-sudo)
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
-exports.parseSudoFlavour = parseSudoFlavour;
-exports.detectSudoFlavour = detectSudoFlavour;
-exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
-exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
-exports.setupSudoLogging = setupSudoLogging;
-exports.getValidationSudoCommands = getValidationSudoCommands;
-exports.getRequiredSudoCommands = getRequiredSudoCommands;
-exports.disableSudoForRunner = disableSudoForRunner;
-exports.readSudoUsage = readSudoUsage;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const fs = __importStar(__nccwpck_require__(9896));
-const sudo_parser_1 = __nccwpck_require__(7516);
-const validation_1 = __nccwpck_require__(8449);
-const constants_1 = __nccwpck_require__(8729);
-// Constants
-exports.RUNNER_USERNAME = 'runner';
-/** Classic sudo: sudoers drop-in enabling `Defaults logfile=` */
-exports.SUDO_LOGGING_SUDOERS_FILE = '/etc/sudoers.d/00-sudo-logging';
-/** sudo-rs: rsyslog rule copying sudo's syslog messages into the safer-runner log file */
-exports.SUDO_LOGGING_RSYSLOG_FILE = '/etc/rsyslog.d/10-sudo-safer-runner.conf';
-const SUDOERS_TEMP_FILE = `/tmp/${exports.RUNNER_USERNAME}-sudoers.tmp`;
-const SUDO_LOGGING_TEMP_FILE = '/tmp/safer-runner-sudo-logging.tmp';
-/**
- * Determine the sudo implementation from `sudo --version` output
- * sudo-rs prints "sudo-rs 0.2.13-0ubuntu1.2", classic sudo prints "Sudo version 1.9.15p5"
- */
-function parseSudoFlavour(versionOutput) {
-    return /^\s*sudo-rs\b/im.test(versionOutput) ? 'sudo-rs' : 'sudo';
-}
-/**
- * Detect which sudo implementation is active on the runner
- */
-async function detectSudoFlavour() {
-    try {
-        const { stdout } = await exec.getExecOutput('sudo', ['--version'], { silent: true, ignoreReturnCode: true });
-        return parseSudoFlavour(stdout);
-    }
-    catch {
-        return 'sudo';
-    }
-}
-/**
- * Path of the config file that enables sudo logging for the given sudo implementation
- * This file is added to the integrity validation baseline
- */
-function getSudoLoggingConfigFile(flavour) {
-    return flavour === 'sudo-rs' ? exports.SUDO_LOGGING_RSYSLOG_FILE : exports.SUDO_LOGGING_SUDOERS_FILE;
-}
-/**
- * Build the rsyslog rule used on sudo-rs to capture sudo usage into a dedicated log file
- *
- * sudo-rs logs "runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/id" to syslog.
- * The template prefixes it with an RFC3164 timestamp so the file matches the
- * classic sudo logfile format understood by parsers/sudo-parser.ts.
- */
-function buildSudoRsyslogConfig(logFile) {
-    return `template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")
-if $programname == 'sudo' and $msg contains 'COMMAND=' then {
-  action(type="omfile" file="${logFile}" template="SaferRunnerSudo")
-}
-`;
-}
-/**
- * Configure sudo logging to capture all sudo usage
- * Logs to specified file for visibility and auditability
- *
- * - Classic sudo: `Defaults logfile=<logFile>` sudoers drop-in
- * - sudo-rs: rsyslog rule filtering sudo's syslog messages into <logFile>
- *
- * Must run while the runner still has unrestricted sudo (i.e. before
- * disableSudoForRunner).
- *
- * @param logFile - Path to sudo log file (e.g., /var/log/safer-runner/main-sudo.log)
- * @param flavour - Sudo implementation (detected if omitted)
- */
-async function setupSudoLogging(logFile, flavour) {
-    const sudoFlavour = flavour ?? (await detectSudoFlavour());
-    core.info(`Configuring sudo logging to ${logFile} (${sudoFlavour})...`);
-    // Create the log file and make it readable by the runner
-    await exec.exec('sudo', ['touch', logFile]);
-    await exec.exec('sudo', ['chmod', '0644', logFile]);
-    if (sudoFlavour === 'sudo-rs') {
-        // sudo-rs has no logfile setting - capture its syslog output with rsyslog instead
-        await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
-        await exec.exec('sudo', ['tee', exports.SUDO_LOGGING_RSYSLOG_FILE], {
-            input: Buffer.from(buildSudoRsyslogConfig(logFile)),
-            silent: true
-        });
-        await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
-    }
-    else {
-        // Stage the drop-in and move it into place last, so logging starts with no
-        // further setup commands to capture (sudoers files must be 0440 root:root)
-        await exec.exec('sudo', ['tee', SUDO_LOGGING_TEMP_FILE], {
-            input: Buffer.from(`Defaults logfile=${logFile}\nDefaults loglinelen=0\n`),
-            silent: true
-        });
-        await exec.exec('sudo', ['chmod', '0440', SUDO_LOGGING_TEMP_FILE]);
-        await exec.exec('sudo', ['chown', 'root:root', SUDO_LOGGING_TEMP_FILE]);
-        await exec.exec('sudo', ['mv', SUDO_LOGGING_TEMP_FILE, exports.SUDO_LOGGING_SUDOERS_FILE]);
-    }
-    core.info(`✅ Sudo logging configured to ${logFile}`);
-}
-/**
- * Commands run by post-action integrity validation (see validation.ts)
- * These are the only sudo commands the runner keeps after sudo is restricted.
- */
-function getValidationSudoCommands() {
-    const files = [
-        ...validation_1.CRITICAL_FILES,
-        constants_1.DOCKER_DAEMON_JSON,
-        exports.SUDO_LOGGING_SUDOERS_FILE,
-        exports.SUDO_LOGGING_RSYSLOG_FILE,
-        constants_1.VALIDATION_STATE_FILE
-    ];
-    return [
-        ...files.map(file => `/usr/bin/cat ${file}`),
-        ...validation_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, validation_1.iptablesListArgs)(chain).join(' ')}`),
-        // post-step teardown (destroys the CA key). `""` = no arguments allowed.
-        `${constants_1.TEARDOWN_BIN} ""`
-    ];
-}
-/**
- * Sudo commands run by the action itself while sudo logging is active
- * Filtered out of sudo reports - they are internal operations, not workflow activity.
- * Paths are matched by basename so /usr/sbin vs /usr/bin resolution doesn't matter.
- */
-exports.INTERNAL_SUDO_COMMANDS = [
-    ...getValidationSudoCommands(),
-    // disableSudoForRunner()
-    `tee ${SUDOERS_TEMP_FILE}`,
-    `visudo -c -f ${SUDOERS_TEMP_FILE}`,
-    `chmod 0440 ${SUDOERS_TEMP_FILE}`,
-    `chown root:root ${SUDOERS_TEMP_FILE}`,
-    `mv ${SUDOERS_TEMP_FILE} /etc/sudoers.d/${exports.RUNNER_USERNAME}`,
-    `rm -f ${SUDOERS_TEMP_FILE}`,
-    // setupSudoLogging() on sudo-rs
-    'systemctl restart rsyslog',
-    // SystemValidator.writeBaseline()
-    ...validation_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
-    constants_1.TEARDOWN_BIN
-].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
-/**
- * Generate the sudoers rules the action always needs for post-action validation
- *
- * Only exact read-only commands are allowed: no wildcards (embedded wildcards are
- * unsupported by sudo-rs, and any wildcard matches arbitrary extra arguments), and nothing that can
- * write files or modify sudo/syslog configuration.
- *
- * @param username - The username to generate rules for
- * @returns Sudoers configuration string with required commands
- */
-function getRequiredSudoCommands(username = exports.RUNNER_USERNAME) {
-    const commands = getValidationSudoCommands();
-    return `
-# Required commands for post-action validation
-# These are automatically added by safer-runner-action
-Cmnd_Alias SAFER_RUNNER_VALIDATION = ${commands.join(', \\\n    ')}
-
-${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
-`;
-}
-/**
- * Disable sudo access for the runner user
- * This prevents malicious code from using sudo to bypass security controls
- *
- * Replaces the sudoers file with only the read-only commands needed for
- * post-action integrity validation (see getValidationSudoCommands()). The file is checked
- * with the active visudo (visudo-rs on sudo-rs systems) before it is moved into place.
- */
-async function disableSudoForRunner(flavour) {
-    core.info('Restricting sudo access to validation commands only');
-    const sudoersFile = `/etc/sudoers.d/${exports.RUNNER_USERNAME}`;
-    const tempFile = SUDOERS_TEMP_FILE;
-    const config = `# Safer Runner Action - Validation-only sudo access
-# This configuration allows only the commands needed for post-action integrity validation.
-# All other sudo commands will be denied.
-${getRequiredSudoCommands(exports.RUNNER_USERNAME)}`;
-    await exec.exec('sudo', ['tee', tempFile], { input: Buffer.from(config + '\n') });
-    const visudo = await exec.getExecOutput('sudo', ['visudo', '-c', '-f', tempFile], { ignoreReturnCode: true });
-    if (visudo.exitCode !== 0) {
-        await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
-        const sudoFlavour = flavour ?? (await detectSudoFlavour());
-        throw new Error(`Generated sudoers rejected by visudo (${sudoFlavour}): ${(visudo.stderr || visudo.stdout).trim()}`);
-    }
-    // Set permissions before moving into place
-    await exec.exec('sudo', ['chmod', '0440', tempFile]);
-    await exec.exec('sudo', ['chown', 'root:root', tempFile]);
-    await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
-    core.info(`🔒 ${exports.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
-}
-/**
- * Read the sudo log and split it into the workflow's own commands, refused attempts and the
- * action's own commands (so the report never counts the action's sudo as the workflow's).
- */
-function readSudoUsage(logFile) {
-    try {
-        if (fs.existsSync(logFile)) {
-            return (0, sudo_parser_1.classifySudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), exports.INTERNAL_SUDO_COMMANDS);
-        }
-    }
-    catch (error) {
-        core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
-    }
-    return { ran: [], refused: [], internal: [] };
-}
-
-
-/***/ }),
-
-/***/ 7578:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * v2 CA trust injection (docs/DESIGN-v2.md section 5). Trust is not one store: the system
- * bundle covers OpenSSL/GnuTLS consumers (curl, git, python ssl, .NET), Node and several
- * language ecosystems need environment variables, and Java has its own keystores.
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.trustEnv = trustEnv;
-exports.installSystemTrust = installSystemTrust;
-exports.exportTrustEnv = exportTrustEnv;
-exports.javaHomes = javaHomes;
-exports.cacertsPath = cacertsPath;
-exports.installJavaTrust = installJavaTrust;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const fs = __importStar(__nccwpck_require__(9896));
-const path = __importStar(__nccwpck_require__(6928));
-const constants_1 = __nccwpck_require__(8729);
-const JAVA_ALIAS = 'safer-runner-ca';
-/**
- * Environment exported to every later step via GITHUB_ENV. Set unconditionally whenever the
- * proxy is active: they are a compatibility mechanism, not a security control.
- */
-function trustEnv() {
-    return {
-        NODE_EXTRA_CA_CERTS: constants_1.CA_CERT_FILE,
-        NODE_USE_SYSTEM_CA: '1',
-        REQUESTS_CA_BUNDLE: constants_1.CA_BUNDLE,
-        PIP_CERT: constants_1.CA_BUNDLE,
-        SSL_CERT_FILE: constants_1.CA_BUNDLE,
-        GIT_SSL_CAINFO: constants_1.CA_BUNDLE,
-        AWS_CA_BUNDLE: constants_1.CA_BUNDLE,
-        CURL_CA_BUNDLE: constants_1.CA_BUNDLE
-    };
-}
-async function installSystemTrust() {
-    await exec.exec('sudo', ['install', '-m', '0644', '-o', 'root', '-g', 'root', constants_1.CA_CERT_FILE, constants_1.SYSTEM_CA_FILE]);
-    await exec.exec('sudo', ['update-ca-certificates'], { silent: true });
-    const bundle = fs.readFileSync(constants_1.CA_BUNDLE, 'utf8');
-    const ca = fs.readFileSync(constants_1.CA_CERT_FILE, 'utf8').trim();
-    if (!bundle.includes(ca.split('\n').slice(1, 3).join('\n'))) {
-        throw new Error(`update-ca-certificates did not add the CA to ${constants_1.CA_BUNDLE}`);
-    }
-}
-function exportTrustEnv() {
-    for (const [k, v] of Object.entries(trustEnv())) {
-        core.exportVariable(k, v);
-    }
-}
-/** JDK homes on the runner: JAVA_HOME plus every JAVA_HOME_<n>_<arch> the image sets. */
-function javaHomes(env = process.env) {
-    const homes = Object.entries(env)
-        .filter(([k, v]) => v && (k === 'JAVA_HOME' || /^JAVA_HOME_\d+_[A-Z0-9]+$/.test(k)))
-        .map(([, v]) => v);
-    return Array.from(new Set(homes));
-}
-/** The cacerts keystore of a JDK home (JDK 9+ layout, then JDK 8's jre/ layout). */
-function cacertsPath(home) {
-    for (const rel of ['lib/security/cacerts', 'jre/lib/security/cacerts']) {
-        const p = path.join(home, rel);
-        if (fs.existsSync(p))
-            return p;
-    }
-    return null;
-}
-/**
- * Import the CA into the cacerts of every JDK present now. JDKs installed later (e.g. by
- * actions/setup-java) are not covered - a documented gap.
- */
-async function installJavaTrust() {
-    const done = new Set();
-    for (const home of javaHomes()) {
-        const store = cacertsPath(home);
-        const keytool = path.join(home, 'bin', 'keytool');
-        if (!store || !fs.existsSync(keytool))
-            continue;
-        const real = fs.realpathSync(store);
-        if (done.has(real))
-            continue;
-        done.add(real);
-        // -delete first so a re-run doesn't fail on an existing alias
-        await exec.exec('sudo', [keytool, '-delete', '-noprompt', '-keystore', real, '-storepass', 'changeit', '-alias', JAVA_ALIAS], {
-            ignoreReturnCode: true,
-            silent: true
-        });
-        const rc = await exec.exec('sudo', [
-            keytool,
-            '-importcert',
-            '-noprompt',
-            '-keystore',
-            real,
-            '-storepass',
-            'changeit',
-            '-alias',
-            JAVA_ALIAS,
-            '-file',
-            constants_1.CA_CERT_FILE
-        ], { ignoreReturnCode: true, silent: true });
-        if (rc === 0) {
-            core.info(`Java: CA imported into ${real}`);
-        }
-        else {
-            core.warning(`Java: could not import the CA into ${real} (exit ${rc})`);
-            done.delete(real);
-        }
-    }
-    return Array.from(done);
-}
-
-
-/***/ }),
-
-/***/ 8449:
+/***/ 1333:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4468,6 +1409,3117 @@ class SystemValidator {
     }
 }
 exports.SystemValidator = SystemValidator;
+
+
+/***/ }),
+
+/***/ 5915:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const core = __importStar(__nccwpck_require__(7484));
+const inputs_1 = __nccwpck_require__(9058);
+const run_1 = __nccwpck_require__(775);
+/**
+ * Main step: normally a no-op because the pre step already applied everything. If pre did
+ * not run (e.g. a local `uses: ./` action) or failed in analyze mode, set up here.
+ */
+async function run() {
+    try {
+        if ((0, run_1.setupCompleted)()) {
+            core.info('✅ safer-runner v2 already active (configured in the pre step)');
+            return;
+        }
+        core.info('Pre step did not complete setup - configuring now');
+        await (0, run_1.runSetup)((0, inputs_1.readInputs)());
+    }
+    catch (error) {
+        core.setFailed(`safer-runner setup failed: ${error}`);
+    }
+}
+run();
+
+
+/***/ }),
+
+/***/ 1106:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * CoreDNS query log parser. Each server block's `log` format labels its own lines
+ * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
+ * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
+ *
+ *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
+ *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
+ *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDnsLog = parseDnsLog;
+exports.refusedNames = refusedNames;
+exports.readRefusedNames = readRefusedNames;
+const fs = __importStar(__nccwpck_require__(9896));
+// anchored on the plugin's own prefix: a query name can't inject a second verdict
+const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
+function parseDnsLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        const m = LINE.exec(line);
+        if (!m)
+            continue;
+        out.push({
+            client: m[1],
+            verdict: m[2],
+            type: m[3],
+            name: m[4].toLowerCase().replace(/\.$/, ''),
+            rcode: m[5]
+        });
+    }
+    return out;
+}
+/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
+function refusedNames(queries) {
+    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
+}
+function readRefusedNames(file) {
+    try {
+        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
+    }
+    catch {
+        return [];
+    }
+}
+
+
+/***/ }),
+
+/***/ 7516:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
+ * syslog lines copied there by rsyslog in the same format (see sudo.ts)
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSudoLogLine = parseSudoLogLine;
+exports.deduplicateSudoCommands = deduplicateSudoCommands;
+exports.parseSudoLogsFromString = parseSudoLogsFromString;
+exports.classifySudoCommands = classifySudoCommands;
+/**
+ * Classic sudo prefixes refused commands with a reason, e.g.
+ * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
+ */
+const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
+/**
+ * Parse a single sudo log entry
+ * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
+ */
+function parseSudoLogLine(line) {
+    // Match sudo log format with timestamp
+    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
+    if (!match) {
+        return null;
+    }
+    const [, timestamp, user, targetUser, fullCommand] = match;
+    // Split command and args
+    const commandParts = fullCommand.trim().split(/\s+/);
+    const command = commandParts[0];
+    const args = commandParts.slice(1).join(' ');
+    return {
+        timestamp,
+        user,
+        targetUser,
+        command,
+        args,
+        ...(DENIED_PATTERN.test(line) && { denied: true })
+    };
+}
+/**
+ * Deduplicate sudo commands by command+args combination
+ */
+function deduplicateSudoCommands(commands) {
+    const seen = new Set();
+    const deduplicated = [];
+    for (const cmd of commands) {
+        const key = `${cmd.command} ${cmd.args}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            deduplicated.push(cmd);
+        }
+    }
+    return deduplicated;
+}
+/**
+ * Join wrapped log entries back into single lines
+ * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
+ * continuation lines, which can split a command from its arguments:
+ *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
+ *       /etc/resolv.conf
+ */
+function joinContinuationLines(content) {
+    const joined = [];
+    for (const line of content.split('\n')) {
+        if (/^\s+\S/.test(line) && joined.length > 0) {
+            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
+        }
+        else {
+            joined.push(line);
+        }
+    }
+    return joined;
+}
+/**
+ * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
+ * entry is matched as one line.
+ */
+function parseSudoLogsFromString(content) {
+    const commands = [];
+    for (const line of joinContinuationLines(content)) {
+        const cmd = parseSudoLogLine(line);
+        if (cmd) {
+            commands.push(cmd);
+        }
+    }
+    // Deduplicate and limit to 1000 commands
+    return deduplicateSudoCommands(commands).slice(0, 1000);
+}
+/**
+ * Whether a (successful) command is one of the action's own. System binaries match by
+ * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
+ * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
+ */
+function isInternal(cmd, internal) {
+    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
+    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+    if (match) {
+        return internal.has(withArgs(match[1]));
+    }
+    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
+}
+/** Split parsed sudo log entries by who ran them and whether they were allowed. */
+function classifySudoCommands(commands, internalCommands) {
+    const internal = new Set(internalCommands);
+    const usage = { ran: [], refused: [], internal: [] };
+    for (const cmd of commands) {
+        if (cmd.denied)
+            usage.refused.push(cmd);
+        else if (isInternal(cmd, internal))
+            usage.internal.push(cmd);
+        else
+            usage.ran.push(cmd);
+    }
+    return usage;
+}
+
+
+/***/ }),
+
+/***/ 2224:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * v2 hostname policy: builds the policy.json the proxy addon enforces, and mirrors the
+ * addon's pattern matching (proxy/policy_core.py) for the report and DNS config.
+ *
+ * Pattern semantics (identical in Python; both are checked against proxy/test-vectors.json):
+ *  - `example.com`     -> exactly example.com (no subdomains)
+ *  - `*.example.com`   -> any subdomain of example.com (not the apex)
+ *  - `a-*.example.com` -> `*` matches within ONE label; the rest must match exactly
+ *
+ * Input shorthand (expanded before validation, never reaches the addon or the Corefile):
+ *  - `.example.com`    -> `example.com` + `*.example.com` (the apex and all subdomains)
+ *
+ * http-filter path patterns use the same glob with `/` in the role of `.`: a segment that is
+ * exactly `*` spans any depth (empty segments included), a `*` inside a segment stays within
+ * it, and a lone `*` matches every path. Matched by the addon (policy_core.HttpFilter) against
+ * the request path without its query string, percent-decoded once.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GIT_HOSTS = exports.MAX_PATH_PATTERN = exports.MANDATORY_PASSTHROUGH = exports.FRONT_DOORS = exports.CONTAINER_TLS = void 0;
+exports.normHost = normHost;
+exports.isIpLiteral = isIpLiteral;
+exports.parseAllowedDomains = parseAllowedDomains;
+exports.validatePattern = validatePattern;
+exports.expandPattern = expandPattern;
+exports.compilePattern = compilePattern;
+exports.matchesAny = matchesAny;
+exports.validatePathPattern = validatePathPattern;
+exports.gitPatternKey = gitPatternKey;
+exports.patternsOverlap = patternsOverlap;
+exports.isDangerouslyBroad = isDangerouslyBroad;
+exports.buildHttpFilter = buildHttpFilter;
+exports.buildPolicyConfig = buildPolicyConfig;
+const github_domains_1 = __nccwpck_require__(2268);
+const constants_1 = __nccwpck_require__(8729);
+/** The only posture implemented: `intercept` needs the CA injected into every container (P3). */
+exports.CONTAINER_TLS = 'sni-only';
+/**
+ * Multi-tenant front doors: one TLS front end serves every tenant and routes by Host, so an
+ * SNI-only check would allow fronting to any tenant. Under container sni-only these stay
+ * intercepted for containers in enforce. Mirrors FRONT_DOORS in proxy/policy_core.py (both
+ * are checked against proxy/test-vectors.json).
+ */
+exports.FRONT_DOORS = [
+    '*.blob.core.windows.net',
+    '*.dfs.core.windows.net',
+    '*.file.core.windows.net',
+    '*.queue.core.windows.net',
+    '*.table.core.windows.net',
+    '*.web.core.windows.net'
+];
+/**
+ * Hosts that MUST be passed through (SNI-only, never decrypted). Empirical (P0 spike): the
+ * Go hosted-compute agent loads system roots at boot and can never trust a CA added later,
+ * and it runs as the same uid as job steps, so it cannot be exempted by uid instead.
+ */
+exports.MANDATORY_PASSTHROUGH = ['hosted-compute-*.githubapp.com'];
+const LABEL = /^[a-z0-9_*]([a-z0-9_*-]*[a-z0-9_*])?$/;
+function normHost(host) {
+    if (!host)
+        return '';
+    let h = String(host).trim().toLowerCase();
+    if (h.startsWith('[')) {
+        const end = h.indexOf(']');
+        return end > 0 ? h.slice(1, end) : h;
+    }
+    if ((h.match(/:/g) || []).length === 1)
+        h = h.slice(0, h.lastIndexOf(':'));
+    return h.replace(/\.+$/, '');
+}
+function isIpLiteral(host) {
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
+}
+/** Split an allowlist input on whitespace, newlines and commas. */
+function parseAllowedDomains(allowedDomains) {
+    if (!allowedDomains)
+        return [];
+    return allowedDomains
+        .split(/[\s,]+/)
+        .map(d => d.trim())
+        .filter(d => d.length > 0);
+}
+/** Return the normalised pattern, or throw with a reason. */
+function validatePattern(pattern) {
+    const p = normHost(pattern);
+    if (!p || !p.includes('.'))
+        throw new Error(`not a domain pattern: '${pattern}'`);
+    if (isIpLiteral(p))
+        throw new Error(`IP literals are not allowed in patterns: '${pattern}'`);
+    const labels = p.split('.');
+    if (!labels.every(l => LABEL.test(l)))
+        throw new Error(`invalid domain pattern: '${pattern}'`);
+    if (labels.slice(-2).some(l => l.includes('*'))) {
+        throw new Error(`wildcard too broad (in the registrable part): '${pattern}'`);
+    }
+    if (p.startsWith('*.') && p.slice(2).includes('*')) {
+        throw new Error(`only one wildcard form per pattern: '${pattern}'`);
+    }
+    return p;
+}
+/**
+ * Expand the `.host` shorthand into `host` + `*.host`; anything else is returned as is. The
+ * result still has to pass validatePattern.
+ */
+function expandPattern(entry) {
+    const e = entry.trim();
+    if (e.startsWith('.') && !e.startsWith('..'))
+        return [e.slice(1), `*${e}`];
+    return [e];
+}
+function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function compilePattern(pattern) {
+    const p = validatePattern(pattern);
+    let body;
+    if (p.startsWith('*.')) {
+        body = '(?:[a-z0-9_-]+\\.)+' + escapeRegex(p.slice(2));
+    }
+    else if (p.includes('*')) {
+        body = p.split('*').map(escapeRegex).join('[a-z0-9_-]*');
+    }
+    else {
+        body = escapeRegex(p);
+    }
+    return new RegExp('^' + body + '$');
+}
+function matchesAny(host, compiled) {
+    const h = normHost(host);
+    return h !== '' && compiled.some(c => c.test(h));
+}
+exports.MAX_PATH_PATTERN = 512;
+/**
+ * Return the normalised http-filter path pattern (one leading `/` stripped; `''` is the root),
+ * or throw. Mirrors validate_path_pattern in proxy/policy_core.py (shared vectors). Patterns
+ * are written decoded (`@scope/*`, not `@scope%2f*`): the addon matches the decoded path.
+ */
+function validatePathPattern(pattern) {
+    let p = String(pattern).trim();
+    if (p.startsWith('/'))
+        p = p.slice(1);
+    if (p === '')
+        return p;
+    if (p.length > exports.MAX_PATH_PATTERN || !/^[\x21-\x7e]*$/.test(p) || /[?#%\\]/.test(p)) {
+        throw new Error(`invalid path pattern: '${pattern}'`);
+    }
+    if (p.split('/').some(s => s === '' || s === '.' || s === '..')) {
+        throw new Error(`empty, '.' or '..' segment in path pattern: '${pattern}'`);
+    }
+    if (p.includes('**')) {
+        throw new Error(`'**' is not supported (a lone '*' segment already spans any depth): '${pattern}'`);
+    }
+    return p;
+}
+/**
+ * Hosts serving git with GitHub's path scheme, /<owner>/<repo>[.git]/...: owner and repo are
+ * case-insensitive and .git is optional, so the addon lower-cases paths and patterns there and
+ * drops one ".git" from every segment of both before matching (`*.git` is then a one-segment
+ * `*`, and the suffix never adds to a rule's specificity). Mirrors GIT_HOSTS in
+ * proxy/policy_core.py.
+ */
+exports.GIT_HOSTS = ['github.com'];
+function stripGit(seg) {
+    return seg.endsWith('.git') && seg.length > 4 ? seg.slice(0, -4) : seg;
+}
+/** Identity of a path pattern on a git host: two patterns with one key are duplicates. */
+function gitPatternKey(pattern) {
+    const p = validatePathPattern(pattern).toLowerCase();
+    return p
+        .split('/')
+        .map(s => (stripGit(s) === '*' ? s : stripGit(s)))
+        .join('/');
+}
+/**
+ * Whether two domain patterns can match a common name (approximate: each is tried against a
+ * concrete instance of the other). Used for warnings and to pick which platform endpoints to
+ * ship - never as an allow decision itself (the addon still matches every request).
+ */
+function patternsOverlap(a, b) {
+    const concrete = (p) => p.replace(/\*/g, 'x');
+    return matchesAny(concrete(b), [compilePattern(a)]) || matchesAny(concrete(a), [compilePattern(b)]);
+}
+/** A pattern that would allow a whole shared namespace (anyone can register a sibling name). */
+function isDangerouslyBroad(pattern) {
+    const base = pattern.startsWith('*.') ? pattern.slice(2) : pattern;
+    return github_domains_1.DANGEROUS_BROAD_DOMAINS.has(base);
+}
+function uniq(xs) {
+    return Array.from(new Set(xs));
+}
+/** Validate user patterns, dropping (and reporting) anything invalid or dangerously broad. */
+function cleanUserPatterns(raw, inputName, warnings) {
+    const out = [];
+    for (const entry of parseAllowedDomains(raw).flatMap(expandPattern)) {
+        try {
+            const p = validatePattern(entry);
+            if (isDangerouslyBroad(p)) {
+                warnings.push(`${inputName}: '${entry}' is a shared multi-tenant namespace and was ignored`);
+                continue;
+            }
+            out.push(p);
+        }
+        catch (e) {
+            warnings.push(`${inputName}: ${e.message} - ignored`);
+        }
+    }
+    return out;
+}
+/**
+ * Compile http-filter for policy.json: the user's rules plus the platform endpoints in force,
+ * with the guardrail warnings (a filter on a host that isn't reachable is inert; a passthrough
+ * host is never decrypted, so it cannot be path-filtered).
+ */
+function buildHttpFilter(hosts, allowGithubPlatform, reachable, passthrough, warnings) {
+    for (const { host } of hosts) {
+        if (!reachable.some(a => patternsOverlap(host, a))) {
+            warnings.push(`http-filter: '${host}' is not in allowed-domains, so this filter has no effect ` +
+                '(http-filter only narrows hosts that are already allowed); add the host to allowed-domains');
+        }
+        const pt = passthrough.find(p => patternsOverlap(host, p));
+        if (pt) {
+            warnings.push(`http-filter: '${host}' matches passthrough-domains entry '${pt}' (SNI-only, never decrypted), ` +
+                'so those requests cannot be path-filtered');
+        }
+    }
+    const platform = allowGithubPlatform
+        ? github_domains_1.GITHUB_PLATFORM_ENDPOINTS.filter(e => hosts.some(h => patternsOverlap(h.host, e.host))).map(e => ({
+            host: validatePattern(e.host),
+            path: validatePathPattern(e.path),
+            methods: [...e.methods],
+            essential: e.essential
+        }))
+        : [];
+    const essential = platform.filter(e => e.essential).length;
+    return {
+        hosts,
+        allow_github_platform: allowGithubPlatform,
+        platform,
+        platform_auto_allowed: essential,
+        platform_optional: platform.length - essential
+    };
+}
+function buildPolicyConfig(opts) {
+    const warnings = [];
+    const github = [];
+    for (const d of opts.githubDomains) {
+        try {
+            github.push(validatePattern(d));
+        }
+        catch {
+            // the meta/static lists are normalised already; skip anything odd rather than fail
+        }
+    }
+    const user = cleanUserPatterns(opts.allowedDomains, 'allowed-domains', warnings);
+    const passthrough = uniq([
+        ...exports.MANDATORY_PASSTHROUGH,
+        ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
+    ]);
+    const deny = opts.blockRiskySubdomains ? [...github_domains_1.RISKY_GITHUB_SUBDOMAINS] : [];
+    const allow = uniq([...github, ...user]);
+    const httpFilter = buildHttpFilter(opts.httpFilter ?? [], opts.allowGithubPlatform ?? true, [...allow, ...passthrough], passthrough, warnings);
+    return {
+        config: {
+            version: 1,
+            mode: opts.mode,
+            allow,
+            passthrough,
+            deny,
+            flow_log: constants_1.FLOW_LOG,
+            // TODO P3: re-add container-tls input when intercept (CA-into-container) ships
+            container_tls: exports.CONTAINER_TLS,
+            container_port: opts.containerPort,
+            http_filter: httpFilter
+        },
+        warnings
+    };
+}
+
+
+/***/ }),
+
+/***/ 5744:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Corefile builder for the CoreDNS resolver (replaces dnsmasq). Pure functions, no I/O.
+ *
+ * enforce: one server block selected by a `view` expression that mirrors the proxy's pattern
+ * set exactly (src/policy.ts compilePattern / proxy/policy_core.py compile_pattern; all three
+ * are checked against proxy/test-vectors.json), forwarding to the upstreams; and a catch-all
+ * block that answers NXDOMAIN locally. So a subdomain of an exact entry
+ * (`<secret>.example.com`) is refused on the host and never forwarded: default-deny, fail
+ * closed (a view that matches nothing denies; a Corefile that doesn't parse means nothing
+ * listens on :53).
+ *
+ * analyze: both blocks forward. The second one labels what enforce would refuse.
+ *
+ * /etc/hosts names (+ the VM's hostname) are routed to the allow block and answered there by
+ * the `hosts` plugin (it runs after `template` in CoreDNS's plugin order, so it can't live in
+ * the deny block).
+ *
+ * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
+ * format, so the report parser never has to infer a verdict (src/parsers/dns-parser.ts).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CACHE_TTL = exports.DNS_LISTEN = void 0;
+exports.parseHostsNames = parseHostsNames;
+exports.patternsExpr = patternsExpr;
+exports.allowExpr = allowExpr;
+exports.buildCorefile = buildCorefile;
+const net = __importStar(__nccwpck_require__(9278));
+const policy_1 = __nccwpck_require__(2224);
+exports.DNS_LISTEN = '127.0.0.1';
+/** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */
+exports.CACHE_TTL = 3600;
+const LOCAL_NAME = /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/;
+/** Hostnames from an /etc/hosts file (lower-cased, unique; comments and odd names skipped). */
+function parseHostsNames(text) {
+    const out = new Set();
+    for (const raw of text.split('\n')) {
+        const fields = raw.replace(/#.*/, '').trim().split(/\s+/);
+        if (fields.length < 2 || net.isIP(fields[0]) === 0)
+            continue;
+        for (const n of fields.slice(1)) {
+            const name = n.toLowerCase().replace(/\.$/, '');
+            if (LOCAL_NAME.test(name))
+                out.add(name);
+        }
+    }
+    return Array.from(out);
+}
+const LOG_ALLOW = '{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}';
+const logLine = (label) => `{remote} ${label} {type} {name} {rcode} upstream={/forward/upstream} {duration}`;
+/** expr string literal for a DNS name (CoreDNS's name() is lower-case and fully qualified). */
+function lit(s, allowed = /^[a-z0-9_.-]+$/) {
+    // validatePattern restricts the charset to [a-z0-9_*.-]; refuse anything that could break
+    // out of the quoted literal (a quote, a backslash, whitespace), whatever the caller passed
+    if (!allowed.test(s))
+        throw new Error(`unsafe DNS name for the Corefile: '${s}'`);
+    return `'${s}'`;
+}
+function regexFor(globPattern) {
+    const body = globPattern
+        .split('*')
+        .map(part => part.replace(/\./g, '[.]'))
+        .join('[a-z0-9_-]*');
+    return `^${body}[.]$`;
+}
+/**
+ * The expr clause for a set of patterns: exact names batched into one `in [...]`, `*.x` as
+ * `endsWith '.x.'`, a single-label glob as an anchored regex.
+ */
+function patternsExpr(patterns) {
+    const exact = [];
+    const terms = [];
+    for (const raw of patterns) {
+        const p = (0, policy_1.validatePattern)(raw);
+        if (p.startsWith('*.')) {
+            terms.push(`name() endsWith ${lit('.' + p.slice(2) + '.')}`);
+        }
+        else if (p.includes('*')) {
+            terms.push(`name() matches ${lit(regexFor(p), /^\^[a-z0-9_.\[\]*-]+\$$/)}`);
+        }
+        else {
+            exact.push(lit(p + '.'));
+        }
+    }
+    if (exact.length)
+        terms.unshift(`name() in [${Array.from(new Set(exact)).join(', ')}]`);
+    return terms.length ? terms.join(' || ') : 'false';
+}
+/** The full `view` expression: allowed and not denied. */
+function allowExpr(allow, deny) {
+    const a = `(${patternsExpr(allow)})`;
+    return deny.length ? `${a} && !(${patternsExpr(deny)})` : a;
+}
+function hostsLines(h) {
+    if (!/^\/[A-Za-z0-9_./-]+$/.test(h.file))
+        throw new Error(`invalid hosts file path: '${h.file}'`);
+    const inline = h.inline.map(({ ip, name }) => {
+        if (net.isIP(ip) === 0 || !LOCAL_NAME.test(name))
+            throw new Error(`invalid hosts entry: '${ip} ${name}'`);
+        return `    ${ip} ${name}`;
+    });
+    // fallthrough: allowlisted names not in the file go on to forward
+    return [`  hosts ${h.file} {`, ...inline, `    fallthrough`, `  }`];
+}
+/** dns-servers order matters: the first is the primary, the rest are tried in order after it. */
+function forwardLines(upstreams) {
+    if (upstreams.length === 1)
+        return [`  forward . ${upstreams[0]}`];
+    return [`  forward . ${upstreams.join(' ')} {`, `    policy sequential`, `  }`];
+}
+function forwardBlock(label, upstreams, view, hosts) {
+    return [
+        `.:53 {`,
+        `  bind ${exports.DNS_LISTEN}`,
+        ...(view ? [`  view allow {`, `    expr ${view}`, `  }`] : []),
+        `  metadata`,
+        `  log . "${label === 'ALLOW' ? LOG_ALLOW : logLine(label)}"`,
+        `  errors`,
+        ...(hosts ? hostsLines(hosts) : []),
+        `  cache ${exports.CACHE_TTL} {`,
+        `    serve_stale 1h`,
+        `  }`,
+        ...forwardLines(upstreams),
+        `}`
+    ].join('\n');
+}
+function buildCorefile(o) {
+    if (!o.upstreams.length)
+        throw new Error('no upstream DNS servers');
+    for (const u of o.upstreams) {
+        if (!/^[0-9a-f.:]+$/i.test(u))
+            throw new Error(`invalid upstream DNS server: '${u}'`);
+    }
+    let view = allowExpr(o.allow, o.deny);
+    const local = o.hosts
+        ? Array.from(new Set([...o.hosts.names, ...o.hosts.inline.map(e => e.name)].map(n => n.toLowerCase())))
+        : [];
+    if (local.length) {
+        view = `(${view}) || name() in [${local.map(n => lit(n + '.', /^[a-z0-9_.-]+$/)).join(', ')}]`;
+    }
+    const header = `# safer-runner CoreDNS resolver (${o.mode}). Generated - do not edit.\n` +
+        '# Blocks are tried in order: the first whose view matches answers the query.\n';
+    const deny = o.mode === 'enforce'
+        ? [
+            `.:53 {`,
+            `  bind ${exports.DNS_LISTEN}`,
+            `  log . "{remote} BLOCK {type} {name} {rcode}"`,
+            `  errors`,
+            `  template ANY ANY {`,
+            `    rcode NXDOMAIN`,
+            `  }`,
+            `}`
+        ].join('\n')
+        : forwardBlock('WOULD_BLOCK', o.upstreams);
+    return `${header}${forwardBlock('ALLOW', o.upstreams, view, o.hosts)}\n${deny}\n`;
+}
+
+
+/***/ }),
+
+/***/ 5212:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 resolver: CoreDNS on 127.0.0.1:53 (replaced dnsmasq). The firewall sends every :53
+ * query on the host (and from containers) here; only the resolver's uid may reach the
+ * upstream servers. enforce: allowlisted names (exact / *.x / glob, the proxy's own pattern
+ * set) are forwarded, everything else - including subdomains of exact entries - gets
+ * NXDOMAIN locally and never leaves the VM. See ./config.ts.
+ *
+ * No DNS-rebind filtering: the proxy's upstream-IP guard (server_connect) refuses a strict
+ * superset of internal answers and logs the address, and anything outside the proxy can
+ * only reach addresses a step could dial by IP anyway. See docs/DNS-COREDNS.md.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HOSTS_FILE = void 0;
+exports.installCoreDns = installCoreDns;
+exports.localHosts = localHosts;
+exports.writeCorefile = writeCorefile;
+exports.dnsSystemdRunArgs = dnsSystemdRunArgs;
+exports.dumpDnsDiagnostics = dumpDnsDiagnostics;
+exports.probe = probe;
+exports.startCoreDns = startCoreDns;
+exports.createRandomDNSUser = createRandomDNSUser;
+exports.setupDNSConfig = setupDNSConfig;
+exports.restartResolved = restartResolved;
+const core = __importStar(__nccwpck_require__(7484));
+const crypto = __importStar(__nccwpck_require__(6982));
+const dns = __importStar(__nccwpck_require__(2250));
+const fs = __importStar(__nccwpck_require__(9896));
+const os = __importStar(__nccwpck_require__(857));
+const exec = __importStar(__nccwpck_require__(5236));
+const constants_1 = __nccwpck_require__(8729);
+const config_1 = __nccwpck_require__(5744);
+const host_1 = __nccwpck_require__(7020);
+const install_1 = __nccwpck_require__(1671);
+async function installCoreDns() {
+    await (0, install_1.installPinnedBinary)(constants_1.COREDNS_URL, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns');
+}
+exports.HOSTS_FILE = '/etc/hosts';
+/** Debian's address for the machine's own name when it has no other (`127.0.1.1 <hostname>`). */
+const OWN_NAME_FALLBACK = '127.0.1.1';
+/**
+ * /etc/hosts names, plus the VM's hostname if /etc/hosts lacks it (AWS-hosted runners: it
+ * resolved through the VPC resolver, and without it every sudo warns "unable to resolve
+ * host"). Call BEFORE resolv.conf points at us, so the hostname resolves the original way.
+ */
+async function localHosts() {
+    let names = [];
+    try {
+        names = (0, config_1.parseHostsNames)(fs.readFileSync(exports.HOSTS_FILE, 'utf8'));
+    }
+    catch {
+        // no /etc/hosts: nothing to serve
+    }
+    const inline = [];
+    const own = os.hostname().toLowerCase();
+    if (own && !names.includes(own) && /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$/.test(own)) {
+        let addrs = [];
+        try {
+            addrs = (await dns.promises.lookup(own, { all: true })).map(a => a.address);
+        }
+        catch {
+            // unresolvable before we started too
+        }
+        for (const ip of addrs.length ? addrs : [OWN_NAME_FALLBACK])
+            inline.push({ ip, name: own });
+        core.info(`hostname ${own} is not in ${exports.HOSTS_FILE}: the resolver answers it with ${inline.map(e => e.ip).join(', ')}`);
+    }
+    return { file: exports.HOSTS_FILE, names, inline };
+}
+async function writeCorefile(o) {
+    const corefile = (0, config_1.buildCorefile)(o);
+    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
+    await (0, host_1.sudo)(['tee', constants_1.COREFILE], { input: Buffer.from(corefile), silent: true });
+    await (0, host_1.sudo)(['chown', 'root:root', constants_1.COREFILE]);
+    await (0, host_1.sudo)(['chmod', '0644', constants_1.COREFILE]);
+}
+/**
+ * systemd-run: outside the runner's process tree (its orphan cleanup would kill it), restarted
+ * on any exit, as the random DNS user with only CAP_NET_BIND_SERVICE (for :53). stdout - the
+ * `log` plugin - is appended by systemd to the world-readable DNS log the report reads.
+ */
+function dnsSystemdRunArgs(dnsUser) {
+    return [
+        'systemd-run',
+        `--unit=${constants_1.DNS_UNIT}`,
+        '--description=safer-runner DNS resolver (CoreDNS)',
+        `--uid=${dnsUser}`,
+        `--gid=${dnsUser}`,
+        '-p',
+        'Restart=always',
+        '-p',
+        'RestartSec=1',
+        '-p',
+        'AmbientCapabilities=CAP_NET_BIND_SERVICE',
+        '-p',
+        'CapabilityBoundingSet=CAP_NET_BIND_SERVICE',
+        '-p',
+        'NoNewPrivileges=yes',
+        '-p',
+        'PrivateTmp=yes',
+        '-p',
+        'ProtectHome=yes',
+        '-p',
+        'ProtectSystem=strict',
+        '-p',
+        `StandardOutput=append:${constants_1.DNS_LOG}`,
+        '-p',
+        `StandardError=append:${constants_1.DNS_LOG}`,
+        constants_1.COREDNS_BIN,
+        '-conf',
+        constants_1.COREFILE
+    ];
+}
+async function dumpDnsDiagnostics() {
+    const opts = { ignoreReturnCode: true };
+    await (0, host_1.sudo)(['systemctl', 'status', constants_1.DNS_UNIT, '--no-pager', '-l'], opts);
+    await (0, host_1.sudo)(['journalctl', '-u', constants_1.DNS_UNIT, '--no-pager', '-n', '30'], opts);
+    await (0, host_1.sudo)(['tail', '-n', '30', constants_1.DNS_LOG], opts);
+    await (0, host_1.sudo)(['ss', '-lntup', 'sport = :53'], opts);
+}
+/** Resolve `name` (A) against our resolver. Returns 'ok', 'NXDOMAIN' or the error code. */
+async function probe(name, timeoutMs = 3000) {
+    const r = new dns.promises.Resolver({ timeout: timeoutMs, tries: 1 });
+    r.setServers([config_1.DNS_LISTEN]);
+    try {
+        await r.resolve4(name);
+        return 'ok';
+    }
+    catch (e) {
+        const code = e.code ?? String(e);
+        return code === dns.NOTFOUND ? 'NXDOMAIN' : code;
+    }
+}
+/**
+ * (Re)start CoreDNS and wait until it answers. The log file is pre-created 0644 root-owned:
+ * systemd opens it as root and appends, so the mode sticks and the runner can read it.
+ */
+async function startCoreDns(dnsUser, readinessName, timeoutMs = 20000) {
+    await (0, host_1.sudo)(['touch', constants_1.DNS_LOG]);
+    await (0, host_1.sudo)(['chown', 'root:root', constants_1.DNS_LOG]);
+    await (0, host_1.sudo)(['chmod', '0644', constants_1.DNS_LOG]);
+    await (0, host_1.sudo)(['systemctl', 'stop', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
+    await (0, host_1.sudo)(['systemctl', 'reset-failed', constants_1.DNS_UNIT], { ignoreReturnCode: true, silent: true });
+    await (0, host_1.sudo)(dnsSystemdRunArgs(dnsUser));
+    const deadline = Date.now() + timeoutMs;
+    let last = '';
+    while (Date.now() < deadline) {
+        last = await probe(readinessName, 2000);
+        if (last === 'ok') {
+            core.info(`✅ CoreDNS up on ${config_1.DNS_LISTEN}:53 (${readinessName} resolved)`);
+            return;
+        }
+        await new Promise(r => setTimeout(r, 300));
+    }
+    await dumpDnsDiagnostics();
+    throw new Error(`CoreDNS did not answer for ${readinessName} within ${timeoutMs / 1000}s (last: ${last})`);
+}
+async function createRandomDNSUser() {
+    // Generate random username with 16 hex characters
+    const randomHex = crypto.randomBytes(8).toString('hex');
+    const username = `dns-${randomHex}`;
+    // Generate random UID in safe range (60000-65000 to avoid conflicts)
+    const uid = 60000 + Math.floor(Math.random() * 5000);
+    // Create system user with no login, no home directory
+    await exec.exec('sudo', [
+        'useradd',
+        '--system',
+        '--no-create-home',
+        '--shell',
+        '/usr/sbin/nologin',
+        '--uid',
+        uid.toString(),
+        username
+    ]);
+    return { username, uid };
+}
+async function setupDNSConfig() {
+    // Configure systemd-resolved to use our DNS server
+    await exec.exec('sudo', ['mkdir', '-p', '/etc/systemd/resolved.conf.d']);
+    const resolvedConfig = `[Resolve]
+DNS=127.0.0.1
+DNSSEC=yes
+DNSStubListener=no`;
+    await exec.exec('sudo', ['tee', '/etc/systemd/resolved.conf.d/no-stub.conf'], {
+        input: Buffer.from(resolvedConfig)
+    });
+    // Update resolv.conf to use localhost
+    await exec.exec('sudo', ['unlink', '/etc/resolv.conf']);
+    await exec.exec('sudo', ['tee', '/etc/resolv.conf'], {
+        input: Buffer.from('nameserver 127.0.0.1\n')
+    });
+}
+/** Apply the resolved.conf drop-in written by setupDNSConfig (releases its stub listener). */
+async function restartResolved() {
+    await exec.exec('sudo', ['systemctl', 'restart', 'systemd-resolved']);
+}
+
+
+/***/ }),
+
+/***/ 6362:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Docker access control (the `docker` input) and dockerd handling for the proxy CA.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.disableDockerForRunner = disableDockerForRunner;
+exports.stopDockerService = stopDockerService;
+exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
+exports.dockerAccess = dockerAccess;
+exports.readDockerState = readDockerState;
+exports.mergeLiveRestore = mergeLiveRestore;
+exports.isDockerActive = isDockerActive;
+exports.runningContainers = runningContainers;
+exports.restartDockerForCaTrust = restartDockerForCaTrust;
+exports.parseContainerAddresses = parseContainerAddresses;
+exports.containerAddresses = containerAddresses;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const constants_1 = __nccwpck_require__(8729);
+// Constants
+exports.RUNNER_USERNAME = 'runner';
+exports.DOCKER_GROUP = 'docker';
+exports.DOCKER_SOCKET = '/var/run/docker.sock';
+async function run(args) {
+    const rc = await exec.exec('sudo', args, { ignoreReturnCode: true });
+    return rc === 0 ? null : `sudo ${args.join(' ')} exited ${rc}`;
+}
+/**
+ * docker: remove-group. Removes the runner user from the docker group (new sessions) and locks
+ * the socket to root:root 0600 (the current session keeps the group in its credentials, so
+ * the group change alone would not stop it). Idempotent: a runner already outside the group,
+ * or without a socket, is left alone.
+ *
+ * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
+ * afterwards - the caller fails closed on that, not on these messages.
+ */
+async function disableDockerForRunner(socket = exports.DOCKER_SOCKET) {
+    core.info('Removing the runner user from the docker group and locking the docker socket...');
+    const failed = [];
+    if (await isRunnerInDockerGroup()) {
+        const err = await run(['gpasswd', '-d', exports.RUNNER_USERNAME, exports.DOCKER_GROUP]);
+        if (err)
+            failed.push(err);
+    }
+    if (fs.existsSync(socket)) {
+        for (const args of [
+            ['chown', 'root:root', socket],
+            ['chmod', '600', socket]
+        ]) {
+            const err = await run(args);
+            if (err)
+                failed.push(err);
+        }
+    }
+    return failed;
+}
+/**
+ * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
+ * running containers). Returns the steps that failed; readDockerState() is the verdict.
+ */
+async function stopDockerService() {
+    core.info('Stopping and disabling the docker daemon...');
+    const failed = [];
+    for (const verb of ['stop', 'disable']) {
+        for (const unit of ['docker.socket', 'docker.service']) {
+            const err = await run(['systemctl', verb, unit]);
+            if (err)
+                failed.push(err);
+        }
+    }
+    return failed;
+}
+/**
+ * Whether the runner user is in the docker group (`id -nG runner`, i.e. what a new session
+ * gets). Fails closed: if membership cannot be read, it is assumed.
+ */
+async function isRunnerInDockerGroup() {
+    const { stdout, exitCode } = await exec.getExecOutput('id', ['-nG', exports.RUNNER_USERNAME], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    if (exitCode !== 0) {
+        core.warning(`Could not read the groups of ${exports.RUNNER_USERNAME} (id exit ${exitCode}); assuming docker membership`);
+        return true;
+    }
+    return stdout.trim().split(/\s+/).includes(exports.DOCKER_GROUP);
+}
+function dockerAccess(s) {
+    if (!s.daemonActive && !s.socketUnitActive)
+        return 'not-running';
+    if (!s.runnerInGroup && !s.socketAccessible)
+        return 'group-removed';
+    return 'retained';
+}
+function canUseSocket(socket) {
+    try {
+        fs.accessSync(socket, fs.constants.R_OK | fs.constants.W_OK);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function unitActive(unit) {
+    return (await exec.exec('systemctl', ['is-active', '--quiet', unit], { ignoreReturnCode: true, silent: true })) === 0;
+}
+async function readDockerState(socket = exports.DOCKER_SOCKET) {
+    return {
+        daemonActive: await unitActive('docker.service'),
+        socketUnitActive: await unitActive('docker.socket'),
+        runnerInGroup: await isRunnerInDockerGroup(),
+        socketAccessible: canUseSocket(socket)
+    };
+}
+/**
+ * Merge `live-restore: true` into a daemon.json body. Returns null when the existing file is
+ * not a JSON object (never overwrite a config we can't parse - dockerd would refuse to start).
+ */
+function mergeLiveRestore(existing) {
+    let cfg = {};
+    if (existing.trim() !== '') {
+        try {
+            const parsed = JSON.parse(existing);
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+                return null;
+            cfg = parsed;
+        }
+        catch {
+            return null;
+        }
+    }
+    if (cfg['live-restore'] === true)
+        return { json: existing, changed: false };
+    return { json: JSON.stringify({ ...cfg, 'live-restore': true }, null, 2) + '\n', changed: true };
+}
+/** `systemctl is-active docker`. */
+async function isDockerActive() {
+    const rc = await exec.exec('systemctl', ['is-active', '--quiet', 'docker'], { ignoreReturnCode: true, silent: true });
+    return rc === 0;
+}
+/** IDs of running containers (empty when docker is not reachable). */
+async function runningContainers() {
+    const { stdout, exitCode } = await exec.getExecOutput('sudo', ['docker', 'ps', '-q', '--no-trunc'], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    return exitCode === 0 ? stdout.split('\n').filter(Boolean) : [];
+}
+async function waitForDocker(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const rc = await exec.exec('sudo', ['docker', 'info', '--format', '{{.ServerVersion}}'], {
+            ignoreReturnCode: true,
+            silent: true
+        });
+        if (rc === 0)
+            return true;
+        await new Promise(r => setTimeout(r, 500));
+    }
+    return false;
+}
+/**
+ * F1: dockerd is Go and caches the system roots on its first TLS handshake. When the runner
+ * pulled a service/job container image before the action ran, those roots predate our CA and
+ * every later `docker pull` through the proxy fails with x509 - in every mode. Restarting
+ * dockerd reloads the roots; live-restore (reloadable by SIGHUP) keeps the running service
+ * containers alive across the restart. Must run after the CA is in the system store and
+ * before the firewall (Docker rebuilds its own chains on restart).
+ *
+ * Returns true when daemon.json was written (it then belongs in the integrity baseline).
+ */
+async function restartDockerForCaTrust() {
+    const before = await runningContainers();
+    const { stdout: existing } = await exec.getExecOutput('sudo', ['cat', constants_1.DOCKER_DAEMON_JSON], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    const merged = mergeLiveRestore(existing);
+    if (merged === null) {
+        core.warning(`${constants_1.DOCKER_DAEMON_JSON} is not a JSON object: dockerd not restarted, so a dockerd that pulled images ` +
+            'before this action may not trust the proxy CA (docker pull: x509 errors)');
+        return false;
+    }
+    if (merged.changed) {
+        await exec.exec('sudo', ['install', '-d', '-m', '0755', '/etc/docker']);
+        await exec.exec('sudo', ['tee', constants_1.DOCKER_DAEMON_JSON], { input: Buffer.from(merged.json), silent: true });
+        // live-restore is one of the options dockerd reloads on SIGHUP (ExecReload)
+        await exec.exec('sudo', ['systemctl', 'reload', 'docker']);
+        await new Promise(r => setTimeout(r, 500));
+    }
+    const t0 = Date.now();
+    await exec.exec('sudo', ['systemctl', 'restart', 'docker']);
+    if (!(await waitForDocker(30000))) {
+        throw new Error('dockerd did not come back within 30s after restart (F1 CA trust reload)');
+    }
+    const after = new Set(await runningContainers());
+    const lost = before.filter(id => !after.has(id));
+    core.info(`dockerd restarted to trust the proxy CA in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
+        `(${before.length} running container(s) kept: ${before.length - lost.length})`);
+    if (lost.length > 0) {
+        core.warning(`${lost.length} container(s) stopped across the dockerd restart: ${lost.map(i => i.slice(0, 12)).join(', ')}`);
+    }
+    return true;
+}
+/**
+ * Parse `docker inspect --format '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}'`
+ * output into container IP -> name.
+ */
+function parseContainerAddresses(output) {
+    const out = new Map();
+    for (const line of output.split('\n')) {
+        const [rawName, ...ips] = line.trim().split(/\s+/);
+        if (!rawName)
+            continue;
+        const name = rawName.replace(/^\//, '');
+        for (const ip of ips)
+            if (ip && !out.has(ip))
+                out.set(ip, name);
+    }
+    return out;
+}
+/**
+ * Container IP -> name for the report. Without sudo: under the default enforce the runner has
+ * lost docker access, and the report then shows addresses only. Containers already removed
+ * (`docker run --rm`) are not listed either.
+ */
+async function containerAddresses() {
+    const opts = { ignoreReturnCode: true, silent: true };
+    const ids = await exec.getExecOutput('docker', ['ps', '-aq'], opts);
+    const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];
+    if (!list.length)
+        return new Map();
+    const fmt = '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}';
+    const { stdout, exitCode } = await exec.getExecOutput('docker', ['inspect', '--format', fmt, ...list], opts);
+    return exitCode === 0 ? parseContainerAddresses(stdout) : new Map();
+}
+
+
+/***/ }),
+
+/***/ 9374:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 iptables: force 80/443 through the proxy, force all DNS through the resolver (CoreDNS), and (enforce)
+ * deny everything else. Rulesets are generated as iptables-restore text (pure functions,
+ * unit-tested) and applied atomically with `iptables-restore --noflush` into chains we own,
+ * jumped to from position 1 of OUTPUT, so the image's own rules are left alone.
+ *
+ * Rules are interface-agnostic ("allow lo + the proxy path, deny the rest") rather than
+ * `-o eth0`-scoped, so a renamed or extra NIC fails closed instead of open (review M3).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MISSING_DOCKER_USER_MESSAGE = void 0;
+exports.buildNatRules = buildNatRules;
+exports.buildFilterRules = buildFilterRules;
+exports.buildIp6FilterRules = buildIp6FilterRules;
+exports.buildContainerNatRules = buildContainerNatRules;
+exports.buildContainerForwardRules = buildContainerForwardRules;
+exports.buildIp6ContainerForwardRules = buildIp6ContainerForwardRules;
+exports.parseDefaultRouteInterfaces = parseDefaultRouteInterfaces;
+exports.detectEgressInterface = detectEgressInterface;
+exports.removeFirewall = removeFirewall;
+exports.applyFirewall = applyFirewall;
+exports.parseDockerSubnets = parseDockerSubnets;
+exports.flushContainerConntrack = flushContainerConntrack;
+exports.killPreexistingConnections = killPreexistingConnections;
+exports.logFirewall = logFirewall;
+exports.setupIptablesLogging = setupIptablesLogging;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const constants_1 = __nccwpck_require__(8729);
+/** Local bridges (docker0, user-defined networks). */
+const LOCAL_BRIDGES = ['docker0', 'br-+'];
+/** Private destinations a container may reach on its own bridge (container <-> container). */
+const RFC1918 = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
+/**
+ * nat OUTPUT: send DNS to the resolver and 80/443 to the proxy. Exempt: the proxy and the resolver
+ * uids (their own upstream connections), loopback, local bridges and the Azure platform IPs.
+ */
+function buildNatRules(o) {
+    const c = constants_1.NAT_CHAIN;
+    const lines = [
+        '*nat',
+        `:${c} - [0:0]`,
+        `-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`,
+        `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`,
+        // Every resolver, whatever address it is aimed at (8.8.8.8, 168.63.129.16, GitHub's
+        // 127.0.0.100 egress resolver...), is answered by our resolver (fixes C1/M4).
+        `-A ${c} -p udp --dport 53 -j REDIRECT --to-ports 53`,
+        `-A ${c} -p tcp --dport 53 -j REDIRECT --to-ports 53`,
+        `-A ${c} -d 127.0.0.0/8 -j RETURN`,
+        `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -j RETURN`,
+        `-A ${c} -d ${constants_1.AZURE_WIRESERVER}/32 -j RETURN`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        `-A ${c} -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports ${o.proxyPort}`,
+        `-I OUTPUT 1 -j ${c}`,
+        'COMMIT',
+        ''
+    ];
+    return lines.join('\n');
+}
+function commonFilterAllows(c) {
+    return [
+        `-A ${c} -o lo -j RETURN`,
+        // REDIRECTed packets (to the proxy / the resolver): after nat OUTPUT the destination is
+        // 127.0.0.1, but `-o` still reports the ORIGINAL route (e.g. eth0), so `-o lo` alone
+        // never matches them. A 127/8 destination cannot leave the host.
+        `-A ${c} -d 127.0.0.0/8 -j RETURN`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        // Azure platform: IMDS and wireserver (WALinuxAgent, health) only on the ports they use.
+        // 168.63.129.16:53 is NOT allowed - it is an open recursive resolver (C1).
+        `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -p tcp --dport 80 -j RETURN`,
+        `-A ${c} -d ${constants_1.AZURE_WIRESERVER}/32 -p tcp -m multiport --dports 80,32526 -j RETURN`
+    ];
+}
+/**
+ * filter OUTPUT.
+ * - enforce: allow lo, the proxy uid on 80/443, the resolver's uid to its upstream servers on 53,
+ *   the Azure platform; reject everything else. A hole in the REDIRECT therefore still
+ *   fails closed, and so does any non-80/443 egress.
+ * - analyze: allow everything, but reject QUIC (UDP/443) so HTTP/3 clients fall back to TCP
+ *   through the proxy, and log new non-proxied connections for the report.
+ */
+function buildFilterRules(o) {
+    const c = constants_1.FILTER_CHAIN;
+    const lines = ['*filter', `:${c} - [0:0]`, ...commonFilterAllows(c)];
+    if (o.mode === 'enforce') {
+        lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -p tcp -m multiport --dports 80,443 -j RETURN`);
+        for (const server of o.dnsServers) {
+            for (const proto of ['udp', 'tcp']) {
+                lines.push(`-A ${c} -m owner --uid-owner ${o.dnsUid} -d ${server}/32 -p ${proto} --dport 53 -j RETURN`);
+            }
+        }
+        lines.push(`-A ${c} -p icmp -m conntrack --ctstate RELATED -j RETURN`, 
+        // log new connections only: packets of flows that predate the cutover (and ownerless
+        // RST/FIN of sockets ss -K closed) are rejected too, but are just noise in the report
+        `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_DROP}" --log-uid`, `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp-port-unreachable`);
+    }
+    else {
+        lines.push(`-A ${c} -m owner --uid-owner ${o.proxyUid} -j RETURN`, `-A ${c} -m owner --uid-owner ${o.dnsUid} -j RETURN`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable`, `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_ANALYZE}" --log-uid`);
+    }
+    lines.push(`-I OUTPUT 1 -j ${c}`, 'COMMIT', '');
+    return lines.join('\n');
+}
+/**
+ * ip6tables: there is no IPv6 path through the proxy. enforce rejects all non-loopback IPv6
+ * egress (except neighbour discovery); analyze rejects 80/443 (+QUIC) so clients fall back
+ * to IPv4 and through the proxy.
+ */
+function buildIp6FilterRules(o) {
+    const c = constants_1.FILTER_CHAIN;
+    const lines = ['*filter', `:${c} - [0:0]`, `-A ${c} -o lo -j RETURN`, `-A ${c} -d ::1/128 -j RETURN`];
+    if (o.mode === 'enforce') {
+        lines.push(...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`));
+        for (const t of ['router-solicitation', 'neighbour-solicitation', 'neighbour-advertisement']) {
+            lines.push(`-A ${c} -p ipv6-icmp --icmpv6-type ${t} -j RETURN`);
+        }
+        lines.push(`-A ${c} -p tcp -j REJECT --reject-with tcp-reset`, `-A ${c} -j REJECT --reject-with icmp6-port-unreachable`);
+    }
+    else {
+        lines.push(`-A ${c} -p tcp -m multiport --dports 80,443 -j REJECT --reject-with tcp-reset`, `-A ${c} -p udp --dport 443 -j REJECT --reject-with icmp6-port-unreachable`);
+    }
+    lines.push(`-I OUTPUT 1 -j ${c}`, 'COMMIT', '');
+    return lines.join('\n');
+}
+/**
+ * nat PREROUTING for traffic containers send off their bridge (docker0, user networks): DNS
+ * to the resolver and 80/443 to the proxy's container listener (DNAT to 127.0.0.1 - needs
+ * route_localnet). Container -> host services and container <-> container (bridged traffic
+ * traverses PREROUTING once Docker loads br_netfilter) are left alone; anything they don't
+ * cover falls through to the DOCKER-USER chain below.
+ */
+function buildContainerNatRules(o) {
+    const c = constants_1.CONTAINER_NAT_CHAIN;
+    return [
+        '*nat',
+        `:${c} - [0:0]`,
+        `-A ${c} -m addrtype --dst-type LOCAL -j RETURN`,
+        `-A ${c} -d ${RFC1918} -j RETURN`,
+        `-A ${c} -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
+        `-A ${c} -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
+        `-A ${c} -p tcp -m multiport --dports 80,443 -j DNAT --to-destination 127.0.0.1:${o.containerProxyPort}`,
+        ...LOCAL_BRIDGES.map(b => `-I PREROUTING 1 -i ${b} -j ${c}`),
+        'COMMIT',
+        ''
+    ].join('\n');
+}
+function containerForwardTail(c, o, icmpReject) {
+    if (o.mode === 'enforce') {
+        return [
+            `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_CDROP}"`,
+            `-A ${c} -p tcp -j REJECT --reject-with tcp-reset`,
+            `-A ${c} -j REJECT --reject-with ${icmpReject}`
+        ];
+    }
+    return [
+        // QUIC: make HTTP/3 clients fall back to TCP, through the proxy (as on the host)
+        `-A ${c} -p udp --dport 443 -j REJECT --reject-with ${icmpReject}`,
+        `-A ${c} -m conntrack --ctstate NEW -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "${constants_1.LOG_PREFIX_CEGRESS}"`
+    ];
+}
+/**
+ * filter DOCKER-USER: everything a container forwards off-host that the DNAT did not send to
+ * the proxy or the resolver. enforce rejects it (so a hole in the DNAT still fails closed), analyze
+ * logs it. DOCKER-USER, not FORWARD: Docker re-inserts its FORWARD jumps ahead of ours on
+ * every restart, but never touches DOCKER-USER.
+ */
+function buildContainerForwardRules(o) {
+    const c = constants_1.CONTAINER_FWD_CHAIN;
+    return [
+        '*filter',
+        `:${c} - [0:0]`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
+        ...containerForwardTail(c, o, 'icmp-port-unreachable'),
+        ...LOCAL_BRIDGES.map(b => `-I ${constants_1.DOCKER_USER_CHAIN} 1 -i ${b} -j ${c}`),
+        'COMMIT',
+        ''
+    ].join('\n');
+}
+/**
+ * ip6tables counterpart: there is no IPv6 path through the proxy, so an IPv6-enabled container
+ * network fails closed (enforce) or is pushed back to IPv4 for 80/443 (analyze). `hook` is
+ * DOCKER-USER when Docker manages ip6tables, otherwise FORWARD.
+ */
+function buildIp6ContainerForwardRules(o, hook = constants_1.DOCKER_USER_CHAIN) {
+    const c = constants_1.CONTAINER_FWD_CHAIN;
+    const tail = o.mode === 'enforce'
+        ? containerForwardTail(c, o, 'icmp6-port-unreachable')
+        : [
+            `-A ${c} -p tcp -m multiport --dports 80,443 -j REJECT --reject-with tcp-reset`,
+            ...containerForwardTail(c, o, 'icmp6-port-unreachable')
+        ];
+    return [
+        '*filter',
+        `:${c} - [0:0]`,
+        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
+        ...tail,
+        ...LOCAL_BRIDGES.map(b => `-I ${hook} 1 -i ${b} -j ${c}`),
+        'COMMIT',
+        ''
+    ].join('\n');
+}
+/** Parse `ip -4 route show default` output into the interface names carrying the default route. */
+function parseDefaultRouteInterfaces(output) {
+    const out = [];
+    for (const line of output.split('\n')) {
+        const m = line.match(/^default\b.*\bdev\s+(\S+)/);
+        if (m)
+            out.push(m[1]);
+    }
+    return Array.from(new Set(out));
+}
+/**
+ * Report where egress actually goes. Our rules are interface-agnostic so they fail closed
+ * whatever the NIC is called; this is a loud diagnostic for the unexpected cases.
+ */
+async function detectEgressInterface() {
+    const { stdout } = await exec.getExecOutput('ip', ['-4', 'route', 'show', 'default'], {
+        silent: true,
+        ignoreReturnCode: true
+    });
+    const ifaces = parseDefaultRouteInterfaces(stdout);
+    if (ifaces.length === 0) {
+        core.warning('No IPv4 default route found - egress rules are interface-agnostic and still apply.');
+    }
+    else if (ifaces.length > 1 || ifaces[0] !== 'eth0') {
+        core.warning(`Default route via ${ifaces.join(', ')} (expected eth0). Egress rules are interface-agnostic ` +
+            '(allow loopback + proxy path, reject the rest), so they still fail closed.');
+    }
+    else {
+        core.info('Default route via eth0');
+    }
+    return ifaces;
+}
+async function restore(binary, rules) {
+    await exec.exec('sudo', [binary, '--noflush'], { input: Buffer.from(rules) });
+}
+/** Remove our chains and jumps if present (idempotency for a re-run in the main step). */
+async function removeFirewall() {
+    const opts = { ignoreReturnCode: true, silent: true };
+    for (const [bin, table, chain] of [
+        ['iptables', 'nat', constants_1.NAT_CHAIN],
+        ['iptables', 'filter', constants_1.FILTER_CHAIN],
+        ['ip6tables', 'filter', constants_1.FILTER_CHAIN]
+    ]) {
+        // -D removes one jump per call; loop until none remain.
+        for (let i = 0; i < 5; i++) {
+            if ((await exec.exec('sudo', [bin, '-t', table, '-D', 'OUTPUT', '-j', chain], opts)) !== 0)
+                break;
+        }
+        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
+        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
+    }
+    const jumps = [
+        ['iptables', 'nat', 'PREROUTING', constants_1.CONTAINER_NAT_CHAIN],
+        ['iptables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', 'FORWARD', constants_1.CONTAINER_FWD_CHAIN]
+    ];
+    for (const [bin, table, from, chain] of jumps) {
+        for (const b of LOCAL_BRIDGES) {
+            for (let i = 0; i < 5; i++) {
+                if ((await exec.exec('sudo', [bin, '-t', table, '-D', from, '-i', b, '-j', chain], opts)) !== 0)
+                    break;
+            }
+        }
+    }
+    for (const [bin, table, chain] of [
+        ['iptables', 'nat', constants_1.CONTAINER_NAT_CHAIN],
+        ['iptables', 'filter', constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', constants_1.CONTAINER_FWD_CHAIN]
+    ]) {
+        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
+        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
+    }
+}
+/** True if `chain` exists in the filter table of `bin`. */
+async function chainExists(bin, chain) {
+    const rc = await exec.exec('sudo', [bin, '-t', 'filter', '-n', '-L', chain], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    return rc === 0;
+}
+exports.MISSING_DOCKER_USER_MESSAGE = 'Docker is running but the DOCKER-USER chain is missing (Docker started with iptables disabled, or a ' +
+    'firewall backend other than iptables), so the container egress rules cannot be applied';
+/**
+ * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
+ * table; IPv6 last. The proxy must already be listening.
+ *
+ * Returns whether the container rules were applied. enforce fails closed instead of running
+ * with containers outside the rules: it throws before anything is changed.
+ */
+async function applyFirewall(o, hasChain = chainExists) {
+    let containerRules = false;
+    let ip6Hook = 'FORWARD';
+    if (o.containers) {
+        if (await hasChain('iptables', constants_1.DOCKER_USER_CHAIN)) {
+            containerRules = true;
+            if (await hasChain('ip6tables', constants_1.DOCKER_USER_CHAIN))
+                ip6Hook = constants_1.DOCKER_USER_CHAIN;
+        }
+        else if (o.mode === 'enforce') {
+            throw new Error(`${exports.MISSING_DOCKER_USER_MESSAGE}. Use docker: stop, or mode: analyze.`);
+        }
+        else {
+            core.warning(`${exports.MISSING_DOCKER_USER_MESSAGE}: container egress is not monitored`);
+        }
+    }
+    await removeFirewall();
+    // REDIRECT to 127.0.0.1 of packets that were routed to another interface
+    await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
+    let v4 = buildNatRules(o) + buildFilterRules(o);
+    let v6 = buildIp6FilterRules(o);
+    if (containerRules) {
+        v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
+        v6 += buildIp6ContainerForwardRules(o, ip6Hook);
+    }
+    await restore('iptables-restore', v4);
+    const rc6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
+        input: Buffer.from(v6),
+        ignoreReturnCode: true
+    });
+    if (rc6 !== 0) {
+        const msg = 'ip6tables rules could not be applied';
+        if (o.mode === 'enforce')
+            throw new Error(msg);
+        core.warning(msg);
+    }
+    return { containerRules };
+}
+/** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
+function parseDockerSubnets(json) {
+    const out = [];
+    try {
+        const nets = JSON.parse(json);
+        for (const n of nets) {
+            if (n.Driver !== 'bridge')
+                continue;
+            for (const cfg of n.IPAM?.Config || [])
+                if (cfg.Subnet)
+                    out.push(cfg.Subnet);
+        }
+    }
+    catch {
+        // not JSON (docker error): no subnets
+    }
+    return Array.from(new Set(out));
+}
+/**
+ * Drop conntrack entries of flows sourced from the container networks. Without this, a
+ * service container's connections that predate the rules keep going via ESTABLISHED (the
+ * forwarded-traffic counterpart of killPreexistingConnections).
+ */
+async function flushContainerConntrack() {
+    const opts = { ignoreReturnCode: true, silent: true };
+    const ids = await exec.getExecOutput('sudo', ['docker', 'network', 'ls', '-q', '--filter', 'driver=bridge'], opts);
+    const netIds = ids.stdout.split('\n').filter(Boolean);
+    let subnets = ['172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8'];
+    if (netIds.length > 0) {
+        const inspect = await exec.getExecOutput('sudo', ['docker', 'network', 'inspect', ...netIds], opts);
+        const found = parseDockerSubnets(inspect.stdout);
+        if (found.length > 0)
+            subnets = found;
+    }
+    if ((await exec.exec('sh', ['-c', 'command -v conntrack'], opts)) !== 0) {
+        core.warning('conntrack not installed: container connections that predate the rules may continue');
+        return;
+    }
+    for (const s of subnets) {
+        // exit 1 = nothing matched
+        await exec.exec('sudo', ['conntrack', '-D', '-f', s.includes(':') ? 'ipv6' : 'ipv4', '-s', s], opts);
+    }
+    core.info(`Flushed container conntrack entries for ${subnets.join(', ')}`);
+}
+/**
+ * Kill established :80/:443 connections that predate the REDIRECT (runner long-polls etc.),
+ * so the cutover is immediate: they reconnect through the proxy instead of being rejected
+ * mid-stream later.
+ */
+async function killPreexistingConnections() {
+    const rc = await exec.exec('sudo', ['ss', '-K', 'state', 'established', '( dport = :443 or dport = :80 )'], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    if (rc !== 0)
+        core.warning('ss -K failed: pre-existing connections will be cut off by the firewall instead');
+}
+/** Human-readable dump of what we installed (job log). */
+async function logFirewall() {
+    const opts = { ignoreReturnCode: true };
+    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.NAT_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-S', constants_1.FILTER_CHAIN], opts);
+    await exec.exec('sudo', ['ip6tables', '-S', constants_1.FILTER_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.CONTAINER_NAT_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-S', constants_1.CONTAINER_FWD_CHAIN], opts);
+    await exec.exec('sudo', ['iptables', '-S', constants_1.DOCKER_USER_CHAIN], opts);
+}
+/**
+ * Setup rsyslog to filter iptables logs to dedicated files
+ * This allows reading logs without sudo and provides clean separation
+ * between pre-hook and main action logs
+ *
+ * Creates separate config files for pre-hook and main action to avoid
+ * overwriting each other's configurations
+ */
+async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
+    // Build rsyslog configuration to filter iptables logs
+    // Filter by programname=kernel to only capture actual iptables log messages
+    // (not sudo commands that set up the logging rules)
+    const prefixArray = "['" + logPrefixes.join("', '") + "']";
+    const rsyslogConfig = `if $programname == 'kernel' and $msg contains ${prefixArray} then ${logFile}
+`;
+    // Use different config file names for pre-hook and main action
+    const configFile = configSuffix
+        ? `/etc/rsyslog.d/10-iptables-safer-runner-${configSuffix}.conf`
+        : '/etc/rsyslog.d/10-iptables-safer-runner.conf';
+    // Write rsyslog configuration
+    await exec.exec('sudo', ['tee', configFile], {
+        input: Buffer.from(rsyslogConfig)
+    });
+    // Create log file and set ownership to syslog user (rsyslog runs as syslog:adm)
+    // This allows rsyslog to write to the file
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
+    await exec.exec('sudo', ['chmod', '644', logFile]);
+    // Restart rsyslog to apply configuration
+    await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+}
+
+
+/***/ }),
+
+/***/ 2145:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 proxy lifecycle: install the pinned mitmdump, create the proxy user and its ephemeral
+ * CA, write the policy, and run mitmdump under systemd outside the runner's process tree.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.PROXY_PORT_BAND = void 0;
+exports.actionRoot = actionRoot;
+exports.allocateProxyPorts = allocateProxyPorts;
+exports.installMitmproxy = installMitmproxy;
+exports.createProxyUser = createProxyUser;
+exports.installAddon = installAddon;
+exports.writePolicy = writePolicy;
+exports.generateCa = generateCa;
+exports.installTeardownHelper = installTeardownHelper;
+exports.mitmdumpArgs = mitmdumpArgs;
+exports.systemdRunArgs = systemdRunArgs;
+exports.findStartRecord = findStartRecord;
+exports.dumpProxyDiagnostics = dumpProxyDiagnostics;
+exports.startProxy = startProxy;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const net = __importStar(__nccwpck_require__(9278));
+const path = __importStar(__nccwpck_require__(6928));
+const constants_1 = __nccwpck_require__(8729);
+const host_1 = __nccwpck_require__(7020);
+const install_1 = __nccwpck_require__(1671);
+/**
+ * Root of the checked-out action (where proxy/policy.py lives). Derived from the running
+ * script (<action>/dist/<entry>/index.js) rather than __dirname so the bundler can't
+ * rewrite or relocate it.
+ */
+function actionRoot() {
+    const script = process.argv[1] || '';
+    return path.resolve(path.dirname(script), '..', '..');
+}
+/**
+ * Free-port band for the proxy listeners: above the registered ports dev servers favour
+ * (3000, 5000, 8080, 9000...) and below Linux's ephemeral range (32768-60999), so an outgoing
+ * connection's local port can never be the one we picked.
+ */
+exports.PROXY_PORT_BAND = [20000, 32766];
+function canBind(port) {
+    return new Promise(resolve => {
+        const srv = net.createServer();
+        srv.once('error', () => resolve(false));
+        srv.listen({ host: constants_1.PROXY_LISTEN_HOST, port, exclusive: true }, () => srv.close(() => resolve(true)));
+    });
+}
+/**
+ * Pick the proxy's two listener ports: host = P, container = P + 1, a random pair in
+ * PROXY_PORT_BAND where both are free right now
+ * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
+ */
+async function allocateProxyPorts(probe = canBind, random = Math.random) {
+    const [lo, hi] = exports.PROXY_PORT_BAND;
+    for (let i = 0; i < 50; i++) {
+        const p = lo + Math.floor(random() * (hi - lo));
+        if ((await probe(p)) && (await probe(p + 1)))
+            return { port: p, containerPort: p + 1 };
+    }
+    throw new Error(`no free pair of loopback ports found in ${lo}-${hi + 1}`);
+}
+/** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
+async function installMitmproxy() {
+    await (0, install_1.installPinnedBinary)(constants_1.MITMPROXY_URL, constants_1.MITMPROXY_SHA256, 'mitmdump', constants_1.MITMDUMP_BIN, 'mitmproxy');
+}
+/** Create the proxy system user (idempotent). Returns its uid. */
+async function createProxyUser() {
+    const exists = await exec.exec('id', ['-u', constants_1.PROXY_USER], { ignoreReturnCode: true, silent: true });
+    if (exists !== 0) {
+        await (0, host_1.sudo)(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', constants_1.PROXY_USER]);
+    }
+    const { stdout } = await exec.getExecOutput('id', ['-u', constants_1.PROXY_USER], { silent: true });
+    return parseInt(stdout.trim(), 10);
+}
+/** Copy the addon out of the (runner-writable) action checkout into a root-owned directory. */
+async function installAddon() {
+    const src = path.join(actionRoot(), 'proxy');
+    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ADDON_DIR]);
+    for (const f of constants_1.ADDON_FILES) {
+        await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', path.join(src, f), path.join(constants_1.ADDON_DIR, f)]);
+    }
+}
+async function writePolicy(config) {
+    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', constants_1.ETC_DIR]);
+    await (0, host_1.sudoWrite)(constants_1.POLICY_FILE, JSON.stringify(config, null, 2) + '\n', '0644');
+    // The flow log is written by the proxy user and read (without sudo) by the post step.
+    await (0, host_1.sudo)(['touch', constants_1.FLOW_LOG]);
+    await (0, host_1.sudo)(['chown', `${constants_1.PROXY_USER}:${constants_1.PROXY_USER}`, constants_1.FLOW_LOG]);
+    await (0, host_1.sudo)(['chmod', '0644', constants_1.FLOW_LOG]);
+}
+/**
+ * Generate the per-run CA: RSA-2048 (broadest client compatibility), 3-day validity, key
+ * only ever on tmpfs, 0600, owned by the proxy user. mitmproxy mints leaf certs from it.
+ * Publishes the public certificate to CA_CERT_FILE.
+ */
+async function generateCa() {
+    await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(constants_1.PROXY_CONF_DIR)]);
+    await (0, host_1.sudo)(['install', '-d', '-m', '0700', '-o', constants_1.PROXY_USER, '-g', constants_1.PROXY_USER, constants_1.PROXY_CONF_DIR]);
+    const key = `${constants_1.PROXY_CONF_DIR}/ca-key.pem`;
+    const cert = `${constants_1.PROXY_CONF_DIR}/ca-cert.pem`;
+    const subject = `/O=safer-runner/CN=safer-runner ephemeral CA ${process.env.GITHUB_RUN_ID || ''}`.trim();
+    await (0, host_1.sudo)([
+        '-u',
+        constants_1.PROXY_USER,
+        'sh',
+        '-c',
+        'umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 ' +
+            `-keyout "$1" -out "$2" -subj "$3" ` +
+            '-addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign ' +
+            `&& cat "$1" "$2" > "$4" && rm -f "$1"`,
+        'sh',
+        key,
+        cert,
+        subject,
+        constants_1.PROXY_CA_KEY_FILE
+    ]);
+    // mitmproxy looks for <confdir>/mitmproxy-ca.pem (key + cert)
+    await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', cert, constants_1.CA_CERT_FILE]);
+}
+/**
+ * Root-owned teardown helper. The only privileged command the post step needs, so with
+ * disable-sudo it is the single extra sudoers entry (exact path, no arguments).
+ * Deleting the key on disk is all it does: the running proxy keeps the CA in memory so the
+ * runner can still finish the job through it; the VM is destroyed afterwards.
+ */
+async function installTeardownHelper() {
+    const script = `#!/bin/sh
+# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
+rm -f ${constants_1.PROXY_CA_KEY_FILE} ${constants_1.PROXY_CONF_DIR}/ca-key.pem ${constants_1.PROXY_CONF_DIR}/mitmproxy-ca.p12
+`;
+    await (0, host_1.sudoWrite)(constants_1.TEARDOWN_BIN, script, '0755');
+}
+function mitmdumpArgs(o) {
+    return [
+        constants_1.MITMDUMP_BIN,
+        // two transparent listeners: a connection's listener tells host from container traffic
+        '--mode',
+        `transparent@${constants_1.PROXY_LISTEN_HOST}:${o.port}`,
+        '--mode',
+        `transparent@${constants_1.PROXY_LISTEN_HOST}:${o.containerPort}`,
+        '--set',
+        `confdir=${constants_1.PROXY_CONF_DIR}`,
+        '--set',
+        'connection_strategy=lazy',
+        '--set',
+        `stream_large_bodies=${constants_1.PROXY_STREAM_LARGE_BODIES}`,
+        '--set',
+        'block_global=false',
+        '--set',
+        'flow_detail=0',
+        '--set',
+        'termlog_verbosity=warn',
+        '-s',
+        `${constants_1.ADDON_DIR}/policy.py`
+    ];
+}
+/**
+ * systemd-run: a transient service OUTSIDE the runner's process tree (the runner's orphan
+ * cleanup would otherwise kill it before "Complete job", which itself goes through the
+ * proxy), restarted on any exit, sandboxed to what it needs.
+ */
+function systemdRunArgs(o) {
+    return [
+        'systemd-run',
+        `--unit=${constants_1.PROXY_UNIT}`,
+        '--description=safer-runner egress proxy',
+        `--uid=${constants_1.PROXY_USER}`,
+        `--gid=${constants_1.PROXY_USER}`,
+        '-p',
+        'Restart=always',
+        '-p',
+        'RestartSec=1',
+        '-p',
+        'UMask=0077',
+        '-p',
+        'NoNewPrivileges=yes',
+        '-p',
+        'PrivateTmp=yes',
+        '-p',
+        'ProtectHome=yes',
+        '-p',
+        'ProtectSystem=strict',
+        '-p',
+        `ReadWritePaths=${constants_1.PROXY_CONF_DIR} ${constants_1.FLOW_LOG}`,
+        '-p',
+        'LimitNOFILE=65536',
+        `--setenv=HOME=${constants_1.PROXY_CONF_DIR}`,
+        `--setenv=SAFER_RUNNER_POLICY=${constants_1.POLICY_FILE}`,
+        ...mitmdumpArgs(o)
+    ];
+}
+/** Find the addon's startup record (written only after its own self-test passed). */
+function findStartRecord(flowLog) {
+    let found = null;
+    for (const line of flowLog.split('\n')) {
+        if (!line.includes('"ev": "start"'))
+            continue;
+        try {
+            const rec = JSON.parse(line);
+            if (rec.ev === 'start' && rec.ok === true)
+                found = rec;
+        }
+        catch {
+            // partial line
+        }
+    }
+    return found;
+}
+async function isListening(port) {
+    const { stdout } = await exec.getExecOutput('ss', ['-Hltn', `sport = :${port}`], {
+        silent: true,
+        ignoreReturnCode: true
+    });
+    return stdout.includes(`${constants_1.PROXY_LISTEN_HOST}:${port}`);
+}
+async function dumpProxyDiagnostics() {
+    const opts = { ignoreReturnCode: true };
+    await (0, host_1.sudo)(['systemctl', 'status', constants_1.PROXY_UNIT, '--no-pager', '-l'], opts);
+    await (0, host_1.sudo)(['journalctl', '-u', constants_1.PROXY_UNIT, '--no-pager', '-n', '50'], opts);
+}
+/** Start the proxy unit and wait until it listens and the policy addon reported a good start. */
+async function startProxy(o, timeoutMs = 90000) {
+    await (0, host_1.sudo)(['systemctl', 'stop', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
+    await (0, host_1.sudo)(['systemctl', 'reset-failed', constants_1.PROXY_UNIT], { ignoreReturnCode: true, silent: true });
+    await (0, host_1.sudo)(systemdRunArgs(o));
+    const deadline = Date.now() + timeoutMs;
+    await (0, host_1.timed)('proxy start', async () => {
+        while (Date.now() < deadline) {
+            const log = fs.existsSync(constants_1.FLOW_LOG) ? fs.readFileSync(constants_1.FLOW_LOG, 'utf8') : '';
+            const start = findStartRecord(log);
+            if (start && (await isListening(o.port)) && (await isListening(o.containerPort))) {
+                core.info(`✅ Proxy up (pid ${start.pid}, ${start.mode} policy loaded and self-tested)`);
+                return;
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+        await dumpProxyDiagnostics();
+        throw new Error(`proxy did not become ready within ${timeoutMs / 1000}s`);
+    });
+}
+
+
+/***/ }),
+
+/***/ 6479:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 CA trust injection (docs/DESIGN-v2.md section 5). Trust is not one store: the system
+ * bundle covers OpenSSL/GnuTLS consumers (curl, git, python ssl, .NET), Node and several
+ * language ecosystems need environment variables, and Java has its own keystores.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.trustEnv = trustEnv;
+exports.installSystemTrust = installSystemTrust;
+exports.exportTrustEnv = exportTrustEnv;
+exports.javaHomes = javaHomes;
+exports.cacertsPath = cacertsPath;
+exports.installJavaTrust = installJavaTrust;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const constants_1 = __nccwpck_require__(8729);
+const JAVA_ALIAS = 'safer-runner-ca';
+/**
+ * Environment exported to every later step via GITHUB_ENV. Set unconditionally whenever the
+ * proxy is active: they are a compatibility mechanism, not a security control.
+ */
+function trustEnv() {
+    return {
+        NODE_EXTRA_CA_CERTS: constants_1.CA_CERT_FILE,
+        NODE_USE_SYSTEM_CA: '1',
+        REQUESTS_CA_BUNDLE: constants_1.CA_BUNDLE,
+        PIP_CERT: constants_1.CA_BUNDLE,
+        SSL_CERT_FILE: constants_1.CA_BUNDLE,
+        GIT_SSL_CAINFO: constants_1.CA_BUNDLE,
+        AWS_CA_BUNDLE: constants_1.CA_BUNDLE,
+        CURL_CA_BUNDLE: constants_1.CA_BUNDLE
+    };
+}
+async function installSystemTrust() {
+    await exec.exec('sudo', ['install', '-m', '0644', '-o', 'root', '-g', 'root', constants_1.CA_CERT_FILE, constants_1.SYSTEM_CA_FILE]);
+    await exec.exec('sudo', ['update-ca-certificates'], { silent: true });
+    const bundle = fs.readFileSync(constants_1.CA_BUNDLE, 'utf8');
+    const ca = fs.readFileSync(constants_1.CA_CERT_FILE, 'utf8').trim();
+    if (!bundle.includes(ca.split('\n').slice(1, 3).join('\n'))) {
+        throw new Error(`update-ca-certificates did not add the CA to ${constants_1.CA_BUNDLE}`);
+    }
+}
+function exportTrustEnv() {
+    for (const [k, v] of Object.entries(trustEnv())) {
+        core.exportVariable(k, v);
+    }
+}
+/** JDK homes on the runner: JAVA_HOME plus every JAVA_HOME_<n>_<arch> the image sets. */
+function javaHomes(env = process.env) {
+    const homes = Object.entries(env)
+        .filter(([k, v]) => v && (k === 'JAVA_HOME' || /^JAVA_HOME_\d+_[A-Z0-9]+$/.test(k)))
+        .map(([, v]) => v);
+    return Array.from(new Set(homes));
+}
+/** The cacerts keystore of a JDK home (JDK 9+ layout, then JDK 8's jre/ layout). */
+function cacertsPath(home) {
+    for (const rel of ['lib/security/cacerts', 'jre/lib/security/cacerts']) {
+        const p = path.join(home, rel);
+        if (fs.existsSync(p))
+            return p;
+    }
+    return null;
+}
+/**
+ * Import the CA into the cacerts of every JDK present now. JDKs installed later (e.g. by
+ * actions/setup-java) are not covered - a documented gap.
+ */
+async function installJavaTrust() {
+    const done = new Set();
+    for (const home of javaHomes()) {
+        const store = cacertsPath(home);
+        const keytool = path.join(home, 'bin', 'keytool');
+        if (!store || !fs.existsSync(keytool))
+            continue;
+        const real = fs.realpathSync(store);
+        if (done.has(real))
+            continue;
+        done.add(real);
+        // -delete first so a re-run doesn't fail on an existing alias
+        await exec.exec('sudo', [keytool, '-delete', '-noprompt', '-keystore', real, '-storepass', 'changeit', '-alias', JAVA_ALIAS], {
+            ignoreReturnCode: true,
+            silent: true
+        });
+        const rc = await exec.exec('sudo', [
+            keytool,
+            '-importcert',
+            '-noprompt',
+            '-keystore',
+            real,
+            '-storepass',
+            'changeit',
+            '-alias',
+            JAVA_ALIAS,
+            '-file',
+            constants_1.CA_CERT_FILE
+        ], { ignoreReturnCode: true, silent: true });
+        if (rc === 0) {
+            core.info(`Java: CA imported into ${real}`);
+        }
+        else {
+            core.warning(`Java: could not import the CA into ${real} (exit ${rc})`);
+            done.delete(real);
+        }
+    }
+    return Array.from(done);
+}
+
+
+/***/ }),
+
+/***/ 3275:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Sudo logging and configuration module
+ * Handles sudo logging setup and removing the runner user's sudo (disable-sudo)
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
+exports.parseSudoFlavour = parseSudoFlavour;
+exports.detectSudoFlavour = detectSudoFlavour;
+exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
+exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
+exports.setupSudoLogging = setupSudoLogging;
+exports.getValidationSudoCommands = getValidationSudoCommands;
+exports.getRequiredSudoCommands = getRequiredSudoCommands;
+exports.disableSudoForRunner = disableSudoForRunner;
+exports.readSudoUsage = readSudoUsage;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const sudo_parser_1 = __nccwpck_require__(7516);
+const baseline_1 = __nccwpck_require__(1333);
+const constants_1 = __nccwpck_require__(8729);
+// Constants
+exports.RUNNER_USERNAME = 'runner';
+/** Classic sudo: sudoers drop-in enabling `Defaults logfile=` */
+exports.SUDO_LOGGING_SUDOERS_FILE = '/etc/sudoers.d/00-sudo-logging';
+/** sudo-rs: rsyslog rule copying sudo's syslog messages into the safer-runner log file */
+exports.SUDO_LOGGING_RSYSLOG_FILE = '/etc/rsyslog.d/10-sudo-safer-runner.conf';
+const SUDOERS_TEMP_FILE = `/tmp/${exports.RUNNER_USERNAME}-sudoers.tmp`;
+const SUDO_LOGGING_TEMP_FILE = '/tmp/safer-runner-sudo-logging.tmp';
+/**
+ * Determine the sudo implementation from `sudo --version` output
+ * sudo-rs prints "sudo-rs 0.2.13-0ubuntu1.2", classic sudo prints "Sudo version 1.9.15p5"
+ */
+function parseSudoFlavour(versionOutput) {
+    return /^\s*sudo-rs\b/im.test(versionOutput) ? 'sudo-rs' : 'sudo';
+}
+/**
+ * Detect which sudo implementation is active on the runner
+ */
+async function detectSudoFlavour() {
+    try {
+        const { stdout } = await exec.getExecOutput('sudo', ['--version'], { silent: true, ignoreReturnCode: true });
+        return parseSudoFlavour(stdout);
+    }
+    catch {
+        return 'sudo';
+    }
+}
+/**
+ * Path of the config file that enables sudo logging for the given sudo implementation
+ * This file is added to the integrity validation baseline
+ */
+function getSudoLoggingConfigFile(flavour) {
+    return flavour === 'sudo-rs' ? exports.SUDO_LOGGING_RSYSLOG_FILE : exports.SUDO_LOGGING_SUDOERS_FILE;
+}
+/**
+ * Build the rsyslog rule used on sudo-rs to capture sudo usage into a dedicated log file
+ *
+ * sudo-rs logs "runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/id" to syslog.
+ * The template prefixes it with an RFC3164 timestamp so the file matches the
+ * classic sudo logfile format understood by parsers/sudo-parser.ts.
+ */
+function buildSudoRsyslogConfig(logFile) {
+    return `template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")
+if $programname == 'sudo' and $msg contains 'COMMAND=' then {
+  action(type="omfile" file="${logFile}" template="SaferRunnerSudo")
+}
+`;
+}
+/**
+ * Configure sudo logging to capture all sudo usage
+ * Logs to specified file for visibility and auditability
+ *
+ * - Classic sudo: `Defaults logfile=<logFile>` sudoers drop-in
+ * - sudo-rs: rsyslog rule filtering sudo's syslog messages into <logFile>
+ *
+ * Must run while the runner still has unrestricted sudo (i.e. before
+ * disableSudoForRunner).
+ *
+ * @param logFile - Path to sudo log file (e.g., /var/log/safer-runner/main-sudo.log)
+ * @param flavour - Sudo implementation (detected if omitted)
+ */
+async function setupSudoLogging(logFile, flavour) {
+    const sudoFlavour = flavour ?? (await detectSudoFlavour());
+    core.info(`Configuring sudo logging to ${logFile} (${sudoFlavour})...`);
+    // Create the log file and make it readable by the runner
+    await exec.exec('sudo', ['touch', logFile]);
+    await exec.exec('sudo', ['chmod', '0644', logFile]);
+    if (sudoFlavour === 'sudo-rs') {
+        // sudo-rs has no logfile setting - capture its syslog output with rsyslog instead
+        await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
+        await exec.exec('sudo', ['tee', exports.SUDO_LOGGING_RSYSLOG_FILE], {
+            input: Buffer.from(buildSudoRsyslogConfig(logFile)),
+            silent: true
+        });
+        await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+    }
+    else {
+        // Stage the drop-in and move it into place last, so logging starts with no
+        // further setup commands to capture (sudoers files must be 0440 root:root)
+        await exec.exec('sudo', ['tee', SUDO_LOGGING_TEMP_FILE], {
+            input: Buffer.from(`Defaults logfile=${logFile}\nDefaults loglinelen=0\n`),
+            silent: true
+        });
+        await exec.exec('sudo', ['chmod', '0440', SUDO_LOGGING_TEMP_FILE]);
+        await exec.exec('sudo', ['chown', 'root:root', SUDO_LOGGING_TEMP_FILE]);
+        await exec.exec('sudo', ['mv', SUDO_LOGGING_TEMP_FILE, exports.SUDO_LOGGING_SUDOERS_FILE]);
+    }
+    core.info(`✅ Sudo logging configured to ${logFile}`);
+}
+/**
+ * Commands run by post-action integrity validation (see src/integrity/baseline.ts)
+ * These are the only sudo commands the runner keeps after sudo is restricted.
+ */
+function getValidationSudoCommands() {
+    const files = [
+        ...baseline_1.CRITICAL_FILES,
+        constants_1.DOCKER_DAEMON_JSON,
+        exports.SUDO_LOGGING_SUDOERS_FILE,
+        exports.SUDO_LOGGING_RSYSLOG_FILE,
+        constants_1.VALIDATION_STATE_FILE
+    ];
+    return [
+        ...files.map(file => `/usr/bin/cat ${file}`),
+        ...baseline_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, baseline_1.iptablesListArgs)(chain).join(' ')}`),
+        // post-step teardown (destroys the CA key). `""` = no arguments allowed.
+        `${constants_1.TEARDOWN_BIN} ""`
+    ];
+}
+/**
+ * Sudo commands run by the action itself while sudo logging is active
+ * Filtered out of sudo reports - they are internal operations, not workflow activity.
+ * Paths are matched by basename so /usr/sbin vs /usr/bin resolution doesn't matter.
+ */
+exports.INTERNAL_SUDO_COMMANDS = [
+    ...getValidationSudoCommands(),
+    // disableSudoForRunner()
+    `tee ${SUDOERS_TEMP_FILE}`,
+    `visudo -c -f ${SUDOERS_TEMP_FILE}`,
+    `chmod 0440 ${SUDOERS_TEMP_FILE}`,
+    `chown root:root ${SUDOERS_TEMP_FILE}`,
+    `mv ${SUDOERS_TEMP_FILE} /etc/sudoers.d/${exports.RUNNER_USERNAME}`,
+    `rm -f ${SUDOERS_TEMP_FILE}`,
+    // setupSudoLogging() on sudo-rs
+    'systemctl restart rsyslog',
+    // SystemValidator.writeBaseline()
+    ...baseline_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
+    constants_1.TEARDOWN_BIN
+].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
+/**
+ * Generate the sudoers rules the action always needs for post-action validation
+ *
+ * Only exact read-only commands are allowed: no wildcards (embedded wildcards are
+ * unsupported by sudo-rs, and any wildcard matches arbitrary extra arguments), and nothing that can
+ * write files or modify sudo/syslog configuration.
+ *
+ * @param username - The username to generate rules for
+ * @returns Sudoers configuration string with required commands
+ */
+function getRequiredSudoCommands(username = exports.RUNNER_USERNAME) {
+    const commands = getValidationSudoCommands();
+    return `
+# Required commands for post-action validation
+# These are automatically added by safer-runner-action
+Cmnd_Alias SAFER_RUNNER_VALIDATION = ${commands.join(', \\\n    ')}
+
+${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
+`;
+}
+/**
+ * Disable sudo access for the runner user
+ * This prevents malicious code from using sudo to bypass security controls
+ *
+ * Replaces the sudoers file with only the read-only commands needed for
+ * post-action integrity validation (see getValidationSudoCommands()). The file is checked
+ * with the active visudo (visudo-rs on sudo-rs systems) before it is moved into place.
+ */
+async function disableSudoForRunner(flavour) {
+    core.info('Restricting sudo access to validation commands only');
+    const sudoersFile = `/etc/sudoers.d/${exports.RUNNER_USERNAME}`;
+    const tempFile = SUDOERS_TEMP_FILE;
+    const config = `# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation.
+# All other sudo commands will be denied.
+${getRequiredSudoCommands(exports.RUNNER_USERNAME)}`;
+    await exec.exec('sudo', ['tee', tempFile], { input: Buffer.from(config + '\n') });
+    const visudo = await exec.getExecOutput('sudo', ['visudo', '-c', '-f', tempFile], { ignoreReturnCode: true });
+    if (visudo.exitCode !== 0) {
+        await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
+        const sudoFlavour = flavour ?? (await detectSudoFlavour());
+        throw new Error(`Generated sudoers rejected by visudo (${sudoFlavour}): ${(visudo.stderr || visudo.stdout).trim()}`);
+    }
+    // Set permissions before moving into place
+    await exec.exec('sudo', ['chmod', '0440', tempFile]);
+    await exec.exec('sudo', ['chown', 'root:root', tempFile]);
+    await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
+    core.info(`🔒 ${exports.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
+}
+/**
+ * Read the sudo log and split it into the workflow's own commands, refused attempts and the
+ * action's own commands (so the report never counts the action's sudo as the workflow's).
+ */
+function readSudoUsage(logFile) {
+    try {
+        if (fs.existsSync(logFile)) {
+            return (0, sudo_parser_1.classifySudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), exports.INTERNAL_SUDO_COMMANDS);
+        }
+    }
+    catch (error) {
+        core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+    }
+    return { ran: [], refused: [], internal: [] };
+}
+
+
+/***/ }),
+
+/***/ 775:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 setup orchestration. Runs once per job - in the pre step (so the policy is enforced for
+ * every later action's pre-hook too, review H2), or in the main step if pre did not run.
+ *
+ * Order (each step depends on the previous):
+ *   allowlist (api.github.com/meta, before DNS changes) -> install (pinned CoreDNS + pinned
+ *   mitmdump + conntrack, in parallel) -> users -> addon + policy + CA -> start proxy (waits for
+ *   the addon's own self-test) -> trust (system store, GITHUB_ENV, Java) -> DNS (CoreDNS up
+ *   first, then resolv.conf points at it) -> dockerd restart so it
+ *   trusts the CA (F1) -> firewall (nat REDIRECT + filter, plus the container DNAT /
+ *   DOCKER-USER rules when docker runs) -> kill pre-existing :443 and container flows ->
+ *   live self-tests -> docker access -> sudo logging -> integrity baseline -> sudo
+ *   restriction (last).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
+exports.setupCompleted = setupCompleted;
+exports.installPackages = installPackages;
+exports.inJobContainer = inJobContainer;
+exports.applyDockerPolicy = applyDockerPolicy;
+exports.runSetup = runSetup;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const constants_1 = __nccwpck_require__(8729);
+const flowlog_1 = __nccwpck_require__(5422);
+const iptables_1 = __nccwpck_require__(9374);
+const policy_1 = __nccwpck_require__(2224);
+const mitmproxy_1 = __nccwpck_require__(2145);
+const selftest_1 = __nccwpck_require__(42);
+const coredns_1 = __nccwpck_require__(5212);
+const github_domains_1 = __nccwpck_require__(2268);
+const sudo_1 = __nccwpck_require__(3275);
+const docker_1 = __nccwpck_require__(6362);
+const trust_1 = __nccwpck_require__(6479);
+const baseline_1 = __nccwpck_require__(1333);
+/** Root-owned marker written when setup completed; checked by main (pre may not have run). */
+exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
+/** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
+const DNS_READY_NAME = 'github.com';
+/**
+ * Create /var/log/safer-runner directory with proper permissions
+ * This directory will contain all safer-runner log files (DNS, iptables, sudo)
+ */
+async function createLogDirectory() {
+    const logDir = '/var/log/safer-runner';
+    // Create directory
+    await exec.exec('sudo', ['mkdir', '-p', logDir]);
+    // Set ownership to syslog:adm (rsyslog runs as syslog, runner is in adm group)
+    await exec.exec('sudo', ['chown', 'syslog:adm', logDir]);
+    // Make directory readable by all (so runner can read logs without sudo)
+    await exec.exec('sudo', ['chmod', '755', logDir]);
+}
+function setupCompleted() {
+    return fs.existsSync(exports.SETUP_MARKER);
+}
+async function timed(label, fn) {
+    const t0 = Date.now();
+    try {
+        return await core.group(label, fn);
+    }
+    finally {
+        core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    }
+}
+/**
+ * apt packages: conntrack only (flushes container flows that predate the container rules; not
+ * on the image). Only refreshes the apt index if a plain install fails (saves ~10s).
+ */
+async function installPackages() {
+    const opts = { ignoreReturnCode: true };
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
+    const install = ['apt-get', 'install', '-y', '-qq', '--no-install-recommends', 'conntrack'];
+    if ((await exec.exec('sudo', ['-E', ...install], { ...opts, env })) === 0)
+        return;
+    await exec.exec('sudo', ['apt-get', 'update', '-qq']);
+    await exec.exec('sudo', ['-E', ...install], { env });
+}
+/**
+ * F3: with a job `container:`, JS actions run INSIDE that container (as root, no sudo, no
+ * access to the host's iptables), so the action cannot apply anything to the runner VM.
+ */
+function inJobContainer(exists = fs.existsSync) {
+    return exists('/.dockerenv') || exists('/run/.containerenv');
+}
+exports.JOB_CONTAINER_MESSAGE = 'safer-runner cannot protect a job that runs in a job `container:` - the action runs inside the ' +
+    'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
+    '`services:` and `docker run` steps instead (their egress is controlled).';
+/**
+ * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
+ * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
+ * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ */
+async function applyDockerPolicy(inputs, ops = { disableDockerForRunner: docker_1.disableDockerForRunner, stopDockerService: docker_1.stopDockerService, readDockerState: docker_1.readDockerState }) {
+    const { mode, docker } = inputs;
+    const failures = docker === 'stop'
+        ? await ops.stopDockerService()
+        : docker === 'remove-group'
+            ? await ops.disableDockerForRunner()
+            : [];
+    const state = await ops.readDockerState();
+    const access = (0, docker_1.dockerAccess)(state);
+    core.info(`docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+        `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`);
+    if (docker !== 'keep' && access === 'retained') {
+        const msg = `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
+            (failures.length ? `: ${failures.join('; ')}` : '');
+        if (mode === 'enforce')
+            throw new Error(msg);
+        core.warning(msg);
+    }
+    else if (failures.length) {
+        core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
+    }
+    if (mode === 'enforce' && access === 'retained') {
+        core.warning('enforce is ADVISORY in this job: docker is retained (docker: keep), and docker access is root-equivalent, ' +
+            'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
+            'or docker: stop unless the job needs docker.', { title: 'safer-runner: enforce (ADVISORY - docker retained)' });
+    }
+    return { requested: docker, access, state };
+}
+async function runSetup(inputs) {
+    const { mode } = inputs;
+    core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
+    if (inJobContainer()) {
+        if (mode === 'enforce')
+            throw new Error(exports.JOB_CONTAINER_MESSAGE);
+        core.warning(`${exports.JOB_CONTAINER_MESSAGE} Analyze mode: nothing is monitored in this job.`, {
+            title: 'safer-runner: job container not supported'
+        });
+        return;
+    }
+    // enforce without sudo removal is advisory: any step can sudo the controls away (review H2)
+    const sudoRetained = mode === 'enforce' && !inputs.disableSudo;
+    if (sudoRetained) {
+        core.warning('enforce is ADVISORY in this job: sudo is retained (disable-sudo: false), so any step can use it to ' +
+            'remove the egress controls. This is not an enforced boundary. Remove disable-sudo: false to make ' +
+            'enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo retained)' });
+    }
+    else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
+        core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
+    }
+    if (mode === 'enforce' && inputs.dockerDefaulted) {
+        core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
+    }
+    const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
+    core.info(`sudo implementation: ${sudoFlavour}`);
+    const ports = await (0, mitmproxy_1.allocateProxyPorts)();
+    core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
+    // 1. Allowlist - fetched while normal DNS and direct egress still work
+    const { domains: githubDomains, source } = await (0, github_domains_1.resolveGitHubDomains)();
+    core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
+    const { config: policy, warnings } = (0, policy_1.buildPolicyConfig)({
+        mode,
+        githubDomains,
+        allowedDomains: inputs.allowedDomains,
+        passthroughDomains: inputs.passthroughDomains,
+        blockRiskySubdomains: inputs.blockRiskySubdomains,
+        containerPort: ports.containerPort,
+        httpFilter: inputs.httpFilter,
+        allowGithubPlatform: inputs.allowGithubPlatform
+    });
+    for (const w of warnings)
+        core.warning(w);
+    core.info(`Policy: ${policy.allow.length} allowed, passthrough [${policy.passthrough.join(', ')}], deny [${policy.deny.join(', ')}]`);
+    if (policy.http_filter.hosts.length) {
+        core.info(`http-filter: ${policy.http_filter.hosts.length} filtered host(s) [${policy.http_filter.hosts.map(h => h.host).join(', ')}], ` +
+            `${policy.http_filter.platform_auto_allowed} platform endpoint(s) auto-allowed, ` +
+            `${policy.http_filter.platform_optional} more unless a rule of the job's matches`);
+    }
+    const { dnsServers } = inputs;
+    // 2. Install (parallel - both are network-bound)
+    await timed('Install CoreDNS + mitmproxy', () => Promise.all([installPackages(), (0, coredns_1.installCoreDns)(), (0, mitmproxy_1.installMitmproxy)()]));
+    // 3. Users, addon, policy, CA
+    await createLogDirectory();
+    const dnsUser = await (0, coredns_1.createRandomDNSUser)();
+    const proxyUid = await (0, mitmproxy_1.createProxyUser)();
+    core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
+    await (0, mitmproxy_1.installAddon)();
+    await (0, mitmproxy_1.writePolicy)(policy);
+    await (0, mitmproxy_1.generateCa)();
+    await (0, mitmproxy_1.installTeardownHelper)();
+    // 4. Proxy
+    await timed('Start proxy', () => (0, mitmproxy_1.startProxy)(ports));
+    // 5. Trust - before any traffic is forced through the proxy
+    await timed('Install CA trust', async () => {
+        await (0, trust_1.installSystemTrust)();
+        (0, trust_1.exportTrustEnv)();
+        await (0, trust_1.installJavaTrust)();
+    });
+    // 6. DNS
+    await timed('Configure DNS', async () => {
+        // same names as the proxy: DNS and the proxy can never disagree about what is allowed
+        await (0, coredns_1.writeCorefile)({
+            mode,
+            allow: [...policy.allow, ...policy.passthrough],
+            deny: policy.deny,
+            upstreams: dnsServers,
+            hosts: await (0, coredns_1.localHosts)()
+        });
+        await (0, coredns_1.startCoreDns)(dnsUser.username, DNS_READY_NAME);
+        await (0, coredns_1.setupDNSConfig)();
+        await (0, coredns_1.restartResolved)();
+    });
+    // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
+    // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
+    const dockerActive = inputs.docker !== 'stop' && (await (0, docker_1.isDockerActive)());
+    let dockerConfigWritten = false;
+    if (dockerActive) {
+        const services = await (0, docker_1.runningContainers)();
+        if (inputs.docker === 'keep' || services.length > 0) {
+            dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => (0, docker_1.restartDockerForCaTrust)());
+        }
+    }
+    // 8. Firewall
+    let containerRules = false;
+    await timed('Configure firewall', async () => {
+        const prefixes = [constants_1.LOG_PREFIX_DROP, constants_1.LOG_PREFIX_ANALYZE, constants_1.LOG_PREFIX_CDROP, constants_1.LOG_PREFIX_CEGRESS].map(p => p.trim());
+        await (0, iptables_1.setupIptablesLogging)(constants_1.FIREWALL_LOG, prefixes, 'v2');
+        await (0, iptables_1.detectEgressInterface)();
+        ({ containerRules } = await (0, iptables_1.applyFirewall)({
+            mode,
+            proxyUid,
+            dnsUid: dnsUser.uid,
+            proxyPort: ports.port,
+            containerProxyPort: ports.containerPort,
+            containers: dockerActive,
+            dnsServers
+        }));
+        await (0, iptables_1.killPreexistingConnections)();
+        if (containerRules)
+            await (0, iptables_1.flushContainerConntrack)();
+        await (0, iptables_1.logFirewall)();
+    });
+    // 9. Prove it on this runner
+    const selfTestFrom = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
+    const dnsSelfTestName = (0, selftest_1.dnsProbeName)([...policy.allow, ...policy.passthrough]);
+    const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode, dnsSelfTestName));
+    await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
+    const selfTestWindow = [selfTestFrom, (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG)];
+    await exec.exec('sudo', ['tee', constants_1.SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
+    await exec.exec('sudo', ['chmod', '0644', constants_1.SELFTEST_FILE]);
+    const failed = results.filter(r => !r.ok);
+    if (failed.length > 0) {
+        const msg = `self-test failed: ${failed.map(f => `${f.name} (${f.detail})`).join('; ')}`;
+        if (mode === 'enforce')
+            throw new Error(msg);
+        core.warning(msg);
+    }
+    // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
+    const docker = await applyDockerPolicy(inputs);
+    await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
+        input: Buffer.from(JSON.stringify({
+            mode,
+            sudoRetained,
+            dockerRetained: docker.access === 'retained',
+            docker,
+            failOnTampering: inputs.failOnTampering,
+            containerTls: policy_1.CONTAINER_TLS,
+            containerRules,
+            proxyPorts: [ports.port, ports.containerPort],
+            selfTestWindow,
+            dnsSelfTestName,
+            at: new Date().toISOString()
+        }) + '\n'),
+        silent: true
+    });
+    await (0, sudo_1.setupSudoLogging)(constants_1.SUDO_LOG, sudoFlavour);
+    const validator = new baseline_1.SystemValidator([
+        ...baseline_1.CRITICAL_FILES,
+        (0, sudo_1.getSudoLoggingConfigFile)(sudoFlavour),
+        ...(dockerConfigWritten ? [constants_1.DOCKER_DAEMON_JSON] : [])
+    ]);
+    await validator.capturePostSetupBaseline();
+    if (inputs.disableSudo) {
+        await (0, sudo_1.disableSudoForRunner)(sudoFlavour);
+    }
+    core.info(`✅ safer-runner v2 active in ${mode} mode`);
+}
+
+
+/***/ }),
+
+/***/ 42:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Runtime self-tests, run on every job right after the firewall is in place. They prove on
+ * the live runner that (1) the SNI-level check actually fires (not just the Host check -
+ * the P0 spike once had SNI enforcement silently off for a whole run) and (2) the proxy
+ * repoints: it ignores the IP the client dialled and connects to the name instead; and (3) the
+ * resolver applies exact-FQDN semantics: a random subdomain of an exact entry is refused on
+ * the runner (enforce) and labelled in the DNS log.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.REPOINT_PATH = exports.REPOINT_HOST = void 0;
+exports.sniBlockSelfTest = sniBlockSelfTest;
+exports.repointSelfTest = repointSelfTest;
+exports.dnsProbeName = dnsProbeName;
+exports.dnsExactSelfTest = dnsExactSelfTest;
+exports.runSelfTests = runSelfTests;
+exports.isSelfTestRecord = isSelfTestRecord;
+exports.withoutSelfTests = withoutSelfTests;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const crypto = __importStar(__nccwpck_require__(6982));
+const fs = __importStar(__nccwpck_require__(9896));
+const constants_1 = __nccwpck_require__(8729);
+const flowlog_1 = __nccwpck_require__(5422);
+const coredns_1 = __nccwpck_require__(5212);
+const dns_parser_1 = __nccwpck_require__(1106);
+const policy_1 = __nccwpck_require__(2224);
+/**
+ * The repoint probe: a bodiless GET of this fixed public file. The addon recognises exactly this
+ * request dialled at SELFTEST_BOGUS_IP (policy_core.is_selftest_probe) and exempts it from
+ * http-filter, so a job's filter on this host cannot fail setup. Checked against
+ * proxy/test-vectors.json "selftest_probe".
+ */
+exports.REPOINT_HOST = 'github.com';
+exports.REPOINT_PATH = '/robots.txt';
+async function curl(args) {
+    const r = await exec.getExecOutput('curl', ['-sS', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}', ...args], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    return { code: r.exitCode, out: (r.stdout + r.stderr).trim() };
+}
+async function waitFor(from, pred, ms = 5000) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+        const hit = (0, flowlog_1.readFlowLog)(constants_1.FLOW_LOG, from).find(pred);
+        if (hit)
+            return hit;
+        await new Promise(r => setTimeout(r, 200));
+    }
+    return null;
+}
+async function sniBlockSelfTest(mode) {
+    const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
+    const want = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
+    const r = await curl(['--resolve', `${constants_1.SELFTEST_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`, `https://${constants_1.SELFTEST_HOST}/`]);
+    const rec = await waitFor(from, x => x.ev === 'tls' && x.sni === constants_1.SELFTEST_HOST && x.layer === 'sni');
+    const ok = rec !== null && rec.verdict === want && (mode === 'analyze' || r.code !== 0);
+    return {
+        name: 'sni-block',
+        ok,
+        detail: rec
+            ? `SNI ${constants_1.SELFTEST_HOST} -> ${rec.verdict} (${rec.reason}); curl exit ${r.code}`
+            : `no SNI-layer record (curl: ${r.out})`
+    };
+}
+async function repointSelfTest() {
+    const from = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
+    const r = await curl([
+        '--resolve',
+        `${exports.REPOINT_HOST}:443:${constants_1.SELFTEST_BOGUS_IP}`,
+        `https://${exports.REPOINT_HOST}${exports.REPOINT_PATH}`
+    ]);
+    const rec = await waitFor(from, x => (x.ev === 'https' || x.ev === 'http') && x.host === exports.REPOINT_HOST && (0, flowlog_1.ipOf)(x.dst) === constants_1.SELFTEST_BOGUS_IP);
+    const upstream = (0, flowlog_1.ipOf)(rec?.upstream);
+    const ok = r.out === '200' && rec !== null && upstream !== '' && upstream !== constants_1.SELFTEST_BOGUS_IP;
+    return {
+        name: 'repoint',
+        ok,
+        detail: rec
+            ? `client dialled ${constants_1.SELFTEST_BOGUS_IP}, proxy connected to ${rec.upstream} (HTTP ${r.out})`
+            : `no flow record for the repoint probe (curl: ${r.out})`
+    };
+}
+/** Preferred parent for the DNS probe: exact in the GitHub list, under no wildcard. */
+const DNS_PROBE_PARENT = 'objects.githubusercontent.com';
+/**
+ * A fresh name under an exact allowlist entry that no pattern allows - what a step would use to
+ * tunnel data through an allowlisted zone. Null if every exact entry sits under a wildcard.
+ */
+function dnsProbeName(allow, rand = crypto.randomBytes(6).toString('hex')) {
+    const compiled = allow.map(policy_1.compilePattern);
+    const exact = allow.filter(p => !p.includes('*'));
+    const parents = [...exact.filter(p => p === DNS_PROBE_PARENT), ...exact];
+    for (const parent of parents) {
+        const name = `srst-${rand}.${parent}`;
+        if (!(0, policy_1.matchesAny)(name, compiled))
+            return name;
+    }
+    return null;
+}
+async function dnsExactSelfTest(mode, name) {
+    if (!name)
+        return { name: 'dns-exact', ok: true, detail: 'no exact allowlist entry to probe (skipped)' };
+    const want = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
+    const answer = await (0, coredns_1.probe)(name);
+    let logged = false;
+    for (let i = 0; i < 15 && !logged; i++) {
+        const log = fs.existsSync(constants_1.DNS_LOG) ? fs.readFileSync(constants_1.DNS_LOG, 'utf8') : '';
+        logged = (0, dns_parser_1.parseDnsLog)(log).some(q => q.name === name && q.verdict === want);
+        if (!logged)
+            await new Promise(r => setTimeout(r, 200));
+    }
+    const ok = logged && (mode === 'analyze' || answer === 'NXDOMAIN');
+    return {
+        name: 'dns-exact',
+        ok,
+        detail: `${name} -> ${answer}; DNS log ${logged ? `labels it ${want}` : `has no ${want} line`}`
+    };
+}
+async function runSelfTests(mode, dnsName) {
+    const results = [await sniBlockSelfTest(mode), await repointSelfTest(), await dnsExactSelfTest(mode, dnsName)];
+    for (const t of results) {
+        (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
+    }
+    return results;
+}
+/** The decision records the two probes above produce. */
+function isSelfTestRecord(r) {
+    if (r.sni === constants_1.SELFTEST_HOST || r.host === constants_1.SELFTEST_HOST)
+        return true;
+    return (0, flowlog_1.ipOf)(r.dst) === constants_1.SELFTEST_BOGUS_IP && (r.sni === exports.REPOINT_HOST || r.host === exports.REPOINT_HOST);
+}
+/**
+ * Flow records without the action's own self-test probes, so the report doesn't list them as
+ * the job's traffic. Only records inside the self-test window (written before any job step
+ * ran) are dropped - otherwise a step could hide traffic by dialling 192.0.2.1. Without a
+ * window only the `.invalid` probe name is dropped: it never resolves and carries nothing.
+ */
+function withoutSelfTests(records, offsets, window) {
+    return records.filter((r, i) => {
+        if (!isSelfTestRecord(r))
+            return true;
+        if (!window)
+            return !(r.sni === constants_1.SELFTEST_HOST || r.host === constants_1.SELFTEST_HOST);
+        return !(offsets[i] >= window[0] && offsets[i] < window[1]);
+    });
+}
+
+
+/***/ }),
+
+/***/ 7020:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Privileged-command helpers shared by the services (sudo, root-owned file writes, timing).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.sudo = sudo;
+exports.sudoWrite = sudoWrite;
+exports.timed = timed;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+async function sudo(args, opts = {}) {
+    return exec.exec('sudo', args, opts);
+}
+async function sudoWrite(file, content, mode, owner = 'root:root') {
+    await sudo(['tee', file], { input: Buffer.from(content), silent: true });
+    await sudo(['chown', owner, file]);
+    await sudo(['chmod', mode, file]);
+}
+async function timed(label, fn) {
+    const t0 = Date.now();
+    try {
+        return await fn();
+    }
+    finally {
+        core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    }
+}
+
+
+/***/ }),
+
+/***/ 1671:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Pinned, sha256-verified downloads of the release tarballs the services run (mitmproxy, CoreDNS).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.downloadVerified = downloadVerified;
+exports.installPinnedBinary = installPinnedBinary;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const crypto = __importStar(__nccwpck_require__(6982));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const host_1 = __nccwpck_require__(7020);
+/**
+ * Download a pinned release artefact and verify its sha256 before anything touches it
+ * (3 attempts on network errors; a digest mismatch fails immediately).
+ */
+async function downloadVerified(url, sha256, dest, label) {
+    await (0, host_1.timed)(`download ${label}`, async () => {
+        let lastError;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                const res = await fetch(url);
+                if (!res.ok)
+                    throw new Error(`HTTP ${res.status}`);
+                const buf = Buffer.from(await res.arrayBuffer());
+                const digest = crypto.createHash('sha256').update(buf).digest('hex');
+                if (digest !== sha256) {
+                    throw new Error(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
+                }
+                fs.writeFileSync(dest, buf);
+                return;
+            }
+            catch (e) {
+                lastError = e;
+                if (String(e).includes('sha256 mismatch'))
+                    break;
+                core.warning(`${label} download attempt ${attempt} failed: ${e}`);
+            }
+        }
+        throw new Error(`could not download ${label}: ${lastError}`);
+    });
+}
+/**
+ * Install one binary from a pinned, sha256-verified release tarball, root-owned 0755.
+ * Skipped if the destination already exists (a re-run on the same VM).
+ */
+async function installPinnedBinary(url, sha256, member, dest, label) {
+    if (fs.existsSync(dest)) {
+        core.info(`${label} already installed at ${dest}`);
+        return;
+    }
+    const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
+    const tarball = path.join(tmp, `${label}.tar.gz`);
+    await downloadVerified(url, sha256, tarball, label);
+    await (0, host_1.timed)(`extract ${label}`, async () => {
+        await exec.exec('tar', ['-xzf', tarball, '-C', tmp, member]);
+        await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)]);
+        await (0, host_1.sudo)(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest]);
+    });
+    fs.rmSync(tmp, { recursive: true, force: true });
+}
 
 
 /***/ }),

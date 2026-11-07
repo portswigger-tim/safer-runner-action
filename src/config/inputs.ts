@@ -9,8 +9,8 @@
 
 import * as core from '@actions/core';
 import * as net from 'net';
-import { GIT_HOSTS, expandPattern, gitPatternKey, validatePathPattern, validatePattern } from './policy';
-import type { HttpFilterHost, Mode } from './policy';
+import { GIT_HOSTS, expandPattern, gitPatternKey, validatePathPattern, validatePattern } from '../policy';
+import type { HttpFilterHost, Mode } from '../policy';
 import { LineCounter, isAlias, isMap, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import type { Node, Pair, Scalar, YAMLMap } from 'yaml';
 

@@ -8,7 +8,7 @@ import {
   normalizeMetaDomain,
   fetchGitHubActionsDomains,
   resolveGitHubDomains
-} from './github-parser';
+} from './github-domains';
 
 describe('GitHub Parser', () => {
   describe('getGitHubRequiredDomains (generated meta snapshot + extras)', () => {

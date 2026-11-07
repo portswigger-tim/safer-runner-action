@@ -5,7 +5,6 @@
 
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
@@ -26,8 +25,10 @@ import {
   PROXY_UNIT,
   PROXY_USER,
   TEARDOWN_BIN
-} from './constants';
-import type { PolicyConfig } from './policy';
+} from '../../constants';
+import { sudo, sudoWrite, timed } from '../../system/host';
+import { installPinnedBinary } from '../../system/install';
+import type { PolicyConfig } from '../../policy';
 
 export interface ProxyOptions {
   /** host listener (nat OUTPUT REDIRECT) */
@@ -76,79 +77,6 @@ export async function allocateProxyPorts(
     if ((await probe(p)) && (await probe(p + 1))) return { port: p, containerPort: p + 1 };
   }
   throw new Error(`no free pair of loopback ports found in ${lo}-${hi + 1}`);
-}
-
-async function sudo(args: string[], opts: exec.ExecOptions = {}): Promise<number> {
-  return exec.exec('sudo', args, opts);
-}
-
-async function sudoWrite(file: string, content: string, mode: string, owner = 'root:root'): Promise<void> {
-  await sudo(['tee', file], { input: Buffer.from(content), silent: true });
-  await sudo(['chown', owner, file]);
-  await sudo(['chmod', mode, file]);
-}
-
-async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
-  const t0 = Date.now();
-  try {
-    return await fn();
-  } finally {
-    core.info(`⏱ ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-  }
-}
-
-/**
- * Download a pinned release artefact and verify its sha256 before anything touches it
- * (3 attempts on network errors; a digest mismatch fails immediately).
- */
-export async function downloadVerified(url: string, sha256: string, dest: string, label: string): Promise<void> {
-  await timed(`download ${label}`, async () => {
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const buf = Buffer.from(await res.arrayBuffer());
-        const digest = crypto.createHash('sha256').update(buf).digest('hex');
-        if (digest !== sha256) {
-          throw new Error(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
-        }
-        fs.writeFileSync(dest, buf);
-        return;
-      } catch (e) {
-        lastError = e;
-        if (String(e).includes('sha256 mismatch')) break;
-        core.warning(`${label} download attempt ${attempt} failed: ${e}`);
-      }
-    }
-    throw new Error(`could not download ${label}: ${lastError}`);
-  });
-}
-
-/**
- * Install one binary from a pinned, sha256-verified release tarball, root-owned 0755.
- * Skipped if the destination already exists (a re-run on the same VM).
- */
-export async function installPinnedBinary(
-  url: string,
-  sha256: string,
-  member: string,
-  dest: string,
-  label: string
-): Promise<void> {
-  if (fs.existsSync(dest)) {
-    core.info(`${label} already installed at ${dest}`);
-    return;
-  }
-  const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
-  const tarball = path.join(tmp, `${label}.tar.gz`);
-  await downloadVerified(url, sha256, tarball, label);
-  await timed(`extract ${label}`, async () => {
-    await exec.exec('tar', ['-xzf', tarball, '-C', tmp, member]);
-    await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)]);
-    await sudo(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest]);
-  });
-  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 /** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
