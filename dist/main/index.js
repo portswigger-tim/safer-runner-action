@@ -2316,7 +2316,6 @@ const constants_1 = __nccwpck_require__(8729);
 const files_1 = __nccwpck_require__(3087);
 const host_1 = __nccwpck_require__(7020);
 const install_1 = __nccwpck_require__(1671);
-const types_1 = __nccwpck_require__(2053);
 const unit_1 = __nccwpck_require__(812);
 const config_1 = __nccwpck_require__(5744);
 var config_2 = __nccwpck_require__(5744);
@@ -2399,7 +2398,7 @@ async function start(h, r) {
         timeoutError: () => new Error(`CoreDNS did not answer for ${exports.READY_NAME} within ${READY_TIMEOUT_MS / 1000}s (last: ${last})`)
     });
     core.info(`✅ CoreDNS up on ${config_1.DNS_LISTEN}:53 (${exports.READY_NAME} resolved)`);
-    return (0, types_1.ready)();
+    return Object.freeze({});
 }
 /**
  * Point the system resolver at CoreDNS: a systemd-resolved drop-in (no stub listener, CoreDNS as
@@ -2413,7 +2412,7 @@ async function cutover(h, _dns) {
     await (0, host_1.sudo)(['unlink', '/etc/resolv.conf'], {}, h);
     await (0, host_1.sudo)(['tee', '/etc/resolv.conf'], { input: Buffer.from('nameserver 127.0.0.1\n') }, h);
     await (0, host_1.sudo)(['systemctl', 'restart', 'systemd-resolved'], {}, h);
-    return (0, types_1.ready)();
+    return Object.freeze({});
 }
 
 
@@ -4380,7 +4379,18 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.writeFiles = writeFiles;
 exports.sudoWrite = sudoWrite;
 const host_1 = __nccwpck_require__(7020);
+/**
+ * Content goes in before owner and mode are set, so a file written here is briefly readable as
+ * root's default. Fine for world-readable files; a restricted one (the baseline, sudoers) must be
+ * its own named step that sets owner and mode first (touch, chown, chmod, then tee).
+ */
+function assertWorldReadable(f) {
+    if (f.kind === 'file' && (parseInt(f.mode, 8) & 0o004) === 0) {
+        throw new Error(`writeFiles: ${f.path} (${f.mode}) is restricted: write it in a named step, not as an inert file`);
+    }
+}
 async function writeFiles(h, files) {
+    files.forEach(assertWorldReadable);
     for (const f of files) {
         if (f.kind === 'dir') {
             const [user, group] = f.owner.split(':');
@@ -4573,26 +4583,6 @@ async function installPinnedBinary(url, sha256, member, dest, label, h = host_1.
         await (0, host_1.sudo)(['install', '-m', '0755', '-o', 'root', '-g', 'root', path.join(tmp, member), dest], {}, h);
     });
     fs.rmSync(tmp, { recursive: true, force: true });
-}
-
-
-/***/ }),
-
-/***/ 2053:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-/**
- * Shapes shared by the services: what a service's pure render() returns, and the readiness
- * tokens its effects hand on. A step that needs another step done first takes that step's token,
- * so calling them out of order is a compile error (setup/run.ts).
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ready = ready;
-/** Mint a token. Only the step that the token stands for calls this. */
-function ready() {
-    return Object.freeze({});
 }
 
 

@@ -15,6 +15,18 @@ const UNIT: UnitSpec = {
 };
 
 describe('writeFiles', () => {
+  it('refuses a restricted file: secrets are a named step, never an inert write', async () => {
+    const { host, calls } = recordingHost();
+    await expect(
+      writeFiles(host, [
+        { kind: 'file', path: '/etc/x/ok.json', content: '{}', mode: '0644', owner: 'root:root' },
+        { kind: 'file', path: '/etc/x/secret.json', content: '{}', mode: '0600', owner: 'root:root' }
+      ])
+    ).rejects.toThrow(/secret\.json \(0600\) is restricted/);
+    // checked before anything is written
+    expect(calls).toEqual([]);
+  });
+
   it('writes each kind in order, as root', async () => {
     const { host, calls } = recordingHost();
     await writeFiles(host, [

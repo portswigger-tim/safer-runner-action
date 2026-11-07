@@ -1,17 +1,24 @@
 /**
- * Shapes shared by the services: what a service's pure render() returns, and the readiness
- * tokens its effects hand on. A step that needs another step done first takes that step's token,
- * so calling them out of order is a compile error (setup/run.ts).
+ * Shapes shared by the services: what a service's pure render() returns and its effects consume.
+ *
+ * Readiness tokens are declared by the service that owns the step, not here: a branded type over
+ * a symbol that module does not export, minted only by that step (`Object.freeze({}) as Token`).
+ * A step that needs another done first takes its token, so the wrong order does not compile.
+ * src/system/tokens.test.ts lists every token with its owning file and its ordering invariant
+ * in src/orchestration.test.ts, and fails if a token is minted anywhere else.
  */
+
+/** `user:group` */
+export type Owner = `${string}:${string}`;
 
 /** A path setup creates as root. `owner` is `user:group`. */
 export type FileSpec =
   /** `install -d`: created with its mode and owner */
-  | { kind: 'dir'; path: string; mode: string; owner: string }
-  /** written, then chown + chmod */
-  | { kind: 'file'; path: string; content: string; mode: string; owner: string }
+  | { kind: 'dir'; path: string; mode: string; owner: Owner }
+  /** written, then chown + chmod; world-readable only (a restricted file is a named step) */
+  | { kind: 'file'; path: string; content: string; mode: string; owner: Owner }
   /** created empty if missing (never truncated: a log on a re-run keeps its lines), then chown + chmod */
-  | { kind: 'touch'; path: string; mode: string; owner: string };
+  | { kind: 'touch'; path: string; mode: string; owner: Owner };
 
 /**
  * A transient systemd unit (systemd-run), run as `user`, restarted on any exit. `props` are the
@@ -36,18 +43,4 @@ export interface UnitSpec {
 export interface Rendered {
   inert: FileSpec[];
   unit: UnitSpec;
-}
-
-declare const done: unique symbol;
-/** Proof that a step has run; only that step can create one. */
-export type Ready<Step extends string> = { readonly [done]: Step };
-
-/** CoreDNS is up and answering (services/coredns start). */
-export type DnsReady = Ready<'dns'>;
-/** The system resolver points at CoreDNS (services/coredns cutover). */
-export type ResolverOn = Ready<'resolver'>;
-
-/** Mint a token. Only the step that the token stands for calls this. */
-export function ready<T extends Ready<string>>(): T {
-  return Object.freeze({}) as T;
 }

@@ -19,7 +19,7 @@ import { COREDNS_BIN, COREDNS_SHA256, COREDNS_URL, DNS_LOG, DNS_UNIT } from '../
 import { writeFiles } from '../../system/files';
 import { realHost, sudo, type Host } from '../../system/host';
 import { installPinnedBinary } from '../../system/install';
-import { ready, type DnsReady, type Rendered, type ResolverOn } from '../../system/types';
+import type { Rendered } from '../../system/types';
 import { startUnit } from '../../system/unit';
 import { DNS_LISTEN, parseHostsNames, type LocalHosts } from './config';
 
@@ -97,6 +97,14 @@ export async function probe(name: string, timeoutMs = 3000): Promise<string> {
   }
 }
 
+declare const dnsReady: unique symbol;
+/** CoreDNS is up and answering. Minted only by start(). */
+export type DnsReady = { readonly [dnsReady]: true };
+
+declare const resolverOn: unique symbol;
+/** The system resolver points at CoreDNS. Minted only by cutover(). */
+export type ResolverOn = { readonly [resolverOn]: true };
+
 /** Always allowlisted (GitHub core): CoreDNS is ready once it resolves this. */
 export const READY_NAME = 'github.com';
 const READY_TIMEOUT_MS = 20000;
@@ -119,7 +127,7 @@ export async function start(h: Host, r: Rendered): Promise<DnsReady> {
       new Error(`CoreDNS did not answer for ${READY_NAME} within ${READY_TIMEOUT_MS / 1000}s (last: ${last})`)
   });
   core.info(`✅ CoreDNS up on ${DNS_LISTEN}:53 (${READY_NAME} resolved)`);
-  return ready<DnsReady>();
+  return Object.freeze({}) as DnsReady;
 }
 
 /**
@@ -138,5 +146,5 @@ export async function cutover(h: Host, _dns: DnsReady): Promise<ResolverOn> {
   await sudo(['unlink', '/etc/resolv.conf'], {}, h);
   await sudo(['tee', '/etc/resolv.conf'], { input: Buffer.from('nameserver 127.0.0.1\n') }, h);
   await sudo(['systemctl', 'restart', 'systemd-resolved'], {}, h);
-  return ready<ResolverOn>();
+  return Object.freeze({}) as ResolverOn;
 }

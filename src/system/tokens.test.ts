@@ -1,0 +1,55 @@
+/**
+ * Readiness tokens (see src/system/types.ts): each is declared and minted only in the module that
+ * owns its step, and each has an ordering invariant in src/orchestration.test.ts. A new token
+ * goes in TOKENS with both, or this fails.
+ */
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+const SRC = path.join(__dirname, '..');
+
+/** token -> the file that declares and mints it, and the orchestration invariants that check its order */
+const TOKENS: Record<string, { owner: string; invariants: string[] }> = {
+  DnsReady: { owner: 'services/coredns/index.ts', invariants: ['L11'] },
+  ResolverOn: { owner: 'services/coredns/index.ts', invariants: ['L11'] }
+};
+
+function sources(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) return sources(p);
+    return e.name.endsWith('.ts') && !e.name.endsWith('.test.ts') ? [p] : [];
+  });
+}
+
+const files = sources(SRC).map(p => ({ rel: path.relative(SRC, p), text: fs.readFileSync(p, 'utf8') }));
+
+describe('readiness tokens', () => {
+  it('every token declared in src is listed here', () => {
+    const declared = files.flatMap(f =>
+      [...f.text.matchAll(/export type (\w+) = \{ readonly \[\w+\]: true \}/g)].map(m => `${m[1]} ${f.rel}`)
+    );
+    expect(declared.sort()).toEqual(
+      Object.entries(TOKENS)
+        .map(([t, { owner }]) => `${t} ${owner}`)
+        .sort()
+    );
+  });
+
+  it.each(Object.entries(TOKENS))('%s is minted only in its owning module', (token, { owner }) => {
+    // `as T`, `as ns.T`, `as import('..').T` and `<T>x`
+    const ref = `(?:import\\([^)]*\\)\\.)?(?:\\w+\\.)*${token}\\b`;
+    const cast = new RegExp(`\\bas\\s+${ref}|<\\s*${ref}\\s*>`);
+    const minted = files.filter(f => cast.test(f.text)).map(f => f.rel);
+    expect(minted).toEqual([owner]);
+  });
+
+  it.each(Object.entries(TOKENS))(
+    '%s has an ordering invariant in the orchestration nets',
+    (_token, { invariants }) => {
+      const nets = fs.readFileSync(path.join(SRC, 'orchestration.test.ts'), 'utf8');
+      for (const id of invariants) expect(nets).toContain(`before('${id}'`);
+    }
+  );
+});
