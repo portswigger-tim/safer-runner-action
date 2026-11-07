@@ -3101,9 +3101,7 @@ function facts(input) {
         sudoRan: input.sudo?.ran.length ?? 0,
         suggest: (0, flows_1.suggestedAllowlist)(denied),
         filterBlocks,
-        filtered: filterBlocks.length
-            ? filterBlocks.reduce((a, b) => a + b.tries, 0)
-            : groups.filtered.reduce((a, h) => a + h.requests, 0),
+        filtered: filterBlocks.reduce((a, b) => a + b.tries, 0),
         hostsDenied: denied.length - groups.filtered.length
     };
 }
@@ -3230,7 +3228,7 @@ function scorecard(f) {
             `**${groups['not-allowed'].length} ${blockedWord}** — ${nameList(groups['not-allowed'])}`
         ]);
     }
-    if (groups.filtered.length || f.filterBlocks.length) {
+    if (f.filterBlocks.length) {
         rows.push(['🔒 **HTTP filter**', `${(0, markdown_1.plural)(f.filtered, 'request')} ${blockedWord} — ${nameList(groups.filtered)}`]);
     }
     if (groups.unresolved.length) {
@@ -3309,13 +3307,6 @@ function blockedSections(f) {
                 "If the job needs one of these requests, run it in analyze mode without that host's `http-filter` entry: " +
                 'the suggested `http-filter` then covers it. Review the rule before you add it: a write is how data ' +
                 'leaves.</sub>\n\n';
-    }
-    else if (groups.filtered.length) {
-        md += hostSection(f, '🔒 Refused by `http-filter`', groups.filtered, ['Host', 'Reason', 'Tries'], h => [
-            (0, markdown_1.code)((0, flows_1.blockedName)(h.name)),
-            h.reasons.map(r => FILTER_REASON_TEXT[r] ?? (0, markdown_1.code)(r)).join(' · '),
-            String(h.tries)
-        ]);
     }
     return md;
 }

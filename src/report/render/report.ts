@@ -45,7 +45,7 @@ export interface ReportInput {
   userDomains?: string[];
   selfTests: { name: string; ok: boolean; detail: string }[];
   integrity?: { status: 'verified' | 'tampered' | 'unavailable'; body: string };
-  /** requests refused by `http-filter` and the suggested filter (summarizeHttpFilter) */
+  /** requests refused by `http-filter` and the suggested filter (summarizeHttpFilter); undefined: no http-filter section */
   httpFilter?: HttpFilterReport;
   /** GitHub platform endpoints the built-in list auto-allowed on filtered hosts (policy.json) */
   platformEndpoints?: number;
@@ -368,9 +368,7 @@ function facts(input: ReportInput): Facts {
     sudoRan: input.sudo?.ran.length ?? 0,
     suggest: suggestedAllowlist(denied),
     filterBlocks,
-    filtered: filterBlocks.length
-      ? filterBlocks.reduce((a, b) => a + b.tries, 0)
-      : groups.filtered.reduce((a, h) => a + h.requests, 0),
+    filtered: filterBlocks.reduce((a, b) => a + b.tries, 0),
     hostsDenied: denied.length - groups.filtered.length
   };
 }
@@ -504,7 +502,7 @@ function scorecard(f: Facts): string {
       `**${groups['not-allowed'].length} ${blockedWord}** — ${nameList(groups['not-allowed'])}`
     ]);
   }
-  if (groups.filtered.length || f.filterBlocks.length) {
+  if (f.filterBlocks.length) {
     rows.push(['🔒 **HTTP filter**', `${plural(f.filtered, 'request')} ${blockedWord} — ${nameList(groups.filtered)}`]);
   }
   if (groups.unresolved.length) {
@@ -594,12 +592,6 @@ function blockedSections(f: Facts): string {
       "If the job needs one of these requests, run it in analyze mode without that host's `http-filter` entry: " +
       'the suggested `http-filter` then covers it. Review the rule before you add it: a write is how data ' +
       'leaves.</sub>\n\n';
-  } else if (groups.filtered.length) {
-    md += hostSection(f, '🔒 Refused by `http-filter`', groups.filtered, ['Host', 'Reason', 'Tries'], h => [
-      code(blockedName(h.name)),
-      h.reasons.map(r => FILTER_REASON_TEXT[r] ?? code(r)).join(' · '),
-      String(h.tries)
-    ]);
   }
   return md;
 }
