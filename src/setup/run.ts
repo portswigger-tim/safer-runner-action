@@ -38,16 +38,9 @@ import {
 } from '../services/iptables';
 import type { DockerPolicy, Inputs } from '../config/inputs';
 import { CONTAINER_TLS, buildPolicyConfig } from '../policy';
-import {
-  allocateProxyPorts,
-  createProxyUser,
-  generateCa,
-  installAddon,
-  installMitmproxy,
-  installTeardownHelper,
-  startProxy,
-  writePolicy
-} from '../services/mitmproxy';
+import * as mitmproxy from '../services/mitmproxy';
+import { generateCa, installTeardown } from '../services/mitmproxy/ca';
+import { distributeTrust } from '../services/mitmproxy/trust';
 import { dnsProbeName, runSelfTests } from './selftest';
 import * as coredns from '../services/coredns';
 import { realHost, type Host } from '../system/host';
@@ -64,7 +57,6 @@ import {
   runningContainers,
   stopDockerService
 } from '../services/docker';
-import { exportTrustEnv, installJavaTrust, installSystemTrust } from '../services/mitmproxy/trust';
 import { CRITICAL_FILES, SystemValidator } from '../integrity/baseline';
 
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
@@ -206,7 +198,7 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   const sudoFlavour = await detectSudoFlavour();
   core.info(`sudo implementation: ${sudoFlavour}`);
 
-  const ports = await allocateProxyPorts();
+  const ports = await mitmproxy.allocateProxyPorts();
   core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
 
   // 1. Allowlist - fetched while normal DNS and direct egress still work
@@ -238,28 +230,25 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
 
   // 2. Install (parallel - both are network-bound)
   await timed('Install CoreDNS + mitmproxy', () =>
-    Promise.all([installPackages(), coredns.install(h), installMitmproxy()])
+    Promise.all([installPackages(), coredns.install(h), mitmproxy.install(h)])
   );
 
   // 3. Users, addon, policy, CA
   await createLogDirectory();
   const dnsUser = await coredns.createUser(h);
-  const proxyUid = await createProxyUser();
+  const proxyUid = await mitmproxy.ensureUser(h);
   core.info(`DNS user ${dnsUser.username} (${dnsUser.uid}), proxy uid ${proxyUid}`);
-  await installAddon();
-  await writePolicy(policy);
-  await generateCa();
-  await installTeardownHelper();
+  const proxyRendered = mitmproxy.render({ policy, ports });
+  const proxyConfig = await mitmproxy.writeConfig(h, proxyRendered);
+  const ca = await generateCa(h);
+  await installTeardown(h, ca);
 
   // 4. Proxy
-  await timed('Start proxy', () => startProxy(ports));
+  const proxy = await timed('Start proxy', () => mitmproxy.start(h, proxyRendered, ports, proxyConfig, ca));
 
-  // 5. Trust - before any traffic is forced through the proxy
-  await timed('Install CA trust', async () => {
-    await installSystemTrust();
-    exportTrustEnv();
-    await installJavaTrust();
-  });
+  // 5. Trust - before any traffic is forced through the proxy (`trust` is the dockerd restart's
+  // and the firewall step's precondition once those take tokens)
+  const trust = await timed('Install CA trust', () => distributeTrust(h, proxy));
 
   // 6. DNS: CoreDNS answering first, then the system resolver points at it
   // (`resolver` is the firewall step's precondition once iptables takes tokens)

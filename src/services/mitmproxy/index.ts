@@ -1,42 +1,41 @@
 /**
- * v2 proxy lifecycle: install the pinned mitmdump, create the proxy user and its ephemeral
- * CA, write the policy, and run mitmdump under systemd outside the runner's process tree.
+ * v2 proxy lifecycle: install the pinned mitmdump, create the proxy user, copy the addon and
+ * write its config, then run mitmdump under systemd outside the runner's process tree.
+ * The CA is ./ca.ts; distributing trust in it is ./trust.ts.
  */
 
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import {
   ADDON_DIR,
   ADDON_FILES,
-  CA_CERT_FILE,
-  ETC_DIR,
   FLOW_LOG,
   MITMDUMP_BIN,
   MITMPROXY_SHA256,
   MITMPROXY_URL,
-  POLICY_FILE,
-  PROXY_CA_KEY_FILE,
-  PROXY_CONF_DIR,
   PROXY_LISTEN_HOST,
-  PROXY_STREAM_LARGE_BODIES,
   PROXY_UNIT,
-  PROXY_USER,
-  TEARDOWN_BIN
+  PROXY_USER
 } from '../../constants';
-import { sudoWrite } from '../../system/files';
-import { sudo, timed } from '../../system/host';
+import { writeFiles } from '../../system/files';
+import { realHost, sudo, type Host } from '../../system/host';
 import { installPinnedBinary } from '../../system/install';
-import type { PolicyConfig } from '../../policy';
+import type { Rendered } from '../../system/types';
+import { startUnit } from '../../system/unit';
+import type { CaReady } from './ca';
+import type { ProxyPorts } from './config';
 
-export interface ProxyOptions {
-  /** host listener (nat OUTPUT REDIRECT) */
-  port: number;
-  /** container listener (nat PREROUTING DNAT from the docker bridges); the addon classifies by it */
-  containerPort: number;
-}
+export { mitmdumpArgs, render, type ProxyFacts, type ProxyPorts } from './config';
+
+declare const configWritten: unique symbol;
+/** The addon and the proxy's rendered files are in place. Minted only by writeConfig(). */
+export type ProxyConfigWritten = { readonly [configWritten]: true };
+
+declare const proxyReady: unique symbol;
+/** mitmdump listens on both ports and the addon passed its own startup self-test. Minted only by start(). */
+export type ProxyReady = { readonly [proxyReady]: true };
 
 /**
  * Root of the checked-out action (where proxy/policy.py lives). Derived from the running
@@ -66,12 +65,12 @@ function canBind(port: number): Promise<boolean> {
 /**
  * Pick the proxy's two listener ports: host = P, container = P + 1, a random pair in
  * PROXY_PORT_BAND where both are free right now
- * (the proxy binds them seconds later; startProxy fails loudly if something took one meanwhile).
+ * (the proxy binds them seconds later; start() fails loudly if something took one meanwhile).
  */
 export async function allocateProxyPorts(
   probe: (port: number) => Promise<boolean> = canBind,
   random: () => number = Math.random
-): Promise<{ port: number; containerPort: number }> {
+): Promise<ProxyPorts> {
   const [lo, hi] = PROXY_PORT_BAND;
   for (let i = 0; i < 50; i++) {
     const p = lo + Math.floor(random() * (hi - lo));
@@ -81,141 +80,36 @@ export async function allocateProxyPorts(
 }
 
 /** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
-export async function installMitmproxy(): Promise<void> {
-  await installPinnedBinary(MITMPROXY_URL, MITMPROXY_SHA256, 'mitmdump', MITMDUMP_BIN, 'mitmproxy');
+export async function install(h: Host = realHost): Promise<void> {
+  await installPinnedBinary(MITMPROXY_URL, MITMPROXY_SHA256, 'mitmdump', MITMDUMP_BIN, 'mitmproxy', h);
 }
 
 /** Create the proxy system user (idempotent). Returns its uid. */
-export async function createProxyUser(): Promise<number> {
-  const exists = await exec.exec('id', ['-u', PROXY_USER], { ignoreReturnCode: true, silent: true });
+export async function ensureUser(h: Host): Promise<number> {
+  const exists = await h.run('id', ['-u', PROXY_USER], { ignoreReturnCode: true, silent: true });
   if (exists !== 0) {
-    await sudo(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', PROXY_USER]);
+    await sudo(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', PROXY_USER], {}, h);
   }
-  const { stdout } = await exec.getExecOutput('id', ['-u', PROXY_USER], { silent: true });
+  const { stdout } = await h.output('id', ['-u', PROXY_USER], { silent: true });
   return parseInt(stdout.trim(), 10);
 }
 
-/** Copy the addon out of the (runner-writable) action checkout into a root-owned directory. */
-export async function installAddon(): Promise<void> {
+/**
+ * The addon, copied out of the (runner-writable) action checkout into a root-owned directory,
+ * and the rendered files (policy.json, the flow log).
+ */
+export async function writeConfig(h: Host, r: Rendered): Promise<ProxyConfigWritten> {
   const src = path.join(actionRoot(), 'proxy');
-  await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', ADDON_DIR]);
+  await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', ADDON_DIR], {}, h);
   for (const f of ADDON_FILES) {
-    await sudo(['install', '-m', '0644', '-o', 'root', '-g', 'root', path.join(src, f), path.join(ADDON_DIR, f)]);
+    await sudo(
+      ['install', '-m', '0644', '-o', 'root', '-g', 'root', path.join(src, f), path.join(ADDON_DIR, f)],
+      {},
+      h
+    );
   }
-}
-
-export async function writePolicy(config: PolicyConfig): Promise<void> {
-  await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', ETC_DIR]);
-  await sudoWrite(POLICY_FILE, JSON.stringify(config, null, 2) + '\n', '0644');
-  // The flow log is written by the proxy user and read (without sudo) by the post step.
-  await sudo(['touch', FLOW_LOG]);
-  await sudo(['chown', `${PROXY_USER}:${PROXY_USER}`, FLOW_LOG]);
-  await sudo(['chmod', '0644', FLOW_LOG]);
-}
-
-/**
- * Generate the per-run CA: RSA-2048 (broadest client compatibility), 3-day validity, key
- * only ever on tmpfs, 0600, owned by the proxy user. mitmproxy mints leaf certs from it.
- * Publishes the public certificate to CA_CERT_FILE.
- */
-export async function generateCa(): Promise<void> {
-  await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(PROXY_CONF_DIR)]);
-  await sudo(['install', '-d', '-m', '0700', '-o', PROXY_USER, '-g', PROXY_USER, PROXY_CONF_DIR]);
-  const key = `${PROXY_CONF_DIR}/ca-key.pem`;
-  const cert = `${PROXY_CONF_DIR}/ca-cert.pem`;
-  const subject = `/O=safer-runner/CN=safer-runner ephemeral CA ${process.env.GITHUB_RUN_ID || ''}`.trim();
-  await sudo([
-    '-u',
-    PROXY_USER,
-    'sh',
-    '-c',
-    'umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 ' +
-      `-keyout "$1" -out "$2" -subj "$3" ` +
-      '-addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign ' +
-      `&& cat "$1" "$2" > "$4" && rm -f "$1"`,
-    'sh',
-    key,
-    cert,
-    subject,
-    PROXY_CA_KEY_FILE
-  ]);
-  // mitmproxy looks for <confdir>/mitmproxy-ca.pem (key + cert)
-  await sudo(['install', '-m', '0644', '-o', 'root', '-g', 'root', cert, CA_CERT_FILE]);
-}
-
-/**
- * Root-owned teardown helper. The only privileged command the post step needs, so with
- * disable-sudo it is the single extra sudoers entry (exact path, no arguments).
- * Deleting the key on disk is all it does: the running proxy keeps the CA in memory so the
- * runner can still finish the job through it; the VM is destroyed afterwards.
- */
-export async function installTeardownHelper(): Promise<void> {
-  const script = `#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f ${PROXY_CA_KEY_FILE} ${PROXY_CONF_DIR}/ca-key.pem ${PROXY_CONF_DIR}/mitmproxy-ca.p12
-`;
-  await sudoWrite(TEARDOWN_BIN, script, '0755');
-}
-
-export function mitmdumpArgs(o: ProxyOptions): string[] {
-  return [
-    MITMDUMP_BIN,
-    // two transparent listeners: a connection's listener tells host from container traffic
-    '--mode',
-    `transparent@${PROXY_LISTEN_HOST}:${o.port}`,
-    '--mode',
-    `transparent@${PROXY_LISTEN_HOST}:${o.containerPort}`,
-    '--set',
-    `confdir=${PROXY_CONF_DIR}`,
-    '--set',
-    'connection_strategy=lazy',
-    '--set',
-    `stream_large_bodies=${PROXY_STREAM_LARGE_BODIES}`,
-    '--set',
-    'block_global=false',
-    '--set',
-    'flow_detail=0',
-    '--set',
-    'termlog_verbosity=warn',
-    '-s',
-    `${ADDON_DIR}/policy.py`
-  ];
-}
-
-/**
- * systemd-run: a transient service OUTSIDE the runner's process tree (the runner's orphan
- * cleanup would otherwise kill it before "Complete job", which itself goes through the
- * proxy), restarted on any exit, sandboxed to what it needs.
- */
-export function systemdRunArgs(o: ProxyOptions): string[] {
-  return [
-    'systemd-run',
-    `--unit=${PROXY_UNIT}`,
-    '--description=safer-runner egress proxy',
-    `--uid=${PROXY_USER}`,
-    `--gid=${PROXY_USER}`,
-    '-p',
-    'Restart=always',
-    '-p',
-    'RestartSec=1',
-    '-p',
-    'UMask=0077',
-    '-p',
-    'NoNewPrivileges=yes',
-    '-p',
-    'PrivateTmp=yes',
-    '-p',
-    'ProtectHome=yes',
-    '-p',
-    'ProtectSystem=strict',
-    '-p',
-    `ReadWritePaths=${PROXY_CONF_DIR} ${FLOW_LOG}`,
-    '-p',
-    'LimitNOFILE=65536',
-    `--setenv=HOME=${PROXY_CONF_DIR}`,
-    `--setenv=SAFER_RUNNER_POLICY=${POLICY_FILE}`,
-    ...mitmdumpArgs(o)
-  ];
+  await writeFiles(h, r.inert);
+  return Object.freeze({}) as ProxyConfigWritten;
 }
 
 interface StartRecord {
@@ -240,38 +134,36 @@ export function findStartRecord(flowLog: string): StartRecord | null {
   return found;
 }
 
-async function isListening(port: number): Promise<boolean> {
-  const { stdout } = await exec.getExecOutput('ss', ['-Hltn', `sport = :${port}`], {
-    silent: true,
-    ignoreReturnCode: true
-  });
+async function isListening(h: Host, port: number): Promise<boolean> {
+  const { stdout } = await h.output('ss', ['-Hltn', `sport = :${port}`], { silent: true, ignoreReturnCode: true });
   return stdout.includes(`${PROXY_LISTEN_HOST}:${port}`);
 }
 
-export async function dumpProxyDiagnostics(): Promise<void> {
-  const opts = { ignoreReturnCode: true };
-  await sudo(['systemctl', 'status', PROXY_UNIT, '--no-pager', '-l'], opts);
-  await sudo(['journalctl', '-u', PROXY_UNIT, '--no-pager', '-n', '50'], opts);
-}
+const READY_TIMEOUT_MS = 90000;
 
 /** Start the proxy unit and wait until it listens and the policy addon reported a good start. */
-export async function startProxy(o: ProxyOptions, timeoutMs = 90000): Promise<void> {
-  await sudo(['systemctl', 'stop', PROXY_UNIT], { ignoreReturnCode: true, silent: true });
-  await sudo(['systemctl', 'reset-failed', PROXY_UNIT], { ignoreReturnCode: true, silent: true });
-  await sudo(systemdRunArgs(o));
-
-  const deadline = Date.now() + timeoutMs;
-  await timed('proxy start', async () => {
-    while (Date.now() < deadline) {
-      const log = fs.existsSync(FLOW_LOG) ? fs.readFileSync(FLOW_LOG, 'utf8') : '';
-      const start = findStartRecord(log);
-      if (start && (await isListening(o.port)) && (await isListening(o.containerPort))) {
-        core.info(`✅ Proxy up (pid ${start.pid}, ${start.mode} policy loaded and self-tested)`);
-        return;
-      }
-      await new Promise(r => setTimeout(r, 500));
-    }
-    await dumpProxyDiagnostics();
-    throw new Error(`proxy did not become ready within ${timeoutMs / 1000}s`);
+export async function start(
+  h: Host,
+  r: Rendered,
+  ports: ProxyPorts,
+  _config: ProxyConfigWritten,
+  _ca: CaReady
+): Promise<ProxyReady> {
+  let started: StartRecord | null = null;
+  await startUnit(h, r.unit, {
+    ready: async () => {
+      started = findStartRecord(fs.existsSync(FLOW_LOG) ? fs.readFileSync(FLOW_LOG, 'utf8') : '');
+      return started !== null && (await isListening(h, ports.port)) && (await isListening(h, ports.containerPort));
+    },
+    pollMs: 500,
+    timeoutMs: READY_TIMEOUT_MS,
+    diagnostics: [
+      ['systemctl', 'status', PROXY_UNIT, '--no-pager', '-l'],
+      ['journalctl', '-u', PROXY_UNIT, '--no-pager', '-n', '50']
+    ],
+    timeoutError: () => new Error(`proxy did not become ready within ${READY_TIMEOUT_MS / 1000}s`)
   });
+  const s = started as StartRecord | null;
+  core.info(`✅ Proxy up (pid ${s?.pid}, ${s?.mode} policy loaded and self-tested)`);
+  return Object.freeze({}) as ProxyReady;
 }
