@@ -1,106 +1,158 @@
 /**
- * Tests for the docker service
+ * Tests for the docker service, on a simulated runner (group membership, socket, units) driven
+ * through a recording Host.
  */
 
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { DOCKER_DAEMON_JSON } from '../../constants';
+import type { SelfTestsRun } from '../../setup/selftest';
+import { recordingHost } from '../../system/testing';
+import type { TrustInstalled } from '../mitmproxy/trust';
 import {
-  disableDockerForRunner,
-  dockerAccess,
-  stopDockerService,
-  isRunnerInDockerGroup,
-  readDockerState,
-  RUNNER_USERNAME,
   DOCKER_GROUP,
   DOCKER_SOCKET,
+  RUNNER_USERNAME,
+  applyAccessPolicy,
+  containerAddresses,
+  disableDockerForRunner,
+  dockerAccess,
+  isRunnerInDockerGroup,
   mergeLiveRestore,
-  parseContainerAddresses
+  parseContainerAddresses,
+  prepare,
+  readDockerState,
+  stopDockerService
 } from '.';
 
 jest.mock('@actions/core');
-jest.mock('@actions/exec');
+jest.mock('fs', () => {
+  const actual = jest.requireActual('fs');
+  return { ...actual, existsSync: jest.fn(actual.existsSync), accessSync: jest.fn(actual.accessSync) };
+});
+const mockExists = fs.existsSync as unknown as jest.Mock;
+const mockAccess = fs.accessSync as unknown as jest.Mock;
+const actualFs = jest.requireActual('fs');
 
-const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-const mockGetExecOutput = exec.getExecOutput as jest.MockedFunction<typeof exec.getExecOutput>;
+/** tokens for tests that call a step directly */
+const TRUST = Object.freeze({}) as TrustInstalled;
+const SELF_TESTS = Object.freeze({}) as SelfTestsRun;
 
-function groups(out: string, exitCode = 0): void {
-  mockGetExecOutput.mockResolvedValue({ stdout: out, stderr: '', exitCode });
+interface World {
+  inGroup: boolean;
+  daemon: boolean;
+  socketUnit: boolean;
+  socket: boolean;
+  locked: boolean;
+  /** commands that fail (exit 3) */
+  failing?: RegExp;
+  /** commands "succeed" but change nothing */
+  sticky?: boolean;
+  /** `id -nG runner` fails */
+  idFails?: boolean;
+  containers?: string[];
+  daemonJson?: string;
 }
 
-function sudoCalls(): string[] {
-  return mockExec.mock.calls.filter(c => c[0] === 'sudo').map(c => (c[1] as string[]).join(' '));
+const RUNNING: World = { inGroup: true, daemon: true, socketUnit: true, socket: true, locked: false };
+
+/** A runner with docker in the state `w`; commands change it the way the real ones would. */
+function runner(world: Partial<World> = {}) {
+  const w: World = { ...RUNNING, ...world };
+  const effect = (line: string): number => {
+    if (w.failing?.test(line)) return 3;
+    if (line === 'id -nG runner') return w.idFails ? 1 : 0;
+    if (line === 'systemctl is-active --quiet docker' || line === 'systemctl is-active --quiet docker.service') {
+      return w.daemon ? 0 : 3;
+    }
+    if (line === 'systemctl is-active --quiet docker.socket') return w.socketUnit ? 0 : 3;
+    if (line === `sudo cat ${DOCKER_DAEMON_JSON}`) return w.daemonJson === undefined ? 1 : 0;
+    if (w.sticky) return 0;
+    if (line === `sudo gpasswd -d ${RUNNER_USERNAME} ${DOCKER_GROUP}`) w.inGroup = false;
+    if (line === `sudo chmod 600 ${DOCKER_SOCKET}`) w.locked = true;
+    if (line === 'sudo systemctl stop docker.service') w.daemon = false;
+    if (line === 'sudo systemctl stop docker.socket') w.socketUnit = false;
+    return 0;
+  };
+  const output = (line: string): string => {
+    if (line === 'id -nG runner') return w.inGroup ? 'runner adm cdrom docker\n' : 'runner adm cdrom\n';
+    if (line === 'sudo docker ps -q --no-trunc') return (w.containers ?? []).join('\n');
+    if (line === `sudo cat ${DOCKER_DAEMON_JSON}`) return w.daemonJson ?? '';
+    return '';
+  };
+  mockExists.mockImplementation((p: string) => (p === DOCKER_SOCKET ? w.socket : actualFs.existsSync(p)));
+  mockAccess.mockImplementation((p: string, mode?: number) => {
+    if (p !== DOCKER_SOCKET) return actualFs.accessSync(p, mode);
+    if (!w.socket || w.locked) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+  });
+  return { w, ...recordingHost(effect, output) };
 }
+
+const sudoCalls = (calls: string[]) => calls.filter(c => c.startsWith('sudo ')).map(c => c.slice(5));
+
+beforeEach(() => jest.clearAllMocks());
 
 describe('docker access (docker input)', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
   describe('disableDockerForRunner (docker: remove-group)', () => {
     it('removes the runner from the group and locks the socket to root', async () => {
-      groups('runner adm docker');
-      mockExec.mockResolvedValue(0);
-
-      expect(await disableDockerForRunner(__filename)).toEqual([]);
-      expect(sudoCalls()).toEqual([
-        `gpasswd -d ${RUNNER_USERNAME} ${DOCKER_GROUP}`,
-        `chown root:root ${__filename}`,
-        `chmod 600 ${__filename}`
+      const { host, calls } = runner();
+      expect(await disableDockerForRunner(host)).toEqual([]);
+      expect(sudoCalls(calls)).toEqual([
+        `gpasswd -d ${RUNNER_USERNAME} ${DOCKER_GROUP} [ignore-rc]`,
+        `chown root:root ${DOCKER_SOCKET} [ignore-rc]`,
+        `chmod 600 ${DOCKER_SOCKET} [ignore-rc]`
       ]);
       expect(DOCKER_SOCKET).toBe('/var/run/docker.sock');
     });
 
     it('is idempotent: skips the group change and a missing socket', async () => {
-      groups('runner adm');
-
-      expect(await disableDockerForRunner('/nonexistent/docker.sock')).toEqual([]);
-      expect(sudoCalls()).toEqual([]);
+      const { host, calls } = runner({ inGroup: false, socket: false });
+      expect(await disableDockerForRunner(host)).toEqual([]);
+      expect(sudoCalls(calls)).toEqual([]);
     });
 
     it('reports failed steps instead of swallowing them (G4)', async () => {
-      groups('runner docker');
-      mockExec.mockImplementation(async (_cmd, args) => ((args as string[])[0] === 'gpasswd' ? 3 : 0));
-
-      expect(await disableDockerForRunner(__filename)).toEqual([`sudo gpasswd -d runner docker exited 3`]);
+      const { host } = runner({ failing: /gpasswd/ });
+      expect(await disableDockerForRunner(host)).toEqual([`sudo gpasswd -d runner docker exited 3`]);
     });
   });
 
   describe('stopDockerService (docker: stop)', () => {
     it('stops, then disables, the socket and the service', async () => {
-      mockExec.mockResolvedValue(0);
-      expect(await stopDockerService()).toEqual([]);
-      expect(sudoCalls()).toEqual([
-        'systemctl stop docker.socket',
-        'systemctl stop docker.service',
-        'systemctl disable docker.socket',
-        'systemctl disable docker.service'
+      const { host, calls } = runner();
+      expect(await stopDockerService(host)).toEqual([]);
+      expect(sudoCalls(calls)).toEqual([
+        'systemctl stop docker.socket [ignore-rc]',
+        'systemctl stop docker.service [ignore-rc]',
+        'systemctl disable docker.socket [ignore-rc]',
+        'systemctl disable docker.service [ignore-rc]'
       ]);
     });
 
     it('reports failed steps instead of swallowing them (G4)', async () => {
-      mockExec.mockResolvedValue(1);
-      expect(await stopDockerService()).toHaveLength(4);
+      const { host } = runner({ failing: /systemctl (stop|disable)/ });
+      expect(await stopDockerService(host)).toHaveLength(4);
     });
   });
 
   describe('isRunnerInDockerGroup', () => {
     it('reads the group database for the runner user', async () => {
-      groups('runner adm cdrom sudo dip plugdev lxd docker\n');
-      expect(await isRunnerInDockerGroup()).toBe(true);
-      expect(mockGetExecOutput).toHaveBeenCalledWith('id', ['-nG', RUNNER_USERNAME], expect.any(Object));
+      const { host, calls } = runner();
+      expect(await isRunnerInDockerGroup(host)).toBe(true);
+      expect(calls).toEqual([`id -nG ${RUNNER_USERNAME} [ignore-rc] [silent]`]);
     });
 
     it('does not match a group that merely contains the word', async () => {
-      groups('runner dockerroot');
-      expect(await isRunnerInDockerGroup()).toBe(false);
+      const { host } = recordingHost(
+        () => 0,
+        () => 'runner dockerroot'
+      );
+      expect(await isRunnerInDockerGroup(host)).toBe(false);
     });
 
     it('fails closed when membership cannot be read', async () => {
-      groups('', 1);
-      expect(await isRunnerInDockerGroup()).toBe(true);
+      const { host } = runner({ idFails: true, inGroup: false });
+      expect(await isRunnerInDockerGroup(host)).toBe(true);
       expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('assuming docker membership'));
     });
   });
@@ -120,23 +172,156 @@ describe('docker access (docker input)', () => {
     });
 
     it('checks the socket with this process credentials and the units with systemctl', async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'safer-runner-docker-'));
-      const sock = path.join(dir, 'docker.sock');
-      fs.writeFileSync(sock, '');
-      groups('runner');
-      mockExec.mockImplementation(async (_cmd, args) => ((args as string[]).includes('docker.service') ? 0 : 3));
-      try {
-        expect(await readDockerState(sock)).toEqual({
-          daemonActive: true,
-          socketUnitActive: false,
-          runnerInGroup: false,
-          socketAccessible: true
-        });
-        expect((await readDockerState(path.join(dir, 'missing.sock'))).socketAccessible).toBe(false);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
+      const { host } = runner({ socketUnit: false, inGroup: false });
+      expect(await readDockerState(host)).toEqual({
+        daemonActive: true,
+        socketUnitActive: false,
+        runnerInGroup: false,
+        socketAccessible: true
+      });
+      expect((await readDockerState(runner({ socket: false }).host)).socketAccessible).toBe(false);
     });
+  });
+});
+
+describe('applyAccessPolicy (G4: verified by observation)', () => {
+  it('remove-group: records the verified state', async () => {
+    const { host } = runner();
+    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'remove-group' }, SELF_TESTS);
+    expect(r).toEqual({
+      requested: 'remove-group',
+      access: 'group-removed',
+      state: { daemonActive: true, socketUnitActive: true, runnerInGroup: false, socketAccessible: false }
+    });
+    expect(core.warning).not.toHaveBeenCalled();
+  });
+
+  it('stop: records the daemon as not running', async () => {
+    const { host, calls } = runner();
+    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, SELF_TESTS);
+    expect(r.access).toBe('not-running');
+    expect(calls.some(c => c.includes('gpasswd'))).toBe(false);
+  });
+
+  it.each(['remove-group', 'stop'] as const)('enforce: fails closed when %s did not take', async docker => {
+    const { host } = runner({ failing: /gpasswd|chmod|chown|systemctl (stop|disable)/ });
+    await expect(applyAccessPolicy(host, { mode: 'enforce', docker }, SELF_TESTS)).rejects.toThrow(
+      new RegExp(`docker: ${docker} did not take effect.*exited 3`)
+    );
+  });
+
+  it('enforce: fails closed even when every command "succeeded" but access remains', async () => {
+    const { host } = runner({ sticky: true });
+    await expect(applyAccessPolicy(host, { mode: 'enforce', docker: 'remove-group' }, SELF_TESTS)).rejects.toThrow(
+      /still use docker/
+    );
+  });
+
+  it('analyze: a failed removal warns and never breaks the job', async () => {
+    const { host } = runner({ sticky: true, failing: /gpasswd/ });
+    const r = await applyAccessPolicy(host, { mode: 'analyze', docker: 'remove-group' }, SELF_TESTS);
+    expect(r.access).toBe('retained');
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('did not take effect'));
+  });
+
+  it('a step failure with access verifiably gone is only a warning', async () => {
+    const { host } = runner({ failing: /systemctl disable/ });
+    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, SELF_TESTS);
+    expect(r.access).toBe('not-running');
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('systemctl disable docker.socket exited 3'));
+  });
+
+  it('enforce + keep is ADVISORY', async () => {
+    const { host, calls } = runner();
+    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'keep' }, SELF_TESTS);
+    expect(calls.some(c => c.includes('gpasswd'))).toBe(false);
+    expect(r.access).toBe('retained');
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('ADVISORY'), {
+      title: 'safer-runner: enforce (ADVISORY - docker retained)'
+    });
+  });
+
+  it('analyze + keep says nothing', async () => {
+    const { host } = runner();
+    await applyAccessPolicy(host, { mode: 'analyze', docker: 'keep' }, SELF_TESTS);
+    expect(core.warning).not.toHaveBeenCalled();
+  });
+
+  it('needs the self-tests first (a compile-time order check)', () => {
+    const { host } = runner();
+    // @ts-expect-error - changing docker access before the self-tests ran does not compile
+    const early = () => applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, {});
+    expect(early).toBeInstanceOf(Function);
+  });
+});
+
+describe('prepare (F1: dockerd trusts the CA before the firewall)', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+  const settle = async <T>(p: Promise<T>): Promise<T> => {
+    const done = p.then(v => v);
+    await jest.advanceTimersByTimeAsync(5_000);
+    return done;
+  };
+
+  it('docker not running: nothing to restart, no container rules', async () => {
+    const { host, calls } = runner({ daemon: false });
+    expect(await settle(prepare(host, 'remove-group', TRUST))).toMatchObject({ active: false, configWritten: false });
+    expect(calls).toEqual(['systemctl is-active --quiet docker [ignore-rc] [silent]']);
+  });
+
+  it('docker: stop: not even asked', async () => {
+    const { host, calls } = runner();
+    expect(await settle(prepare(host, 'stop', TRUST))).toMatchObject({ active: false, configWritten: false });
+    expect(calls).toEqual([]);
+  });
+
+  it('running, nothing pulled yet (no keep, no service containers): no restart', async () => {
+    const { host, calls } = runner();
+    expect(await settle(prepare(host, 'remove-group', TRUST))).toMatchObject({ active: true, configWritten: false });
+    expect(calls.some(c => c.includes('restart'))).toBe(false);
+  });
+
+  it('keep: live-restore merged, SIGHUP reload, restart, wait, containers compared', async () => {
+    const { host, calls, stdin } = runner({ containers: ['c1'], daemonJson: '{"registry-mirrors":["m"]}' });
+    expect(await settle(prepare(host, 'keep', TRUST))).toMatchObject({ active: true, configWritten: true });
+    expect(calls).toEqual([
+      'systemctl is-active --quiet docker [ignore-rc] [silent]',
+      'sudo docker ps -q --no-trunc [ignore-rc] [silent]',
+      'sudo docker ps -q --no-trunc [ignore-rc] [silent]',
+      `sudo cat ${DOCKER_DAEMON_JSON} [ignore-rc] [silent]`,
+      'sudo install -d -m 0755 /etc/docker',
+      `sudo tee ${DOCKER_DAEMON_JSON} [silent]`,
+      'sudo systemctl reload docker',
+      'sudo systemctl restart docker',
+      'sudo docker info --format {{.ServerVersion}} [ignore-rc] [silent]',
+      'sudo docker ps -q --no-trunc [ignore-rc] [silent]'
+    ]);
+    expect(JSON.parse(stdin[`sudo tee ${DOCKER_DAEMON_JSON}`])).toEqual({
+      'registry-mirrors': ['m'],
+      'live-restore': true
+    });
+  });
+
+  it('a daemon.json it cannot parse is left alone and dockerd is not restarted', async () => {
+    const { host, calls } = runner({ daemonJson: '{ not json' });
+    expect(await settle(prepare(host, 'keep', TRUST))).toMatchObject({ active: true, configWritten: false });
+    expect(calls.some(c => c.includes('restart') || c.includes('tee'))).toBe(false);
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('is not a JSON object'));
+  });
+
+  it('needs the CA trusted first (a compile-time order check)', () => {
+    const { host } = runner();
+    // @ts-expect-error - restarting dockerd before the CA is in the system store does not compile
+    const early = () => prepare(host, 'keep', {});
+    expect(early).toBeInstanceOf(Function);
+  });
+});
+
+describe('containerAddresses', () => {
+  it('shows addresses only when the runner has lost docker access', async () => {
+    const { host } = recordingHost(l => (l.startsWith('docker ') ? 1 : 0));
+    expect(await containerAddresses(host)).toEqual(new Map());
   });
 });
 

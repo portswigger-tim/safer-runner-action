@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import { FLOW_LOG, DOCKER_DAEMON_JSON, SELFTEST_FILE, SUDO_LOG } from '../constants';
 import { flowLogSize } from '../flowlog';
 import * as iptables from '../services/iptables';
-import type { DockerPolicy, Inputs } from '../config/inputs';
+import type { Inputs } from '../config/inputs';
 import { CONTAINER_TLS, buildPolicyConfig } from '../policy';
 import * as mitmproxy from '../services/mitmproxy';
 import { generateCa, installTeardown } from '../services/mitmproxy/ca';
@@ -29,17 +29,7 @@ import * as coredns from '../services/coredns';
 import { realHost, type Host } from '../system/host';
 import { resolveGitHubDomains } from '../config/github-domains';
 import { detectSudoFlavour, disableSudoForRunner, getSudoLoggingConfigFile, setupSudoLogging } from '../services/sudo';
-import {
-  type DockerAccess,
-  type DockerState,
-  disableDockerForRunner,
-  dockerAccess,
-  isDockerActive,
-  readDockerState,
-  restartDockerForCaTrust,
-  runningContainers,
-  stopDockerService
-} from '../services/docker';
+import * as docker from '../services/docker';
 import { CRITICAL_FILES, SystemValidator } from '../integrity/baseline';
 
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
@@ -100,55 +90,6 @@ export const JOB_CONTAINER_MESSAGE =
   'safer-runner cannot protect a job that runs in a job `container:` - the action runs inside the ' +
   'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
   '`services:` and `docker run` steps instead (their egress is controlled).';
-
-/** What the setup marker (and so the report) records about docker: requested AND verified. */
-export interface DockerOutcome {
-  requested: DockerPolicy;
-  access: DockerAccess;
-  state: DockerState;
-}
-
-/**
- * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
- * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
- * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
- */
-export async function applyDockerPolicy(
-  inputs: Pick<Inputs, 'mode' | 'docker'>,
-  ops = { disableDockerForRunner, stopDockerService, readDockerState }
-): Promise<DockerOutcome> {
-  const { mode, docker } = inputs;
-  const failures =
-    docker === 'stop'
-      ? await ops.stopDockerService()
-      : docker === 'remove-group'
-        ? await ops.disableDockerForRunner()
-        : [];
-  const state = await ops.readDockerState();
-  const access = dockerAccess(state);
-  core.info(
-    `docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
-      `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`
-  );
-  if (docker !== 'keep' && access === 'retained') {
-    const msg =
-      `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
-      (failures.length ? `: ${failures.join('; ')}` : '');
-    if (mode === 'enforce') throw new Error(msg);
-    core.warning(msg);
-  } else if (failures.length) {
-    core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
-  }
-  if (mode === 'enforce' && access === 'retained') {
-    core.warning(
-      'enforce is ADVISORY in this job: docker is retained (docker: keep), and docker access is root-equivalent, ' +
-        'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
-        'or docker: stop unless the job needs docker.',
-      { title: 'safer-runner: enforce (ADVISORY - docker retained)' }
-    );
-  }
-  return { requested: docker, access, state };
-}
 
 /**
  * `h` is where the converted services run their commands. Until every service takes a Host
@@ -258,16 +199,9 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
 
   // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
   // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
-  const dockerActive = inputs.docker !== 'stop' && (await isDockerActive());
-  let dockerConfigWritten = false;
-  if (dockerActive) {
-    const services = await runningContainers();
-    if (inputs.docker === 'keep' || services.length > 0) {
-      dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => restartDockerForCaTrust());
-    }
-  }
+  const dockerd = await docker.prepare(h, inputs.docker, trust);
 
-  // 8. Firewall: only once the resolver points at CoreDNS and the CA is trusted
+  // 8. Firewall: only once the resolver points at CoreDNS, the CA is trusted and dockerd settled
   const { containerRules, firewall } = await timed('Configure firewall', () =>
     iptables.configure(
       h,
@@ -277,17 +211,17 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
         dnsUid: dnsUser.uid,
         proxyPort: ports.port,
         containerProxyPort: ports.containerPort,
-        containers: dockerActive,
+        containers: dockerd.active,
         dnsServers
       },
-      { resolver, trust }
+      { resolver, trust, docker: dockerd.prepared }
     )
   );
 
   // 9. Prove it on this runner
   const selfTestFrom = flowLogSize(FLOW_LOG);
   const dnsSelfTestName = dnsProbeName([...policy.allow, ...policy.passthrough]);
-  const results = await timed('Self-tests', () => runSelfTests(mode, dnsSelfTestName, firewall));
+  const { results, selfTests } = await timed('Self-tests', () => runSelfTests(mode, dnsSelfTestName, firewall));
   await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
   const selfTestWindow = [selfTestFrom, flowLogSize(FLOW_LOG)];
   await exec.exec('sudo', ['tee', SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
@@ -300,14 +234,14 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   }
 
   // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-  const docker = await applyDockerPolicy(inputs);
+  const dockerAccess = await docker.applyAccessPolicy(h, inputs, selfTests);
   await exec.exec('sudo', ['tee', SETUP_MARKER], {
     input: Buffer.from(
       JSON.stringify({
         mode,
         sudoRetained,
-        dockerRetained: docker.access === 'retained',
-        docker,
+        dockerRetained: dockerAccess.access === 'retained',
+        docker: dockerAccess,
         failOnTampering: inputs.failOnTampering,
         containerTls: CONTAINER_TLS,
         containerRules,
@@ -323,7 +257,7 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   const validator = new SystemValidator([
     ...CRITICAL_FILES,
     getSudoLoggingConfigFile(sudoFlavour),
-    ...(dockerConfigWritten ? [DOCKER_DAEMON_JSON] : [])
+    ...(dockerd.configWritten ? [DOCKER_DAEMON_JSON] : [])
   ]);
   await validator.capturePostSetupBaseline();
   if (inputs.disableSudo) {

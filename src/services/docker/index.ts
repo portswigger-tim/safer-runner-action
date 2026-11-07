@@ -1,19 +1,38 @@
 /**
- * Docker access control (the `docker` input) and dockerd handling for the proxy CA.
+ * Docker access control (the `docker` input) and dockerd handling for the proxy CA. Pure parts
+ * are in ./config.ts.
  */
 
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import * as fs from 'fs';
+import type { DockerPolicy, Inputs } from '../../config/inputs';
 import { DOCKER_DAEMON_JSON } from '../../constants';
+import type { SelfTestsRun } from '../../setup/selftest';
+import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
+import type { TrustInstalled } from '../mitmproxy/trust';
+import {
+  DOCKER_GROUP,
+  DOCKER_SOCKET,
+  RUNNER_USERNAME,
+  dockerAccess,
+  mergeLiveRestore,
+  parseContainerAddresses,
+  type DockerAccess,
+  type DockerState
+} from './config';
 
-// Constants
-export const RUNNER_USERNAME = 'runner';
-export const DOCKER_GROUP = 'docker';
-export const DOCKER_SOCKET = '/var/run/docker.sock';
+export * from './config';
 
-async function run(args: string[]): Promise<string | null> {
-  const rc = await exec.exec('sudo', args, { ignoreReturnCode: true });
+declare const dockerPrepared: unique symbol;
+/**
+ * dockerd is ready for the firewall: restarted to trust the CA if it had done TLS already (F1),
+ * or not in play. Minted only by prepare().
+ */
+export type DockerPrepared = { readonly [dockerPrepared]: true };
+
+/** A sudo step whose failure is collected, not thrown: the verified state decides. */
+async function step(h: Host, args: string[]): Promise<string | null> {
+  const rc = await sudo(args, { ignoreReturnCode: true }, h);
   return rc === 0 ? null : `sudo ${args.join(' ')} exited ${rc}`;
 }
 
@@ -26,11 +45,11 @@ async function run(args: string[]): Promise<string | null> {
  * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
  * afterwards - the caller fails closed on that, not on these messages.
  */
-export async function disableDockerForRunner(socket: string = DOCKER_SOCKET): Promise<string[]> {
+export async function disableDockerForRunner(h: Host, socket: string = DOCKER_SOCKET): Promise<string[]> {
   core.info('Removing the runner user from the docker group and locking the docker socket...');
   const failed: string[] = [];
-  if (await isRunnerInDockerGroup()) {
-    const err = await run(['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
+  if (await isRunnerInDockerGroup(h)) {
+    const err = await step(h, ['gpasswd', '-d', RUNNER_USERNAME, DOCKER_GROUP]);
     if (err) failed.push(err);
   }
   if (fs.existsSync(socket)) {
@@ -38,7 +57,7 @@ export async function disableDockerForRunner(socket: string = DOCKER_SOCKET): Pr
       ['chown', 'root:root', socket],
       ['chmod', '600', socket]
     ]) {
-      const err = await run(args);
+      const err = await step(h, args);
       if (err) failed.push(err);
     }
   }
@@ -49,12 +68,12 @@ export async function disableDockerForRunner(socket: string = DOCKER_SOCKET): Pr
  * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
  * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
-export async function stopDockerService(): Promise<string[]> {
+export async function stopDockerService(h: Host): Promise<string[]> {
   core.info('Stopping and disabling the docker daemon...');
   const failed: string[] = [];
   for (const verb of ['stop', 'disable']) {
     for (const unit of ['docker.socket', 'docker.service']) {
-      const err = await run(['systemctl', verb, unit]);
+      const err = await step(h, ['systemctl', verb, unit]);
       if (err) failed.push(err);
     }
   }
@@ -65,8 +84,8 @@ export async function stopDockerService(): Promise<string[]> {
  * Whether the runner user is in the docker group (`id -nG runner`, i.e. what a new session
  * gets). Fails closed: if membership cannot be read, it is assumed.
  */
-export async function isRunnerInDockerGroup(): Promise<boolean> {
-  const { stdout, exitCode } = await exec.getExecOutput('id', ['-nG', RUNNER_USERNAME], {
+export async function isRunnerInDockerGroup(h: Host): Promise<boolean> {
+  const { stdout, exitCode } = await h.output('id', ['-nG', RUNNER_USERNAME], {
     ignoreReturnCode: true,
     silent: true
   });
@@ -75,32 +94,6 @@ export async function isRunnerInDockerGroup(): Promise<boolean> {
     return true;
   }
   return stdout.trim().split(/\s+/).includes(DOCKER_GROUP);
-}
-
-/** Docker access as observed on the runner (not as requested). */
-export interface DockerState {
-  /** docker.service is active */
-  daemonActive: boolean;
-  /** docker.socket (socket activation) is active */
-  socketUnitActive: boolean;
-  /** a new runner session would get the docker group */
-  runnerInGroup: boolean;
-  /** this process (the runner user's current credentials) can read+write the docker socket */
-  socketAccessible: boolean;
-}
-
-/**
- * Verified docker access for the runner user:
- * - not-running: neither the daemon nor its socket unit is active
- * - group-removed: the daemon runs, but the runner is out of the group and cannot use the socket
- * - retained: the runner can use docker (root-equivalent)
- */
-export type DockerAccess = 'retained' | 'group-removed' | 'not-running';
-
-export function dockerAccess(s: DockerState): DockerAccess {
-  if (!s.daemonActive && !s.socketUnitActive) return 'not-running';
-  if (!s.runnerInGroup && !s.socketAccessible) return 'group-removed';
-  return 'retained';
 }
 
 function canUseSocket(socket: string): boolean {
@@ -112,62 +105,43 @@ function canUseSocket(socket: string): boolean {
   }
 }
 
-async function unitActive(unit: string): Promise<boolean> {
-  return (await exec.exec('systemctl', ['is-active', '--quiet', unit], { ignoreReturnCode: true, silent: true })) === 0;
+async function unitActive(h: Host, unit: string): Promise<boolean> {
+  return (await h.run('systemctl', ['is-active', '--quiet', unit], { ignoreReturnCode: true, silent: true })) === 0;
 }
 
-export async function readDockerState(socket: string = DOCKER_SOCKET): Promise<DockerState> {
+export async function readDockerState(h: Host, socket: string = DOCKER_SOCKET): Promise<DockerState> {
   return {
-    daemonActive: await unitActive('docker.service'),
-    socketUnitActive: await unitActive('docker.socket'),
-    runnerInGroup: await isRunnerInDockerGroup(),
+    daemonActive: await unitActive(h, 'docker.service'),
+    socketUnitActive: await unitActive(h, 'docker.socket'),
+    runnerInGroup: await isRunnerInDockerGroup(h),
     socketAccessible: canUseSocket(socket)
   };
 }
 
-/**
- * Merge `live-restore: true` into a daemon.json body. Returns null when the existing file is
- * not a JSON object (never overwrite a config we can't parse - dockerd would refuse to start).
- */
-export function mergeLiveRestore(existing: string): { json: string; changed: boolean } | null {
-  let cfg: Record<string, unknown> = {};
-  if (existing.trim() !== '') {
-    try {
-      const parsed = JSON.parse(existing);
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-      cfg = parsed as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-  if (cfg['live-restore'] === true) return { json: existing, changed: false };
-  return { json: JSON.stringify({ ...cfg, 'live-restore': true }, null, 2) + '\n', changed: true };
-}
-
 /** `systemctl is-active docker`. */
-export async function isDockerActive(): Promise<boolean> {
-  const rc = await exec.exec('systemctl', ['is-active', '--quiet', 'docker'], { ignoreReturnCode: true, silent: true });
+async function isDockerActive(h: Host): Promise<boolean> {
+  const rc = await h.run('systemctl', ['is-active', '--quiet', 'docker'], { ignoreReturnCode: true, silent: true });
   return rc === 0;
 }
 
 /** IDs of running containers (empty when docker is not reachable). */
-export async function runningContainers(): Promise<string[]> {
-  const { stdout, exitCode } = await exec.getExecOutput('sudo', ['docker', 'ps', '-q', '--no-trunc'], {
+async function runningContainers(h: Host): Promise<string[]> {
+  const { stdout, exitCode } = await h.output('sudo', ['docker', 'ps', '-q', '--no-trunc'], {
     ignoreReturnCode: true,
     silent: true
   });
   return exitCode === 0 ? stdout.split('\n').filter(Boolean) : [];
 }
 
-async function waitForDocker(timeoutMs: number): Promise<boolean> {
+async function waitForDocker(h: Host, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const rc = await exec.exec('sudo', ['docker', 'info', '--format', '{{.ServerVersion}}'], {
+    const rc = await h.run('sudo', ['docker', 'info', '--format', '{{.ServerVersion}}'], {
       ignoreReturnCode: true,
       silent: true
     });
     if (rc === 0) return true;
-    await new Promise(r => setTimeout(r, 500));
+    await sleep(500);
   }
   return false;
 }
@@ -182,9 +156,9 @@ async function waitForDocker(timeoutMs: number): Promise<boolean> {
  *
  * Returns true when daemon.json was written (it then belongs in the integrity baseline).
  */
-export async function restartDockerForCaTrust(): Promise<boolean> {
-  const before = await runningContainers();
-  const { stdout: existing } = await exec.getExecOutput('sudo', ['cat', DOCKER_DAEMON_JSON], {
+async function restartForCaTrust(h: Host): Promise<boolean> {
+  const before = await runningContainers(h);
+  const { stdout: existing } = await h.output('sudo', ['cat', DOCKER_DAEMON_JSON], {
     ignoreReturnCode: true,
     silent: true
   });
@@ -197,18 +171,18 @@ export async function restartDockerForCaTrust(): Promise<boolean> {
     return false;
   }
   if (merged.changed) {
-    await exec.exec('sudo', ['install', '-d', '-m', '0755', '/etc/docker']);
-    await exec.exec('sudo', ['tee', DOCKER_DAEMON_JSON], { input: Buffer.from(merged.json), silent: true });
+    await sudo(['install', '-d', '-m', '0755', '/etc/docker'], {}, h);
+    await sudo(['tee', DOCKER_DAEMON_JSON], { input: Buffer.from(merged.json), silent: true }, h);
     // live-restore is one of the options dockerd reloads on SIGHUP (ExecReload)
-    await exec.exec('sudo', ['systemctl', 'reload', 'docker']);
-    await new Promise(r => setTimeout(r, 500));
+    await sudo(['systemctl', 'reload', 'docker'], {}, h);
+    await sleep(500);
   }
   const t0 = Date.now();
-  await exec.exec('sudo', ['systemctl', 'restart', 'docker']);
-  if (!(await waitForDocker(30000))) {
+  await sudo(['systemctl', 'restart', 'docker'], {}, h);
+  if (!(await waitForDocker(h, 30000))) {
     throw new Error('dockerd did not come back within 30s after restart (F1 CA trust reload)');
   }
-  const after = new Set(await runningContainers());
+  const after = new Set(await runningContainers(h));
   const lost = before.filter(id => !after.has(id));
   core.info(
     `dockerd restarted to trust the proxy CA in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
@@ -223,18 +197,71 @@ export async function restartDockerForCaTrust(): Promise<boolean> {
 }
 
 /**
- * Parse `docker inspect --format '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}'`
- * output into container IP -> name.
+ * Get dockerd ready for the firewall, once the CA is trusted: when docker runs (and is not about
+ * to be stopped) and dockerd may already have done TLS (`keep`, or service containers running),
+ * restart it so it trusts the CA (F1). Returns whether docker is active (the firewall adds the
+ * container rules) and whether daemon.json was written (it joins the integrity baseline).
  */
-export function parseContainerAddresses(output: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const line of output.split('\n')) {
-    const [rawName, ...ips] = line.trim().split(/\s+/);
-    if (!rawName) continue;
-    const name = rawName.replace(/^\//, '');
-    for (const ip of ips) if (ip && !out.has(ip)) out.set(ip, name);
+export async function prepare(
+  h: Host,
+  policy: DockerPolicy,
+  _trust: TrustInstalled
+): Promise<{ active: boolean; configWritten: boolean; prepared: DockerPrepared }> {
+  const active = policy !== 'stop' && (await isDockerActive(h));
+  let configWritten = false;
+  if (active) {
+    const services = await runningContainers(h);
+    if (policy === 'keep' || services.length > 0) {
+      configWritten = await timed('Restart dockerd (CA trust)', () => restartForCaTrust(h));
+    }
   }
-  return out;
+  return { active, configWritten, prepared: Object.freeze({}) as DockerPrepared };
+}
+
+/** What the setup marker (and so the report) records about docker: requested AND verified. */
+export interface DockerOutcome {
+  requested: DockerPolicy;
+  access: DockerAccess;
+  state: DockerState;
+}
+
+/**
+ * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
+ * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
+ * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ */
+export async function applyAccessPolicy(
+  h: Host,
+  inputs: Pick<Inputs, 'mode' | 'docker'>,
+  _selfTests: SelfTestsRun
+): Promise<DockerOutcome> {
+  const { mode, docker } = inputs;
+  const failures =
+    docker === 'stop' ? await stopDockerService(h) : docker === 'remove-group' ? await disableDockerForRunner(h) : [];
+  const state = await readDockerState(h);
+  const access = dockerAccess(state);
+  core.info(
+    `docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+      `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`
+  );
+  if (docker !== 'keep' && access === 'retained') {
+    const msg =
+      `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
+      (failures.length ? `: ${failures.join('; ')}` : '');
+    if (mode === 'enforce') throw new Error(msg);
+    core.warning(msg);
+  } else if (failures.length) {
+    core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
+  }
+  if (mode === 'enforce' && access === 'retained') {
+    core.warning(
+      'enforce is ADVISORY in this job: docker is retained (docker: keep), and docker access is root-equivalent, ' +
+        'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
+        'or docker: stop unless the job needs docker.',
+      { title: 'safer-runner: enforce (ADVISORY - docker retained)' }
+    );
+  }
+  return { requested: docker, access, state };
 }
 
 /**
@@ -242,12 +269,12 @@ export function parseContainerAddresses(output: string): Map<string, string> {
  * lost docker access, and the report then shows addresses only. Containers already removed
  * (`docker run --rm`) are not listed either.
  */
-export async function containerAddresses(): Promise<Map<string, string>> {
+export async function containerAddresses(h: Host = realHost): Promise<Map<string, string>> {
   const opts = { ignoreReturnCode: true, silent: true };
-  const ids = await exec.getExecOutput('docker', ['ps', '-aq'], opts);
+  const ids = await h.output('docker', ['ps', '-aq'], opts);
   const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];
   if (!list.length) return new Map();
   const fmt = '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}';
-  const { stdout, exitCode } = await exec.getExecOutput('docker', ['inspect', '--format', fmt, ...list], opts);
+  const { stdout, exitCode } = await h.output('docker', ['inspect', '--format', fmt, ...list], opts);
   return exitCode === 0 ? parseContainerAddresses(stdout) : new Map();
 }

@@ -124,17 +124,21 @@ export async function dnsExactSelfTest(mode: Mode, name: string | null): Promise
   };
 }
 
+declare const selfTestsRun: unique symbol;
+/** The live self-tests have run (their results decide whether setup goes on). Minted only by runSelfTests(). */
+export type SelfTestsRun = { readonly [selfTestsRun]: true };
+
 /** The live self-tests: they prove the firewall in place on this runner, so they need it first. */
 export async function runSelfTests(
   mode: Mode,
   dnsName: string | null,
   _firewall: FirewallOn
-): Promise<SelfTestResult[]> {
+): Promise<{ results: SelfTestResult[]; selfTests: SelfTestsRun }> {
   const results = [await sniBlockSelfTest(mode), await repointSelfTest(), await dnsExactSelfTest(mode, dnsName)];
   for (const t of results) {
     (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
   }
-  return results;
+  return { results, selfTests: Object.freeze({}) as SelfTestsRun };
 }
 
 /** Byte range of the flow log the self-tests wrote to (recorded in the root-owned setup marker). */
