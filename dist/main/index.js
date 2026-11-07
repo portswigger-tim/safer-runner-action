@@ -1482,15 +1482,6 @@ run();
 
 "use strict";
 
-/**
- * CoreDNS query log parser. Each server block's `log` format labels its own lines
- * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
- * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
- *
- *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
- *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
- *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
- */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -1502,186 +1493,38 @@ var __createBinding = (this && this.__createBinding) || (Object.create ? (functi
     if (k2 === undefined) k2 = k;
     o[k2] = m[k];
 }));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseDnsLog = parseDnsLog;
-exports.refusedNames = refusedNames;
-exports.readRefusedNames = readRefusedNames;
-const fs = __importStar(__nccwpck_require__(9896));
-// anchored on the plugin's own prefix: a query name can't inject a second verdict
-const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
-function parseDnsLog(text) {
-    const out = [];
-    for (const line of text.split('\n')) {
-        const m = LINE.exec(line);
-        if (!m)
-            continue;
-        out.push({
-            client: m[1],
-            verdict: m[2],
-            type: m[3],
-            name: m[4].toLowerCase().replace(/\.$/, ''),
-            rcode: m[5]
-        });
-    }
-    return out;
-}
-/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
-function refusedNames(queries) {
-    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
-}
-function readRefusedNames(file) {
-    try {
-        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
-    }
-    catch {
-        return [];
-    }
-}
+/** Moved to src/report/logs/dns-log.ts; kept so existing importers (selftest.ts) still resolve. */
+__exportStar(__nccwpck_require__(7039), exports);
 
 
 /***/ }),
 
 /***/ 7516:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
-/**
- * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
- * syslog lines copied there by rsyslog in the same format (see sudo.ts)
- */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseSudoLogLine = parseSudoLogLine;
-exports.deduplicateSudoCommands = deduplicateSudoCommands;
-exports.parseSudoLogsFromString = parseSudoLogsFromString;
-exports.classifySudoCommands = classifySudoCommands;
-/**
- * Classic sudo prefixes refused commands with a reason, e.g.
- * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
- */
-const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
-/**
- * Parse a single sudo log entry
- * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
- */
-function parseSudoLogLine(line) {
-    // Match sudo log format with timestamp
-    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
-    if (!match) {
-        return null;
-    }
-    const [, timestamp, user, targetUser, fullCommand] = match;
-    // Split command and args
-    const commandParts = fullCommand.trim().split(/\s+/);
-    const command = commandParts[0];
-    const args = commandParts.slice(1).join(' ');
-    return {
-        timestamp,
-        user,
-        targetUser,
-        command,
-        args,
-        ...(DENIED_PATTERN.test(line) && { denied: true })
-    };
-}
-/**
- * Deduplicate sudo commands by command+args combination
- */
-function deduplicateSudoCommands(commands) {
-    const seen = new Set();
-    const deduplicated = [];
-    for (const cmd of commands) {
-        const key = `${cmd.command} ${cmd.args}`;
-        if (!seen.has(key)) {
-            seen.add(key);
-            deduplicated.push(cmd);
-        }
-    }
-    return deduplicated;
-}
-/**
- * Join wrapped log entries back into single lines
- * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
- * continuation lines, which can split a command from its arguments:
- *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
- *       /etc/resolv.conf
- */
-function joinContinuationLines(content) {
-    const joined = [];
-    for (const line of content.split('\n')) {
-        if (/^\s+\S/.test(line) && joined.length > 0) {
-            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
-        }
-        else {
-            joined.push(line);
-        }
-    }
-    return joined;
-}
-/**
- * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
- * entry is matched as one line.
- */
-function parseSudoLogsFromString(content) {
-    const commands = [];
-    for (const line of joinContinuationLines(content)) {
-        const cmd = parseSudoLogLine(line);
-        if (cmd) {
-            commands.push(cmd);
-        }
-    }
-    // Deduplicate and limit to 1000 commands
-    return deduplicateSudoCommands(commands).slice(0, 1000);
-}
-/**
- * Whether a (successful) command is one of the action's own. System binaries match by
- * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
- * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
- */
-function isInternal(cmd, internal) {
-    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
-    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
-    if (match) {
-        return internal.has(withArgs(match[1]));
-    }
-    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
-}
-/** Split parsed sudo log entries by who ran them and whether they were allowed. */
-function classifySudoCommands(commands, internalCommands) {
-    const internal = new Set(internalCommands);
-    const usage = { ran: [], refused: [], internal: [] };
-    for (const cmd of commands) {
-        if (cmd.denied)
-            usage.refused.push(cmd);
-        else if (isInternal(cmd, internal))
-            usage.internal.push(cmd);
-        else
-            usage.ran.push(cmd);
-    }
-    return usage;
-}
+/** Moved to src/report/logs/sudo-log.ts; kept so existing importers (sudo.ts) still resolve. */
+__exportStar(__nccwpck_require__(8305), exports);
 
 
 /***/ }),
@@ -1966,6 +1809,215 @@ function buildPolicyConfig(opts) {
         },
         warnings
     };
+}
+
+
+/***/ }),
+
+/***/ 7039:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * CoreDNS query log parser. Each server block's `log` format labels its own lines
+ * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
+ * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
+ *
+ *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
+ *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
+ *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDnsLog = parseDnsLog;
+exports.refusedNames = refusedNames;
+exports.readRefusedNames = readRefusedNames;
+const fs = __importStar(__nccwpck_require__(9896));
+// anchored on the plugin's own prefix: a query name can't inject a second verdict
+const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
+function parseDnsLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        const m = LINE.exec(line);
+        if (!m)
+            continue;
+        out.push({
+            client: m[1],
+            verdict: m[2],
+            type: m[3],
+            name: m[4].toLowerCase().replace(/\.$/, ''),
+            rcode: m[5]
+        });
+    }
+    return out;
+}
+/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
+function refusedNames(queries) {
+    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
+}
+function readRefusedNames(file) {
+    try {
+        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
+    }
+    catch {
+        return [];
+    }
+}
+
+
+/***/ }),
+
+/***/ 8305:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
+ * syslog lines copied there by rsyslog in the same format (see sudo.ts)
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSudoLogLine = parseSudoLogLine;
+exports.deduplicateSudoCommands = deduplicateSudoCommands;
+exports.parseSudoLogsFromString = parseSudoLogsFromString;
+exports.classifySudoCommands = classifySudoCommands;
+/**
+ * Classic sudo prefixes refused commands with a reason, e.g.
+ * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
+ */
+const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
+/**
+ * Parse a single sudo log entry
+ * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
+ */
+function parseSudoLogLine(line) {
+    // Match sudo log format with timestamp
+    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
+    if (!match) {
+        return null;
+    }
+    const [, timestamp, user, targetUser, fullCommand] = match;
+    // Split command and args
+    const commandParts = fullCommand.trim().split(/\s+/);
+    const command = commandParts[0];
+    const args = commandParts.slice(1).join(' ');
+    return {
+        timestamp,
+        user,
+        targetUser,
+        command,
+        args,
+        ...(DENIED_PATTERN.test(line) && { denied: true })
+    };
+}
+/**
+ * Deduplicate sudo commands by command+args combination
+ */
+function deduplicateSudoCommands(commands) {
+    const seen = new Set();
+    const deduplicated = [];
+    for (const cmd of commands) {
+        const key = `${cmd.command} ${cmd.args}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            deduplicated.push(cmd);
+        }
+    }
+    return deduplicated;
+}
+/**
+ * Join wrapped log entries back into single lines
+ * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
+ * continuation lines, which can split a command from its arguments:
+ *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
+ *       /etc/resolv.conf
+ */
+function joinContinuationLines(content) {
+    const joined = [];
+    for (const line of content.split('\n')) {
+        if (/^\s+\S/.test(line) && joined.length > 0) {
+            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
+        }
+        else {
+            joined.push(line);
+        }
+    }
+    return joined;
+}
+/**
+ * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
+ * entry is matched as one line.
+ */
+function parseSudoLogsFromString(content) {
+    const commands = [];
+    for (const line of joinContinuationLines(content)) {
+        const cmd = parseSudoLogLine(line);
+        if (cmd) {
+            commands.push(cmd);
+        }
+    }
+    // Deduplicate and limit to 1000 commands
+    return deduplicateSudoCommands(commands).slice(0, 1000);
+}
+/**
+ * Whether a (successful) command is one of the action's own. System binaries match by
+ * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
+ * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
+ */
+function isInternal(cmd, internal) {
+    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
+    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+    if (match) {
+        return internal.has(withArgs(match[1]));
+    }
+    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
+}
+/** Split parsed sudo log entries by who ran them and whether they were allowed. */
+function classifySudoCommands(commands, internalCommands) {
+    const internal = new Set(internalCommands);
+    const usage = { ran: [], refused: [], internal: [] };
+    for (const cmd of commands) {
+        if (cmd.denied)
+            usage.refused.push(cmd);
+        else if (isInternal(cmd, internal))
+            usage.internal.push(cmd);
+        else
+            usage.ran.push(cmd);
+    }
+    return usage;
 }
 
 
