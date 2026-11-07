@@ -10,10 +10,13 @@ import type { Host } from './host';
 export function recordingHost(
   exitCode: (line: string) => number = () => 0,
   stdout: (line: string) => string = () => ''
-): { host: Host; calls: string[] } {
+): { host: Host; calls: string[]; stdin: Record<string, string> } {
   const calls: string[] = [];
+  /** stdin by command line (the last one, if a command ran more than once) */
+  const stdin: Record<string, string> = {};
   const run = (cmd: string, args: string[], opts: ExecOptions = {}) => {
     const line = [cmd, ...args].join(' ');
+    if (opts.input) stdin[line] = opts.input.toString();
     calls.push(`${line}${opts.ignoreReturnCode ? ' [ignore-rc]' : ''}${opts.silent ? ' [silent]' : ''}`);
     const code = exitCode(line);
     if (code !== 0 && !opts.ignoreReturnCode) throw new Error(`The process '${cmd}' failed with exit code ${code}`);
@@ -21,6 +24,7 @@ export function recordingHost(
   };
   return {
     calls,
+    stdin,
     host: {
       run: async (cmd, args, opts) => run(cmd, args, opts),
       output: async (cmd, args, opts) => ({

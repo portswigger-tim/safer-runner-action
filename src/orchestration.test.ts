@@ -742,6 +742,8 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
   before('L11', P.resolvedDropIn, P.resolvUnlink);
   before('L11', P.resolvUnlink, P.resolvWrite);
   before('L11', P.resolvWrite, P.resolvedRestart);
+  // the firewall forces :53 to CoreDNS only once the system resolver points at it
+  before('L11', P.resolvWrite, P.restore4);
   if (x.dockerRestart) {
     before('L12', P.dockerReload, P.dockerRestart);
     before('L12', P.dockerRestart, P.restore4);
@@ -1084,6 +1086,11 @@ describe('invariants have teeth (mutation check)', () => {
     ['L9', 'REDIRECT before the proxy is up', (t: Entry[]) => moveBefore(t, P.restore4, P.proxyRun)],
     ['L10', 'dockerd restarted before the CA is in the store', (t: Entry[]) => swap(t, P.updateCa, P.dockerRestart)],
     ['L11', 'resolv.conf switched before CoreDNS answers', (t: Entry[]) => moveBefore(t, P.resolvWrite, P.dnsRun)],
+    [
+      'L11',
+      'firewall before the resolver points at CoreDNS',
+      (t: Entry[]) => moveBefore(t, P.restore4, P.resolvUnlink)
+    ],
     ['L12', 'firewall before the dockerd restart', (t: Entry[]) => moveBefore(t, P.restore4, P.dockerRestart)],
     ['L13', 'rules changed before the DOCKER-USER probe', (t: Entry[]) => moveBefore(t, P.dockerUserProbe, P.restore6)],
     ['L15', 'self-tests before the firewall', (t: Entry[]) => moveBefore(t, P.restore6, P.selftestWrite)],

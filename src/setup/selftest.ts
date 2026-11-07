@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import { DNS_LOG, FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from '../constants';
 import { FlowRecord, flowLogSize, ipOf, readFlowLog } from '../flowlog';
 import { probe } from '../services/coredns';
+import type { FirewallOn } from '../services/iptables';
 import { parseDnsLog } from '../parsers/dns-parser';
 import { compilePattern, matchesAny, type Mode } from '../policy';
 
@@ -123,7 +124,12 @@ export async function dnsExactSelfTest(mode: Mode, name: string | null): Promise
   };
 }
 
-export async function runSelfTests(mode: Mode, dnsName: string | null): Promise<SelfTestResult[]> {
+/** The live self-tests: they prove the firewall in place on this runner, so they need it first. */
+export async function runSelfTests(
+  mode: Mode,
+  dnsName: string | null,
+  _firewall: FirewallOn
+): Promise<SelfTestResult[]> {
   const results = [await sniBlockSelfTest(mode), await repointSelfTest(), await dnsExactSelfTest(mode, dnsName)];
   for (const t of results) {
     (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
