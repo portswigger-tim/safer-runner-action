@@ -597,10 +597,9 @@ describe('redaction canary (C5)', () => {
     expect(md).not.toContain(METHOD_CANARY);
   });
 
-  // KNOWN GAP (found writing this test; fix lands outside M0): the container table prints
-  // ALLOWED names raw, unlike every host table, so data in an allowed wildcard name leaks there.
-  // Expected to fail until fixed - jest reports it the moment it starts passing.
-  it.failing('container table: an allowed name carrying data is redacted', () => {
+  // Allowed names are redacted too, as in the host tables: a name under an allowed wildcard
+  // entry can carry data.
+  it('container table: an allowed name carrying data is redacted', () => {
     const records: FlowRecord[] = [
       {
         ts: 1,
