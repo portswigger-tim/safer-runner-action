@@ -19,6 +19,7 @@ import {
 } from '../../constants';
 import { sudo, type Host } from '../../system/host';
 import type { ResolverOn } from '../coredns';
+import type { DockerPrepared } from '../docker';
 import type { TrustInstalled } from '../mitmproxy/trust';
 import {
   LOCAL_BRIDGES,
@@ -230,12 +231,12 @@ async function logFirewall(h: Host): Promise<void> {
  * The firewall step: LOG routing, the rulesets (DOCKER-USER checked before anything changes),
  * then the cutover of connections that predate them. Only once the resolver points at CoreDNS
  * and the CA is trusted, so nothing is forced through the proxy or the resolver before they
- * are ready for it.
+ * are ready for it, and once dockerd is settled (its restart rebuilds Docker's own chains).
  */
 export async function configure(
   h: Host,
   o: FirewallOptions,
-  _after: { resolver: ResolverOn; trust: TrustInstalled }
+  _after: { resolver: ResolverOn; trust: TrustInstalled; docker: DockerPrepared }
 ): Promise<{ containerRules: boolean; firewall: FirewallOn }> {
   await setupLogging(h);
   await detectEgressInterface(h);
