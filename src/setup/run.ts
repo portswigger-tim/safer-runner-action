@@ -16,26 +16,9 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import {
-  FIREWALL_LOG,
-  FLOW_LOG,
-  DOCKER_DAEMON_JSON,
-  LOG_PREFIX_ANALYZE,
-  LOG_PREFIX_CDROP,
-  LOG_PREFIX_CEGRESS,
-  LOG_PREFIX_DROP,
-  SELFTEST_FILE,
-  SUDO_LOG
-} from '../constants';
+import { FLOW_LOG, DOCKER_DAEMON_JSON, SELFTEST_FILE, SUDO_LOG } from '../constants';
 import { flowLogSize } from '../flowlog';
-import {
-  applyFirewall,
-  detectEgressInterface,
-  flushContainerConntrack,
-  killPreexistingConnections,
-  logFirewall,
-  setupIptablesLogging
-} from '../services/iptables';
+import * as iptables from '../services/iptables';
 import type { DockerPolicy, Inputs } from '../config/inputs';
 import { CONTAINER_TLS, buildPolicyConfig } from '../policy';
 import * as mitmproxy from '../services/mitmproxy';
@@ -167,6 +150,11 @@ export async function applyDockerPolicy(
   return { requested: docker, access, state };
 }
 
+/**
+ * `h` is where the converted services run their commands. Until every service takes a Host
+ * (docker, sudo and the integrity baseline still use @actions/exec directly), it is a test seam
+ * only: pass anything but realHost and part of setup still runs on the real machine.
+ */
 export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void> {
   const { mode } = inputs;
   core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
@@ -246,12 +234,11 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   // 4. Proxy
   const proxy = await timed('Start proxy', () => mitmproxy.start(h, proxyRendered, ports, proxyConfig, ca));
 
-  // 5. Trust - before any traffic is forced through the proxy (`trust` is the dockerd restart's
-  // and the firewall step's precondition once those take tokens)
+  // 5. Trust - before any traffic is forced through the proxy (`trust` is also the dockerd
+  // restart's precondition once docker takes tokens)
   const trust = await timed('Install CA trust', () => distributeTrust(h, proxy));
 
   // 6. DNS: CoreDNS answering first, then the system resolver points at it
-  // (`resolver` is the firewall step's precondition once iptables takes tokens)
   const resolver = await timed('Configure DNS', async () => {
     const dns = await coredns.start(
       h,
@@ -280,30 +267,27 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
     }
   }
 
-  // 8. Firewall
-  let containerRules = false;
-  await timed('Configure firewall', async () => {
-    const prefixes = [LOG_PREFIX_DROP, LOG_PREFIX_ANALYZE, LOG_PREFIX_CDROP, LOG_PREFIX_CEGRESS].map(p => p.trim());
-    await setupIptablesLogging(FIREWALL_LOG, prefixes, 'v2');
-    await detectEgressInterface();
-    ({ containerRules } = await applyFirewall({
-      mode,
-      proxyUid,
-      dnsUid: dnsUser.uid,
-      proxyPort: ports.port,
-      containerProxyPort: ports.containerPort,
-      containers: dockerActive,
-      dnsServers
-    }));
-    await killPreexistingConnections();
-    if (containerRules) await flushContainerConntrack();
-    await logFirewall();
-  });
+  // 8. Firewall: only once the resolver points at CoreDNS and the CA is trusted
+  const { containerRules, firewall } = await timed('Configure firewall', () =>
+    iptables.configure(
+      h,
+      {
+        mode,
+        proxyUid,
+        dnsUid: dnsUser.uid,
+        proxyPort: ports.port,
+        containerProxyPort: ports.containerPort,
+        containers: dockerActive,
+        dnsServers
+      },
+      { resolver, trust }
+    )
+  );
 
   // 9. Prove it on this runner
   const selfTestFrom = flowLogSize(FLOW_LOG);
   const dnsSelfTestName = dnsProbeName([...policy.allow, ...policy.passthrough]);
-  const results = await timed('Self-tests', () => runSelfTests(mode, dnsSelfTestName));
+  const results = await timed('Self-tests', () => runSelfTests(mode, dnsSelfTestName, firewall));
   await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
   const selfTestWindow = [selfTestFrom, flowLogSize(FLOW_LOG)];
   await exec.exec('sudo', ['tee', SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });

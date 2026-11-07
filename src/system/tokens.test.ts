@@ -16,7 +16,8 @@ const TOKENS: Record<string, { owner: string; invariants: string[] }> = {
   ProxyConfigWritten: { owner: 'services/mitmproxy/index.ts', invariants: ['L6', 'L7'] },
   CaReady: { owner: 'services/mitmproxy/ca.ts', invariants: ['L8'] },
   ProxyReady: { owner: 'services/mitmproxy/index.ts', invariants: ['L9'] },
-  TrustInstalled: { owner: 'services/mitmproxy/trust.ts', invariants: ['L10'] }
+  TrustInstalled: { owner: 'services/mitmproxy/trust.ts', invariants: ['L10'] },
+  FirewallOn: { owner: 'services/iptables/index.ts', invariants: ['L14', 'L15'] }
 };
 
 function sources(dir: string): string[] {

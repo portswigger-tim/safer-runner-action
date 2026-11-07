@@ -1,8 +1,14 @@
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
+import { FIREWALL_LOG } from '../../constants';
+import { recordingHost } from '../../system/testing';
+import type { ResolverOn } from '../coredns';
+import type { TrustInstalled } from '../mitmproxy/trust';
 import {
+  LOGGING_RULE_FILE,
+  LOG_PREFIXES,
   MISSING_DOCKER_USER_MESSAGE,
-  applyFirewall,
+  configure,
+  loggingRule,
   buildContainerForwardRules,
   buildContainerNatRules,
   buildFilterRules,
@@ -14,7 +20,9 @@ import {
 } from '.';
 
 jest.mock('@actions/core');
-jest.mock('@actions/exec');
+
+/** tokens for tests that call the step directly */
+const AFTER = { resolver: Object.freeze({}) as ResolverOn, trust: Object.freeze({}) as TrustInstalled };
 
 const base = {
   proxyUid: 990,
@@ -223,51 +231,112 @@ describe('container rules', () => {
   });
 });
 
-describe('applyFirewall: container hook (C3)', () => {
-  const execMock = exec.exec as jest.MockedFunction<typeof exec.exec>;
-  const restored = () =>
-    execMock.mock.calls
-      .filter(([, args]) => args?.[0] === 'iptables-restore' || args?.[0] === 'ip6tables-restore')
-      .map(([, args, opts]) => `${args?.[0]}\n${opts?.input?.toString()}`)
-      .join('\n');
-  const hooks =
-    (v4: boolean, v6: boolean) =>
-    async (bin: 'iptables' | 'ip6tables'): Promise<boolean> =>
-      bin === 'iptables' ? v4 : v6;
+describe('configure: container hook (C3)', () => {
+  /** a runner where DOCKER-USER exists for iptables (v4) and/or ip6tables (v6) */
+  const runner = (v4: boolean, v6: boolean) =>
+    recordingHost(l => {
+      if (l === 'sudo iptables -t filter -n -L DOCKER-USER') return v4 ? 0 : 1;
+      if (l === 'sudo ip6tables -t filter -n -L DOCKER-USER') return v6 ? 0 : 1;
+      return 0;
+    });
+  const restored = (stdin: Record<string, string>) =>
+    `${stdin['sudo iptables-restore --noflush'] ?? ''}\n${stdin['sudo ip6tables-restore --noflush'] ?? ''}`;
+  const changesRules = (c: string) => / -D | -F | -X |sysctl|-restore /.test(c);
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    execMock.mockResolvedValue(0);
-  });
+  beforeEach(() => jest.clearAllMocks());
 
   it('enforce: fails closed before changing anything when DOCKER-USER is missing', async () => {
-    await expect(applyFirewall({ ...base, mode: 'enforce' }, hooks(false, false))).rejects.toThrow(
-      MISSING_DOCKER_USER_MESSAGE
-    );
-    expect(execMock).not.toHaveBeenCalled();
+    const { host, calls } = runner(false, false);
+    await expect(configure(host, { ...base, mode: 'enforce' }, AFTER)).rejects.toThrow(MISSING_DOCKER_USER_MESSAGE);
+    expect(calls.filter(changesRules)).toEqual([]);
+    expect(calls).toContain('sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]');
   });
 
   it('analyze: warns, applies the host rules and reports no container rules', async () => {
-    const r = await applyFirewall({ ...base, mode: 'analyze' }, hooks(false, false));
-    expect(r).toEqual({ containerRules: false });
+    const { host, stdin } = runner(false, false);
+    const r = await configure(host, { ...base, mode: 'analyze' }, AFTER);
+    expect(r.containerRules).toBe(false);
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining(MISSING_DOCKER_USER_MESSAGE));
-    expect(restored()).toContain('SAFER_RUNNER_OUT');
-    expect(restored()).not.toContain('SAFER_RUNNER_CFWD');
+    expect(restored(stdin)).toContain('SAFER_RUNNER_OUT');
+    expect(restored(stdin)).not.toContain('SAFER_RUNNER_CFWD');
   });
 
   it.each(['enforce', 'analyze'] as const)('%s: applies and reports the container rules when hooked', async mode => {
-    const r = await applyFirewall({ ...base, mode }, hooks(true, false));
-    expect(r).toEqual({ containerRules: true });
-    expect(restored()).toContain('-I DOCKER-USER 1 -i docker0 -j SAFER_RUNNER_CFWD');
+    const { host, stdin } = runner(true, false);
+    const r = await configure(host, { ...base, mode }, AFTER);
+    expect(r.containerRules).toBe(true);
+    expect(restored(stdin)).toContain('-I DOCKER-USER 1 -i docker0 -j SAFER_RUNNER_CFWD');
     // no IPv6 DOCKER-USER: hook FORWARD instead
-    expect(restored()).toContain('-I FORWARD 1 -i docker0 -j SAFER_RUNNER_CFWD');
+    expect(restored(stdin)).toContain('-I FORWARD 1 -i docker0 -j SAFER_RUNNER_CFWD');
   });
 
   it('without docker: no hook lookup, no container rules', async () => {
-    const hasChain = jest.fn(hooks(false, false));
-    const r = await applyFirewall({ ...base, mode: 'enforce', containers: false }, hasChain);
-    expect(r).toEqual({ containerRules: false });
-    expect(hasChain).not.toHaveBeenCalled();
+    const { host, calls } = runner(false, false);
+    const r = await configure(host, { ...base, mode: 'enforce', containers: false }, AFTER);
+    expect(r.containerRules).toBe(false);
+    expect(calls.some(c => c.includes('DOCKER-USER') && c.includes(' -n -L '))).toBe(false);
+  });
+});
+
+describe('configure: the step', () => {
+  it('logging rule, then the rules (v4 atomically before v6), then the cutover of old connections', async () => {
+    const { host, calls, stdin } = recordingHost();
+    await configure(host, { ...base, mode: 'enforce', containers: false }, AFTER);
+    const at = (prefix: string) => calls.findIndex(c => c.startsWith(prefix));
+    expect(calls[0]).toBe(`sudo tee ${LOGGING_RULE_FILE}`);
+    expect(stdin[`sudo tee ${LOGGING_RULE_FILE}`]).toBe(loggingRule(FIREWALL_LOG));
+    expect(calls.slice(1, 5)).toEqual([
+      `sudo touch ${FIREWALL_LOG}`,
+      `sudo chown syslog:adm ${FIREWALL_LOG}`,
+      `sudo chmod 644 ${FIREWALL_LOG}`,
+      'sudo systemctl restart rsyslog'
+    ]);
+    expect(at('sudo sysctl')).toBeLessThan(at('sudo iptables-restore'));
+    expect(at('sudo iptables-restore')).toBeLessThan(at('sudo ip6tables-restore'));
+    expect(at('sudo ip6tables-restore')).toBeLessThan(at('sudo ss -K'));
+    // the v4 rules fail loudly; only ip6tables-restore's code is checked by hand
+    expect(calls).toContain('sudo iptables-restore --noflush');
+    expect(calls).toContain('sudo ip6tables-restore --noflush [ignore-rc]');
+  });
+
+  it('enforce: an ip6tables-restore failure fails the step; analyze warns', async () => {
+    const failing = () => recordingHost(l => (l.startsWith('sudo ip6tables-restore') ? 2 : 0));
+    await expect(configure(failing().host, { ...base, mode: 'enforce', containers: false }, AFTER)).rejects.toThrow(
+      'ip6tables rules could not be applied'
+    );
+    await configure(failing().host, { ...base, mode: 'analyze', containers: false }, AFTER);
+    expect(core.warning).toHaveBeenCalledWith('ip6tables rules could not be applied');
+  });
+
+  it('needs the resolver switched over and the CA trusted first (a compile-time order check)', () => {
+    const { host } = recordingHost();
+    const o = { ...base, mode: 'enforce' as const };
+    // @ts-expect-error - the firewall before the resolver points at CoreDNS does not compile
+    const noResolver = () => configure(host, o, { trust: AFTER.trust });
+    // @ts-expect-error - nor before the CA is in the trust stores
+    const noTrust = () => configure(host, o, { resolver: AFTER.resolver, trust: {} });
+    expect([noResolver, noTrust]).toHaveLength(2);
+  });
+});
+
+describe('loggingRule', () => {
+  it("copies only the kernel's LOG lines with our prefixes to the log", () => {
+    expect(loggingRule('/var/log/x.log', ['A-Drop', 'B-Egress'])).toBe(
+      "if $programname == 'kernel' and $msg contains ['A-Drop', 'B-Egress'] then /var/log/x.log\n"
+    );
+  });
+
+  it('covers every prefix the rulesets log with', () => {
+    expect(LOG_PREFIXES).toEqual([
+      'SaferRunner-Drop:',
+      'SaferRunner-Egress:',
+      'SaferRunner-CDrop:',
+      'SaferRunner-CEgress:'
+    ]);
+    const rules = [buildFilterRules, buildIp6FilterRules, buildContainerForwardRules]
+      .flatMap(f => (['enforce', 'analyze'] as const).map(mode => f({ ...base, mode })))
+      .join('\n');
+    for (const m of rules.matchAll(/--log-prefix "([^"]+) "/g)) expect(LOG_PREFIXES).toContain(m[1]);
   });
 });
 

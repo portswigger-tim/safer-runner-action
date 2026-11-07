@@ -2697,55 +2697,20 @@ async function containerAddresses() {
 
 /***/ }),
 
-/***/ 9374:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+/***/ 7014:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 /**
- * v2 iptables: force 80/443 through the proxy, force all DNS through the resolver (CoreDNS), and (enforce)
- * deny everything else. Rulesets are generated as iptables-restore text (pure functions,
- * unit-tested) and applied atomically with `iptables-restore --noflush` into chains we own,
- * jumped to from position 1 of OUTPUT, so the image's own rules are left alone.
+ * The firewall's pure config: iptables-restore rulesets (snapshot-tested), the rsyslog rule that
+ * routes their LOG lines, and parsers for what the runner reports. No I/O.
  *
  * Rules are interface-agnostic ("allow lo + the proxy path, deny the rest") rather than
  * `-o eth0`-scoped, so a renamed or extra NIC fails closed instead of open (review M3).
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MISSING_DOCKER_USER_MESSAGE = void 0;
+exports.LOG_PREFIXES = exports.LOGGING_RULE_FILE = exports.MISSING_DOCKER_USER_MESSAGE = exports.LOCAL_BRIDGES = void 0;
 exports.buildNatRules = buildNatRules;
 exports.buildFilterRules = buildFilterRules;
 exports.buildIp6FilterRules = buildIp6FilterRules;
@@ -2753,19 +2718,11 @@ exports.buildContainerNatRules = buildContainerNatRules;
 exports.buildContainerForwardRules = buildContainerForwardRules;
 exports.buildIp6ContainerForwardRules = buildIp6ContainerForwardRules;
 exports.parseDefaultRouteInterfaces = parseDefaultRouteInterfaces;
-exports.detectEgressInterface = detectEgressInterface;
-exports.removeFirewall = removeFirewall;
-exports.applyFirewall = applyFirewall;
 exports.parseDockerSubnets = parseDockerSubnets;
-exports.flushContainerConntrack = flushContainerConntrack;
-exports.killPreexistingConnections = killPreexistingConnections;
-exports.logFirewall = logFirewall;
-exports.setupIptablesLogging = setupIptablesLogging;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
+exports.loggingRule = loggingRule;
 const constants_1 = __nccwpck_require__(8729);
 /** Local bridges (docker0, user-defined networks). */
-const LOCAL_BRIDGES = ['docker0', 'br-+'];
+exports.LOCAL_BRIDGES = ['docker0', 'br-+'];
 /** Private destinations a container may reach on its own bridge (container <-> container). */
 const RFC1918 = '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
 /**
@@ -2786,7 +2743,7 @@ function buildNatRules(o) {
         `-A ${c} -d 127.0.0.0/8 -j RETURN`,
         `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -j RETURN`,
         `-A ${c} -d ${constants_1.AZURE_WIRESERVER}/32 -j RETURN`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        ...exports.LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
         `-A ${c} -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports ${o.proxyPort}`,
         `-I OUTPUT 1 -j ${c}`,
         'COMMIT',
@@ -2801,7 +2758,7 @@ function commonFilterAllows(c) {
         // 127.0.0.1, but `-o` still reports the ORIGINAL route (e.g. eth0), so `-o lo` alone
         // never matches them. A 127/8 destination cannot leave the host.
         `-A ${c} -d 127.0.0.0/8 -j RETURN`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        ...exports.LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
         // Azure platform: IMDS and wireserver (WALinuxAgent, health) only on the ports they use.
         // 168.63.129.16:53 is NOT allowed - it is an open recursive resolver (C1).
         `-A ${c} -d ${constants_1.AZURE_IMDS}/32 -p tcp --dport 80 -j RETURN`,
@@ -2846,7 +2803,7 @@ function buildIp6FilterRules(o) {
     const c = constants_1.FILTER_CHAIN;
     const lines = ['*filter', `:${c} - [0:0]`, `-A ${c} -o lo -j RETURN`, `-A ${c} -d ::1/128 -j RETURN`];
     if (o.mode === 'enforce') {
-        lines.push(...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`));
+        lines.push(...exports.LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`));
         for (const t of ['router-solicitation', 'neighbour-solicitation', 'neighbour-advertisement']) {
             lines.push(`-A ${c} -p ipv6-icmp --icmpv6-type ${t} -j RETURN`);
         }
@@ -2875,7 +2832,7 @@ function buildContainerNatRules(o) {
         `-A ${c} -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
         `-A ${c} -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:53`,
         `-A ${c} -p tcp -m multiport --dports 80,443 -j DNAT --to-destination 127.0.0.1:${o.containerProxyPort}`,
-        ...LOCAL_BRIDGES.map(b => `-I PREROUTING 1 -i ${b} -j ${c}`),
+        ...exports.LOCAL_BRIDGES.map(b => `-I PREROUTING 1 -i ${b} -j ${c}`),
         'COMMIT',
         ''
     ].join('\n');
@@ -2905,10 +2862,10 @@ function buildContainerForwardRules(o) {
     return [
         '*filter',
         `:${c} - [0:0]`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        ...exports.LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
         `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
         ...containerForwardTail(c, o, 'icmp-port-unreachable'),
-        ...LOCAL_BRIDGES.map(b => `-I ${constants_1.DOCKER_USER_CHAIN} 1 -i ${b} -j ${c}`),
+        ...exports.LOCAL_BRIDGES.map(b => `-I ${constants_1.DOCKER_USER_CHAIN} 1 -i ${b} -j ${c}`),
         'COMMIT',
         ''
     ].join('\n');
@@ -2929,10 +2886,10 @@ function buildIp6ContainerForwardRules(o, hook = constants_1.DOCKER_USER_CHAIN) 
     return [
         '*filter',
         `:${c} - [0:0]`,
-        ...LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
+        ...exports.LOCAL_BRIDGES.map(b => `-A ${c} -o ${b} -j RETURN`),
         `-A ${c} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`,
         ...tail,
-        ...LOCAL_BRIDGES.map(b => `-I ${hook} 1 -i ${b} -j ${c}`),
+        ...exports.LOCAL_BRIDGES.map(b => `-I ${hook} 1 -i ${b} -j ${c}`),
         'COMMIT',
         ''
     ].join('\n');
@@ -2946,125 +2903,6 @@ function parseDefaultRouteInterfaces(output) {
             out.push(m[1]);
     }
     return Array.from(new Set(out));
-}
-/**
- * Report where egress actually goes. Our rules are interface-agnostic so they fail closed
- * whatever the NIC is called; this is a loud diagnostic for the unexpected cases.
- */
-async function detectEgressInterface() {
-    const { stdout } = await exec.getExecOutput('ip', ['-4', 'route', 'show', 'default'], {
-        silent: true,
-        ignoreReturnCode: true
-    });
-    const ifaces = parseDefaultRouteInterfaces(stdout);
-    if (ifaces.length === 0) {
-        core.warning('No IPv4 default route found - egress rules are interface-agnostic and still apply.');
-    }
-    else if (ifaces.length > 1 || ifaces[0] !== 'eth0') {
-        core.warning(`Default route via ${ifaces.join(', ')} (expected eth0). Egress rules are interface-agnostic ` +
-            '(allow loopback + proxy path, reject the rest), so they still fail closed.');
-    }
-    else {
-        core.info('Default route via eth0');
-    }
-    return ifaces;
-}
-async function restore(binary, rules) {
-    await exec.exec('sudo', [binary, '--noflush'], { input: Buffer.from(rules) });
-}
-/** Remove our chains and jumps if present (idempotency for a re-run in the main step). */
-async function removeFirewall() {
-    const opts = { ignoreReturnCode: true, silent: true };
-    for (const [bin, table, chain] of [
-        ['iptables', 'nat', constants_1.NAT_CHAIN],
-        ['iptables', 'filter', constants_1.FILTER_CHAIN],
-        ['ip6tables', 'filter', constants_1.FILTER_CHAIN]
-    ]) {
-        // -D removes one jump per call; loop until none remain.
-        for (let i = 0; i < 5; i++) {
-            if ((await exec.exec('sudo', [bin, '-t', table, '-D', 'OUTPUT', '-j', chain], opts)) !== 0)
-                break;
-        }
-        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
-        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
-    }
-    const jumps = [
-        ['iptables', 'nat', 'PREROUTING', constants_1.CONTAINER_NAT_CHAIN],
-        ['iptables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
-        ['ip6tables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
-        ['ip6tables', 'filter', 'FORWARD', constants_1.CONTAINER_FWD_CHAIN]
-    ];
-    for (const [bin, table, from, chain] of jumps) {
-        for (const b of LOCAL_BRIDGES) {
-            for (let i = 0; i < 5; i++) {
-                if ((await exec.exec('sudo', [bin, '-t', table, '-D', from, '-i', b, '-j', chain], opts)) !== 0)
-                    break;
-            }
-        }
-    }
-    for (const [bin, table, chain] of [
-        ['iptables', 'nat', constants_1.CONTAINER_NAT_CHAIN],
-        ['iptables', 'filter', constants_1.CONTAINER_FWD_CHAIN],
-        ['ip6tables', 'filter', constants_1.CONTAINER_FWD_CHAIN]
-    ]) {
-        await exec.exec('sudo', [bin, '-t', table, '-F', chain], opts);
-        await exec.exec('sudo', [bin, '-t', table, '-X', chain], opts);
-    }
-}
-/** True if `chain` exists in the filter table of `bin`. */
-async function chainExists(bin, chain) {
-    const rc = await exec.exec('sudo', [bin, '-t', 'filter', '-n', '-L', chain], {
-        ignoreReturnCode: true,
-        silent: true
-    });
-    return rc === 0;
-}
-exports.MISSING_DOCKER_USER_MESSAGE = 'Docker is running but the DOCKER-USER chain is missing (Docker started with iptables disabled, or a ' +
-    'firewall backend other than iptables), so the container egress rules cannot be applied';
-/**
- * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
- * table; IPv6 last. The proxy must already be listening.
- *
- * Returns whether the container rules were applied. enforce fails closed instead of running
- * with containers outside the rules: it throws before anything is changed.
- */
-async function applyFirewall(o, hasChain = chainExists) {
-    let containerRules = false;
-    let ip6Hook = 'FORWARD';
-    if (o.containers) {
-        if (await hasChain('iptables', constants_1.DOCKER_USER_CHAIN)) {
-            containerRules = true;
-            if (await hasChain('ip6tables', constants_1.DOCKER_USER_CHAIN))
-                ip6Hook = constants_1.DOCKER_USER_CHAIN;
-        }
-        else if (o.mode === 'enforce') {
-            throw new Error(`${exports.MISSING_DOCKER_USER_MESSAGE}. Use docker: stop, or mode: analyze.`);
-        }
-        else {
-            core.warning(`${exports.MISSING_DOCKER_USER_MESSAGE}: container egress is not monitored`);
-        }
-    }
-    await removeFirewall();
-    // REDIRECT to 127.0.0.1 of packets that were routed to another interface
-    await exec.exec('sudo', ['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1']);
-    let v4 = buildNatRules(o) + buildFilterRules(o);
-    let v6 = buildIp6FilterRules(o);
-    if (containerRules) {
-        v4 += buildContainerNatRules(o) + buildContainerForwardRules(o);
-        v6 += buildIp6ContainerForwardRules(o, ip6Hook);
-    }
-    await restore('iptables-restore', v4);
-    const rc6 = await exec.exec('sudo', ['ip6tables-restore', '--noflush'], {
-        input: Buffer.from(v6),
-        ignoreReturnCode: true
-    });
-    if (rc6 !== 0) {
-        const msg = 'ip6tables rules could not be applied';
-        if (o.mode === 'enforce')
-            throw new Error(msg);
-        core.warning(msg);
-    }
-    return { containerRules };
 }
 /** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
 function parseDockerSubnets(json) {
@@ -3084,29 +2922,226 @@ function parseDockerSubnets(json) {
     }
     return Array.from(new Set(out));
 }
+exports.MISSING_DOCKER_USER_MESSAGE = 'Docker is running but the DOCKER-USER chain is missing (Docker started with iptables disabled, or a ' +
+    'firewall backend other than iptables), so the container egress rules cannot be applied';
+/** rsyslog rule file for the firewall's LOG lines */
+exports.LOGGING_RULE_FILE = '/etc/rsyslog.d/10-iptables-safer-runner-v2.conf';
+/** the LOG prefixes the rulesets use (without their trailing space) */
+exports.LOG_PREFIXES = [constants_1.LOG_PREFIX_DROP, constants_1.LOG_PREFIX_ANALYZE, constants_1.LOG_PREFIX_CDROP, constants_1.LOG_PREFIX_CEGRESS].map(p => p.trim());
+/**
+ * rsyslog: copy the kernel's LOG lines with our prefixes to `logFile`, readable without sudo.
+ * Filtered on programname=kernel, so the sudo commands that set the rules up don't match.
+ */
+function loggingRule(logFile, prefixes = exports.LOG_PREFIXES) {
+    return `if $programname == 'kernel' and $msg contains ['${prefixes.join("', '")}'] then ${logFile}\n`;
+}
+
+
+/***/ }),
+
+/***/ 9374:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * v2 iptables: force 80/443 through the proxy, force all DNS through the resolver (CoreDNS), and (enforce)
+ * deny everything else. Rulesets are generated as iptables-restore text (./config.ts, pure,
+ * snapshot-tested) and applied atomically with `iptables-restore --noflush` into chains we own,
+ * jumped to from position 1 of OUTPUT, so the image's own rules are left alone.
+ *
+ * The one entry point is configure(): it needs the resolver switched over and the CA trusted
+ * first, and its FirewallOn token is what the self-tests need.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.configure = configure;
+const core = __importStar(__nccwpck_require__(7484));
+const constants_1 = __nccwpck_require__(8729);
+const host_1 = __nccwpck_require__(7020);
+const config_1 = __nccwpck_require__(7014);
+__exportStar(__nccwpck_require__(7014), exports);
+/** Route the rules' LOG lines to the firewall log (rsyslog), readable without sudo. */
+async function setupLogging(h) {
+    await (0, host_1.sudo)(['tee', config_1.LOGGING_RULE_FILE], { input: Buffer.from((0, config_1.loggingRule)(constants_1.FIREWALL_LOG)) }, h);
+    // rsyslog runs as syslog:adm and writes the log
+    await (0, host_1.sudo)(['touch', constants_1.FIREWALL_LOG], {}, h);
+    await (0, host_1.sudo)(['chown', 'syslog:adm', constants_1.FIREWALL_LOG], {}, h);
+    await (0, host_1.sudo)(['chmod', '644', constants_1.FIREWALL_LOG], {}, h);
+    await (0, host_1.sudo)(['systemctl', 'restart', 'rsyslog'], {}, h);
+}
+/**
+ * Report where egress actually goes. Our rules are interface-agnostic so they fail closed
+ * whatever the NIC is called; this is a loud diagnostic for the unexpected cases.
+ */
+async function detectEgressInterface(h) {
+    const { stdout } = await h.output('ip', ['-4', 'route', 'show', 'default'], {
+        silent: true,
+        ignoreReturnCode: true
+    });
+    const ifaces = (0, config_1.parseDefaultRouteInterfaces)(stdout);
+    if (ifaces.length === 0) {
+        core.warning('No IPv4 default route found - egress rules are interface-agnostic and still apply.');
+    }
+    else if (ifaces.length > 1 || ifaces[0] !== 'eth0') {
+        core.warning(`Default route via ${ifaces.join(', ')} (expected eth0). Egress rules are interface-agnostic ` +
+            '(allow loopback + proxy path, reject the rest), so they still fail closed.');
+    }
+    else {
+        core.info('Default route via eth0');
+    }
+    return ifaces;
+}
+/** Remove our chains and jumps if present (idempotency for a re-run in the main step). */
+async function removeFirewall(h) {
+    const opts = { ignoreReturnCode: true, silent: true };
+    for (const [bin, table, chain] of [
+        ['iptables', 'nat', constants_1.NAT_CHAIN],
+        ['iptables', 'filter', constants_1.FILTER_CHAIN],
+        ['ip6tables', 'filter', constants_1.FILTER_CHAIN]
+    ]) {
+        // -D removes one jump per call; loop until none remain.
+        for (let i = 0; i < 5; i++) {
+            if ((await (0, host_1.sudo)([bin, '-t', table, '-D', 'OUTPUT', '-j', chain], opts, h)) !== 0)
+                break;
+        }
+        await (0, host_1.sudo)([bin, '-t', table, '-F', chain], opts, h);
+        await (0, host_1.sudo)([bin, '-t', table, '-X', chain], opts, h);
+    }
+    const jumps = [
+        ['iptables', 'nat', 'PREROUTING', constants_1.CONTAINER_NAT_CHAIN],
+        ['iptables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', constants_1.DOCKER_USER_CHAIN, constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', 'FORWARD', constants_1.CONTAINER_FWD_CHAIN]
+    ];
+    for (const [bin, table, from, chain] of jumps) {
+        for (const b of config_1.LOCAL_BRIDGES) {
+            for (let i = 0; i < 5; i++) {
+                if ((await (0, host_1.sudo)([bin, '-t', table, '-D', from, '-i', b, '-j', chain], opts, h)) !== 0)
+                    break;
+            }
+        }
+    }
+    for (const [bin, table, chain] of [
+        ['iptables', 'nat', constants_1.CONTAINER_NAT_CHAIN],
+        ['iptables', 'filter', constants_1.CONTAINER_FWD_CHAIN],
+        ['ip6tables', 'filter', constants_1.CONTAINER_FWD_CHAIN]
+    ]) {
+        await (0, host_1.sudo)([bin, '-t', table, '-F', chain], opts, h);
+        await (0, host_1.sudo)([bin, '-t', table, '-X', chain], opts, h);
+    }
+}
+/** True if `chain` exists in the filter table of `bin`. */
+async function chainExists(h, bin, chain) {
+    const rc = await (0, host_1.sudo)([bin, '-t', 'filter', '-n', '-L', chain], {
+        ignoreReturnCode: true,
+        silent: true
+    }, h);
+    return rc === 0;
+}
+/**
+ * Apply the full ruleset. Order matters: nat (redirect) and filter go in together per
+ * table; IPv6 last. The proxy must already be listening.
+ *
+ * Returns whether the container rules were applied. enforce fails closed instead of running
+ * with containers outside the rules: it throws before anything is changed.
+ */
+async function applyFirewall(h, o, hasChain) {
+    let containerRules = false;
+    let ip6Hook = 'FORWARD';
+    if (o.containers) {
+        if (await hasChain('iptables', constants_1.DOCKER_USER_CHAIN)) {
+            containerRules = true;
+            if (await hasChain('ip6tables', constants_1.DOCKER_USER_CHAIN))
+                ip6Hook = constants_1.DOCKER_USER_CHAIN;
+        }
+        else if (o.mode === 'enforce') {
+            throw new Error(`${config_1.MISSING_DOCKER_USER_MESSAGE}. Use docker: stop, or mode: analyze.`);
+        }
+        else {
+            core.warning(`${config_1.MISSING_DOCKER_USER_MESSAGE}: container egress is not monitored`);
+        }
+    }
+    await removeFirewall(h);
+    // REDIRECT to 127.0.0.1 of packets that were routed to another interface
+    await (0, host_1.sudo)(['sysctl', '-q', '-w', 'net.ipv4.conf.all.route_localnet=1'], {}, h);
+    let v4 = (0, config_1.buildNatRules)(o) + (0, config_1.buildFilterRules)(o);
+    let v6 = (0, config_1.buildIp6FilterRules)(o);
+    if (containerRules) {
+        v4 += (0, config_1.buildContainerNatRules)(o) + (0, config_1.buildContainerForwardRules)(o);
+        v6 += (0, config_1.buildIp6ContainerForwardRules)(o, ip6Hook);
+    }
+    await (0, host_1.sudo)(['iptables-restore', '--noflush'], { input: Buffer.from(v4) }, h);
+    const rc6 = await (0, host_1.sudo)(['ip6tables-restore', '--noflush'], {
+        input: Buffer.from(v6),
+        ignoreReturnCode: true
+    }, h);
+    if (rc6 !== 0) {
+        const msg = 'ip6tables rules could not be applied';
+        if (o.mode === 'enforce')
+            throw new Error(msg);
+        core.warning(msg);
+    }
+    return { containerRules };
+}
 /**
  * Drop conntrack entries of flows sourced from the container networks. Without this, a
  * service container's connections that predate the rules keep going via ESTABLISHED (the
  * forwarded-traffic counterpart of killPreexistingConnections).
  */
-async function flushContainerConntrack() {
+async function flushContainerConntrack(h) {
     const opts = { ignoreReturnCode: true, silent: true };
-    const ids = await exec.getExecOutput('sudo', ['docker', 'network', 'ls', '-q', '--filter', 'driver=bridge'], opts);
+    const ids = await h.output('sudo', ['docker', 'network', 'ls', '-q', '--filter', 'driver=bridge'], opts);
     const netIds = ids.stdout.split('\n').filter(Boolean);
     let subnets = ['172.16.0.0/12', '192.168.0.0/16', '10.0.0.0/8'];
     if (netIds.length > 0) {
-        const inspect = await exec.getExecOutput('sudo', ['docker', 'network', 'inspect', ...netIds], opts);
-        const found = parseDockerSubnets(inspect.stdout);
+        const inspect = await h.output('sudo', ['docker', 'network', 'inspect', ...netIds], opts);
+        const found = (0, config_1.parseDockerSubnets)(inspect.stdout);
         if (found.length > 0)
             subnets = found;
     }
-    if ((await exec.exec('sh', ['-c', 'command -v conntrack'], opts)) !== 0) {
+    if ((await h.run('sh', ['-c', 'command -v conntrack'], opts)) !== 0) {
         core.warning('conntrack not installed: container connections that predate the rules may continue');
         return;
     }
     for (const s of subnets) {
         // exit 1 = nothing matched
-        await exec.exec('sudo', ['conntrack', '-D', '-f', s.includes(':') ? 'ipv6' : 'ipv4', '-s', s], opts);
+        await (0, host_1.sudo)(['conntrack', '-D', '-f', s.includes(':') ? 'ipv6' : 'ipv4', '-s', s], opts, h);
     }
     core.info(`Flushed container conntrack entries for ${subnets.join(', ')}`);
 }
@@ -3115,54 +3150,39 @@ async function flushContainerConntrack() {
  * so the cutover is immediate: they reconnect through the proxy instead of being rejected
  * mid-stream later.
  */
-async function killPreexistingConnections() {
-    const rc = await exec.exec('sudo', ['ss', '-K', 'state', 'established', '( dport = :443 or dport = :80 )'], {
+async function killPreexistingConnections(h) {
+    const rc = await (0, host_1.sudo)(['ss', '-K', 'state', 'established', '( dport = :443 or dport = :80 )'], {
         ignoreReturnCode: true,
         silent: true
-    });
+    }, h);
     if (rc !== 0)
         core.warning('ss -K failed: pre-existing connections will be cut off by the firewall instead');
 }
 /** Human-readable dump of what we installed (job log). */
-async function logFirewall() {
+async function logFirewall(h) {
     const opts = { ignoreReturnCode: true };
-    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.NAT_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-S', constants_1.FILTER_CHAIN], opts);
-    await exec.exec('sudo', ['ip6tables', '-S', constants_1.FILTER_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-t', 'nat', '-S', constants_1.CONTAINER_NAT_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-S', constants_1.CONTAINER_FWD_CHAIN], opts);
-    await exec.exec('sudo', ['iptables', '-S', constants_1.DOCKER_USER_CHAIN], opts);
+    await (0, host_1.sudo)(['iptables', '-t', 'nat', '-S', constants_1.NAT_CHAIN], opts, h);
+    await (0, host_1.sudo)(['iptables', '-S', constants_1.FILTER_CHAIN], opts, h);
+    await (0, host_1.sudo)(['ip6tables', '-S', constants_1.FILTER_CHAIN], opts, h);
+    await (0, host_1.sudo)(['iptables', '-t', 'nat', '-S', constants_1.CONTAINER_NAT_CHAIN], opts, h);
+    await (0, host_1.sudo)(['iptables', '-S', constants_1.CONTAINER_FWD_CHAIN], opts, h);
+    await (0, host_1.sudo)(['iptables', '-S', constants_1.DOCKER_USER_CHAIN], opts, h);
 }
 /**
- * Setup rsyslog to filter iptables logs to dedicated files
- * This allows reading logs without sudo and provides clean separation
- * between pre-hook and main action logs
- *
- * Creates separate config files for pre-hook and main action to avoid
- * overwriting each other's configurations
+ * The firewall step: LOG routing, the rulesets (DOCKER-USER checked before anything changes),
+ * then the cutover of connections that predate them. Only once the resolver points at CoreDNS
+ * and the CA is trusted, so nothing is forced through the proxy or the resolver before they
+ * are ready for it.
  */
-async function setupIptablesLogging(logFile, logPrefixes, configSuffix = '') {
-    // Build rsyslog configuration to filter iptables logs
-    // Filter by programname=kernel to only capture actual iptables log messages
-    // (not sudo commands that set up the logging rules)
-    const prefixArray = "['" + logPrefixes.join("', '") + "']";
-    const rsyslogConfig = `if $programname == 'kernel' and $msg contains ${prefixArray} then ${logFile}
-`;
-    // Use different config file names for pre-hook and main action
-    const configFile = configSuffix
-        ? `/etc/rsyslog.d/10-iptables-safer-runner-${configSuffix}.conf`
-        : '/etc/rsyslog.d/10-iptables-safer-runner.conf';
-    // Write rsyslog configuration
-    await exec.exec('sudo', ['tee', configFile], {
-        input: Buffer.from(rsyslogConfig)
-    });
-    // Create log file and set ownership to syslog user (rsyslog runs as syslog:adm)
-    // This allows rsyslog to write to the file
-    await exec.exec('sudo', ['touch', logFile]);
-    await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
-    await exec.exec('sudo', ['chmod', '644', logFile]);
-    // Restart rsyslog to apply configuration
-    await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+async function configure(h, o, _after, hasChain = (bin, chain) => chainExists(h, bin, chain)) {
+    await setupLogging(h);
+    await detectEgressInterface(h);
+    const { containerRules } = await applyFirewall(h, o, hasChain);
+    await killPreexistingConnections(h);
+    if (containerRules)
+        await flushContainerConntrack(h);
+    await logFirewall(h);
+    return { containerRules, firewall: Object.freeze({}) };
 }
 
 
@@ -3989,7 +4009,7 @@ const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const flowlog_1 = __nccwpck_require__(5422);
-const iptables_1 = __nccwpck_require__(9374);
+const iptables = __importStar(__nccwpck_require__(9374));
 const policy_1 = __nccwpck_require__(2224);
 const mitmproxy = __importStar(__nccwpck_require__(2145));
 const ca_1 = __nccwpck_require__(1345);
@@ -4084,6 +4104,11 @@ async function applyDockerPolicy(inputs, ops = { disableDockerForRunner: docker_
     }
     return { requested: docker, access, state };
 }
+/**
+ * `h` is where the converted services run their commands. Until every service takes a Host
+ * (docker, sudo and the integrity baseline still use @actions/exec directly), it is a test seam
+ * only: pass anything but realHost and part of setup still runs on the real machine.
+ */
 async function runSetup(inputs, h = host_1.realHost) {
     const { mode } = inputs;
     core.info(`🛡️ safer-runner v2: ${mode.toUpperCase()} mode (L7 egress proxy)`);
@@ -4147,11 +4172,10 @@ async function runSetup(inputs, h = host_1.realHost) {
     await (0, ca_1.installTeardown)(h, ca);
     // 4. Proxy
     const proxy = await timed('Start proxy', () => mitmproxy.start(h, proxyRendered, ports, proxyConfig, ca));
-    // 5. Trust - before any traffic is forced through the proxy (`trust` is the dockerd restart's
-    // and the firewall step's precondition once those take tokens)
+    // 5. Trust - before any traffic is forced through the proxy (`trust` is also the dockerd
+    // restart's precondition once docker takes tokens)
     const trust = await timed('Install CA trust', () => (0, trust_1.distributeTrust)(h, proxy));
     // 6. DNS: CoreDNS answering first, then the system resolver points at it
-    // (`resolver` is the firewall step's precondition once iptables takes tokens)
     const resolver = await timed('Configure DNS', async () => {
         const dns = await coredns.start(h, coredns.render({
             mode,
@@ -4175,30 +4199,20 @@ async function runSetup(inputs, h = host_1.realHost) {
             dockerConfigWritten = await timed('Restart dockerd (CA trust)', () => (0, docker_1.restartDockerForCaTrust)());
         }
     }
-    // 8. Firewall
-    let containerRules = false;
-    await timed('Configure firewall', async () => {
-        const prefixes = [constants_1.LOG_PREFIX_DROP, constants_1.LOG_PREFIX_ANALYZE, constants_1.LOG_PREFIX_CDROP, constants_1.LOG_PREFIX_CEGRESS].map(p => p.trim());
-        await (0, iptables_1.setupIptablesLogging)(constants_1.FIREWALL_LOG, prefixes, 'v2');
-        await (0, iptables_1.detectEgressInterface)();
-        ({ containerRules } = await (0, iptables_1.applyFirewall)({
-            mode,
-            proxyUid,
-            dnsUid: dnsUser.uid,
-            proxyPort: ports.port,
-            containerProxyPort: ports.containerPort,
-            containers: dockerActive,
-            dnsServers
-        }));
-        await (0, iptables_1.killPreexistingConnections)();
-        if (containerRules)
-            await (0, iptables_1.flushContainerConntrack)();
-        await (0, iptables_1.logFirewall)();
-    });
+    // 8. Firewall: only once the resolver points at CoreDNS and the CA is trusted
+    const { containerRules, firewall } = await timed('Configure firewall', () => iptables.configure(h, {
+        mode,
+        proxyUid,
+        dnsUid: dnsUser.uid,
+        proxyPort: ports.port,
+        containerProxyPort: ports.containerPort,
+        containers: dockerActive,
+        dnsServers
+    }, { resolver, trust }));
     // 9. Prove it on this runner
     const selfTestFrom = (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG);
     const dnsSelfTestName = (0, selftest_1.dnsProbeName)([...policy.allow, ...policy.passthrough]);
-    const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode, dnsSelfTestName));
+    const results = await timed('Self-tests', () => (0, selftest_1.runSelfTests)(mode, dnsSelfTestName, firewall));
     await new Promise(r => setTimeout(r, 500)); // let the probes' last records land
     const selfTestWindow = [selfTestFrom, (0, flowlog_1.flowLogSize)(constants_1.FLOW_LOG)];
     await exec.exec('sudo', ['tee', constants_1.SELFTEST_FILE], { input: Buffer.from(JSON.stringify(results)), silent: true });
@@ -4401,7 +4415,8 @@ async function dnsExactSelfTest(mode, name) {
         detail: `${name} -> ${answer}; DNS log ${logged ? `labels it ${want}` : `has no ${want} line`}`
     };
 }
-async function runSelfTests(mode, dnsName) {
+/** The live self-tests: they prove the firewall in place on this runner, so they need it first. */
+async function runSelfTests(mode, dnsName, _firewall) {
     const results = [await sniBlockSelfTest(mode), await repointSelfTest(), await dnsExactSelfTest(mode, dnsName)];
     for (const t of results) {
         (t.ok ? core.info : core.warning)(`${t.ok ? '✅' : '❌'} self-test ${t.name}: ${t.detail}`);
