@@ -1,42 +1,42 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
 exports[`post step transcript enforce: teardown, integrity, report: transcript 1`] = `
-"$ sudo -n /opt/safer-runner/bin/teardown
-$ sudo -n cat /etc/safer-runner/validation-state.json
-$ sudo cat /etc/safer-runner/Corefile
-$ sudo cat /etc/resolv.conf
-$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
-$ sudo cat /etc/safer-runner/policy.json
-$ sudo cat /opt/safer-runner/proxy/policy.py
-$ sudo cat /opt/safer-runner/proxy/policy_core.py
-$ sudo cat /etc/sudoers.d/00-sudo-logging
-$ sudo iptables -L INPUT -n --line-numbers
-$ sudo iptables -L OUTPUT -n --line-numbers
-$ sudo iptables -L FORWARD -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers
-$ sudo iptables -t nat -L OUTPUT -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
-$ sudo iptables -L DOCKER-USER -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
-$ docker ps -aq
-$ sudo -n cat /etc/safer-runner/validation-state.json
-$ sudo cat /etc/safer-runner/Corefile
-$ sudo cat /etc/resolv.conf
-$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
-$ sudo cat /etc/safer-runner/policy.json
-$ sudo cat /opt/safer-runner/proxy/policy.py
-$ sudo cat /opt/safer-runner/proxy/policy_core.py
-$ sudo cat /etc/sudoers.d/00-sudo-logging
-$ sudo iptables -L INPUT -n --line-numbers
-$ sudo iptables -L OUTPUT -n --line-numbers
-$ sudo iptables -L FORWARD -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers
-$ sudo iptables -t nat -L OUTPUT -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
-$ sudo iptables -L DOCKER-USER -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+"$ sudo -n /opt/safer-runner/bin/teardown [ignore-rc]
+$ sudo -n cat /etc/safer-runner/validation-state.json [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/sudoers.d/00-sudo-logging [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
+$ docker ps -aq [ignore-rc] [silent]
+$ sudo -n cat /etc/safer-runner/validation-state.json [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/sudoers.d/00-sudo-logging [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
 $ <summary.write>"
 `;
 
@@ -302,23 +302,23 @@ Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/tee /
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) analyze (defaults): transcript 1`] = `
-"$ sudo --version
+"$ sudo --version [ignore-rc] [silent]
 $ <net.listen> 26383
 $ <net.listen> 26384
 $ <fetch> https://api.github.com/meta
-$ sudo -E apt-get install -y -qq --no-install-recommends conntrack
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
 $ sudo mkdir -p /var/log/safer-runner
 $ sudo chown syslog:adm /var/log/safer-runner
 $ sudo chmod 755 /var/log/safer-runner
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [ignore-rc] [silent]
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
 $ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/policy.json  <<< 756 bytes, sha256:ea3e4a7458a9
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 756 bytes, sha256:ea3e4a7458a9
 $ sudo chown root:root /etc/safer-runner/policy.json
 $ sudo chmod 0644 /etc/safer-runner/policy.json
 $ sudo touch /var/log/safer-runner/proxy-flows.jsonl
@@ -328,16 +328,16 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown  <<< 223 bytes, sha256:6abf7ddcc62d
+$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
 $ sudo chown root:root /opt/safer-runner/bin/teardown
 $ sudo chmod 0755 /opt/safer-runner/bin/teardown
-$ sudo systemctl stop safer-runner-proxy
-$ sudo systemctl reset-failed safer-runner-proxy
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
-$ ss -Hltn sport = :26383
-$ ss -Hltn sport = :26384
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
 $ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
-$ sudo update-ca-certificates
+$ sudo update-ca-certificates [silent]
 $ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
 $ <export> NODE_USE_SYSTEM_CA=1
 $ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -346,18 +346,18 @@ $ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 $ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 $ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 $ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
 $ <dns.lookup> fv-az123-456
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/Corefile  <<< 1251 bytes, sha256:db0128c5071f
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1251 bytes, sha256:db0128c5071f
 $ sudo chown root:root /etc/safer-runner/Corefile
 $ sudo chmod 0644 /etc/safer-runner/Corefile
 $ sudo touch /var/log/safer-runner/dns.log
 $ sudo chown root:root /var/log/safer-runner/dns.log
 $ sudo chmod 0644 /var/log/safer-runner/dns.log
-$ sudo systemctl stop safer-runner-dns
-$ sudo systemctl reset-failed safer-runner-dns
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
 $ <dns.query> github.com
 $ sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -365,97 +365,97 @@ $ sudo tee /etc/systemd/resolved.conf.d/no-stub.conf  <<< 53 bytes, sha256:c45ac
 $ sudo unlink /etc/resolv.conf
 $ sudo tee /etc/resolv.conf  <<< 21 bytes, sha256:388b5f501733
 $ sudo systemctl restart systemd-resolved
-$ systemctl is-active --quiet docker
-$ sudo docker ps -q --no-trunc
-$ sudo docker ps -q --no-trunc
-$ sudo cat /etc/docker/daemon.json
+$ systemctl is-active --quiet docker [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
+$ sudo cat /etc/docker/daemon.json [ignore-rc] [silent]
 $ sudo install -d -m 0755 /etc/docker
-$ sudo tee /etc/docker/daemon.json  <<< 27 bytes, sha256:a344a0029f96
+$ sudo tee /etc/docker/daemon.json [silent]  <<< 27 bytes, sha256:a344a0029f96
 $ sudo systemctl reload docker
 $ sudo systemctl restart docker
-$ sudo docker info --format {{.ServerVersion}}
-$ sudo docker ps -q --no-trunc
+$ sudo docker info --format {{.ServerVersion}} [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
 $ sudo tee /etc/rsyslog.d/10-iptables-safer-runner-v2.conf  <<< 177 bytes, sha256:5c63d7dab6a6
 $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default
-$ sudo iptables -t filter -n -L DOCKER-USER
-$ sudo ip6tables -t filter -n -L DOCKER-USER
-$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT
-$ sudo iptables -t nat -F SAFER_RUNNER_NAT
-$ sudo iptables -t nat -X SAFER_RUNNER_NAT
-$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo iptables -t filter -F SAFER_RUNNER_OUT
-$ sudo iptables -t filter -X SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT
-$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo iptables -t nat -F SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -X SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -F SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -X SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
 $ sudo sysctl -q -w net.ipv4.conf.all.route_localnet=1
 $ sudo iptables-restore --noflush  <<< 2379 bytes, sha256:df524ae134cc
-$ sudo ip6tables-restore --noflush  <<< 929 bytes, sha256:4f6688c35ac7
-$ sudo ss -K state established ( dport = :443 or dport = :80 )
-$ sudo docker network ls -q --filter driver=bridge
-$ sudo docker network inspect f00dbabe0001
-$ sh -c command -v conntrack
-$ sudo conntrack -D -f ipv4 -s 172.17.0.0/16
-$ sudo iptables -t nat -S SAFER_RUNNER_NAT
-$ sudo iptables -S SAFER_RUNNER_OUT
-$ sudo ip6tables -S SAFER_RUNNER_OUT
-$ sudo iptables -t nat -S SAFER_RUNNER_CNAT
-$ sudo iptables -S SAFER_RUNNER_CFWD
-$ sudo iptables -S DOCKER-USER
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt
+$ sudo ip6tables-restore --noflush [ignore-rc]  <<< 929 bytes, sha256:4f6688c35ac7
+$ sudo ss -K state established ( dport = :443 or dport = :80 ) [ignore-rc] [silent]
+$ sudo docker network ls -q --filter driver=bridge [ignore-rc] [silent]
+$ sudo docker network inspect f00dbabe0001 [ignore-rc] [silent]
+$ sh -c command -v conntrack [ignore-rc] [silent]
+$ sudo conntrack -D -f ipv4 -s 172.17.0.0/16 [ignore-rc] [silent]
+$ sudo iptables -t nat -S SAFER_RUNNER_NAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo ip6tables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo iptables -t nat -S SAFER_RUNNER_CNAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_CFWD [ignore-rc]
+$ sudo iptables -S DOCKER-USER [ignore-rc]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/ [ignore-rc] [silent]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt [ignore-rc] [silent]
 $ <dns.query> srst-abababababab.objects.githubusercontent.com
-$ sudo tee /var/log/safer-runner/selftest.json  <<< 370 bytes, sha256:c855af01a480
+$ sudo tee /var/log/safer-runner/selftest.json [silent]  <<< 370 bytes, sha256:c855af01a480
 $ sudo chmod 0644 /var/log/safer-runner/selftest.json
-$ systemctl is-active --quiet docker.service
-$ systemctl is-active --quiet docker.socket
-$ id -nG runner
-$ sudo tee /etc/safer-runner/setup-complete  <<< 436 bytes, sha256:047d5f0a9882
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
+$ id -nG runner [ignore-rc] [silent]
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 436 bytes, sha256:047d5f0a9882
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
-$ sudo tee /tmp/safer-runner-sudo-logging.tmp  <<< 70 bytes, sha256:fa273c0b1629
+$ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
 $ sudo chmod 0440 /tmp/safer-runner-sudo-logging.tmp
 $ sudo chown root:root /tmp/safer-runner-sudo-logging.tmp
 $ sudo mv /tmp/safer-runner-sudo-logging.tmp /etc/sudoers.d/00-sudo-logging
-$ sudo cat /etc/safer-runner/Corefile
-$ sudo cat /etc/resolv.conf
-$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
-$ sudo cat /etc/safer-runner/policy.json
-$ sudo cat /opt/safer-runner/proxy/policy.py
-$ sudo cat /opt/safer-runner/proxy/policy_core.py
-$ sudo cat /etc/sudoers.d/00-sudo-logging
-$ sudo cat /etc/docker/daemon.json
-$ sudo iptables -L INPUT -n --line-numbers
-$ sudo iptables -L OUTPUT -n --line-numbers
-$ sudo iptables -L FORWARD -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers
-$ sudo iptables -t nat -L OUTPUT -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
-$ sudo iptables -L DOCKER-USER -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/sudoers.d/00-sudo-logging [ignore-rc] [silent]
+$ sudo cat /etc/docker/daemon.json [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
 $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
-$ sudo tee /etc/safer-runner/validation-state.json  <<< 4118 bytes, sha256:e82a60c2df60"
+$ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 4118 bytes, sha256:e82a60c2df60"
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) analyze (defaults): warnings 1`] = `[]`;
@@ -758,23 +758,23 @@ Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/mv /t
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) enforce (defaults): transcript 1`] = `
-"$ sudo --version
+"$ sudo --version [ignore-rc] [silent]
 $ <net.listen> 26383
 $ <net.listen> 26384
 $ <fetch> https://api.github.com/meta
-$ sudo -E apt-get install -y -qq --no-install-recommends conntrack
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
 $ sudo mkdir -p /var/log/safer-runner
 $ sudo chown syslog:adm /var/log/safer-runner
 $ sudo chmod 755 /var/log/safer-runner
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [ignore-rc] [silent]
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
 $ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/policy.json  <<< 1010 bytes, sha256:093ac77c142e
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 1010 bytes, sha256:093ac77c142e
 $ sudo chown root:root /etc/safer-runner/policy.json
 $ sudo chmod 0644 /etc/safer-runner/policy.json
 $ sudo touch /var/log/safer-runner/proxy-flows.jsonl
@@ -784,16 +784,16 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown  <<< 223 bytes, sha256:6abf7ddcc62d
+$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
 $ sudo chown root:root /opt/safer-runner/bin/teardown
 $ sudo chmod 0755 /opt/safer-runner/bin/teardown
-$ sudo systemctl stop safer-runner-proxy
-$ sudo systemctl reset-failed safer-runner-proxy
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
-$ ss -Hltn sport = :26383
-$ ss -Hltn sport = :26384
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
 $ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
-$ sudo update-ca-certificates
+$ sudo update-ca-certificates [silent]
 $ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
 $ <export> NODE_USE_SYSTEM_CA=1
 $ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -802,18 +802,18 @@ $ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 $ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 $ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 $ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
 $ <dns.lookup> fv-az123-456
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/Corefile  <<< 1187 bytes, sha256:bbef07cc3604
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1187 bytes, sha256:bbef07cc3604
 $ sudo chown root:root /etc/safer-runner/Corefile
 $ sudo chmod 0644 /etc/safer-runner/Corefile
 $ sudo touch /var/log/safer-runner/dns.log
 $ sudo chown root:root /var/log/safer-runner/dns.log
 $ sudo chmod 0644 /var/log/safer-runner/dns.log
-$ sudo systemctl stop safer-runner-dns
-$ sudo systemctl reset-failed safer-runner-dns
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
 $ <dns.query> github.com
 $ sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -821,94 +821,94 @@ $ sudo tee /etc/systemd/resolved.conf.d/no-stub.conf  <<< 53 bytes, sha256:c45ac
 $ sudo unlink /etc/resolv.conf
 $ sudo tee /etc/resolv.conf  <<< 21 bytes, sha256:388b5f501733
 $ sudo systemctl restart systemd-resolved
-$ systemctl is-active --quiet docker
-$ sudo docker ps -q --no-trunc
+$ systemctl is-active --quiet docker [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
 $ sudo tee /etc/rsyslog.d/10-iptables-safer-runner-v2.conf  <<< 177 bytes, sha256:5c63d7dab6a6
 $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default
-$ sudo iptables -t filter -n -L DOCKER-USER
-$ sudo ip6tables -t filter -n -L DOCKER-USER
-$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT
-$ sudo iptables -t nat -F SAFER_RUNNER_NAT
-$ sudo iptables -t nat -X SAFER_RUNNER_NAT
-$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo iptables -t filter -F SAFER_RUNNER_OUT
-$ sudo iptables -t filter -X SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT
-$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo iptables -t nat -F SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -X SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -F SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -X SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
 $ sudo sysctl -q -w net.ipv4.conf.all.route_localnet=1
 $ sudo iptables-restore --noflush  <<< 2880 bytes, sha256:7cc0401b0714
-$ sudo ip6tables-restore --noflush  <<< 1148 bytes, sha256:3604c6569b46
-$ sudo ss -K state established ( dport = :443 or dport = :80 )
-$ sudo docker network ls -q --filter driver=bridge
-$ sudo docker network inspect f00dbabe0001
-$ sh -c command -v conntrack
-$ sudo conntrack -D -f ipv4 -s 172.17.0.0/16
-$ sudo iptables -t nat -S SAFER_RUNNER_NAT
-$ sudo iptables -S SAFER_RUNNER_OUT
-$ sudo ip6tables -S SAFER_RUNNER_OUT
-$ sudo iptables -t nat -S SAFER_RUNNER_CNAT
-$ sudo iptables -S SAFER_RUNNER_CFWD
-$ sudo iptables -S DOCKER-USER
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt
+$ sudo ip6tables-restore --noflush [ignore-rc]  <<< 1148 bytes, sha256:3604c6569b46
+$ sudo ss -K state established ( dport = :443 or dport = :80 ) [ignore-rc] [silent]
+$ sudo docker network ls -q --filter driver=bridge [ignore-rc] [silent]
+$ sudo docker network inspect f00dbabe0001 [ignore-rc] [silent]
+$ sh -c command -v conntrack [ignore-rc] [silent]
+$ sudo conntrack -D -f ipv4 -s 172.17.0.0/16 [ignore-rc] [silent]
+$ sudo iptables -t nat -S SAFER_RUNNER_NAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo ip6tables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo iptables -t nat -S SAFER_RUNNER_CNAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_CFWD [ignore-rc]
+$ sudo iptables -S DOCKER-USER [ignore-rc]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/ [ignore-rc] [silent]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt [ignore-rc] [silent]
 $ <dns.query> srst-abababababab.objects.githubusercontent.com
-$ sudo tee /var/log/safer-runner/selftest.json  <<< 358 bytes, sha256:3029ee7d9376
+$ sudo tee /var/log/safer-runner/selftest.json [silent]  <<< 358 bytes, sha256:3029ee7d9376
 $ sudo chmod 0644 /var/log/safer-runner/selftest.json
-$ id -nG runner
-$ sudo gpasswd -d runner docker
-$ sudo chown root:root /var/run/docker.sock
-$ sudo chmod 600 /var/run/docker.sock
-$ systemctl is-active --quiet docker.service
-$ systemctl is-active --quiet docker.socket
-$ id -nG runner
-$ sudo tee /etc/safer-runner/setup-complete  <<< 451 bytes, sha256:15b15d3fa474
+$ id -nG runner [ignore-rc] [silent]
+$ sudo gpasswd -d runner docker [ignore-rc]
+$ sudo chown root:root /var/run/docker.sock [ignore-rc]
+$ sudo chmod 600 /var/run/docker.sock [ignore-rc]
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
+$ id -nG runner [ignore-rc] [silent]
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 451 bytes, sha256:15b15d3fa474
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
-$ sudo tee /tmp/safer-runner-sudo-logging.tmp  <<< 70 bytes, sha256:fa273c0b1629
+$ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
 $ sudo chmod 0440 /tmp/safer-runner-sudo-logging.tmp
 $ sudo chown root:root /tmp/safer-runner-sudo-logging.tmp
 $ sudo mv /tmp/safer-runner-sudo-logging.tmp /etc/sudoers.d/00-sudo-logging
-$ sudo cat /etc/safer-runner/Corefile
-$ sudo cat /etc/resolv.conf
-$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
-$ sudo cat /etc/safer-runner/policy.json
-$ sudo cat /opt/safer-runner/proxy/policy.py
-$ sudo cat /opt/safer-runner/proxy/policy_core.py
-$ sudo cat /etc/sudoers.d/00-sudo-logging
-$ sudo iptables -L INPUT -n --line-numbers
-$ sudo iptables -L OUTPUT -n --line-numbers
-$ sudo iptables -L FORWARD -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers
-$ sudo iptables -t nat -L OUTPUT -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
-$ sudo iptables -L DOCKER-USER -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/sudoers.d/00-sudo-logging [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
 $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
-$ sudo tee /etc/safer-runner/validation-state.json  <<< 3932 bytes, sha256:3ca9d500c331
+$ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3932 bytes, sha256:3ca9d500c331
 $ sudo tee /tmp/runner-sudoers.tmp  <<< 1491 bytes, sha256:05d1e5236f7b
-$ sudo visudo -c -f /tmp/runner-sudoers.tmp
+$ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
 $ sudo chmod 0440 /tmp/runner-sudoers.tmp
 $ sudo chown root:root /tmp/runner-sudoers.tmp
 $ sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner"
@@ -1216,23 +1216,23 @@ Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/mv /t
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) enforce on sudo-rs, docker not running: transcript 1`] = `
-"$ sudo --version
+"$ sudo --version [ignore-rc] [silent]
 $ <net.listen> 26383
 $ <net.listen> 26384
 $ <fetch> https://api.github.com/meta
-$ sudo -E apt-get install -y -qq --no-install-recommends conntrack
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
 $ sudo mkdir -p /var/log/safer-runner
 $ sudo chown syslog:adm /var/log/safer-runner
 $ sudo chmod 755 /var/log/safer-runner
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [ignore-rc] [silent]
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
 $ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/policy.json  <<< 1010 bytes, sha256:093ac77c142e
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 1010 bytes, sha256:093ac77c142e
 $ sudo chown root:root /etc/safer-runner/policy.json
 $ sudo chmod 0644 /etc/safer-runner/policy.json
 $ sudo touch /var/log/safer-runner/proxy-flows.jsonl
@@ -1242,16 +1242,16 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown  <<< 223 bytes, sha256:6abf7ddcc62d
+$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
 $ sudo chown root:root /opt/safer-runner/bin/teardown
 $ sudo chmod 0755 /opt/safer-runner/bin/teardown
-$ sudo systemctl stop safer-runner-proxy
-$ sudo systemctl reset-failed safer-runner-proxy
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
-$ ss -Hltn sport = :26383
-$ ss -Hltn sport = :26384
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
 $ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
-$ sudo update-ca-certificates
+$ sudo update-ca-certificates [silent]
 $ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
 $ <export> NODE_USE_SYSTEM_CA=1
 $ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -1260,18 +1260,18 @@ $ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 $ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 $ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 $ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
 $ <dns.lookup> fv-az123-456
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/Corefile  <<< 1187 bytes, sha256:bbef07cc3604
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1187 bytes, sha256:bbef07cc3604
 $ sudo chown root:root /etc/safer-runner/Corefile
 $ sudo chmod 0644 /etc/safer-runner/Corefile
 $ sudo touch /var/log/safer-runner/dns.log
 $ sudo chown root:root /var/log/safer-runner/dns.log
 $ sudo chmod 0644 /var/log/safer-runner/dns.log
-$ sudo systemctl stop safer-runner-dns
-$ sudo systemctl reset-failed safer-runner-dns
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
 $ <dns.query> github.com
 $ sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -1279,84 +1279,84 @@ $ sudo tee /etc/systemd/resolved.conf.d/no-stub.conf  <<< 53 bytes, sha256:c45ac
 $ sudo unlink /etc/resolv.conf
 $ sudo tee /etc/resolv.conf  <<< 21 bytes, sha256:388b5f501733
 $ sudo systemctl restart systemd-resolved
-$ systemctl is-active --quiet docker
+$ systemctl is-active --quiet docker [ignore-rc] [silent]
 $ sudo tee /etc/rsyslog.d/10-iptables-safer-runner-v2.conf  <<< 177 bytes, sha256:5c63d7dab6a6
 $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default
-$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT
-$ sudo iptables -t nat -F SAFER_RUNNER_NAT
-$ sudo iptables -t nat -X SAFER_RUNNER_NAT
-$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo iptables -t filter -F SAFER_RUNNER_OUT
-$ sudo iptables -t filter -X SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT
-$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo iptables -t nat -F SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -X SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -F SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -X SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
 $ sudo sysctl -q -w net.ipv4.conf.all.route_localnet=1
 $ sudo iptables-restore --noflush  <<< 1810 bytes, sha256:0a7f801c8232
-$ sudo ip6tables-restore --noflush  <<< 595 bytes, sha256:5efd88f74ba7
-$ sudo ss -K state established ( dport = :443 or dport = :80 )
-$ sudo iptables -t nat -S SAFER_RUNNER_NAT
-$ sudo iptables -S SAFER_RUNNER_OUT
-$ sudo ip6tables -S SAFER_RUNNER_OUT
-$ sudo iptables -t nat -S SAFER_RUNNER_CNAT
-$ sudo iptables -S SAFER_RUNNER_CFWD
-$ sudo iptables -S DOCKER-USER
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt
+$ sudo ip6tables-restore --noflush [ignore-rc]  <<< 595 bytes, sha256:5efd88f74ba7
+$ sudo ss -K state established ( dport = :443 or dport = :80 ) [ignore-rc] [silent]
+$ sudo iptables -t nat -S SAFER_RUNNER_NAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo ip6tables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo iptables -t nat -S SAFER_RUNNER_CNAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_CFWD [ignore-rc]
+$ sudo iptables -S DOCKER-USER [ignore-rc]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/ [ignore-rc] [silent]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt [ignore-rc] [silent]
 $ <dns.query> srst-abababababab.objects.githubusercontent.com
-$ sudo tee /var/log/safer-runner/selftest.json  <<< 358 bytes, sha256:3029ee7d9376
+$ sudo tee /var/log/safer-runner/selftest.json [silent]  <<< 358 bytes, sha256:3029ee7d9376
 $ sudo chmod 0644 /var/log/safer-runner/selftest.json
-$ id -nG runner
-$ sudo gpasswd -d runner docker
-$ systemctl is-active --quiet docker.service
-$ systemctl is-active --quiet docker.socket
-$ id -nG runner
-$ sudo tee /etc/safer-runner/setup-complete  <<< 452 bytes, sha256:e83a10108392
+$ id -nG runner [ignore-rc] [silent]
+$ sudo gpasswd -d runner docker [ignore-rc]
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
+$ id -nG runner [ignore-rc] [silent]
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 452 bytes, sha256:e83a10108392
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo chown syslog:adm /var/log/safer-runner/sudo.log
-$ sudo tee /etc/rsyslog.d/10-sudo-safer-runner.conf  <<< 248 bytes, sha256:6690a7067806
+$ sudo tee /etc/rsyslog.d/10-sudo-safer-runner.conf [silent]  <<< 248 bytes, sha256:6690a7067806
 $ sudo systemctl restart rsyslog
-$ sudo cat /etc/safer-runner/Corefile
-$ sudo cat /etc/resolv.conf
-$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
-$ sudo cat /etc/safer-runner/policy.json
-$ sudo cat /opt/safer-runner/proxy/policy.py
-$ sudo cat /opt/safer-runner/proxy/policy_core.py
-$ sudo cat /etc/rsyslog.d/10-sudo-safer-runner.conf
-$ sudo iptables -L INPUT -n --line-numbers
-$ sudo iptables -L OUTPUT -n --line-numbers
-$ sudo iptables -L FORWARD -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers
-$ sudo iptables -t nat -L OUTPUT -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
-$ sudo iptables -L DOCKER-USER -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/rsyslog.d/10-sudo-safer-runner.conf [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
 $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
-$ sudo tee /etc/safer-runner/validation-state.json  <<< 3687 bytes, sha256:4330be89fb8c
+$ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3687 bytes, sha256:4330be89fb8c
 $ sudo tee /tmp/runner-sudoers.tmp  <<< 1491 bytes, sha256:05d1e5236f7b
-$ sudo visudo -c -f /tmp/runner-sudoers.tmp
+$ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
 $ sudo chmod 0440 /tmp/runner-sudoers.tmp
 $ sudo chown root:root /tmp/runner-sudoers.tmp
 $ sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner"
@@ -1672,23 +1672,23 @@ Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/mv /t
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) enforce, docker: keep with running service containers: transcript 1`] = `
-"$ sudo --version
+"$ sudo --version [ignore-rc] [silent]
 $ <net.listen> 26383
 $ <net.listen> 26384
 $ <fetch> https://api.github.com/meta
-$ sudo -E apt-get install -y -qq --no-install-recommends conntrack
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
 $ sudo mkdir -p /var/log/safer-runner
 $ sudo chown syslog:adm /var/log/safer-runner
 $ sudo chmod 755 /var/log/safer-runner
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [ignore-rc] [silent]
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
 $ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/policy.json  <<< 1010 bytes, sha256:093ac77c142e
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 1010 bytes, sha256:093ac77c142e
 $ sudo chown root:root /etc/safer-runner/policy.json
 $ sudo chmod 0644 /etc/safer-runner/policy.json
 $ sudo touch /var/log/safer-runner/proxy-flows.jsonl
@@ -1698,16 +1698,16 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown  <<< 223 bytes, sha256:6abf7ddcc62d
+$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
 $ sudo chown root:root /opt/safer-runner/bin/teardown
 $ sudo chmod 0755 /opt/safer-runner/bin/teardown
-$ sudo systemctl stop safer-runner-proxy
-$ sudo systemctl reset-failed safer-runner-proxy
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
-$ ss -Hltn sport = :26383
-$ ss -Hltn sport = :26384
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
 $ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
-$ sudo update-ca-certificates
+$ sudo update-ca-certificates [silent]
 $ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
 $ <export> NODE_USE_SYSTEM_CA=1
 $ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -1716,18 +1716,18 @@ $ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 $ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 $ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 $ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
 $ <dns.lookup> fv-az123-456
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/Corefile  <<< 1187 bytes, sha256:bbef07cc3604
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1187 bytes, sha256:bbef07cc3604
 $ sudo chown root:root /etc/safer-runner/Corefile
 $ sudo chmod 0644 /etc/safer-runner/Corefile
 $ sudo touch /var/log/safer-runner/dns.log
 $ sudo chown root:root /var/log/safer-runner/dns.log
 $ sudo chmod 0644 /var/log/safer-runner/dns.log
-$ sudo systemctl stop safer-runner-dns
-$ sudo systemctl reset-failed safer-runner-dns
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
 $ <dns.query> github.com
 $ sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -1735,99 +1735,99 @@ $ sudo tee /etc/systemd/resolved.conf.d/no-stub.conf  <<< 53 bytes, sha256:c45ac
 $ sudo unlink /etc/resolv.conf
 $ sudo tee /etc/resolv.conf  <<< 21 bytes, sha256:388b5f501733
 $ sudo systemctl restart systemd-resolved
-$ systemctl is-active --quiet docker
-$ sudo docker ps -q --no-trunc
-$ sudo docker ps -q --no-trunc
-$ sudo cat /etc/docker/daemon.json
+$ systemctl is-active --quiet docker [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
+$ sudo cat /etc/docker/daemon.json [ignore-rc] [silent]
 $ sudo install -d -m 0755 /etc/docker
-$ sudo tee /etc/docker/daemon.json  <<< 27 bytes, sha256:a344a0029f96
+$ sudo tee /etc/docker/daemon.json [silent]  <<< 27 bytes, sha256:a344a0029f96
 $ sudo systemctl reload docker
 $ sudo systemctl restart docker
-$ sudo docker info --format {{.ServerVersion}}
-$ sudo docker ps -q --no-trunc
+$ sudo docker info --format {{.ServerVersion}} [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
 $ sudo tee /etc/rsyslog.d/10-iptables-safer-runner-v2.conf  <<< 177 bytes, sha256:5c63d7dab6a6
 $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default
-$ sudo iptables -t filter -n -L DOCKER-USER
-$ sudo ip6tables -t filter -n -L DOCKER-USER
-$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT
-$ sudo iptables -t nat -F SAFER_RUNNER_NAT
-$ sudo iptables -t nat -X SAFER_RUNNER_NAT
-$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo iptables -t filter -F SAFER_RUNNER_OUT
-$ sudo iptables -t filter -X SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT
-$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo iptables -t nat -F SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -X SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -F SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -X SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
 $ sudo sysctl -q -w net.ipv4.conf.all.route_localnet=1
 $ sudo iptables-restore --noflush  <<< 2880 bytes, sha256:7cc0401b0714
-$ sudo ip6tables-restore --noflush  <<< 1148 bytes, sha256:3604c6569b46
-$ sudo ss -K state established ( dport = :443 or dport = :80 )
-$ sudo docker network ls -q --filter driver=bridge
-$ sudo docker network inspect f00dbabe0001
-$ sh -c command -v conntrack
-$ sudo conntrack -D -f ipv4 -s 172.17.0.0/16
-$ sudo iptables -t nat -S SAFER_RUNNER_NAT
-$ sudo iptables -S SAFER_RUNNER_OUT
-$ sudo ip6tables -S SAFER_RUNNER_OUT
-$ sudo iptables -t nat -S SAFER_RUNNER_CNAT
-$ sudo iptables -S SAFER_RUNNER_CFWD
-$ sudo iptables -S DOCKER-USER
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt
+$ sudo ip6tables-restore --noflush [ignore-rc]  <<< 1148 bytes, sha256:3604c6569b46
+$ sudo ss -K state established ( dport = :443 or dport = :80 ) [ignore-rc] [silent]
+$ sudo docker network ls -q --filter driver=bridge [ignore-rc] [silent]
+$ sudo docker network inspect f00dbabe0001 [ignore-rc] [silent]
+$ sh -c command -v conntrack [ignore-rc] [silent]
+$ sudo conntrack -D -f ipv4 -s 172.17.0.0/16 [ignore-rc] [silent]
+$ sudo iptables -t nat -S SAFER_RUNNER_NAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo ip6tables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo iptables -t nat -S SAFER_RUNNER_CNAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_CFWD [ignore-rc]
+$ sudo iptables -S DOCKER-USER [ignore-rc]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/ [ignore-rc] [silent]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt [ignore-rc] [silent]
 $ <dns.query> srst-abababababab.objects.githubusercontent.com
-$ sudo tee /var/log/safer-runner/selftest.json  <<< 358 bytes, sha256:3029ee7d9376
+$ sudo tee /var/log/safer-runner/selftest.json [silent]  <<< 358 bytes, sha256:3029ee7d9376
 $ sudo chmod 0644 /var/log/safer-runner/selftest.json
-$ systemctl is-active --quiet docker.service
-$ systemctl is-active --quiet docker.socket
-$ id -nG runner
-$ sudo tee /etc/safer-runner/setup-complete  <<< 435 bytes, sha256:fdc308486b86
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
+$ id -nG runner [ignore-rc] [silent]
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 435 bytes, sha256:fdc308486b86
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
-$ sudo tee /tmp/safer-runner-sudo-logging.tmp  <<< 70 bytes, sha256:fa273c0b1629
+$ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
 $ sudo chmod 0440 /tmp/safer-runner-sudo-logging.tmp
 $ sudo chown root:root /tmp/safer-runner-sudo-logging.tmp
 $ sudo mv /tmp/safer-runner-sudo-logging.tmp /etc/sudoers.d/00-sudo-logging
-$ sudo cat /etc/safer-runner/Corefile
-$ sudo cat /etc/resolv.conf
-$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
-$ sudo cat /etc/safer-runner/policy.json
-$ sudo cat /opt/safer-runner/proxy/policy.py
-$ sudo cat /opt/safer-runner/proxy/policy_core.py
-$ sudo cat /etc/sudoers.d/00-sudo-logging
-$ sudo cat /etc/docker/daemon.json
-$ sudo iptables -L INPUT -n --line-numbers
-$ sudo iptables -L OUTPUT -n --line-numbers
-$ sudo iptables -L FORWARD -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers
-$ sudo iptables -t nat -L OUTPUT -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
-$ sudo iptables -L DOCKER-USER -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/sudoers.d/00-sudo-logging [ignore-rc] [silent]
+$ sudo cat /etc/docker/daemon.json [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
 $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
-$ sudo tee /etc/safer-runner/validation-state.json  <<< 4118 bytes, sha256:8aad3d76b7af
+$ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 4118 bytes, sha256:8aad3d76b7af
 $ sudo tee /tmp/runner-sudoers.tmp  <<< 1491 bytes, sha256:05d1e5236f7b
-$ sudo visudo -c -f /tmp/runner-sudoers.tmp
+$ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
 $ sudo chmod 0440 /tmp/runner-sudoers.tmp
 $ sudo chown root:root /tmp/runner-sudoers.tmp
 $ sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner"
@@ -2102,23 +2102,23 @@ Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/tee /
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) enforce, docker: stop, disable-sudo: false: transcript 1`] = `
-"$ sudo --version
+"$ sudo --version [ignore-rc] [silent]
 $ <net.listen> 26383
 $ <net.listen> 26384
 $ <fetch> https://api.github.com/meta
-$ sudo -E apt-get install -y -qq --no-install-recommends conntrack
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
 $ sudo mkdir -p /var/log/safer-runner
 $ sudo chown syslog:adm /var/log/safer-runner
 $ sudo chmod 755 /var/log/safer-runner
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [ignore-rc] [silent]
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
 $ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/policy.json  <<< 1010 bytes, sha256:093ac77c142e
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 1010 bytes, sha256:093ac77c142e
 $ sudo chown root:root /etc/safer-runner/policy.json
 $ sudo chmod 0644 /etc/safer-runner/policy.json
 $ sudo touch /var/log/safer-runner/proxy-flows.jsonl
@@ -2128,16 +2128,16 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown  <<< 223 bytes, sha256:6abf7ddcc62d
+$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
 $ sudo chown root:root /opt/safer-runner/bin/teardown
 $ sudo chmod 0755 /opt/safer-runner/bin/teardown
-$ sudo systemctl stop safer-runner-proxy
-$ sudo systemctl reset-failed safer-runner-proxy
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
-$ ss -Hltn sport = :26383
-$ ss -Hltn sport = :26384
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
 $ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
-$ sudo update-ca-certificates
+$ sudo update-ca-certificates [silent]
 $ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
 $ <export> NODE_USE_SYSTEM_CA=1
 $ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -2146,18 +2146,18 @@ $ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 $ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 $ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 $ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
 $ <dns.lookup> fv-az123-456
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/Corefile  <<< 1187 bytes, sha256:bbef07cc3604
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1187 bytes, sha256:bbef07cc3604
 $ sudo chown root:root /etc/safer-runner/Corefile
 $ sudo chmod 0644 /etc/safer-runner/Corefile
 $ sudo touch /var/log/safer-runner/dns.log
 $ sudo chown root:root /var/log/safer-runner/dns.log
 $ sudo chmod 0644 /var/log/safer-runner/dns.log
-$ sudo systemctl stop safer-runner-dns
-$ sudo systemctl reset-failed safer-runner-dns
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
 $ <dns.query> github.com
 $ sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -2170,79 +2170,79 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default
-$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT
-$ sudo iptables -t nat -F SAFER_RUNNER_NAT
-$ sudo iptables -t nat -X SAFER_RUNNER_NAT
-$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo iptables -t filter -F SAFER_RUNNER_OUT
-$ sudo iptables -t filter -X SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT
-$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT
-$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD
-$ sudo iptables -t nat -F SAFER_RUNNER_CNAT
-$ sudo iptables -t nat -X SAFER_RUNNER_CNAT
-$ sudo iptables -t filter -F SAFER_RUNNER_CFWD
-$ sudo iptables -t filter -X SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD
-$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
 $ sudo sysctl -q -w net.ipv4.conf.all.route_localnet=1
 $ sudo iptables-restore --noflush  <<< 1810 bytes, sha256:0a7f801c8232
-$ sudo ip6tables-restore --noflush  <<< 595 bytes, sha256:5efd88f74ba7
-$ sudo ss -K state established ( dport = :443 or dport = :80 )
-$ sudo iptables -t nat -S SAFER_RUNNER_NAT
-$ sudo iptables -S SAFER_RUNNER_OUT
-$ sudo ip6tables -S SAFER_RUNNER_OUT
-$ sudo iptables -t nat -S SAFER_RUNNER_CNAT
-$ sudo iptables -S SAFER_RUNNER_CFWD
-$ sudo iptables -S DOCKER-USER
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/
-$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt
+$ sudo ip6tables-restore --noflush [ignore-rc]  <<< 595 bytes, sha256:5efd88f74ba7
+$ sudo ss -K state established ( dport = :443 or dport = :80 ) [ignore-rc] [silent]
+$ sudo iptables -t nat -S SAFER_RUNNER_NAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo ip6tables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo iptables -t nat -S SAFER_RUNNER_CNAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_CFWD [ignore-rc]
+$ sudo iptables -S DOCKER-USER [ignore-rc]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/ [ignore-rc] [silent]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt [ignore-rc] [silent]
 $ <dns.query> srst-abababababab.objects.githubusercontent.com
-$ sudo tee /var/log/safer-runner/selftest.json  <<< 358 bytes, sha256:3029ee7d9376
+$ sudo tee /var/log/safer-runner/selftest.json [silent]  <<< 358 bytes, sha256:3029ee7d9376
 $ sudo chmod 0644 /var/log/safer-runner/selftest.json
-$ sudo systemctl stop docker.socket
-$ sudo systemctl stop docker.service
-$ sudo systemctl disable docker.socket
-$ sudo systemctl disable docker.service
-$ systemctl is-active --quiet docker.service
-$ systemctl is-active --quiet docker.socket
-$ id -nG runner
-$ sudo tee /etc/safer-runner/setup-complete  <<< 441 bytes, sha256:8480cdd765fe
+$ sudo systemctl stop docker.socket [ignore-rc]
+$ sudo systemctl stop docker.service [ignore-rc]
+$ sudo systemctl disable docker.socket [ignore-rc]
+$ sudo systemctl disable docker.service [ignore-rc]
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
+$ id -nG runner [ignore-rc] [silent]
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 441 bytes, sha256:8480cdd765fe
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
-$ sudo tee /tmp/safer-runner-sudo-logging.tmp  <<< 70 bytes, sha256:fa273c0b1629
+$ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
 $ sudo chmod 0440 /tmp/safer-runner-sudo-logging.tmp
 $ sudo chown root:root /tmp/safer-runner-sudo-logging.tmp
 $ sudo mv /tmp/safer-runner-sudo-logging.tmp /etc/sudoers.d/00-sudo-logging
-$ sudo cat /etc/safer-runner/Corefile
-$ sudo cat /etc/resolv.conf
-$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf
-$ sudo cat /etc/safer-runner/policy.json
-$ sudo cat /opt/safer-runner/proxy/policy.py
-$ sudo cat /opt/safer-runner/proxy/policy_core.py
-$ sudo cat /etc/sudoers.d/00-sudo-logging
-$ sudo iptables -L INPUT -n --line-numbers
-$ sudo iptables -L OUTPUT -n --line-numbers
-$ sudo iptables -L FORWARD -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers
-$ sudo iptables -t nat -L OUTPUT -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
-$ sudo iptables -L DOCKER-USER -n --line-numbers
-$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers
-$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/sudoers.d/00-sudo-logging [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
 $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
-$ sudo tee /etc/safer-runner/validation-state.json  <<< 3932 bytes, sha256:3ca9d500c331"
+$ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3932 bytes, sha256:3ca9d500c331"
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) enforce, docker: stop, disable-sudo: false: warnings 1`] = `
@@ -2252,23 +2252,23 @@ exports[`setup transcript (runSetup on a recording fake runner) enforce, docker:
 `;
 
 exports[`setup transcript (runSetup on a recording fake runner) enforce: DOCKER-USER missing fails closed before any rule changes: transcript 1`] = `
-"$ sudo --version
+"$ sudo --version [ignore-rc] [silent]
 $ <net.listen> 26383
 $ <net.listen> 26384
 $ <fetch> https://api.github.com/meta
-$ sudo -E apt-get install -y -qq --no-install-recommends conntrack
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
 $ sudo mkdir -p /var/log/safer-runner
 $ sudo chown syslog:adm /var/log/safer-runner
 $ sudo chmod 755 /var/log/safer-runner
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [ignore-rc] [silent]
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
-$ id -u safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
 $ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
 $ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/policy.json  <<< 1010 bytes, sha256:093ac77c142e
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 1010 bytes, sha256:093ac77c142e
 $ sudo chown root:root /etc/safer-runner/policy.json
 $ sudo chmod 0644 /etc/safer-runner/policy.json
 $ sudo touch /var/log/safer-runner/proxy-flows.jsonl
@@ -2278,16 +2278,16 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown  <<< 223 bytes, sha256:6abf7ddcc62d
+$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
 $ sudo chown root:root /opt/safer-runner/bin/teardown
 $ sudo chmod 0755 /opt/safer-runner/bin/teardown
-$ sudo systemctl stop safer-runner-proxy
-$ sudo systemctl reset-failed safer-runner-proxy
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
-$ ss -Hltn sport = :26383
-$ ss -Hltn sport = :26384
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
 $ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
-$ sudo update-ca-certificates
+$ sudo update-ca-certificates [silent]
 $ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
 $ <export> NODE_USE_SYSTEM_CA=1
 $ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -2296,18 +2296,18 @@ $ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 $ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 $ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 $ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca
-$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
 $ <dns.lookup> fv-az123-456
 $ sudo install -d -m 0755 -o root -g root /etc/safer-runner
-$ sudo tee /etc/safer-runner/Corefile  <<< 1187 bytes, sha256:bbef07cc3604
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1187 bytes, sha256:bbef07cc3604
 $ sudo chown root:root /etc/safer-runner/Corefile
 $ sudo chmod 0644 /etc/safer-runner/Corefile
 $ sudo touch /var/log/safer-runner/dns.log
 $ sudo chown root:root /var/log/safer-runner/dns.log
 $ sudo chmod 0644 /var/log/safer-runner/dns.log
-$ sudo systemctl stop safer-runner-dns
-$ sudo systemctl reset-failed safer-runner-dns
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
 $ <dns.query> github.com
 $ sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -2315,13 +2315,13 @@ $ sudo tee /etc/systemd/resolved.conf.d/no-stub.conf  <<< 53 bytes, sha256:c45ac
 $ sudo unlink /etc/resolv.conf
 $ sudo tee /etc/resolv.conf  <<< 21 bytes, sha256:388b5f501733
 $ sudo systemctl restart systemd-resolved
-$ systemctl is-active --quiet docker
-$ sudo docker ps -q --no-trunc
+$ systemctl is-active --quiet docker [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
 $ sudo tee /etc/rsyslog.d/10-iptables-safer-runner-v2.conf  <<< 177 bytes, sha256:5c63d7dab6a6
 $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default
-$ sudo iptables -t filter -n -L DOCKER-USER"
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]"
 `;

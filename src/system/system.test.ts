@@ -36,7 +36,7 @@ describe('writeFiles', () => {
     ]);
     expect(calls).toEqual([
       'sudo install -d -m 0755 -o root -g root /etc/x',
-      'sudo tee /etc/x/a.json',
+      'sudo tee /etc/x/a.json [silent]',
       'sudo chown root:root /etc/x/a.json',
       'sudo chmod 0644 /etc/x/a.json',
       'sudo touch /var/log/x.log',
@@ -109,6 +109,6 @@ describe('transient units', () => {
         timeoutError: () => new Error('svc did not start')
       })
     ).rejects.toThrow('svc did not start');
-    expect(calls.slice(-2)).toEqual(['sudo journalctl -u svc', 'sudo ss -lnt']);
+    expect(calls.slice(-2)).toEqual(['sudo journalctl -u svc [ignore-rc]', 'sudo ss -lnt [ignore-rc]']);
   });
 });
