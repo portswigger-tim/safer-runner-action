@@ -1,5 +1,75 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
+exports[`job summary golden snapshots analyze: sudo the policy would block, with the suggested sudo-config 1`] = `
+"## 🛡️ Safer Runner — egress
+
+<kbd>📊 ANALYZE</kbd> <kbd>1 sudo command would be blocked</kbd> <kbd>🧪 self-tests 3/3</kbd>
+
+> [!IMPORTANT]
+> **Enforce would block 1 sudo command this job ran** (enforce removes sudo, except your \`sudo-config\` lines; listed under Diagnostics). Drop that usage, or allow the exact command lines with \`sudo-config\` (review each line):
+>
+> \`\`\`yaml
+> sudo-config: |
+>   - /usr/bin/apt-get install -y jq
+>   - /usr/sbin/service nginx restart
+> \`\`\`
+>
+> Not suggested: 1 with arguments that look like a secret, 1 run as another user.
+>
+> A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Enforce with any \`sudo-config\` is ADVISORY.
+
+
+**✅ Nothing would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+
+### Allowed — this job's hosts (2)
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+
+<details>
+<summary>🐙 <b>GitHub platform</b> — 2 hosts · 2 requests · 4.2 KiB · expected for every job</summary>
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
+| \`hosted-compute-abc.githubapp.com\` <sub>🔀 passthrough</sub> | — | n/a | n/a |
+
+<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>
+
+</details>
+
+<details>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · workflow ran 2 sudo commands (1 by Safer Runner) · enforce would block 1 · docker retained</summary>
+
+**Self-tests**
+
+- ✅ \`sni-block\` — SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
+- ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
+- ✅ \`dns-exact\` — srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
+
+**Sudo** — the workflow ran 2 commands; Safer Runner itself ran 1 (setup, integrity checks):
+
+\`\`\`console
+$ sudo /usr/bin/apt-get install -y jq
+$ sudo /usr/sbin/service nginx restart
+\`\`\`
+
+Enforce would block (1):
+
+\`\`\`console
+$ sudo /usr/bin/apt-get install -y jq
+\`\`\`
+
+**Docker** — \`docker: keep\`; verified at setup: runner user can use docker
+
+</details>
+
+<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+"
+`;
+
 exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker kept 1`] = `
 "## 🛡️ Safer Runner — egress
 
@@ -21,7 +91,8 @@ exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker k
 >       pypi.example.com
 > \`\`\`
 >
-> **This job ran 1 sudo command.** Enforce removes sudo — drop that usage, or add \`disable-sudo: false\` (which makes enforce ADVISORY: sudo can remove the controls).
+> **Enforce would block 1 sudo command this job ran** (enforce removes sudo; listed under Diagnostics). Drop that usage, or allow the exact command lines with \`sudo-config\`.
+
 
 |  |  |
 |:--|:--|
@@ -116,7 +187,7 @@ http-filter: |
 </details>
 
 <details>
-<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · 1 allowed outside the proxy · 2 DNS lookup enforce would refuses · workflow ran 1 sudo command (1 by Safer Runner) · docker retained</summary>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · 1 allowed outside the proxy · 2 DNS lookup enforce would refuses · workflow ran 1 sudo command (1 by Safer Runner) · enforce would block 1 · docker retained</summary>
 
 **Self-tests**
 
@@ -226,6 +297,71 @@ allowed-domains: |
 | \`198.51.100.7:22\` | TCP | SSH | 1001 | 1 | ❌ rejected |
 
 **Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
+
+**Docker** — \`docker: remove-group\`; verified at setup: runner user removed from the docker group, socket root-only
+
+**Config file tamper check** (advisory) — all verified
+
+**Configuration Files**
+
+| File | Status |
+|--|--|
+| /etc/resolv.conf | VERIFIED |
+
+
+<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
+
+</details>
+
+<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+"
+`;
+
+exports[`job summary golden snapshots enforce ADVISORY: a sudo-config allowlist 1`] = `
+"## 🛡️ Safer Runner — egress — enforce (ADVISORY — sudo (sudo-config allowlist) retained, not an enforced boundary)
+
+<kbd>⚠️ ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo allowlist (2)</kbd> <kbd>🔎 no config change seen (advisory)</kbd> <kbd>🧪 self-tests 3/3</kbd>
+
+> [!WARNING]
+> **The boundary was weaker than it looks.**
+>
+> **ADVISORY: sudo was kept for 2 command lines** (\`sudo-config\`). A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Remove \`sudo-config\` to make enforce a boundary.
+
+**✅ Nothing blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+
+### Allowed — this job's hosts (2)
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+
+<details>
+<summary>🐙 <b>GitHub platform</b> — 2 hosts · 2 requests · 4.2 KiB · expected for every job</summary>
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
+| \`hosted-compute-abc.githubapp.com\` <sub>🔀 passthrough</sub> | — | n/a | n/a |
+
+<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>
+
+</details>
+
+<details>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · workflow ran 1 sudo command (1 by Safer Runner) · docker removed ✓ · config unchanged ✓</summary>
+
+**Self-tests**
+
+- ✅ \`sni-block\` — SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
+- ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
+- ✅ \`dns-exact\` — srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
+
+**Sudo** — the workflow ran 1 command; Safer Runner itself ran 1 (setup, integrity checks):
+
+\`\`\`console
+$ sudo /usr/bin/apt-get install -y jq
+\`\`\`
 
 **Docker** — \`docker: remove-group\`; verified at setup: runner user removed from the docker group, socket root-only
 

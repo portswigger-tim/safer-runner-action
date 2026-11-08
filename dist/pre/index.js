@@ -535,12 +535,14 @@ function triState(raw, name) {
     throw new Error(`${name} must be true or false, got "${raw}"`);
 }
 /**
- * disable-sudo (review H2). Unset means ON in enforce mode: with sudo any step can switch the
- * egress controls off, so enforce is only a boundary without it. Off in analyze.
+ * disable-sudo (review H2): the sudo policy. Unset means remove sudo, in either mode: with sudo
+ * any step can switch the egress controls off, so enforce is only a boundary without it. The
+ * mode decides whether the policy is applied (enforce) or only evaluated (analyze never
+ * changes sudo; it reports what enforce would block and suggests a sudo-config).
  */
-function resolveDisableSudo(raw, mode) {
+function resolveDisableSudo(raw) {
     const v = triState(raw, 'disable-sudo');
-    return v === null ? [mode === 'enforce', true] : [v, false];
+    return v === null ? [true, true] : [v, false];
 }
 /**
  * docker. Unset means remove-group in enforce (docker is root-equivalent, mirroring
@@ -756,9 +758,9 @@ function bool(name) {
 function readInputs() {
     const mode = parseMode(core.getInput('mode'));
     // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
-    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'));
     const sudoConfig = (0, config_1.parseSudoConfig)(core.getInput('sudo-config', { trimWhitespace: false }));
-    if (sudoConfig.length && !disableSudo && !disableSudoDefaulted) {
+    if (sudoConfig.length && !disableSudo) {
         throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
     }
     const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
@@ -1547,10 +1549,8 @@ async function run() {
         core.setFailed(`safer-runner setup failed: ${error}`);
         return;
     }
-    let inputs;
     try {
-        inputs = (0, inputs_1.readInputs)();
-        await (0, run_1.runSetup)(inputs);
+        await (0, run_1.runSetup)((0, inputs_1.readInputs)());
     }
     catch (error) {
         if (mode === 'enforce') {
@@ -1558,14 +1558,10 @@ async function run() {
             core.setFailed(`safer-runner setup failed in enforce mode: ${error}`);
         }
         else if ((0, run_1.setupCompleted)()) {
-            // The setup marker is written before the sudo steps (they must come last, and the marker
-            // needs sudo), so main sees it and will not retry what failed after it.
-            if (inputs?.disableSudo) {
-                core.setFailed(`safer-runner setup failed before sudo was removed (disable-sudo: true): ${error}`);
-            }
-            else {
-                core.warning(`safer-runner setup failed in analyze mode, after the setup marker: ${error}`);
-            }
+            // The setup marker is written before the sudo logging and integrity steps (they come last),
+            // so main sees it and will not retry what failed after it. Analyze never changes sudo, so
+            // nothing is left half-applied.
+            core.warning(`safer-runner setup failed in analyze mode, after the setup marker: ${error}. The main step will not retry.`);
         }
         else {
             core.warning(`safer-runner setup failed in analyze mode: ${error}. The main step will retry.`);
@@ -3529,6 +3525,7 @@ exports.parseSudoLine = parseSudoLine;
 exports.parseSudoConfig = parseSudoConfig;
 exports.sudoConfigWarnings = sudoConfigWarnings;
 exports.ruleAllows = ruleAllows;
+exports.evaluateSudo = evaluateSudo;
 const yaml_1 = __nccwpck_require__(8815);
 const yaml_2 = __nccwpck_require__(2040);
 const baseline_1 = __nccwpck_require__(1333);
@@ -3793,6 +3790,20 @@ function ruleAllows(r, command, args) {
     if (!r.anyRest)
         return got.length === r.args.length && r.args.every((a, i) => got[i] === a);
     return got.length > r.args.length && r.args.every((a, i) => got[i] === a);
+}
+/**
+ * Analyze: the workflow's own sudo commands the declared policy would block in enforce. With sudo
+ * kept (disable-sudo: false) nothing would be; otherwise everything the sudo-config rules don't
+ * allow (they run as root only).
+ */
+function evaluateSudo(rules, kept, ran) {
+    const allowed = [];
+    const wouldBlock = [];
+    for (const c of ran) {
+        const ok = kept || ((c.targetUser || 'root') === 'root' && rules.some(r => ruleAllows(r, c.command, c.args)));
+        (ok ? allowed : wouldBlock).push(c);
+    }
+    return { allowed, wouldBlock };
 }
 
 
@@ -4193,6 +4204,9 @@ async function runSetup(inputs, h = host_1.realHost) {
         input: Buffer.from(JSON.stringify({
             mode,
             sudoRetained,
+            // the sudo policy the post step evaluates (analyze) or reports (enforce)
+            ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
+            ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
             dockerRetained: dockerAccess.access === 'retained',
             docker: dockerAccess,
             failOnTampering: inputs.failOnTampering,
@@ -4209,7 +4223,8 @@ async function runSetup(inputs, h = host_1.realHost) {
     const sudoRendered = sudo.render({
         flavour: sudoFlavour,
         logFile: constants_1.SUDO_LOG,
-        restrict: inputs.disableSudo,
+        // analyze never changes sudo: it evaluates the policy in the post step
+        restrict: mode === 'enforce' && inputs.disableSudo,
         rules: inputs.sudoConfig
     });
     const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);

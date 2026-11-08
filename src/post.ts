@@ -11,16 +11,19 @@ import {
   parseFirewallLog,
   readRefusedNames,
   suggestHttpFilter,
+  suggestSudoConfig,
   summarizeContainers,
   summarizeFlows,
   summarizeHttpFilter,
   type AllowedRequest,
-  type HttpFilterSuggestion
+  type HttpFilterSuggestion,
+  type SudoCommand,
+  type SudoPolicyReport
 } from './report';
 import { containerAddresses } from './services/docker';
 import { actionRoot } from './services/mitmproxy';
 import { type SelfTestWindow, withoutSelfTests } from './setup/selftest';
-import { readSudoUsage } from './services/sudo';
+import { evaluateSudo, parseSudoLine, readSudoUsage, ruleText, type SudoRule } from './services/sudo';
 import { checkIntegrity, type IntegrityResult } from './integrity/check';
 import { realHost } from './system/host';
 import { parseAllowedDomains, type Mode } from './policy';
@@ -38,6 +41,10 @@ interface SetupMarker {
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
   dnsSelfTestName?: string;
+  /** sudo-config lines setup used (absent: none) */
+  sudoConfig?: string[];
+  /** analyze with disable-sudo: false (the policy keeps sudo) */
+  sudoKept?: boolean;
 }
 
 /** GitHub platform endpoints the built-in list allowed on filtered hosts (policy.json, 0644). */
@@ -61,6 +68,31 @@ function suggestion(requests: AllowedRequest[]): HttpFilterSuggestion | undefine
     core.warning(`No suggested http-filter: ${error}`);
     return undefined;
   }
+}
+
+/**
+ * The sudo policy setup recorded (in the root-owned marker, not re-read from the inputs) and,
+ * in analyze, what it would block in enforce and the suggested sudo-config.
+ */
+function sudoPolicy(mode: Mode, marker: SetupMarker, ran: SudoCommand[]): SudoPolicyReport {
+  let rules: SudoRule[] = [];
+  try {
+    rules = (marker.sudoConfig ?? []).map(parseSudoLine);
+  } catch (error) {
+    core.warning(`Unreadable sudo-config in the setup marker: ${error}`);
+  }
+  const kept = marker.sudoRetained === true || marker.sudoKept === true;
+  const policy: SudoPolicyReport = { rules: rules.map(ruleText), kept, wouldBlock: [] };
+  if (mode !== 'analyze') return policy;
+  policy.wouldBlock = evaluateSudo(rules, kept, ran).wouldBlock;
+  if (ran.length) {
+    try {
+      policy.suggestion = suggestSudoConfig(ran, path.join(actionRoot(), 'proxy'));
+    } catch (error) {
+      core.warning(`No suggested sudo-config: ${error}`);
+    }
+  }
+  return policy;
 }
 
 function readSetupMarker(): SetupMarker | null {
@@ -128,6 +160,8 @@ async function run(): Promise<void> {
     const sudo = readSudoUsage(SUDO_LOG);
     for (const c of sudo.ran) core.info(`sudo (workflow) ${c.command} ${c.args}`);
     for (const c of sudo.refused) core.info(`sudo REFUSED ${c.command} ${c.args}`);
+    const sudoPolicyReport = sudoPolicy(mode, marker, sudo.ran);
+    for (const c of sudoPolicyReport.wouldBlock) core.info(`sudo WOULD_BLOCK ${c.command} ${c.args}`);
 
     const md = buildReport({
       mode,
@@ -135,6 +169,7 @@ async function run(): Promise<void> {
       dockerRetained: marker.dockerRetained === true,
       docker: marker.docker,
       sudo,
+      sudoPolicy: sudoPolicyReport,
       job: process.env.GITHUB_JOB || 'unknown',
       actionRef: process.env.GITHUB_ACTION_REF,
       hosts,

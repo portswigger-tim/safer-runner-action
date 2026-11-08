@@ -16,13 +16,16 @@
 > against the `src/policy.ts` contract (`version: 1`) and fails closed. Real-runner tests run
 > from throwaway branches of the test repo `portswigger-tim/safer-runner-action-test`.
 > **v2 inputs:** `mode`, `allowed-domains`, `passthrough-domains`,
-> `block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `docker` (keep | remove-group |
+> `block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `sudo-config` (YAML list of exact
+> sudo command lines kept under `disable-sudo`; `parseSudoConfig` in `src/services/sudo/config.ts`), `docker` (keep | remove-group |
 > stop), `fail-on-tampering`, `http-filter` + `allow-github-platform` (L7 method/path filter -
 > [docs/DESIGN-L7-path-method.md](docs/DESIGN-L7-path-method.md); matcher `HttpFilter` in
 > `proxy/policy_core.py`, platform list `GITHUB_PLATFORM_ENDPOINTS`) - parsed in `src/config/inputs.ts`.
-> `disable-sudo`, `docker` and `fail-on-tampering` are mode-aware (no action.yaml default;
-> unset = the enforce-safe value in enforce). Removed (v1 or early beta only - do not document
-> as current): `sudo-config`, `disable-docker`, `stop-docker`, `primary-dns-server`,
+> `docker` and `fail-on-tampering` are mode-aware (no action.yaml default; unset = the
+> enforce-safe value in enforce). `disable-sudo` unset means remove sudo in both modes: `mode`
+> decides apply (enforce) or evaluate (analyze never changes sudo; it reports what enforce would
+> block and suggests a `sudo-config`) - see [docs/DESIGN-unified-analyze.md](docs/DESIGN-unified-analyze.md).
+> Removed (v1 or early beta only - do not document as current): v1's `sudo-config` format, `disable-docker`, `stop-docker`, `primary-dns-server`,
 > `secondary-dns-server`, `proxy-port`, `proxy-stream-large-bodies`, `container-tls`.
 
 This guide helps developers understand, maintain, and extend the Safer Runner Action codebase.
@@ -86,8 +89,10 @@ proxy/
 ├── policy.py            # mitmproxy addon: wiring, layer selection, repoint, flow log
 ├── policy_core.py       # pure policy logic (no mitmproxy import): patterns, decisions, HttpFilter
 ├── suggest.py           # builds the suggested http-filter from allowed requests (post step)
+├── sudo_suggest.py      # builds the suggested sudo-config from the workflow's sudo use (post step)
 ├── policy_core_test.py  # Python unit tests for the policy core
 ├── suggest_test.py      # Python unit tests for the suggester
+├── sudo_suggest_test.py # Python unit tests for the sudo-config suggester
 └── test-vectors.json    # shared vectors checked by BOTH the Python and the jest tests
 ```
 
@@ -121,8 +126,9 @@ The action is a `node24` JavaScript action with `pre`, `main` and `post` entry p
    step. That includes the `pre` steps of actions that appear later in the job.
    - A bad `mode` value fails the step at once.
    - If setup fails in enforce, `pre` fails the job (fail closed). In analyze it warns, and
-     `main` retries - unless the setup marker was already written (the sudo steps come after
-     it), when `main` will not retry: then `pre` fails the step if `disable-sudo` is on.
+     `main` retries - unless the setup marker was already written (sudo logging and the
+     baseline come after it), when `main` will not retry. Analyze never changes sudo, so nothing
+     is left half-applied.
 2. **main** (`main.ts`) - if the root-owned setup marker `/etc/safer-runner/setup-complete`
    exists, it does nothing. Otherwise (for example a local `uses: ./` action) it runs setup.
 3. **post** (`post.ts`) - verifies integrity against the baseline, builds the job summary, and
@@ -136,7 +142,7 @@ The action is a `node24` JavaScript action with `pre`, `main` and `post` entry p
 Each step depends on the one before it. Where a step needs an earlier one, it takes that
 step's readiness token (a branded type only the owning module can mint, listed in
 `src/system/tokens.test.ts`), so the wrong order does not compile; `src/orchestration.test.ts`
-checks the same order (L1-L25) on a recording fake runner.
+checks the same order (L1-L27) on a recording fake runner.
 
 1. Job-container guard: a job `container:` is unsupported (enforce fails, analyze warns).
 2. Allowlist: GitHub domains from `api.github.com/meta` (before DNS changes), plus user entries.
@@ -211,9 +217,16 @@ checks the same order (L1-L25) on a recording fake runner.
      - Logging goes to `/var/log/safer-runner/sudo.log`. Classic sudo: `Defaults logfile=` drop-in
        `/etc/sudoers.d/00-sudo-logging`. sudo-rs has no logfile support, so an rsyslog rule
        `/etc/rsyslog.d/10-sudo-safer-runner.conf` copies its syslog messages to the same file.
-     - `disable-sudo` (`restrictSudo`) rewrites `/etc/sudoers.d/runner` to allow only exact,
-       read-only validation commands (`getValidationSudoCommands()`). It is validated with the
-       active `visudo` before it is moved into place; a rejected file fails setup.
+     - `disable-sudo` in enforce (`restrictSudo`) rewrites `/etc/sudoers.d/runner` to allow only
+       exact, read-only validation commands (`getValidationSudoCommands()`), plus the job's
+       `sudo-config` lines as a second alias run as `(root)`. A command with no arguments is
+       written `path ""` (bare, sudoers allows ANY arguments). It is validated with the active
+       `visudo` before it is moved into place; a rejected file fails setup. `restrictSudo` only
+       accepts a render that restricts, so analyze cannot restrict (L26); the installed file is
+       checked line by line (L27). Any `sudo-config` makes enforce ADVISORY.
+     - Analyze: the post step evaluates the policy against the sudo log (`evaluateSudo`), lists
+       what enforce would block, and suggests a `sudo-config` (`proxy/sudo_suggest.py`, exact
+       lines only, never `*`; run by `src/report/suggest.ts`).
      - Sudoers text must be valid for BOTH implementations: no wildcards among command
        arguments (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no
        `log_allowed`.
@@ -223,9 +236,9 @@ checks the same order (L1-L25) on a recording fake runner.
    - **docker**: `docker: remove-group` removes the runner user from the `docker` group and
      locks the socket to `root:root 0600`; `stop` stops and disables the daemon; `keep` leaves it.
      Setup then verifies the real access (`readDockerState`).
-   - **Mode-aware defaults** (`src/config/inputs.ts`): unset `disable-sudo`, `docker` and
-     `fail-on-tampering` take the enforce-safe value in enforce and the permissive value in
-     analyze. An explicit value always wins. Enforce with sudo or docker kept is **ADVISORY**:
+   - **Mode-aware defaults** (`src/config/inputs.ts`): unset `docker` and `fail-on-tampering`
+     take the enforce-safe value in enforce and the permissive value in analyze; unset
+     `disable-sudo` is `true` in both (analyze only evaluates it). An explicit value always wins. Enforce with sudo or docker kept is **ADVISORY**:
      the controls are applied, but they are not an enforced boundary.
 
 ### Integrity check - `src/integrity/`
@@ -379,7 +392,7 @@ Python only: `npm run test:py`.
 - `orchestration.test.ts` - `runSetup` and the post step on a recording fake runner that fakes
   only external boundaries (`@actions/*`, `fs`, `os`, `dns`, `net`, randomness, timers).
   Snapshots the command transcript and the files setup writes, checks the ordering invariants
-  L1-L25, and proves each one bites with a mutation check. Also pre then main around the setup
+  L1-L27, and proves each one bites with a mutation check. Also pre then main around the setup
   marker.
 - `system/tokens.test.ts` - every readiness token is minted only by its owning module and has an
   ordering invariant; `system/system.test.ts` - `writeFiles` and transient units.

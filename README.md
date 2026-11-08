@@ -72,13 +72,38 @@ cache, OIDC) are allowed automatically.
 | `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted). Single-tenant hosts whose clients can't trust the CA. The default is always included |
 | `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
 | `dns-servers` | `9.9.9.9 149.112.112.112` | Upstream resolvers for allowlisted names (Quad9 by default) |
-| `disable-sudo` | follows `mode` | `enforce` removes the runner's sudo after setup. Keeping it in enforce makes the job **ADVISORY** |
+| `disable-sudo` | `true` | Remove the runner's sudo after setup. `enforce` applies it; `analyze` never changes sudo, it reports what enforce would block. `false` keeps sudo, which makes enforce **ADVISORY** |
+| `sudo-config` | | With sudo removed, the exact sudo command lines the job may still run as root. [Below](#sudo-allowlist-sudo-config). Any entry makes enforce **ADVISORY** |
 | `docker` | follows `mode` | `keep`, `remove-group`, or `stop`. `enforce` uses `remove-group`. `keep` in enforce makes the job **ADVISORY** |
 | `fail-on-tampering` | follows `mode` | `enforce` fails the post step if the safer-runner config changed during the job |
 
-An explicit value always wins; leaving one unset follows the mode. Keeping sudo or docker in
-enforce means a root step could remove the controls, so the job is labelled **ADVISORY** rather
-than enforced. See [docs/DESIGN-v2.md](docs/DESIGN-v2.md) for the full enforce behaviour.
+An explicit value always wins; leaving `docker` or `fail-on-tampering` unset follows the mode.
+`analyze` never changes sudo or docker on the runner. Keeping sudo or docker in enforce means a
+root step could remove the controls, so the job is labelled **ADVISORY** rather than enforced.
+See [docs/DESIGN-v2.md](docs/DESIGN-v2.md) for the full enforce behaviour.
+
+### Sudo allowlist (`sudo-config`)
+
+Prefer no sudo. If a job needs a few root commands, list the exact command lines:
+
+```yaml
+- uses: portswigger-tim/safer-runner-action@<version>
+  with:
+    mode: enforce
+    sudo-config: |
+      - /usr/bin/apt-get update
+      - /usr/bin/apt-get install -y jq
+```
+
+Each line is an absolute path and its exact arguments (a command with no arguments allows none).
+A lone trailing `*` allows one or more further arguments, options included: avoid it. Only
+letters, digits and `_ . / @ + -`. In `analyze`, the summary lists the sudo commands enforce
+would block and suggests a `sudo-config` from the job's own use (exact lines only; anything that
+looks like a secret is left out).
+
+**A sudo allowlist is not a boundary.** A command that can run code or write files (`apt-get`,
+`bash`, `tee`, `systemctl`, ...) gives the job root, and root can remove the egress controls.
+Enforce with any `sudo-config` is labelled **ADVISORY**.
 
 ### Allowlist syntax
 

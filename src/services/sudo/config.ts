@@ -8,6 +8,7 @@
 
 import { isScalar, isSeq } from 'yaml';
 import { strictYaml } from '../../config/yaml';
+import type { SudoCommand } from '../../report/logs/sudo-log';
 import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from '../../integrity/baseline';
 import { DOCKER_DAEMON_JSON, VALIDATION_STATE_FILE } from '../../constants';
 
@@ -328,4 +329,23 @@ export function ruleAllows(r: Pick<SudoRule, 'path' | 'args' | 'anyRest'>, comma
   const got = args.split(/ +/).filter(Boolean);
   if (!r.anyRest) return got.length === r.args.length && r.args.every((a, i) => got[i] === a);
   return got.length > r.args.length && r.args.every((a, i) => got[i] === a);
+}
+
+/**
+ * Analyze: the workflow's own sudo commands the declared policy would block in enforce. With sudo
+ * kept (disable-sudo: false) nothing would be; otherwise everything the sudo-config rules don't
+ * allow (they run as root only).
+ */
+export function evaluateSudo(
+  rules: readonly SudoRule[],
+  kept: boolean,
+  ran: readonly SudoCommand[]
+): { allowed: SudoCommand[]; wouldBlock: SudoCommand[] } {
+  const allowed: SudoCommand[] = [];
+  const wouldBlock: SudoCommand[] = [];
+  for (const c of ran) {
+    const ok = kept || ((c.targetUser || 'root') === 'root' && rules.some(r => ruleAllows(r, c.command, c.args)));
+    (ok ? allowed : wouldBlock).push(c);
+  }
+  return { allowed, wouldBlock };
 }

@@ -1564,6 +1564,171 @@
       "%admin",
       "   "
     ],
+    "suggest": [
+      {
+        "name": "exact lines, deduplicated and sorted",
+        "commands": [
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "update",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y jq",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "update",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/nproc",
+            "args": "",
+            "targetUser": "root"
+          }
+        ],
+        "rules": [
+          "/usr/bin/apt-get install -y jq",
+          "/usr/bin/apt-get update",
+          "/usr/bin/nproc"
+        ],
+        "omitted": {
+          "secret": 0,
+          "unrepresentable": 0,
+          "other_user": 0,
+          "over_cap": 0
+        }
+      },
+      {
+        "name": "never a wildcard: many installs stay exact lines",
+        "commands": [
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-1",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-2",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-3",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-4",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-5",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-6",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-7",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-8",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-9",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install -y pkg-10",
+            "targetUser": "root"
+          }
+        ],
+        "rules": [
+          "/usr/bin/apt-get install -y pkg-1",
+          "/usr/bin/apt-get install -y pkg-10",
+          "/usr/bin/apt-get install -y pkg-2",
+          "/usr/bin/apt-get install -y pkg-3",
+          "/usr/bin/apt-get install -y pkg-4",
+          "/usr/bin/apt-get install -y pkg-5",
+          "/usr/bin/apt-get install -y pkg-6",
+          "/usr/bin/apt-get install -y pkg-7",
+          "/usr/bin/apt-get install -y pkg-8",
+          "/usr/bin/apt-get install -y pkg-9"
+        ],
+        "omitted": {
+          "secret": 0,
+          "unrepresentable": 0,
+          "other_user": 0,
+          "over_cap": 0
+        }
+      },
+      {
+        "name": "secrets, unwritable lines and other users are left out and counted",
+        "commands": [
+          {
+            "command": "/usr/bin/docker",
+            "args": "login -u bot --password hunter2",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/gh",
+            "args": "auth login ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/curl",
+            "args": "-o /tmp/x https://example.org/5ec7e7c0ffee1234",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/tool",
+            "args": "--id 5ec7e7c0ffee1234",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/sh",
+            "args": "-c echo $HOME",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "install lib*",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/psql",
+            "args": "-c select",
+            "targetUser": "postgres"
+          },
+          {
+            "command": "/usr/sbin/service",
+            "args": "nginx restart",
+            "targetUser": "root"
+          }
+        ],
+        "rules": [
+          "/usr/sbin/service nginx restart"
+        ],
+        "omitted": {
+          "secret": 3,
+          "unrepresentable": 3,
+          "other_user": 1,
+          "over_cap": 0
+        }
+      }
+    ],
     "match": [
       {
         "rule": "/usr/bin/apt-get update",

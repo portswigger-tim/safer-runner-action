@@ -1,6 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseSudoConfig, parseSudoLine, ruleAllows, ruleText, sudoConfigWarnings, type SudoRule } from './config';
+import {
+  evaluateSudo,
+  parseSudoConfig,
+  parseSudoLine,
+  ruleAllows,
+  ruleText,
+  sudoConfigWarnings,
+  type SudoRule
+} from './config';
 
 /** proxy/test-vectors.json "sudo": also run by proxy/sudo_suggest_test.py */
 const VECTORS = JSON.parse(
@@ -93,5 +101,36 @@ describe('sudoConfigWarnings', () => {
       "sudo-config: '/usr/local/bin/tool sync *' allows any further arguments, including options"
     ]);
     expect(sudoConfigWarnings(parseSudoConfig('- /usr/sbin/service nginx restart'))).toEqual([]);
+  });
+});
+
+describe('evaluateSudo (analyze: what enforce would block)', () => {
+  const ran = (command: string, args: string, targetUser = 'root') => ({
+    timestamp: '',
+    user: 'runner',
+    targetUser,
+    command,
+    args
+  });
+  const RAN = [
+    ran('/usr/bin/apt-get', 'update'),
+    ran('/usr/bin/apt-get', 'install -y jq'),
+    ran('/usr/bin/apt-get', 'install'),
+    ran('/usr/bin/psql', '-c select', 'postgres')
+  ];
+  const rules = parseSudoConfig('- /usr/bin/apt-get update\n- /usr/bin/apt-get install *\n- /usr/bin/psql -c select');
+
+  it('blocks what the rules do not allow, and anything as another user (rules run as root)', () => {
+    const { allowed, wouldBlock } = evaluateSudo(rules, false, RAN);
+    expect(allowed).toEqual(RAN.slice(0, 2));
+    expect(wouldBlock).toEqual(RAN.slice(2));
+  });
+
+  it('no rules: every workflow sudo command would be blocked', () => {
+    expect(evaluateSudo([], false, RAN).wouldBlock).toEqual(RAN);
+  });
+
+  it('disable-sudo: false keeps sudo: nothing would be blocked', () => {
+    expect(evaluateSudo([], true, RAN)).toEqual({ allowed: RAN, wouldBlock: [] });
   });
 });

@@ -38,7 +38,7 @@ export interface Inputs {
   dnsServers: string[];
   /** effective value: see resolveDisableSudo() */
   disableSudo: boolean;
-  /** true when disable-sudo was not set and the mode decided it */
+  /** true when disable-sudo was not set (the policy then removes sudo) */
   disableSudoDefaulted: boolean;
   /** sudo-config (parseSudoConfig): command lines the job may run as root; [] = none */
   sudoConfig: SudoRule[];
@@ -72,12 +72,14 @@ function triState(raw: string, name: string): boolean | null {
 }
 
 /**
- * disable-sudo (review H2). Unset means ON in enforce mode: with sudo any step can switch the
- * egress controls off, so enforce is only a boundary without it. Off in analyze.
+ * disable-sudo (review H2): the sudo policy. Unset means remove sudo, in either mode: with sudo
+ * any step can switch the egress controls off, so enforce is only a boundary without it. The
+ * mode decides whether the policy is applied (enforce) or only evaluated (analyze never
+ * changes sudo; it reports what enforce would block and suggests a sudo-config).
  */
-export function resolveDisableSudo(raw: string, mode: Mode): [boolean, boolean] {
+export function resolveDisableSudo(raw: string): [boolean, boolean] {
   const v = triState(raw, 'disable-sudo');
-  return v === null ? [mode === 'enforce', true] : [v, false];
+  return v === null ? [true, true] : [v, false];
 }
 
 /**
@@ -294,9 +296,9 @@ function bool(name: string): boolean {
 export function readInputs(): Inputs {
   const mode = parseMode(core.getInput('mode'));
   // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
-  const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+  const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'));
   const sudoConfig = parseSudoConfig(core.getInput('sudo-config', { trimWhitespace: false }));
-  if (sudoConfig.length && !disableSudo && !disableSudoDefaulted) {
+  if (sudoConfig.length && !disableSudo) {
     throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
   }
   const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);

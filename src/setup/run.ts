@@ -249,6 +249,9 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
       JSON.stringify({
         mode,
         sudoRetained,
+        // the sudo policy the post step evaluates (analyze) or reports (enforce)
+        ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
+        ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
         dockerRetained: dockerAccess.access === 'retained',
         docker: dockerAccess,
         failOnTampering: inputs.failOnTampering,
@@ -266,7 +269,8 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   const sudoRendered = sudo.render({
     flavour: sudoFlavour,
     logFile: SUDO_LOG,
-    restrict: inputs.disableSudo,
+    // analyze never changes sudo: it evaluates the policy in the post step
+    restrict: mode === 'enforce' && inputs.disableSudo,
     rules: inputs.sudoConfig
   });
   const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);

@@ -535,12 +535,14 @@ function triState(raw, name) {
     throw new Error(`${name} must be true or false, got "${raw}"`);
 }
 /**
- * disable-sudo (review H2). Unset means ON in enforce mode: with sudo any step can switch the
- * egress controls off, so enforce is only a boundary without it. Off in analyze.
+ * disable-sudo (review H2): the sudo policy. Unset means remove sudo, in either mode: with sudo
+ * any step can switch the egress controls off, so enforce is only a boundary without it. The
+ * mode decides whether the policy is applied (enforce) or only evaluated (analyze never
+ * changes sudo; it reports what enforce would block and suggests a sudo-config).
  */
-function resolveDisableSudo(raw, mode) {
+function resolveDisableSudo(raw) {
     const v = triState(raw, 'disable-sudo');
-    return v === null ? [mode === 'enforce', true] : [v, false];
+    return v === null ? [true, true] : [v, false];
 }
 /**
  * docker. Unset means remove-group in enforce (docker is root-equivalent, mirroring
@@ -756,9 +758,9 @@ function bool(name) {
 function readInputs() {
     const mode = parseMode(core.getInput('mode'));
     // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
-    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'));
     const sudoConfig = (0, config_1.parseSudoConfig)(core.getInput('sudo-config', { trimWhitespace: false }));
-    if (sudoConfig.length && !disableSudo && !disableSudoDefaulted) {
+    if (sudoConfig.length && !disableSudo) {
         throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
     }
     const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
@@ -1762,6 +1764,33 @@ function suggestion(requests) {
         return undefined;
     }
 }
+/**
+ * The sudo policy setup recorded (in the root-owned marker, not re-read from the inputs) and,
+ * in analyze, what it would block in enforce and the suggested sudo-config.
+ */
+function sudoPolicy(mode, marker, ran) {
+    let rules = [];
+    try {
+        rules = (marker.sudoConfig ?? []).map(sudo_1.parseSudoLine);
+    }
+    catch (error) {
+        core.warning(`Unreadable sudo-config in the setup marker: ${error}`);
+    }
+    const kept = marker.sudoRetained === true || marker.sudoKept === true;
+    const policy = { rules: rules.map(sudo_1.ruleText), kept, wouldBlock: [] };
+    if (mode !== 'analyze')
+        return policy;
+    policy.wouldBlock = (0, sudo_1.evaluateSudo)(rules, kept, ran).wouldBlock;
+    if (ran.length) {
+        try {
+            policy.suggestion = (0, report_1.suggestSudoConfig)(ran, path.join((0, mitmproxy_1.actionRoot)(), 'proxy'));
+        }
+        catch (error) {
+            core.warning(`No suggested sudo-config: ${error}`);
+        }
+    }
+    return policy;
+}
 function readSetupMarker() {
     try {
         return JSON.parse(fs.readFileSync(run_1.SETUP_MARKER, 'utf8'));
@@ -1823,12 +1852,16 @@ async function run() {
             core.info(`sudo (workflow) ${c.command} ${c.args}`);
         for (const c of sudo.refused)
             core.info(`sudo REFUSED ${c.command} ${c.args}`);
+        const sudoPolicyReport = sudoPolicy(mode, marker, sudo.ran);
+        for (const c of sudoPolicyReport.wouldBlock)
+            core.info(`sudo WOULD_BLOCK ${c.command} ${c.args}`);
         const md = (0, report_1.buildReport)({
             mode,
             sudoRetained: marker.sudoRetained === true,
             dockerRetained: marker.dockerRetained === true,
             docker: marker.docker,
             sudo,
+            sudoPolicy: sudoPolicyReport,
             job: process.env.GITHUB_JOB || 'unknown',
             actionRef: process.env.GITHUB_ACTION_REF,
             hosts,
@@ -2270,6 +2303,26 @@ function httpFilterYaml(s) {
 
 /***/ }),
 
+/***/ 2293:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * The suggested sudo-config (analyze): what proxy/sudo_suggest.py builds from the workflow's own
+ * sudo commands, and its YAML, written with the same library that reads the input back.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.sudoConfigYaml = sudoConfigYaml;
+const yaml_1 = __nccwpck_require__(8815);
+/** The suggestion as the sudo-config input value: a YAML list, read back by parseSudoConfig. */
+function sudoConfigYaml(rules) {
+    return (0, yaml_1.stringify)(rules, { lineWidth: 0 });
+}
+
+
+/***/ }),
+
 /***/ 4427:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -2279,7 +2332,7 @@ function httpFilterYaml(s) {
  * The job summary, as a pure pipeline: logs/ parse the raw logs, aggregate/ turns flow records
  * into summaries, render/ writes the Markdown. Every name or path a step chose goes through
  * redact.ts before it is printed (the C5 disclosure boundary). suggest.ts runs proxy/suggest.py
- * for the suggested http-filter.
+ * and proxy/sudo_suggest.py for the suggested http-filter and sudo-config.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2302,6 +2355,7 @@ __exportStar(__nccwpck_require__(8305), exports);
 __exportStar(__nccwpck_require__(2982), exports);
 __exportStar(__nccwpck_require__(7535), exports);
 __exportStar(__nccwpck_require__(6774), exports);
+__exportStar(__nccwpck_require__(2293), exports);
 __exportStar(__nccwpck_require__(4379), exports);
 __exportStar(__nccwpck_require__(248), exports);
 __exportStar(__nccwpck_require__(8646), exports);
@@ -2760,7 +2814,7 @@ function codeBlock(lang, text) {
  * DENIED first and in full; anything that has to be cut is said so explicitly (review M6).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ADVISORY_REPORT_NOTE = void 0;
+exports.ADVISORY_REPORT_NOTE = exports.SUDO_CONFIG_CAVEAT = void 0;
 exports.addressClass = addressClass;
 exports.modeLabel = modeLabel;
 exports.statusSummary = statusSummary;
@@ -2770,8 +2824,12 @@ const containers_1 = __nccwpck_require__(7535);
 const flows_1 = __nccwpck_require__(2982);
 const http_filter_1 = __nccwpck_require__(6774);
 const firewall_log_1 = __nccwpck_require__(1504);
+const sudo_config_1 = __nccwpck_require__(2293);
 const redact_1 = __nccwpck_require__(8646);
 const markdown_1 = __nccwpck_require__(4379);
+/** Fixed caveat for every sudo-config: never shown as safe. */
+exports.SUDO_CONFIG_CAVEAT = 'A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, ' +
+    'and root can remove the egress controls. Enforce with any `sudo-config` is ADVISORY.';
 /**
  * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
  * the action's files on the runner, which the job's own steps can write to. Say so in the report.
@@ -2857,18 +2915,22 @@ function integrityChip(status) {
         return '🔎 no config change seen (advisory)';
     return '❔ config unverified';
 }
-/** What made enforce advisory: 'sudo', 'docker', 'sudo and docker', or '' (a boundary). */
-function retained(sudoRetained, dockerRetained) {
-    return [sudoRetained ? 'sudo' : '', dockerRetained ? 'docker' : ''].filter(Boolean).join(' and ');
+/**
+ * What made enforce advisory: 'sudo', 'sudo (sudo-config allowlist)', 'docker', joined with
+ * 'and', or '' (a boundary).
+ */
+function retained(sudoRetained, dockerRetained, sudoAllowlist = false) {
+    const sudo = sudoRetained ? 'sudo' : sudoAllowlist ? 'sudo (sudo-config allowlist)' : '';
+    return [sudo, dockerRetained ? 'docker' : ''].filter(Boolean).join(' and ');
 }
 /**
- * Mode as shown in the summary header. enforce with sudo or docker (root-equivalent) retained
- * is never shown as plain enforce.
+ * Mode as shown in the summary header. enforce with sudo or docker (root-equivalent) retained,
+ * or a sudo-config allowlist, is never shown as plain enforce.
  */
-function modeLabel(mode, sudoRetained = false, dockerRetained = false) {
+function modeLabel(mode, sudoRetained = false, dockerRetained = false, sudoAllowlist = false) {
     if (mode === 'analyze')
         return '📊 ANALYZE';
-    const what = retained(sudoRetained, dockerRetained);
+    const what = retained(sudoRetained, dockerRetained, sudoAllowlist);
     return what ? `⚠️ ENFORCE (ADVISORY — ${what} retained, not an enforced boundary)` : '🔒 ENFORCE';
 }
 function compressionText(s) {
@@ -2982,7 +3044,10 @@ function totals(rows) {
 function facts(input) {
     const { mode } = input;
     const enforce = mode === 'enforce';
-    const advisoryWhat = enforce ? retained(input.sudoRetained === true, input.dockerRetained === true) : '';
+    const sudoAllowlist = enforce && !input.sudoRetained ? (input.sudoPolicy?.rules.length ?? 0) : 0;
+    const advisoryWhat = enforce
+        ? retained(input.sudoRetained === true, input.dockerRetained === true, sudoAllowlist > 0)
+        : '';
     const denied = input.hosts.filter(h => flows_1.DENIED.has(h.verdict));
     const allowed = input.hosts.filter(h => !flows_1.DENIED.has(h.verdict));
     const groups = {
@@ -3029,6 +3094,9 @@ function facts(input) {
         // container firewall events are reported in the container section, with their source
         fw: (0, firewall_log_1.firewallSummary)(input.firewall.filter(e => !firewall_log_1.CONTAINER_PREFIXES.has(e.prefix))),
         sudoRan: input.sudo?.ran.length ?? 0,
+        // without a policy (an older setup marker), every workflow sudo command: enforce removes sudo
+        sudoWouldBlock: input.sudoPolicy ? input.sudoPolicy.wouldBlock.length : (input.sudo?.ran.length ?? 0),
+        sudoAllowlist,
         suggest: (0, flows_1.suggestedAllowlist)(denied),
         filterBlocks,
         filtered: filterBlocks.reduce((a, b) => a + b.tries, 0),
@@ -3042,9 +3110,11 @@ function titleAndChips(f) {
     if (enforce) {
         if (input.sudoRetained)
             chips.push('⚠️ sudo retained');
+        if (f.sudoAllowlist)
+            chips.push(`⚠️ sudo allowlist (${f.sudoAllowlist})`);
         if (input.dockerRetained)
             chips.push('⚠️ docker retained');
-        if (!input.sudoRetained && !input.dockerRetained)
+        if (!f.advisory)
             chips.push('✅ controls applied at setup');
         chips.push(integrityChip(input.integrity?.status));
     }
@@ -3053,7 +3123,9 @@ function titleAndChips(f) {
             chips.push(`${(0, markdown_1.plural)(f.hostsDenied, 'host')} would be blocked`);
         if (f.filtered)
             chips.push(`${(0, markdown_1.plural)(f.filtered, 'request')} the http-filter would refuse`);
-        if (!f.hostsDenied && !f.filtered)
+        if (input.sudoPolicy && f.sudoWouldBlock)
+            chips.push(`${(0, markdown_1.plural)(f.sudoWouldBlock, 'sudo command')} would be blocked`);
+        if (!f.hostsDenied && !f.filtered && !(input.sudoPolicy && f.sudoWouldBlock))
             chips.push('nothing would be blocked');
     }
     if (input.selfTests.length) {
@@ -3063,7 +3135,8 @@ function titleAndChips(f) {
 }
 /** Verdict alerts (top level only: alerts don't render inside <details>). */
 function alerts(f) {
-    const { input, enforce, groups, bypass, filtered, suggest, sudoRan } = f;
+    const { input, enforce, groups, bypass, filtered, suggest, sudoRan, sudoWouldBlock } = f;
+    const sudoKeptRan = !enforce && input.sudoPolicy?.kept === true && sudoRan > 0;
     let md = '';
     const critical = [];
     if (bypass.length) {
@@ -3087,8 +3160,13 @@ function alerts(f) {
     }
     if (critical.length)
         md += '> [!CAUTION]\n' + critical.map(c => `> ${c}`).join('\n>\n') + '\n\n';
-    if (enforce && (input.sudoRetained || input.dockerRetained)) {
+    if (enforce && f.advisory) {
         const why = [];
+        if (f.sudoAllowlist) {
+            why.push(`**ADVISORY: sudo was kept for ${(0, markdown_1.plural)(f.sudoAllowlist, 'command line')}** (\`sudo-config\`). ` +
+                exports.SUDO_CONFIG_CAVEAT.replace(' Enforce with any `sudo-config` is ADVISORY.', '') +
+                ' Remove `sudo-config` to make enforce a boundary.');
+        }
         if (input.sudoRetained) {
             why.push('**ADVISORY: sudo was retained** (`disable-sudo: false`), so any step could have used it to ' +
                 'remove the egress controls. The policy below was applied, but this job did not run inside an enforced ' +
@@ -3114,7 +3192,7 @@ function alerts(f) {
             what.push(`${(0, markdown_1.plural)(filtered, 'request')} ${filtered === 1 ? 'was' : 'were'} refused by \`http-filter\``);
         md += '> [!IMPORTANT]\n' + `> **${what.join('; ')}.** If this job failed, this is probably why — see below.\n\n`;
     }
-    if (!enforce && (suggest.length || sudoRan)) {
+    if (!enforce && (suggest.length || sudoWouldBlock || sudoKeptRan)) {
         md += '> [!IMPORTANT]\n';
         if (suggest.length) {
             md += `> **Enforce would block ${(0, markdown_1.plural)(suggest.length, 'host')} this job used.** Add ${suggest.length === 1 ? 'it' : 'them'} to run this job under \`mode: enforce\` (review each one first):\n>\n`;
@@ -3127,16 +3205,52 @@ function alerts(f) {
                     .map(l => `> ${l}`)
                     .join('\n') + '\n';
         }
-        if (sudoRan) {
+        if (sudoWouldBlock || sudoKeptRan) {
             if (suggest.length)
                 md += '>\n';
-            md +=
-                `> **This job ran ${(0, markdown_1.plural)(sudoRan, 'sudo command')}.** Enforce removes sudo — drop that usage, ` +
-                    'or add `disable-sudo: false` (which makes enforce ADVISORY: sudo can remove the controls).\n';
+            md += sudoAlert(f) + '\n';
         }
         md += '\n';
     }
     return md;
+}
+/** Analyze: the sudo commands enforce would block, and the suggested sudo-config (in an alert). */
+function sudoAlert(f) {
+    const policy = f.input.sudoPolicy;
+    const quote = (text) => text
+        .split('\n')
+        .map(l => `> ${l}`)
+        .join('\n');
+    let md;
+    if (f.sudoWouldBlock) {
+        md =
+            `> **Enforce would block ${(0, markdown_1.plural)(f.sudoWouldBlock, 'sudo command')} this job ran** ` +
+                `(enforce removes sudo${policy?.rules.length ? ', except your `sudo-config` lines' : ''}; listed under Diagnostics). ` +
+                'Drop that usage, or allow the exact command lines with `sudo-config`';
+    }
+    else {
+        md =
+            `> **This job ran ${(0, markdown_1.plural)(f.sudoRan, 'sudo command')}, and \`disable-sudo: false\` keeps sudo**, so enforce ` +
+                'would be ADVISORY (sudo can remove the controls). To make enforce a boundary, remove `disable-sudo: false`';
+    }
+    const s = policy?.suggestion;
+    if (!s?.rules.length)
+        return md + '.\n';
+    md += ' (review each line):\n>\n';
+    const yaml = 'sudo-config: |\n' +
+        (0, sudo_config_1.sudoConfigYaml)(s.rules)
+            .replace(/^(?=.)/gm, '  ')
+            .trimEnd();
+    md += quote((0, markdown_1.codeBlock)('yaml', yaml)) + '\n';
+    const left = [
+        s.omitted.secret ? `${s.omitted.secret} with arguments that look like a secret` : '',
+        s.omitted.unrepresentable ? `${s.omitted.unrepresentable} that a sudo-config line cannot express` : '',
+        s.omitted.other_user ? `${s.omitted.other_user} run as another user` : '',
+        s.omitted.over_cap ? `${s.omitted.over_cap} over the limit` : ''
+    ].filter(Boolean);
+    if (left.length)
+        md += `>\n> Not suggested: ${left.join(', ')}.\n`;
+    return md + `>\n> ${exports.SUDO_CONFIG_CAVEAT}\n`;
 }
 /** The scorecard, or the one-line clean verdict. */
 function scorecard(f) {
@@ -3147,7 +3261,7 @@ function scorecard(f) {
         return enforce
             ? `**✅ Nothing blocked.** ${allowedLine} through the proxy.\n\n`
             : `**✅ Nothing would be blocked.** ${allowedLine} through the proxy.` +
-                (f.sudoRan ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
+                (f.sudoWouldBlock ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
     }
     const rows = [];
     if (bypass.length)
@@ -3364,7 +3478,8 @@ function diagnostics(f) {
         const { ran, refused, internal } = input.sudo;
         diag.push((ran.length === 0 ? 'no workflow sudo' : `workflow ran ${(0, markdown_1.plural)(ran.length, 'sudo command')}`) +
             (internal.length ? ` (${internal.length} by Safer Runner)` : '') +
-            (refused.length ? ` · ${(0, markdown_1.plural)(refused.length, 'sudo attempt')} refused` : ''));
+            (refused.length ? ` · ${(0, markdown_1.plural)(refused.length, 'sudo attempt')} refused` : '') +
+            (!enforce && f.sudoWouldBlock ? ` · enforce would block ${f.sudoWouldBlock}` : ''));
         const lines = (cmds) => cmds
             .slice(0, 50)
             .map(c => `$ sudo ${c.targetUser && c.targetUser !== 'root' ? `-u ${c.targetUser} ` : ''}${c.command}${c.args ? ` ${c.args}` : ''}`)
@@ -3374,6 +3489,10 @@ function diagnostics(f) {
         body += ran.length ? ':\n\n' + (0, markdown_1.codeBlock)('console', lines(ran)) + '\n\n' : '.\n\n';
         if (refused.length) {
             body += `Refused by sudo (${refused.length}):\n\n` + (0, markdown_1.codeBlock)('console', lines(refused)) + '\n\n';
+        }
+        const wouldBlock = enforce ? [] : (input.sudoPolicy?.wouldBlock ?? []);
+        if (wouldBlock.length) {
+            body += `Enforce would block (${wouldBlock.length}):\n\n` + (0, markdown_1.codeBlock)('console', lines(wouldBlock)) + '\n\n';
         }
     }
     if (input.docker) {
@@ -3422,11 +3541,13 @@ function buildReport(input) {
 "use strict";
 
 /**
- * Runs the http-filter suggester (proxy/suggest.py) for the report.
+ * Runs the suggesters for the report: the http-filter (proxy/suggest.py) and the sudo-config
+ * (proxy/sudo_suggest.py).
  *
- * The suggestion is built in Python, next to the matcher that enforces it, so there is one copy
- * of the path matching and of the path-segment redaction a suggestion needs. This side only
- * passes the allowed requests in and checks that what comes back is safe to print as YAML.
+ * The suggestions are built in Python: the http-filter next to the matcher that enforces it, so
+ * there is one copy of the path matching and of the path-segment redaction a suggestion needs;
+ * the sudo-config next to it, sharing its encoded-data heuristic. This side only passes the
+ * observations in and checks that what comes back is safe to print as YAML.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -3465,15 +3586,18 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.defaultPython = defaultPython;
 exports.parseSuggestion = parseSuggestion;
 exports.suggestHttpFilter = suggestHttpFilter;
+exports.parseSudoSuggestion = parseSudoSuggestion;
+exports.suggestSudoConfig = suggestSudoConfig;
 const child_process_1 = __nccwpck_require__(5317);
 const fs = __importStar(__nccwpck_require__(9896));
+const config_1 = __nccwpck_require__(5665);
 const redact_1 = __nccwpck_require__(8646);
 /** The system interpreter when there is one: a job's own PATH (setup-python, GITHUB_PATH) can't swap it. */
 function defaultPython() {
     return fs.existsSync('/usr/bin/python3') ? '/usr/bin/python3' : 'python3';
 }
 /** -I: no PYTHON* variables, user site or current directory (the job's workspace) on the path. */
-const RUN = 'import sys; sys.path.insert(0, sys.argv[1]); import suggest; suggest.main()';
+const run = (module) => `import sys; sys.path.insert(0, sys.argv[1]); import ${module}; ${module}.main()`;
 const TIMEOUT_MS = 60_000;
 const EMPTY = { hosts: [], requests: 0, rules: 0, specific: 0, coarse: false };
 /** what suggest.py can print: well-formed names, templated paths, standard methods */
@@ -3509,6 +3633,26 @@ function parseSuggestion(value) {
         coarse: s.coarse
     };
 }
+/** Run one suggester module in `proxyDir` on this JSON input; its parsed JSON output. */
+function runSuggester(module, input, proxyDir, python) {
+    const r = (0, child_process_1.spawnSync)(python, ['-I', '-c', run(module), proxyDir], {
+        input: JSON.stringify(input),
+        encoding: 'utf8',
+        timeout: TIMEOUT_MS,
+        maxBuffer: 64 * 1024 * 1024
+    });
+    if (r.error)
+        throw r.error;
+    // stderr is not passed on: an error message can quote a request path or a command line, and the job log is public
+    if (r.status !== 0)
+        throw new Error(`${module}.py exited ${r.status ?? r.signal}`);
+    try {
+        return JSON.parse(r.stdout);
+    }
+    catch {
+        throw new Error(`${module}.py printed no JSON`);
+    }
+}
 /**
  * The suggested http-filter for these allowed requests, from proxy/suggest.py in `proxyDir`.
  * Throws when it can't be built: the caller reports without a suggestion.
@@ -3516,25 +3660,47 @@ function parseSuggestion(value) {
 function suggestHttpFilter(requests, proxyDir, python = defaultPython()) {
     if (!requests.length)
         return { ...EMPTY, hosts: [] };
-    const run = (0, child_process_1.spawnSync)(python, ['-I', '-c', RUN, proxyDir], {
-        input: JSON.stringify({ requests }),
-        encoding: 'utf8',
-        timeout: TIMEOUT_MS,
-        maxBuffer: 64 * 1024 * 1024
-    });
-    if (run.error)
-        throw run.error;
-    // stderr is not passed on: an error message can quote a request path, and the job log is public
-    if (run.status !== 0)
-        throw new Error(`suggest.py exited ${run.status ?? run.signal}`);
-    let out;
-    try {
-        out = JSON.parse(run.stdout);
-    }
-    catch {
-        throw new Error('suggest.py printed no JSON');
-    }
-    return parseSuggestion(out);
+    return parseSuggestion(runSuggester('suggest', { requests }, proxyDir, python));
+}
+/**
+ * The suggestion, or throws when anything in it is not what sudo_suggest.py prints: exact
+ * sudo-config lines (never a `*`) and counts.
+ */
+function parseSudoSuggestion(value) {
+    const s = value;
+    const o = s?.omitted;
+    const ok = typeof s === 'object' &&
+        s !== null &&
+        Array.isArray(s.rules) &&
+        s.rules.length <= 50 &&
+        s.rules.every(r => {
+            if (typeof r !== 'string' || r.includes('*'))
+                return false;
+            try {
+                (0, config_1.parseSudoLine)(r);
+                return true;
+            }
+            catch {
+                return false;
+            }
+        }) &&
+        typeof o === 'object' &&
+        o !== null &&
+        [o.secret, o.unrepresentable, o.other_user, o.over_cap].every(isCount);
+    if (!ok)
+        throw new Error('unexpected output from sudo_suggest.py');
+    return {
+        rules: [...s.rules],
+        omitted: { secret: o.secret, unrepresentable: o.unrepresentable, other_user: o.other_user, over_cap: o.over_cap }
+    };
+}
+/**
+ * The suggested sudo-config for the workflow's own sudo commands, from proxy/sudo_suggest.py in
+ * `proxyDir`. Throws when it can't be built: the caller reports without a suggestion.
+ */
+function suggestSudoConfig(commands, proxyDir, python = defaultPython()) {
+    const input = commands.map(c => ({ command: c.command, args: c.args, targetUser: c.targetUser }));
+    return parseSudoSuggestion(runSuggester('sudo_suggest', { commands: input }, proxyDir, python));
 }
 
 
@@ -5283,6 +5449,7 @@ exports.parseSudoLine = parseSudoLine;
 exports.parseSudoConfig = parseSudoConfig;
 exports.sudoConfigWarnings = sudoConfigWarnings;
 exports.ruleAllows = ruleAllows;
+exports.evaluateSudo = evaluateSudo;
 const yaml_1 = __nccwpck_require__(8815);
 const yaml_2 = __nccwpck_require__(2040);
 const baseline_1 = __nccwpck_require__(1333);
@@ -5547,6 +5714,20 @@ function ruleAllows(r, command, args) {
     if (!r.anyRest)
         return got.length === r.args.length && r.args.every((a, i) => got[i] === a);
     return got.length > r.args.length && r.args.every((a, i) => got[i] === a);
+}
+/**
+ * Analyze: the workflow's own sudo commands the declared policy would block in enforce. With sudo
+ * kept (disable-sudo: false) nothing would be; otherwise everything the sudo-config rules don't
+ * allow (they run as root only).
+ */
+function evaluateSudo(rules, kept, ran) {
+    const allowed = [];
+    const wouldBlock = [];
+    for (const c of ran) {
+        const ok = kept || ((c.targetUser || 'root') === 'root' && rules.some(r => ruleAllows(r, c.command, c.args)));
+        (ok ? allowed : wouldBlock).push(c);
+    }
+    return { allowed, wouldBlock };
 }
 
 
@@ -5947,6 +6128,9 @@ async function runSetup(inputs, h = host_1.realHost) {
         input: Buffer.from(JSON.stringify({
             mode,
             sudoRetained,
+            // the sudo policy the post step evaluates (analyze) or reports (enforce)
+            ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
+            ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
             dockerRetained: dockerAccess.access === 'retained',
             docker: dockerAccess,
             failOnTampering: inputs.failOnTampering,
@@ -5963,7 +6147,8 @@ async function runSetup(inputs, h = host_1.realHost) {
     const sudoRendered = sudo.render({
         flavour: sudoFlavour,
         logFile: constants_1.SUDO_LOG,
-        restrict: inputs.disableSudo,
+        // analyze never changes sudo: it evaluates the policy in the post step
+        restrict: mode === 'enforce' && inputs.disableSudo,
         rules: inputs.sudoConfig
     });
     const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);

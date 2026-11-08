@@ -106,6 +106,40 @@ renders the YAML. The action's own commands (`INTERNAL_SUDO_COMMANDS`) are filte
 suggesters call; enforce uses the existing `render`/apply. This is the provider-interface
 instinct landing as a shared *analyze/suggest* interface, not a forced apply/teardown lifecycle.
 
+### Sudo slice: as built
+
+Where the build settled a detail the sections above left open:
+
+- **Line syntax** (`parseSudoLine`, `src/services/sudo/config.ts`): an absolute, normalised path;
+  arguments of letters, digits and `_ . / @ + -` only, so nothing ever needs sudoers escaping; a
+  lone trailing `*` after at least one argument (`path *` alone is refused). At most 100 lines.
+  Shared vectors: `proxy/test-vectors.json` "sudo" (jest and Python).
+- **Sudoers**: the job's lines are a second alias, `SAFER_RUNNER_JOB`, run as `(root)` only. A
+  command with no arguments is written `path ""` (bare, sudoers would allow any arguments). The
+  file without `sudo-config` is unchanged.
+- **Trailing `*`**: classic sudo needs the space before `*` (so at least one more argument);
+  sudo-rs takes zero or more. The matcher (`ruleAllows`) takes the stricter: one or more.
+- **Label**: any `sudo-config` makes enforce ADVISORY (we cannot prove a command is not
+  root-equivalent). Setup warns on known root-equivalent commands and on a trailing `*`.
+- **Suggestions** (`proxy/sudo_suggest.py`): exact observed lines only, never a `*`, capped at 50.
+  A line that ran as another user, cannot be expressed, or has a secret-looking argument is left
+  out and counted.
+- **`evaluate`**: `evaluateSudo(rules, kept, ran)` returns the would-block list; the suggestion
+  comes from the Python suggester, and the report puts the two together.
+- **Checks**: `restrictSudo` only accepts a render that restricts, so analyze restricting does not
+  compile; `SudoRule` is made only by the parser. Orchestration invariants L26 (analyze changes no
+  sudoers) and L27 (the installed sudoers is exactly the validation commands plus `sudo-config`).
+- **`disable-sudo` + `sudo-config` + mode:**
+
+  | mode | disable-sudo | sudo-config | runner | summary |
+  |---|---|---|---|---|
+  | enforce | unset / true | none | validation-only sudoers | sudo removed |
+  | enforce | unset / true | lines | validation + the lines (root) | ADVISORY, sudo allowlist (N) |
+  | enforce | false | none | sudo kept | ADVISORY, sudo retained |
+  | either | false | lines | step fails | — |
+  | analyze | unset / true | none / lines | unchanged | would-block list + suggested sudo-config |
+  | analyze | false | none | unchanged | sudo kept: enforce would be ADVISORY |
+
 ## Backwards-compat
 
 - Restores `sudo-config` (removed in v2; v2 is young, so blast radius is small).
