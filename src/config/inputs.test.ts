@@ -137,16 +137,37 @@ describe('readInputs', () => {
   it('has no removed inputs left in its result', () => {
     inputs({ mode: 'enforce' });
     const keys = Object.keys(readInputs());
-    for (const gone of [
-      'proxyPort',
-      'streamLargeBodies',
-      'containerTls',
-      'sudoConfig',
-      'disableDocker',
-      'stopDocker'
-    ]) {
+    for (const gone of ['proxyPort', 'streamLargeBodies', 'containerTls', 'disableDocker', 'stopDocker']) {
       expect(keys).not.toContain(gone);
     }
+  });
+});
+
+describe('readInputs: sudo-config', () => {
+  const inputs = (values: Record<string, string>) =>
+    (core.getInput as jest.Mock).mockImplementation((name: string) => values[name] ?? '');
+
+  it('is empty when unset', () => {
+    inputs({ mode: 'enforce' });
+    expect(readInputs().sudoConfig).toEqual([]);
+  });
+
+  it('parses the command lines', () => {
+    inputs({ mode: 'enforce', 'sudo-config': '- /usr/bin/apt-get update\n- /usr/bin/apt-get install *\n' });
+    expect(readInputs().sudoConfig).toEqual([
+      { path: '/usr/bin/apt-get', args: ['update'], anyRest: false },
+      { path: '/usr/bin/apt-get', args: ['install'], anyRest: true }
+    ]);
+  });
+
+  it.each(['enforce', 'analyze'])('%s: sudo-config with an explicit disable-sudo: false fails the step', mode => {
+    inputs({ mode, 'disable-sudo': 'false', 'sudo-config': '- /usr/bin/apt-get update' });
+    expect(() => readInputs()).toThrow(/sudo-config has no effect with disable-sudo: false/);
+  });
+
+  it('an invalid sudo-config fails the step', () => {
+    inputs({ mode: 'enforce', 'sudo-config': '- /usr/bin/x --opt=v' });
+    expect(() => readInputs()).toThrow(/sudo-config line 1: .*unsupported character/);
   });
 });
 

@@ -76,6 +76,15 @@ inputs:
       "enforce (ADVISORY)" - the controls are applied but are not an enforced boundary. Leave
       unset to follow the mode (unset and `false` are not the same).
     required: false
+  sudo-config:
+    description: >-
+      With sudo removed (`disable-sudo`), the exact sudo command lines the job may still run as
+      root, as a YAML list: `- /usr/bin/apt-get update`. Each is an absolute path and its exact
+      arguments; a lone trailing `*` allows one or more further arguments (including options).
+      Only letters, digits and `_ . / @ + -`. Any entry makes `enforce` ADVISORY: a command that
+      can run code or write files gives the job root. `analyze` lists what this would block and
+      suggests a sudo-config from the job's sudo use. Not valid with `disable-sudo: false`.
+    required: false
   docker:
     description: >-
       Override docker access for the runner user (docker is root-equivalent: a step can use it to

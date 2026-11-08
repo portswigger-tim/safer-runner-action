@@ -1472,5 +1472,159 @@
         "coarse": true
       }
     }
-  ]
+  ],
+  "sudo_comment": "sudo-config command lines (src/services/sudo/config.ts parseSudoLine / ruleAllows; proxy/sudo_suggest.py suggests only lines that parse). valid: the parsed rule; invalid: refused. match: what a rule allows, as the sudo log records a command (absolute path, arguments joined by spaces): exact arguments; a trailing * takes ONE OR MORE further arguments (classic sudo needs the space before *, sudo-rs takes zero or more: both allow this). suggest: observed workflow commands -> the suggested rules and omitted counts.",
+  "sudo": {
+    "valid": [
+      {
+        "line": "/usr/bin/apt-get update",
+        "path": "/usr/bin/apt-get",
+        "args": [
+          "update"
+        ],
+        "anyRest": false
+      },
+      {
+        "line": "  /usr/bin/apt-get   install  -y jq ",
+        "path": "/usr/bin/apt-get",
+        "args": [
+          "install",
+          "-y",
+          "jq"
+        ],
+        "anyRest": false
+      },
+      {
+        "line": "/usr/bin/nproc",
+        "path": "/usr/bin/nproc",
+        "args": [],
+        "anyRest": false
+      },
+      {
+        "line": "/usr/bin/apt-get install *",
+        "path": "/usr/bin/apt-get",
+        "args": [
+          "install"
+        ],
+        "anyRest": true
+      },
+      {
+        "line": "/usr/sbin/service nginx restart",
+        "path": "/usr/sbin/service",
+        "args": [
+          "nginx",
+          "restart"
+        ],
+        "anyRest": false
+      },
+      {
+        "line": "/opt/hostedtoolcache/x/1.2.3/bin/tool --flag a@b+c_d.e/f",
+        "path": "/opt/hostedtoolcache/x/1.2.3/bin/tool",
+        "args": [
+          "--flag",
+          "a@b+c_d.e/f"
+        ],
+        "anyRest": false
+      }
+    ],
+    "invalid": [
+      "apt-get update",
+      "./bin/x",
+      "/usr/bin/",
+      "/usr//bin/x",
+      "/usr/bin/../bin/sh",
+      "/usr/./bin/x",
+      "/usr/bin/apt-get *",
+      "/usr/bin/apt-* update",
+      "/usr/bin/x a* b",
+      "/usr/bin/x * b",
+      "/usr/bin/x a*b",
+      "/usr/bin/x **",
+      "/usr/bin/x a,b",
+      "/usr/bin/x a:b",
+      "/usr/bin/x --opt=v",
+      "/usr/bin/x a\\b",
+      "/usr/bin/x #c",
+      "/usr/bin/x !y",
+      "/usr/bin/x %y",
+      "/usr/bin/x $HOME",
+      "/usr/bin/x \"q\"",
+      "/usr/bin/x 'q'",
+      "/usr/bin/x `id`",
+      "/usr/bin/x a?",
+      "/usr/bin/x [a]",
+      "/usr/bin/x\ta",
+      "/usr/bin/x é",
+      "ALL",
+      "sudoedit /etc/hosts",
+      "/usr/bin/sudoedit /etc/hosts",
+      "Defaults env_reset",
+      "Cmnd_Alias X = /bin/sh",
+      "!/bin/sh",
+      "%admin",
+      "   "
+    ],
+    "match": [
+      {
+        "rule": "/usr/bin/apt-get update",
+        "command": "/usr/bin/apt-get",
+        "args": "update",
+        "allowed": true
+      },
+      {
+        "rule": "/usr/bin/apt-get update",
+        "command": "/usr/bin/apt-get",
+        "args": "update -o x",
+        "allowed": false
+      },
+      {
+        "rule": "/usr/bin/apt-get update",
+        "command": "/usr/bin/apt-get",
+        "args": "",
+        "allowed": false
+      },
+      {
+        "rule": "/usr/bin/apt-get update",
+        "command": "/bin/apt-get",
+        "args": "update",
+        "allowed": false
+      },
+      {
+        "rule": "/usr/bin/nproc",
+        "command": "/usr/bin/nproc",
+        "args": "",
+        "allowed": true
+      },
+      {
+        "rule": "/usr/bin/nproc",
+        "command": "/usr/bin/nproc",
+        "args": "--all",
+        "allowed": false
+      },
+      {
+        "rule": "/usr/bin/apt-get install *",
+        "command": "/usr/bin/apt-get",
+        "args": "install -y jq",
+        "allowed": true
+      },
+      {
+        "rule": "/usr/bin/apt-get install *",
+        "command": "/usr/bin/apt-get",
+        "args": "install",
+        "allowed": false
+      },
+      {
+        "rule": "/usr/bin/apt-get install *",
+        "command": "/usr/bin/apt-get",
+        "args": "remove jq",
+        "allowed": false
+      },
+      {
+        "rule": "/usr/bin/apt-get install *",
+        "command": "/usr/bin/apt-get",
+        "args": "installx jq",
+        "allowed": false
+      }
+    ]
+  }
 }

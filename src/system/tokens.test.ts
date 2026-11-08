@@ -62,3 +62,19 @@ describe('readiness tokens', () => {
     }
   );
 });
+
+/**
+ * Validated inputs: a branded type made only by its parser, so security-relevant text (the
+ * sudoers file) is never built from a string that was not checked.
+ */
+const VALIDATED: Record<string, string> = {
+  SudoRule: 'services/sudo/config.ts'
+};
+
+describe('validated inputs', () => {
+  it.each(Object.entries(VALIDATED))('%s is made only by its parser', (type, owner) => {
+    const ref = `(?:import\\([^)]*\\)\\.)?(?:\\w+\\.)*${type}\\b`;
+    const cast = new RegExp(`\\bas\\s+${ref}|<\\s*${ref}\\s*>`);
+    expect(files.filter(f => cast.test(f.text)).map(f => f.rel)).toEqual([owner]);
+  });
+});

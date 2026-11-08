@@ -512,6 +512,7 @@ const net = __importStar(__nccwpck_require__(9278));
 const policy_1 = __nccwpck_require__(2224);
 const yaml_1 = __nccwpck_require__(8815);
 const yaml_2 = __nccwpck_require__(2040);
+const config_1 = __nccwpck_require__(5665);
 exports.DOCKER_POLICIES = ['keep', 'remove-group', 'stop'];
 /** Quad9 (filtering, no logging of client IPs): primary + secondary. */
 exports.DEFAULT_DNS_SERVERS = ['9.9.9.9', '149.112.112.112'];
@@ -756,6 +757,10 @@ function readInputs() {
     const mode = parseMode(core.getInput('mode'));
     // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
     const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+    const sudoConfig = (0, config_1.parseSudoConfig)(core.getInput('sudo-config', { trimWhitespace: false }));
+    if (sudoConfig.length && !disableSudo && !disableSudoDefaulted) {
+        throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
+    }
     const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
     const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
     const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
@@ -767,6 +772,7 @@ function readInputs() {
         dnsServers: parseDnsServers(core.getInput('dns-servers')),
         disableSudo,
         disableSudoDefaulted,
+        sudoConfig,
         docker,
         dockerDefaulted,
         failOnTampering,
@@ -5262,7 +5268,7 @@ async function distributeTrust(h, _proxy) {
  * (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no `log_allowed`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
+exports.SUDO_CONFIG_MAX_RULES = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
 exports.parseSudoFlavour = parseSudoFlavour;
 exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
 exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
@@ -5271,6 +5277,13 @@ exports.getValidationSudoCommands = getValidationSudoCommands;
 exports.getRequiredSudoCommands = getRequiredSudoCommands;
 exports.buildRestrictedSudoers = buildRestrictedSudoers;
 exports.render = render;
+exports.ruleText = ruleText;
+exports.parseSudoLine = parseSudoLine;
+exports.parseSudoConfig = parseSudoConfig;
+exports.sudoConfigWarnings = sudoConfigWarnings;
+exports.ruleAllows = ruleAllows;
+const yaml_1 = __nccwpck_require__(8815);
+const yaml_2 = __nccwpck_require__(2040);
 const baseline_1 = __nccwpck_require__(1333);
 const constants_1 = __nccwpck_require__(8729);
 exports.RUNNER_USERNAME = 'runner';
@@ -5388,6 +5401,127 @@ function render(f) {
         },
         sudoers: buildRestrictedSudoers()
     };
+}
+/**
+ * What an entry may contain: nothing sudoers would need escaped (`, : = \ # ! %` quotes,
+ * whitespace inside an argument) and no glob other than the lone trailing `*`.
+ */
+const WORD = /^[A-Za-z0-9_./@+-]+$/;
+const PATH = /^(\/[A-Za-z0-9_.@+-]+)+$/;
+exports.SUDO_CONFIG_MAX_RULES = 100;
+const MAX_LINE = 512;
+/** The sudoers text of one rule (also its identity): `path args...`, `*` last. */
+function ruleText(r) {
+    return [r.path, ...r.args, ...(r.anyRest ? ['*'] : [])].join(' ');
+}
+/** One command line, or the reason it is not one. */
+function parseSudoLine(line) {
+    if (line.length > MAX_LINE)
+        throw new Error(`is longer than ${MAX_LINE} characters`);
+    const words = line.trim().split(/ +/).filter(Boolean);
+    if (!words.length)
+        throw new Error('is empty');
+    const [path, ...rest] = words;
+    if (/^(ALL|sudoedit|Defaults|Cmnd_Alias|Runas_Alias|User_Alias|Host_Alias)\b/.test(path) || /^[!%+]/.test(path)) {
+        throw new Error(`is not a command line ('${path}' is sudoers syntax)`);
+    }
+    if (path.includes('*'))
+        throw new Error('has a * in the command path (only a lone trailing * argument is allowed)');
+    if (!path.startsWith('/'))
+        throw new Error(`'${path}' is not an absolute path`);
+    if (!PATH.test(path) || path.split('/').some(seg => seg === '.' || seg === '..')) {
+        throw new Error(`'${path}' is not a plain absolute path (no //, ., .., trailing / or special characters)`);
+    }
+    if (/\/sudoedit$/.test(path))
+        throw new Error('sudoedit is not allowed');
+    const anyRest = rest[rest.length - 1] === '*';
+    const args = anyRest ? rest.slice(0, -1) : rest;
+    for (const a of args) {
+        if (a.includes('*'))
+            throw new Error(`'${a}': only a lone trailing * is allowed (sudo-rs)`);
+        if (!WORD.test(a)) {
+            throw new Error(`'${a}' has an unsupported character (allowed: letters, digits and _ . / @ + -)`);
+        }
+    }
+    if (anyRest && !args.length) {
+        throw new Error(`'${path} *' would allow every argument: name at least the first argument before *`);
+    }
+    return Object.freeze({ path, args: Object.freeze([...args]), anyRest });
+}
+/**
+ * sudo-config: a YAML list of command lines the job may run as root under disable-sudo in
+ * enforce (on top of the action's own read-only checks). Read with the same strict YAML as
+ * http-filter; anything invalid fails the step, never skipped or last-wins.
+ */
+function parseSudoConfig(raw) {
+    if (!(raw || '').trim())
+        return [];
+    const { doc, at } = (0, yaml_2.strictYaml)(raw, 'sudo-config', {
+        fallback: 'write one command line per "- " list item',
+        hints: { BAD_ALIAS: 'a command line must start with its absolute path, not *' }
+    });
+    if (doc.contents === null || ((0, yaml_1.isScalar)(doc.contents) && doc.contents.value === null))
+        return [];
+    if (!(0, yaml_1.isSeq)(doc.contents)) {
+        throw new Error(`${at(doc.contents)}: expected a list of command lines, e.g. "- /usr/bin/apt-get update" ` +
+            '(the v1 sudo-config format is not accepted)');
+    }
+    const items = doc.contents.items;
+    if (items.length > exports.SUDO_CONFIG_MAX_RULES) {
+        throw new Error(`sudo-config: at most ${exports.SUDO_CONFIG_MAX_RULES} command lines, got ${items.length}`);
+    }
+    const seen = new Set();
+    return items.map(item => {
+        const where = at(item);
+        if (!(0, yaml_1.isScalar)(item) || typeof item.value !== 'string') {
+            throw new Error(`${where}: each entry must be one command line (a string)`);
+        }
+        let rule;
+        try {
+            rule = parseSudoLine(item.value);
+        }
+        catch (e) {
+            throw new Error(`${where}: '${item.value}' ${e.message}`);
+        }
+        const text = ruleText(rule);
+        if (seen.has(text))
+            throw new Error(`${where}: '${text}' is listed more than once`);
+        seen.add(text);
+        return rule;
+    });
+}
+/**
+ * Commands that give whoever can run them as root a way to run anything else, or to write any
+ * file. Not exhaustive: a warning nudges towards tight entries, never a guarantee.
+ */
+const ROOT_EQUIVALENT = /^(sh|bash|dash|zsh|ksh|fish|python[0-9.]*|perl|ruby|node|nodejs|php|lua|env|su|sudo|visudo|tee|cp|mv|dd|install|chmod|chown|chgrp|ln|rm|systemctl|journalctl|docker|podman|iptables.*|ip6tables.*|nft|ip|mount|umount|kill|pkill|killall|apt|apt-get|aptitude|dpkg|snap|pip[0-9.]*|npm|npx|yarn|gem|cargo|vi|vim|nvim|nano|ed|emacs|less|more|man|find|xargs|awk|gawk|sed|tar|zip|unzip|rsync|scp|ssh|git|make|crontab|at|useradd|usermod|passwd|chroot|nsenter|unshare|setcap|insmod|modprobe|sysctl)$/;
+/** Guardrail warnings for the job log and summary. Every sudo-config makes enforce ADVISORY. */
+function sudoConfigWarnings(rules) {
+    const out = [];
+    for (const r of rules) {
+        const base = r.path.slice(r.path.lastIndexOf('/') + 1);
+        if (ROOT_EQUIVALENT.test(base)) {
+            out.push(`sudo-config: '${ruleText(r)}' gives the job root (${base} can run or write anything), so sudo can remove the egress controls`);
+        }
+        else if (r.anyRest) {
+            out.push(`sudo-config: '${ruleText(r)}' allows any further arguments, including options`);
+        }
+    }
+    return out;
+}
+/**
+ * Does a rule allow this command (as the sudo log records it: absolute path, arguments joined
+ * by single spaces, run as root)? Exact path and exact arguments; a trailing `*` takes one or
+ * more further arguments. That is what BOTH sudo implementations allow: classic sudo's `*` needs
+ * the space before it (so not zero further arguments), sudo-rs takes zero or more.
+ */
+function ruleAllows(r, command, args) {
+    if (command !== r.path)
+        return false;
+    const got = args.split(/ +/).filter(Boolean);
+    if (!r.anyRest)
+        return got.length === r.args.length && r.args.every((a, i) => got[i] === a);
+    return got.length > r.args.length && r.args.every((a, i) => got[i] === a);
 }
 
 

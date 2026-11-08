@@ -14,6 +14,7 @@ import type { HttpFilterHost, Mode } from '../policy';
 import { isMap, isScalar, isSeq } from 'yaml';
 import type { Node, Pair, Scalar, YAMLMap } from 'yaml';
 import { strictYaml } from './yaml';
+import { parseSudoConfig, type SudoRule } from '../services/sudo/config';
 
 /**
  * What happens to docker access. Docker group membership is root-equivalent (a step can use
@@ -39,6 +40,8 @@ export interface Inputs {
   disableSudo: boolean;
   /** true when disable-sudo was not set and the mode decided it */
   disableSudoDefaulted: boolean;
+  /** sudo-config (parseSudoConfig): command lines the job may run as root; [] = none */
+  sudoConfig: SudoRule[];
   /** effective value: see resolveDocker() */
   docker: DockerPolicy;
   /** true when docker was not set and the mode decided it */
@@ -292,6 +295,10 @@ export function readInputs(): Inputs {
   const mode = parseMode(core.getInput('mode'));
   // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
   const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+  const sudoConfig = parseSudoConfig(core.getInput('sudo-config', { trimWhitespace: false }));
+  if (sudoConfig.length && !disableSudo && !disableSudoDefaulted) {
+    throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
+  }
   const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
   const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
   const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
@@ -304,6 +311,7 @@ export function readInputs(): Inputs {
     dnsServers: parseDnsServers(core.getInput('dns-servers')),
     disableSudo,
     disableSudoDefaulted,
+    sudoConfig,
     docker,
     dockerDefaulted,
     failOnTampering,
