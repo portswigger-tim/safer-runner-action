@@ -7,6 +7,8 @@ export const MITMPROXY_VERSION = '12.3.1';
 export const MITMPROXY_URL = `https://downloads.mitmproxy.org/${MITMPROXY_VERSION}/mitmproxy-${MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
 /** sha256 of the tarball above (verified before anything is extracted). */
 export const MITMPROXY_SHA256 = 'f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5';
+/** Where the tarball is downloaded from (mitmproxy publishes no GitHub release assets). */
+export const MITMPROXY_SOURCES = [{ url: MITMPROXY_URL }];
 
 /**
  * CoreDNS is the resolver (replaced dnsmasq): stock upstream release, sha256-pinned. It is
@@ -16,6 +18,19 @@ export const COREDNS_VERSION = '1.15.0';
 export const COREDNS_URL = `https://github.com/coredns/coredns/releases/download/v${COREDNS_VERSION}/coredns_${COREDNS_VERSION}_linux_amd64.tgz`;
 /** sha256 of the tarball above (matches upstream's published .sha256). */
 export const COREDNS_SHA256 = '2495c5b8f3fab6d0a336c397f1227b75406d86e6ec7125744a29df9e936ab8cd';
+/**
+ * The same release asset through the GitHub REST API: a different front door from
+ * github.com/.../releases/download, which has failed on its own (HTTP 504 for every repo) while
+ * the API kept serving. Asset ids are immutable: a re-uploaded asset gets a new id, this one
+ * then fails and the next source is used. Bump it with the version:
+ * `gh api repos/coredns/coredns/releases/tags/v<version> --jq '.assets[] | select(.name|endswith("_linux_amd64.tgz")) | .id'`
+ */
+export const COREDNS_ASSET_ID = 661218351;
+/** Tried in order, each verified against COREDNS_SHA256. */
+export const COREDNS_SOURCES = [
+  { url: `https://api.github.com/repos/coredns/coredns/releases/assets/${COREDNS_ASSET_ID}`, api: true },
+  { url: COREDNS_URL }
+];
 export const DNS_UNIT = 'safer-runner-dns';
 
 /** Dedicated system user the proxy runs as. Its UID is exempt from the REDIRECT. */

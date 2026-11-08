@@ -25,12 +25,23 @@ export function backoffMs(n: number, random: () => number = Math.random): number
   return Math.round(Math.min(BACKOFF_BASE_MS * 2 ** (n - 1), BACKOFF_MAX_MS) * (0.5 + random()));
 }
 
-/** One attempt: the body, or an error (HTTP status, network, timeout). */
-async function fetchOnce(url: string): Promise<Buffer> {
+/** Where a pinned artefact can be downloaded from. */
+export interface DownloadSource {
+  url: string;
+  /** a GitHub REST API release-asset URL: needs `Accept: application/octet-stream` */
+  api?: boolean;
+}
+
+/** One request: the body, or an error (HTTP status, network, timeout). */
+async function fetchOnce(src: DownloadSource): Promise<Buffer> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), DOWNLOAD_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: abort.signal });
+    const res = await fetch(src.url, {
+      signal: abort.signal,
+      // the GitHub API refuses requests without a User-Agent; no credentials are ever sent
+      headers: { 'user-agent': 'safer-runner-action', ...(src.api ? { accept: 'application/octet-stream' } : {}) }
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   } catch (e) {
@@ -42,27 +53,40 @@ async function fetchOnce(url: string): Promise<Buffer> {
 }
 
 /**
- * Download a pinned release artefact and verify its sha256 before anything touches it. Network
- * errors, HTTP errors and timeouts are retried with backoff (DOWNLOAD_ATTEMPTS in all); a digest
- * mismatch fails at once.
+ * Download a pinned release artefact and verify its sha256 before anything touches it. Each
+ * round tries every source in order, moving straight to the next on any failure; there are
+ * DOWNLOAD_ATTEMPTS rounds, with backoff between them. A source that serves the wrong digest is
+ * not tried again (and nothing from it is written); every source is checked against the same
+ * pin. When every source has failed, setup fails.
  */
-export async function downloadVerified(url: string, sha256: string, dest: string, label: string): Promise<void> {
+export async function downloadVerified(
+  sources: readonly DownloadSource[],
+  sha256: string,
+  dest: string,
+  label: string
+): Promise<void> {
   await timed(`download ${label}`, async () => {
     let lastError: unknown;
-    for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
-      if (attempt > 1) await sleep(backoffMs(attempt - 1));
-      try {
-        const buf = await fetchOnce(url);
-        const digest = crypto.createHash('sha256').update(buf).digest('hex');
-        if (digest !== sha256) {
-          throw new DigestMismatch(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
+    const mismatched = new Set<DownloadSource>();
+    for (let round = 1; round <= DOWNLOAD_ATTEMPTS && mismatched.size < sources.length; round++) {
+      if (round > 1) await sleep(backoffMs(round - 1));
+      for (const src of sources) {
+        if (mismatched.has(src)) continue;
+        const from = new URL(src.url).host;
+        try {
+          const buf = await fetchOnce(src);
+          const digest = crypto.createHash('sha256').update(buf).digest('hex');
+          if (digest !== sha256) {
+            mismatched.add(src);
+            throw new DigestMismatch(`sha256 mismatch for ${src.url}: got ${digest}, want ${sha256}`);
+          }
+          fs.writeFileSync(dest, buf);
+          core.info(`${label}: downloaded from ${from}, sha256 verified`);
+          return;
+        } catch (e) {
+          lastError = e;
+          core.warning(`${label} download from ${from} failed (attempt ${round}/${DOWNLOAD_ATTEMPTS}): ${e}`);
         }
-        fs.writeFileSync(dest, buf);
-        return;
-      } catch (e) {
-        lastError = e;
-        if (e instanceof DigestMismatch) break;
-        core.warning(`${label} download attempt ${attempt}/${DOWNLOAD_ATTEMPTS} failed: ${e}`);
       }
     }
     throw new Error(`could not download ${label}: ${lastError}`);
@@ -74,7 +98,7 @@ export async function downloadVerified(url: string, sha256: string, dest: string
  * Skipped if the destination already exists (a re-run on the same VM).
  */
 export async function installPinnedBinary(
-  url: string,
+  sources: readonly DownloadSource[],
   sha256: string,
   member: string,
   dest: string,
@@ -87,7 +111,7 @@ export async function installPinnedBinary(
   }
   const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
   const tarball = path.join(tmp, `${label}.tar.gz`);
-  await downloadVerified(url, sha256, tarball, label);
+  await downloadVerified(sources, sha256, tarball, label);
   await timed(`extract ${label}`, async () => {
     await h.run('tar', ['-xzf', tarball, '-C', tmp, member]);
     await sudo(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)], {}, h);

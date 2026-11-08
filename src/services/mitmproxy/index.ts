@@ -14,7 +14,7 @@ import {
   FLOW_LOG,
   MITMDUMP_BIN,
   MITMPROXY_SHA256,
-  MITMPROXY_URL,
+  MITMPROXY_SOURCES,
   PROXY_LISTEN_HOST,
   PROXY_UNIT,
   PROXY_USER
@@ -81,7 +81,7 @@ export async function allocateProxyPorts(
 
 /** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
 export async function install(h: Host = realHost): Promise<void> {
-  await installPinnedBinary(MITMPROXY_URL, MITMPROXY_SHA256, 'mitmdump', MITMDUMP_BIN, 'mitmproxy', h);
+  await installPinnedBinary(MITMPROXY_SOURCES, MITMPROXY_SHA256, 'mitmdump', MITMDUMP_BIN, 'mitmproxy', h);
 }
 
 /** Create the proxy system user (idempotent). Returns its uid. */
