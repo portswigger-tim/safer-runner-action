@@ -18,6 +18,7 @@ $ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent
 $ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
 $ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
 $ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ docker ps -aq [ignore-rc] [silent]
 $ <summary.write>"
 `;

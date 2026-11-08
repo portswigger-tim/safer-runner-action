@@ -2106,15 +2106,16 @@ function dockerUseCount(uses) {
 const IMAGE_REF = /^[A-Za-z0-9._/:@-]{1,200}$/;
 /**
  * An image name for the summary: only the characters an image reference can hold, and every
- * part of it (registry, path, tag, digest) through the label check, so a digest or an encoded
- * tag prints as REDACTED.
+ * part of it (each label of the registry, each path segment, each dot-separated piece of the tag,
+ * the digest) through the label check, as redactName does for a hostname. A part that looks
+ * encoded prints as REDACTED.
  */
 function imageLabel(ref) {
     if (!IMAGE_REF.test(ref))
         return redact_1.REDACTED;
     return ref
-        .split(/([/:@])/)
-        .map(p => (/^[/:@]$/.test(p) || !(0, redact_1.looksEncoded)(p) ? p : redact_1.REDACTED))
+        .split(/([/:@.])/)
+        .map(p => (/^[/:@.]$/.test(p) || !(0, redact_1.looksEncoded)(p) ? p : redact_1.REDACTED))
         .join('');
 }
 
@@ -3311,11 +3312,16 @@ function titleAndChips(f) {
             chips.push(`${(0, markdown_1.plural)(f.dockerWouldBlock, 'docker use')} would be blocked`);
         if (f.dockerWouldStop)
             chips.push(`${(0, markdown_1.plural)(f.dockerWouldStop, 'service container')} would be stopped`);
+        // a partial docker recording can have missed a use enforce would block: never "nothing"
+        const dockerPartial = input.dockerPolicy?.observed.partial === true;
+        if (dockerPartial)
+            chips.push('⚠️ docker use partly unseen');
         if (!f.hostsDenied &&
             !f.filtered &&
             !(input.sudoPolicy && f.sudoWouldBlock) &&
             !f.dockerWouldBlock &&
-            !f.dockerWouldStop)
+            !f.dockerWouldStop &&
+            !dockerPartial)
             chips.push('nothing would be blocked');
     }
     if (input.selfTests.length) {
@@ -3444,6 +3450,11 @@ function dockerAlert(d) {
         md =
             '> **No use of docker after setup was seen, but `docker: keep` keeps it**, so enforce would be ADVISORY ' +
                 '(docker is root-equivalent). Remove `docker: keep` to make enforce a boundary.';
+    }
+    else if (observed.partial) {
+        // nothing seen is not nothing used: enforce would block a use the recording missed
+        return (`> **No use of docker after setup was seen, but the recording did not cover the whole job**, and enforce ` +
+            `(\`docker: ${policy}\`) would block any use it missed. Check the job under enforce.\n>\n> ${caveat}`);
     }
     else {
         return '';
@@ -4394,14 +4405,10 @@ const unit_1 = __nccwpck_require__(812);
 exports.RUNNER_USERNAME = 'runner';
 exports.DOCKER_GROUP = 'docker';
 exports.DOCKER_SOCKET = '/var/run/docker.sock';
-/**
- * The docker policy as setup applies it. enforce applies it; analyze never changes docker access
- * (it evaluates the policy in the post step instead), so docker stays usable and is treated as
- * `keep` (the CA restart and the container rules follow from that).
- */
+const NO_CHANGE = Object.freeze({ removal: null });
 function planDocker(mode, policy) {
     if (mode !== 'enforce' || policy === 'keep')
-        return { policy, applied: 'keep', apply: null };
+        return { policy, applied: 'keep', apply: NO_CHANGE };
     return { policy, applied: policy, apply: Object.freeze({ removal: policy }) };
 }
 /**
@@ -4635,7 +4642,9 @@ async function step(h, args) {
  * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
  * afterwards - the caller fails closed on that, not on these messages.
  */
-async function disableDockerForRunner(h, _apply, socket = config_1.DOCKER_SOCKET) {
+async function disableDockerForRunner(h, apply, socket = config_1.DOCKER_SOCKET) {
+    if (apply?.removal !== 'remove-group')
+        throw new Error('docker: remove-group without an enforce plan for it');
     core.info('Removing the runner user from the docker group and locking the docker socket...');
     const failed = [];
     if (await isRunnerInDockerGroup(h)) {
@@ -4659,7 +4668,9 @@ async function disableDockerForRunner(h, _apply, socket = config_1.DOCKER_SOCKET
  * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
  * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
-async function stopDockerService(h, _apply) {
+async function stopDockerService(h, apply) {
+    if (apply?.removal !== 'stop')
+        throw new Error('docker: stop without an enforce plan for it');
     core.info('Stopping and disabling the docker daemon...');
     const failed = [];
     for (const verb of ['stop', 'disable']) {
@@ -4830,11 +4841,12 @@ async function startEventRecorder(h, _prepared) {
 const MAX_INSPECT = 50;
 /**
  * The healthcheck commands of these containers (healthcheckCommands). Without sudo: the runner
- * kept docker in analyze. A container that is gone has none.
+ * kept docker in analyze. A container that is gone has none. Only a running dockerd is asked:
+ * connecting to a stopped one would start it through socket activation.
  */
 async function healthchecks(h, ids) {
     const out = new Map();
-    if (!ids.length)
+    if (!ids.length || !(await unitActive(h, 'docker.service')))
         return out;
     // JSON values, tab separated (JSON never holds a raw tab); never the env or anything else
     const fmt = '{{json .Id}}\t{{json .Config.Healthcheck}}\t{{json .Config.Shell}}';
@@ -4901,7 +4913,7 @@ async function observeDocker(h, recorded, setupAt, access) {
 async function applyAccessPolicy(h, mode, plan, _selfTests) {
     const { apply } = plan;
     const docker = plan.applied;
-    const failures = !apply
+    const failures = apply.removal === null
         ? []
         : apply.removal === 'stop'
             ? await stopDockerService(h, apply)
@@ -4911,7 +4923,7 @@ async function applyAccessPolicy(h, mode, plan, _selfTests) {
     core.info(`docker: ${plan.policy}${mode === 'analyze' ? ' (analyze: not applied)' : ''} -> verified ${access} ` +
         `(daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
         `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`);
-    if (apply && access === 'retained') {
+    if (apply.removal !== null && access === 'retained') {
         throw new Error(`docker: ${apply.removal} did not take effect - the runner user can still use docker (root-equivalent)` +
             (failures.length ? `: ${failures.join('; ')}` : ''));
     }
@@ -4928,9 +4940,12 @@ async function applyAccessPolicy(h, mode, plan, _selfTests) {
 /**
  * Container IP -> name for the report. Without sudo: under the default enforce the runner has
  * lost docker access, and the report then shows addresses only. Containers already removed
- * (`docker run --rm`) are not listed either.
+ * (`docker run --rm`) are not listed either. Only a running dockerd is asked: connecting to a
+ * stopped one would start it through socket activation.
  */
 async function containerAddresses(h = host_1.realHost) {
+    if (!(await unitActive(h, 'docker.service')))
+        return new Map();
     const opts = { ignoreReturnCode: true, silent: true };
     const ids = await h.output('docker', ['ps', '-aq'], opts);
     const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];

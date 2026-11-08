@@ -58,13 +58,14 @@ const IMAGE_REF = /^[A-Za-z0-9._/:@-]{1,200}$/;
 
 /**
  * An image name for the summary: only the characters an image reference can hold, and every
- * part of it (registry, path, tag, digest) through the label check, so a digest or an encoded
- * tag prints as REDACTED.
+ * part of it (each label of the registry, each path segment, each dot-separated piece of the tag,
+ * the digest) through the label check, as redactName does for a hostname. A part that looks
+ * encoded prints as REDACTED.
  */
 export function imageLabel(ref: string): string {
   if (!IMAGE_REF.test(ref)) return REDACTED;
   return ref
-    .split(/([/:@])/)
-    .map(p => (/^[/:@]$/.test(p) || !looksEncoded(p) ? p : REDACTED))
+    .split(/([/:@.])/)
+    .map(p => (/^[/:@.]$/.test(p) || !looksEncoded(p) ? p : REDACTED))
     .join('');
 }

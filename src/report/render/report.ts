@@ -450,12 +450,16 @@ function titleAndChips(f: Facts): string {
       chips.push(`${plural(f.sudoWouldBlock, 'sudo command')} would be blocked`);
     if (f.dockerWouldBlock) chips.push(`${plural(f.dockerWouldBlock, 'docker use')} would be blocked`);
     if (f.dockerWouldStop) chips.push(`${plural(f.dockerWouldStop, 'service container')} would be stopped`);
+    // a partial docker recording can have missed a use enforce would block: never "nothing"
+    const dockerPartial = input.dockerPolicy?.observed.partial === true;
+    if (dockerPartial) chips.push('⚠️ docker use partly unseen');
     if (
       !f.hostsDenied &&
       !f.filtered &&
       !(input.sudoPolicy && f.sudoWouldBlock) &&
       !f.dockerWouldBlock &&
-      !f.dockerWouldStop
+      !f.dockerWouldStop &&
+      !dockerPartial
     )
       chips.push('nothing would be blocked');
   }
@@ -597,6 +601,12 @@ function dockerAlert(d: DockerPolicyReport): string {
     md =
       '> **No use of docker after setup was seen, but `docker: keep` keeps it**, so enforce would be ADVISORY ' +
       '(docker is root-equivalent). Remove `docker: keep` to make enforce a boundary.';
+  } else if (observed.partial) {
+    // nothing seen is not nothing used: enforce would block a use the recording missed
+    return (
+      `> **No use of docker after setup was seen, but the recording did not cover the whole job**, and enforce ` +
+      `(\`docker: ${policy}\`) would block any use it missed. Check the job under enforce.\n>\n> ${caveat}`
+    );
   } else {
     return '';
   }

@@ -23,13 +23,22 @@ declare const applyingDocker: unique symbol;
  */
 export type ApplyingDocker = { readonly removal: Exclude<DockerPolicy, 'keep'>; readonly [applyingDocker]: true };
 
-export interface DockerPlan {
+declare const noDockerChange: unique symbol;
+/**
+ * No change to docker access (analyze, or keep). An object, not null, so a non-null assertion
+ * (`plan.apply!`) cannot turn it into an ApplyingDocker: getting one out of a plan takes a check
+ * of `removal`.
+ */
+export type NoDockerChange = { readonly removal: null; readonly [noDockerChange]: true };
+const NO_CHANGE = Object.freeze({ removal: null }) as NoDockerChange;
+
+export interface DockerPlan<A extends ApplyingDocker | NoDockerChange = ApplyingDocker | NoDockerChange> {
   /** the docker policy: the input, or remove-group when unset */
   policy: DockerPolicy;
   /** what setup leaves in place: the policy in enforce; analyze never changes docker (keep) */
   applied: DockerPolicy;
-  /** the change setup makes (enforce, policy not keep); null: none */
-  apply: ApplyingDocker | null;
+  /** the change setup makes: only in enforce, for a policy that removes access */
+  apply: A;
 }
 
 /**
@@ -37,8 +46,11 @@ export interface DockerPlan {
  * (it evaluates the policy in the post step instead), so docker stays usable and is treated as
  * `keep` (the CA restart and the container rules follow from that).
  */
+export function planDocker(mode: 'analyze', policy: DockerPolicy): DockerPlan<NoDockerChange>;
+export function planDocker(mode: 'enforce', policy: Exclude<DockerPolicy, 'keep'>): DockerPlan<ApplyingDocker>;
+export function planDocker(mode: Mode, policy: DockerPolicy): DockerPlan;
 export function planDocker(mode: Mode, policy: DockerPolicy): DockerPlan {
-  if (mode !== 'enforce' || policy === 'keep') return { policy, applied: 'keep', apply: null };
+  if (mode !== 'enforce' || policy === 'keep') return { policy, applied: 'keep', apply: NO_CHANGE };
   return { policy, applied: policy, apply: Object.freeze({ removal: policy }) as ApplyingDocker };
 }
 

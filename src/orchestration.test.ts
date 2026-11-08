@@ -1377,7 +1377,8 @@ describe('post step transcript', () => {
       ev('container', 'die', RUN, { image: 'alpine:3.20', exitCode: '0' }),
       // a step's own docker exec into the service: its command is never shown
       ev('container', `exec_create: psql -c select '${CANARY}'`, SERVICE, { image: 'postgres:16', execID: 'e2' }),
-      ev('image', 'tag', 'sha256:0123', { name: `ghcr.io/acme/app:${CANARY}` })
+      ev('image', 'tag', 'sha256:0123', { name: `ghcr.io/acme/app:${CANARY}` }),
+      ev('image', 'tag', 'sha256:0456', { name: 'ghcr.io/acme/app:release.k3j9x8q2' })
     ];
 
     async function analyzeThenPost(events: string[], recorderStopped = false): Promise<FakeHost> {
@@ -1392,19 +1393,24 @@ describe('post step transcript', () => {
 
     it('the job used docker: what enforce would block, and `docker: keep` with its caveat', async () => {
       const h = await analyzeThenPost([...healthcheck, ...jobUse, ...healthcheck]);
-      expect(h.summaryText).toContain('<kbd>6 docker uses would be blocked</kbd>');
+      expect(h.summaryText).toContain('<kbd>7 docker uses would be blocked</kbd>');
       expect(h.summaryText).toContain(
         '**Enforce would block docker, which this job used after setup** (`docker: stop`: 2 container actions, ' +
-          '1 exec into a container, 2 image actions, 1 network change; listed under Diagnostics)'
+          '1 exec into a container, 3 image actions, 1 network change; listed under Diagnostics)'
       );
       expect(h.summaryText).toContain('> ```yaml\n> docker: keep\n> ```');
       expect(h.summaryText).toContain('enforce with `docker: keep` is ADVISORY');
-      expect(h.summaryText).toContain('Images: `alpine:3.20`, `postgres:16`, `ghcr.io/acme/app:‹redacted›`');
+      expect(h.summaryText).toContain(
+        'Images: `alpine:3.20`, `postgres:16`, `ghcr.io/acme/app:‹redacted›`, `ghcr.io/acme/app:release.‹redacted›`'
+      );
       expect(h.summaryText).toContain('1 container already ran at setup (service containers)');
       // the healthcheck is dockerd's own; an exec command, container names: never shown
       expect(h.summaryText).not.toContain('pg_isready');
       expect(h.summaryText).not.toContain('eager_turing');
-      for (const out of [h.summaryText, h.log.join('\n')]) expect(out).not.toContain(CANARY);
+      for (const out of [h.summaryText, h.log.join('\n')]) {
+        expect(out).not.toContain(CANARY);
+        expect(out).not.toContain('k3j9x8q2');
+      }
       expect(h.log).toContain('info: docker WOULD_BLOCK container x2');
       expect(h.log).toContain('info: docker WOULD_BLOCK exec x1');
       expect(h.summaryText).not.toContain('should run unchanged');
@@ -1419,6 +1425,20 @@ describe('post step transcript', () => {
       expect(h.summaryText).toContain('No use of docker after setup was seen.');
       expect(h.summaryText).not.toContain('docker: keep');
       expect(h.summaryText).not.toContain('docker uses would be blocked');
+    });
+
+    it('defaults, a recording that stopped early and saw nothing: no all-clear at the top', async () => {
+      const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze (defaults)')!.s);
+      h.units.delete(constants.DOCKER_EVENTS_UNIT);
+      await post(h);
+      expect(h.failed).toEqual([]);
+      expect(h.summaryText).toContain('<kbd>⚠️ docker use partly unseen</kbd>');
+      expect(h.summaryText).toContain(
+        '**No use of docker after setup was seen, but the recording did not cover the whole job**, and enforce ' +
+          '(`docker: remove-group`) would block any use it missed.'
+      );
+      expect(h.summaryText).not.toContain('nothing would be blocked');
+      expect(h.summaryText).not.toContain('should run unchanged');
     });
 
     it('a recording that stopped early is said to be partial', async () => {

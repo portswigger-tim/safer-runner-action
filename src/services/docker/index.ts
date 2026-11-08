@@ -56,9 +56,10 @@ async function step(h: Host, args: string[]): Promise<string | null> {
  */
 export async function disableDockerForRunner(
   h: Host,
-  _apply: ApplyingDocker,
+  apply: ApplyingDocker,
   socket: string = DOCKER_SOCKET
 ): Promise<string[]> {
+  if (apply?.removal !== 'remove-group') throw new Error('docker: remove-group without an enforce plan for it');
   core.info('Removing the runner user from the docker group and locking the docker socket...');
   const failed: string[] = [];
   if (await isRunnerInDockerGroup(h)) {
@@ -81,7 +82,8 @@ export async function disableDockerForRunner(
  * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
  * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
-export async function stopDockerService(h: Host, _apply: ApplyingDocker): Promise<string[]> {
+export async function stopDockerService(h: Host, apply: ApplyingDocker): Promise<string[]> {
+  if (apply?.removal !== 'stop') throw new Error('docker: stop without an enforce plan for it');
   core.info('Stopping and disabling the docker daemon...');
   const failed: string[] = [];
   for (const verb of ['stop', 'disable']) {
@@ -278,11 +280,12 @@ const MAX_INSPECT = 50;
 
 /**
  * The healthcheck commands of these containers (healthcheckCommands). Without sudo: the runner
- * kept docker in analyze. A container that is gone has none.
+ * kept docker in analyze. A container that is gone has none. Only a running dockerd is asked:
+ * connecting to a stopped one would start it through socket activation.
  */
 async function healthchecks(h: Host, ids: string[]): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
-  if (!ids.length) return out;
+  if (!ids.length || !(await unitActive(h, 'docker.service'))) return out;
   // JSON values, tab separated (JSON never holds a raw tab); never the env or anything else
   const fmt = '{{json .Id}}\t{{json .Config.Healthcheck}}\t{{json .Config.Shell}}';
   const { stdout } = await h.output('docker', ['inspect', '--format', fmt, ...ids.slice(0, MAX_INSPECT)], {
@@ -365,11 +368,12 @@ export async function applyAccessPolicy(
 ): Promise<DockerOutcome> {
   const { apply } = plan;
   const docker = plan.applied;
-  const failures = !apply
-    ? []
-    : apply.removal === 'stop'
-      ? await stopDockerService(h, apply)
-      : await disableDockerForRunner(h, apply);
+  const failures =
+    apply.removal === null
+      ? []
+      : apply.removal === 'stop'
+        ? await stopDockerService(h, apply)
+        : await disableDockerForRunner(h, apply);
   const state = await readDockerState(h);
   const access = dockerAccess(state);
   core.info(
@@ -377,7 +381,7 @@ export async function applyAccessPolicy(
       `(daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
       `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`
   );
-  if (apply && access === 'retained') {
+  if (apply.removal !== null && access === 'retained') {
     throw new Error(
       `docker: ${apply.removal} did not take effect - the runner user can still use docker (root-equivalent)` +
         (failures.length ? `: ${failures.join('; ')}` : '')
@@ -399,9 +403,11 @@ export async function applyAccessPolicy(
 /**
  * Container IP -> name for the report. Without sudo: under the default enforce the runner has
  * lost docker access, and the report then shows addresses only. Containers already removed
- * (`docker run --rm`) are not listed either.
+ * (`docker run --rm`) are not listed either. Only a running dockerd is asked: connecting to a
+ * stopped one would start it through socket activation.
  */
 export async function containerAddresses(h: Host = realHost): Promise<Map<string, string>> {
+  if (!(await unitActive(h, 'docker.service'))) return new Map();
   const opts = { ignoreReturnCode: true, silent: true };
   const ids = await h.output('docker', ['ps', '-aq'], opts);
   const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];

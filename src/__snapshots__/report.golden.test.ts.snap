@@ -3,7 +3,7 @@
 exports[`job summary golden snapshots analyze: docker: keep with no use of docker (partial recording) 1`] = `
 "## 🛡️ Safer Runner — egress
 
-<kbd>📊 ANALYZE</kbd> <kbd>nothing would be blocked</kbd> <kbd>🧪 self-tests 3/3</kbd>
+<kbd>📊 ANALYZE</kbd> <kbd>⚠️ docker use partly unseen</kbd> <kbd>🧪 self-tests 3/3</kbd>
 
 > [!IMPORTANT]
 > **No use of docker after setup was seen, but \`docker: keep\` keeps it**, so enforce would be ADVISORY (docker is root-equivalent). Remove \`docker: keep\` to make enforce a boundary.

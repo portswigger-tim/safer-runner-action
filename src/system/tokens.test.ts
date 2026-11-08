@@ -70,7 +70,8 @@ describe('readiness tokens', () => {
  */
 const VALIDATED: Record<string, string> = {
   SudoRule: 'services/sudo/config.ts',
-  ApplyingDocker: 'services/docker/config.ts'
+  ApplyingDocker: 'services/docker/config.ts',
+  NoDockerChange: 'services/docker/config.ts'
 };
 
 describe('validated inputs', () => {

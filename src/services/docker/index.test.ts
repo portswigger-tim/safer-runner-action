@@ -26,6 +26,8 @@ import {
   observeDocker,
   startEventRecorder,
   stopDockerService,
+  type ApplyingDocker,
+  type DockerPlan,
   type DockerPrepared
 } from '.';
 
@@ -42,8 +44,8 @@ const actualFs = jest.requireActual('fs');
 const TRUST = Object.freeze({}) as TrustInstalled;
 const SELF_TESTS = Object.freeze({}) as SelfTestsRun;
 /** the access changes, as only planDocker() makes them (enforce) */
-const REMOVE_GROUP = planDocker('enforce', 'remove-group').apply!;
-const STOP = planDocker('enforce', 'stop').apply!;
+const REMOVE_GROUP = planDocker('enforce', 'remove-group').apply;
+const STOP = planDocker('enforce', 'stop').apply;
 
 interface World {
   inGroup: boolean;
@@ -230,7 +232,7 @@ describe('applyAccessPolicy (G4: verified by observation)', () => {
     'analyze never changes docker access (docker: %s): it only reads the state',
     async docker => {
       const plan = planDocker('analyze', docker);
-      expect(plan).toEqual({ policy: docker, applied: 'keep', apply: null });
+      expect(plan).toEqual({ policy: docker, applied: 'keep', apply: { removal: null } });
       const { host, calls, w } = runner();
       const r = await applyAccessPolicy(host, 'analyze', plan, SELF_TESTS);
       expect(r).toMatchObject({ requested: docker, access: 'retained' });
@@ -268,9 +270,24 @@ describe('applyAccessPolicy (G4: verified by observation)', () => {
     const { host } = runner();
     // @ts-expect-error - a plain object is not an access change (analyze never makes one)
     const forged = () => stopDockerService(host, { removal: 'stop' });
-    // @ts-expect-error - nor is an analyze plan's
-    const fromAnalyze = () => disableDockerForRunner(host, planDocker('analyze', 'remove-group').apply);
-    expect([forged, fromAnalyze]).toHaveLength(2);
+    // @ts-expect-error - nor is an analyze plan's, even asserted non-null (it is an object, not null)
+    const fromAnalyze = () => disableDockerForRunner(host, planDocker('analyze', 'remove-group').apply!);
+    const plan: DockerPlan = planDocker('enforce', 'remove-group');
+    // @ts-expect-error - nor a plan's whose mode the caller does not know, without checking `removal`
+    const unchecked = () => disableDockerForRunner(host, plan.apply!);
+    expect([forged, fromAnalyze, unchecked]).toHaveLength(3);
+  });
+
+  it('a change that is not the one asked for is refused at run time too, before any command', async () => {
+    const { host, calls } = runner();
+    const noChange = planDocker('analyze', 'stop').apply as unknown as ApplyingDocker;
+    await expect(stopDockerService(host, noChange)).rejects.toThrow('docker: stop without an enforce plan');
+    await expect(disableDockerForRunner(host, noChange)).rejects.toThrow(
+      'docker: remove-group without an enforce plan'
+    );
+    await expect(stopDockerService(host, REMOVE_GROUP)).rejects.toThrow('without an enforce plan');
+    await expect(disableDockerForRunner(host, STOP)).rejects.toThrow('without an enforce plan');
+    expect(calls).toEqual([]);
   });
 });
 
@@ -422,6 +439,12 @@ describe('observeDocker (analyze, post step)', () => {
 });
 
 describe('containerAddresses', () => {
+  it('never asks a stopped dockerd (socket activation would start it)', async () => {
+    const { host, calls } = runner({ daemon: false });
+    expect(await containerAddresses(host)).toEqual(new Map());
+    expect(calls).toEqual(['systemctl is-active --quiet docker.service [ignore-rc] [silent]']);
+  });
+
   it('shows addresses only when the runner has lost docker access', async () => {
     const { host } = recordingHost(l => (l.startsWith('docker ') ? 1 : 0));
     expect(await containerAddresses(host)).toEqual(new Map());

@@ -8,7 +8,9 @@ describe('imageLabel (an image name in the summary)', () => {
       'alpine:3.20',
       'postgres:16',
       'ghcr.io/acme/app:1.4.2',
-      'mcr.microsoft.com/dotnet/sdk:8.0'
+      'mcr.microsoft.com/dotnet/sdk:8.0',
+      'node:20.11.1-bookworm-slim',
+      'public.ecr.aws/docker/library/python:3.12-alpine'
     ]) {
       expect(imageLabel(ref)).toBe(ref);
     }
@@ -18,6 +20,10 @@ describe('imageLabel (an image name in the summary)', () => {
     expect(imageLabel(`alpine@sha256:${'ab12'.repeat(16)}`)).toBe(`alpine@sha256:${REDACTED}`);
     expect(imageLabel('ghcr.io/acme/app:5ec7e7c0ffee1234')).toBe(`ghcr.io/acme/app:${REDACTED}`);
     expect(imageLabel('registry.example.com/5ec7e7c0ffee1234/app')).toBe(`registry.example.com/${REDACTED}/app`);
+    // a dotted tag or registry label: each piece is checked on its own
+    expect(imageLabel('ghcr.io/acme/app:release.k3j9x8q2')).toBe(`ghcr.io/acme/app:release.${REDACTED}`);
+    expect(imageLabel('registry/x:build.a1b2c3')).toBe(`registry/x:build.${REDACTED}`);
+    expect(imageLabel('5ec7e7c0ffee1234.example.com/app:1')).toBe(`${REDACTED}.example.com/app:1`);
   });
 
   it('anything an image name cannot hold is not shown at all (no Markdown, no spaces)', () => {

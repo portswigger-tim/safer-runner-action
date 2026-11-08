@@ -238,8 +238,10 @@ checks the same order (L1-L29) on a recording fake runner.
      locks the socket to `root:root 0600`; `stop` stops and disables the daemon; `keep` leaves it.
      Setup then verifies the real access (`readDockerState`). Only enforce changes docker access:
      `planDocker` (`config.ts`) makes the `ApplyingDocker` that the functions changing access
-     require, and only in enforce, so analyze changing it does not compile (L28 checks the
-     transcript). Analyze is treated as `keep` (the dockerd CA restart and the container rules
+     require, and only in enforce; otherwise a `NoDockerChange` (an object, so `plan.apply!` does
+     not get past the type check). Analyze changing access does not compile, the functions check
+     the change again at run time, and L28 checks the transcript. The post step asks dockerd
+     (`docker ps`, `inspect`, `events`) only while `docker.service` runs. Analyze is treated as `keep` (the dockerd CA restart and the container rules
      still apply), and records the use of docker after setup for the post step: a transient unit
      runs `docker events` (read only; `eventRecorderUnit`), started only if `docker.service`
      already runs and never restarted, since connecting to a stopped daemon would start it

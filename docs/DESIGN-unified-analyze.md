@@ -155,8 +155,10 @@ dockerd CA restart in analyze; show a `docker: keep` suggestion with its caveat;
 mode-aware.
 
 - **Default and mode**: unset `docker` is `remove-group` in both modes (`resolveDocker`).
-  `planDocker(mode, policy)` returns the access change, an `ApplyingDocker`, only in enforce; the
-  functions that change docker access take one, so analyze changing it does not compile.
+  `planDocker(mode, policy)` returns the access change, an `ApplyingDocker`, only in enforce
+  (otherwise a `NoDockerChange` object, which a non-null assertion cannot turn into one); the
+  functions that change docker access take one and check it again at run time, so analyze
+  changing it does not compile.
   Analyze is treated as `keep`.
 - **The docker behaviour change**: analyze with an explicit `docker: remove-group` or `stop` no
   longer applies it (setup warns). In that case dockerd now restarts for the proxy CA and the

@@ -16,9 +16,9 @@ describe('planDocker', () => {
       apply: { removal: 'remove-group' }
     });
     expect(planDocker('enforce', 'stop').apply).toEqual({ removal: 'stop' });
-    expect(planDocker('enforce', 'keep')).toEqual({ policy: 'keep', applied: 'keep', apply: null });
+    expect(planDocker('enforce', 'keep')).toEqual({ policy: 'keep', applied: 'keep', apply: { removal: null } });
     for (const p of ['keep', 'remove-group', 'stop'] as const) {
-      expect(planDocker('analyze', p)).toEqual({ policy: p, applied: 'keep', apply: null });
+      expect(planDocker('analyze', p)).toEqual({ policy: p, applied: 'keep', apply: { removal: null } });
     }
   });
 });

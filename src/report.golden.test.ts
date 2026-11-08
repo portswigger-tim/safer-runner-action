@@ -30,6 +30,8 @@ const NOW = new Date('2026-11-07T12:34:56Z');
 const CANARY = '5ec7e7c0ffee1234';
 const PATH_CANARY = 'pathcanary-0f1e2d3c4b5a';
 const METHOD_CANARY = 'EXFILMETHODCANARY';
+/** Encoded-looking pieces of a dotted image tag (each piece is checked on its own). */
+const TAG_CANARIES = ['k3j9x8q2', 'a1b2c3'];
 
 const fw = (prefix: string, src: string, dst: string, proto: string, dport: string, uid = '1001') =>
   `Nov  7 12:00:00 vm kernel: [1.2] ${prefix}: IN= OUT=eth0 SRC=${src} DST=${dst} LEN=60 PROTO=${proto} SPT=4 DPT=${dport} UID=${uid} GID=${uid}`;
@@ -665,7 +667,12 @@ describe('redaction canary (C5)', () => {
       // analyze: image names the job used, one with an encoded tag and one with an encoded path
       dockerPolicy: dockerPolicy('remove-group', {
         uses: { container: 1, image: 2 },
-        images: [`ghcr.io/acme/app:${CANARY}`, `registry.example.com/${CANARY}/app:1`]
+        images: [
+          `ghcr.io/acme/app:${CANARY}`,
+          `registry.example.com/${CANARY}/app:1`,
+          `ghcr.io/acme/app:release.${TAG_CANARIES[0]}`,
+          `registry/x:build.${TAG_CANARIES[1]}`
+        ]
       })
     });
   }
@@ -690,6 +697,7 @@ describe('redaction canary (C5)', () => {
     expect(md).not.toContain(CANARY);
     expect(md).not.toContain(PATH_CANARY);
     expect(md).not.toContain(METHOD_CANARY);
+    for (const c of TAG_CANARIES) expect(md).not.toContain(c);
   });
 
   // Allowed names are redacted too, as in the host tables: a name under an allowed wildcard
