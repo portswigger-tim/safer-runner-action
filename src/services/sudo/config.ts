@@ -7,7 +7,7 @@
  */
 
 import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from '../../integrity/baseline';
-import { DOCKER_DAEMON_JSON, TEARDOWN_BIN, VALIDATION_STATE_FILE } from '../../constants';
+import { DOCKER_DAEMON_JSON, VALIDATION_STATE_FILE } from '../../constants';
 
 export const RUNNER_USERNAME = 'runner';
 
@@ -81,9 +81,7 @@ export function getValidationSudoCommands(): string[] {
   ];
   return [
     ...files.map(file => `/usr/bin/cat ${file}`),
-    ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${iptablesListArgs(chain).join(' ')}`),
-    // post-step teardown (destroys the CA key). `""` = no arguments allowed.
-    `${TEARDOWN_BIN} ""`
+    ...IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${iptablesListArgs(chain).join(' ')}`)
   ];
 }
 
@@ -104,8 +102,7 @@ export const INTERNAL_SUDO_COMMANDS: string[] = [
   // setupSudoLogging() on sudo-rs
   'systemctl restart rsyslog',
   // SystemValidator.writeBaseline()
-  ...BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
-  TEARDOWN_BIN
+  ...BASELINE_WRITE_COMMANDS.map(args => args.join(' '))
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 
 /**

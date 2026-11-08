@@ -1,8 +1,7 @@
 import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as path from 'path';
-import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG, TEARDOWN_BIN } from './constants';
+import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG } from './constants';
 import { SETUP_MARKER } from './setup/run';
 import { parseFlowLogWithOffsets } from './flowlog';
 import {
@@ -72,8 +71,9 @@ function readSetupMarker(): SetupMarker | null {
 }
 
 /**
- * Post step: destroy the CA private key, then report. The proxy and firewall stay up: the
- * runner's own "Complete job" traffic still goes through them, and the VM is destroyed after.
+ * Post step: integrity check, then report. The proxy and firewall stay up: the runner's own
+ * "Complete job" traffic still goes through them, and the VM is destroyed after (the CA key, on
+ * tmpfs, with it).
  */
 async function run(): Promise<void> {
   const marker = readSetupMarker();
@@ -82,11 +82,6 @@ async function run(): Promise<void> {
     core.warning('safer-runner setup did not complete - no report');
     return;
   }
-
-  // -n: never prompt; the helper is allowlisted even with disable-sudo
-  const rc = await exec.exec('sudo', ['-n', TEARDOWN_BIN], { ignoreReturnCode: true });
-  if (rc === 0) core.info('🔑 Ephemeral CA private key destroyed');
-  else core.warning(`Could not run ${TEARDOWN_BIN} (exit ${rc}); the CA key dies with the VM`);
 
   // integrity first, outside the report: a report failure must never skip fail-on-tampering
   const validator = new SystemValidator();

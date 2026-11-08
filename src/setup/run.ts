@@ -22,7 +22,7 @@ import * as iptables from '../services/iptables';
 import type { Inputs } from '../config/inputs';
 import { CONTAINER_TLS, buildPolicyConfig } from '../policy';
 import * as mitmproxy from '../services/mitmproxy';
-import { generateCa, installTeardown } from '../services/mitmproxy/ca';
+import { generateCa } from '../services/mitmproxy/ca';
 import { distributeTrust } from '../services/mitmproxy/trust';
 import { dnsProbeName, runSelfTests } from './selftest';
 import * as coredns from '../services/coredns';
@@ -170,7 +170,6 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   const proxyRendered = mitmproxy.render({ policy, ports });
   const proxyConfig = await mitmproxy.writeConfig(h, proxyRendered);
   const ca = await generateCa(h);
-  await installTeardown(h, ca);
 
   // 4. Proxy
   const proxy = await timed('Start proxy', () => mitmproxy.start(h, proxyRendered, ports, proxyConfig, ca));

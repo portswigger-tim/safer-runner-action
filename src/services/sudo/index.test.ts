@@ -107,8 +107,7 @@ describe('sudo module', () => {
         '/usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers',
         '/usr/sbin/iptables -L DOCKER-USER -n --line-numbers',
         '/usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers',
-        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers',
-        '/opt/safer-runner/bin/teardown ""'
+        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers'
       ]);
     });
 
@@ -353,10 +352,9 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
       fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    // Real enforce job (v2.0.0-beta.2 suite, ubuntu-latest): the summary said "Workflow executed 4
-    // sudo commands". Teardown is the action's own post step; the other three were the
-    // workflow's attempts, all refused because enforce removed sudo.
-    it('attributes the post-step teardown to the action and refused attempts to the workflow', () => {
+    // Real enforce job (v2.0.0-beta.2 suite, ubuntu-latest): the workflow's three attempts were
+    // all refused because enforce removed sudo.
+    it("attributes the action's own commands to the action and refused attempts to the workflow", () => {
       const log = path.join(dir, 'sudo.log');
       const pwd = 'PWD=/home/runner/work/x/x';
       fs.writeFileSync(
@@ -366,8 +364,7 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
           `Nov  4 19:17:13 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner`,
           `Nov  4 19:17:35 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/true`,
           `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/journalctl -u safer-runner-proxy --no-pager`,
-          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/sbin/iptables-save`,
-          `Nov  4 19:20:30 : runner : ${pwd} ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown`
+          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/sbin/iptables-save`
         ].join('\n') + '\n'
       );
       const u = readSudoUsage(log);
@@ -377,17 +374,7 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
         '/usr/bin/journalctl',
         '/usr/sbin/iptables-save'
       ]);
-      expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv', '/opt/safer-runner/bin/teardown']);
-    });
-
-    it('only matches the teardown helper by its exact root-owned path', () => {
-      const log = path.join(dir, 'sudo.log');
-      fs.writeFileSync(
-        log,
-        'Nov  4 19:20:30 : runner : PWD=/ ; USER=root ; COMMAND=/home/runner/opt/safer-runner/bin/teardown\n' +
-          'Nov  4 19:20:31 : runner : PWD=/ ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown --evil\n'
-      );
-      expect(readSudoUsage(log).ran).toHaveLength(2);
+      expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv']);
     });
 
     it('is empty for a missing file', () => {

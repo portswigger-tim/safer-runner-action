@@ -1,8 +1,7 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
-exports[`post step transcript enforce: teardown, integrity, report: transcript 1`] = `
-"$ sudo -n /opt/safer-runner/bin/teardown [ignore-rc]
-$ sudo -n cat /etc/safer-runner/validation-state.json [ignore-rc] [silent]
+exports[`post step transcript enforce: integrity, report: transcript 1`] = `
+"$ sudo -n cat /etc/safer-runner/validation-state.json [ignore-rc] [silent]
 $ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
 $ sudo cat /etc/resolv.conf [ignore-rc] [silent]
 $ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
@@ -240,10 +239,6 @@ Defaults loglinelen=0
 DNS=127.0.0.1
 DNSSEC=yes
 DNSStubListener=no",
-  "/opt/safer-runner/bin/teardown": "#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f /run/safer-runner/proxy/mitmproxy-ca.pem /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/mitmproxy-ca.p12
-",
   "/opt/safer-runner/proxy/policy.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py>
 ",
   "/opt/safer-runner/proxy/policy_core.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py>
@@ -328,9 +323,6 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
-$ sudo chown root:root /opt/safer-runner/bin/teardown
-$ sudo chmod 0755 /opt/safer-runner/bin/teardown
 $ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
@@ -682,8 +674,7 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/safer-runner/Corefile, \\
     /usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers, \\
     /usr/sbin/iptables -L DOCKER-USER -n --line-numbers, \\
     /usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers, \\
-    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers, \\
-    /opt/safer-runner/bin/teardown ""
+    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
 
 runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 
@@ -692,10 +683,6 @@ runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 DNS=127.0.0.1
 DNSSEC=yes
 DNSStubListener=no",
-  "/opt/safer-runner/bin/teardown": "#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f /run/safer-runner/proxy/mitmproxy-ca.pem /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/mitmproxy-ca.p12
-",
   "/opt/safer-runner/proxy/policy.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py>
 ",
   "/opt/safer-runner/proxy/policy_core.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py>
@@ -784,9 +771,6 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
-$ sudo chown root:root /opt/safer-runner/bin/teardown
-$ sudo chmod 0755 /opt/safer-runner/bin/teardown
 $ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
@@ -907,7 +891,7 @@ $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
 $ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3932 bytes, sha256:3ca9d500c331
-$ sudo tee /tmp/runner-sudoers.tmp  <<< 1491 bytes, sha256:05d1e5236f7b
+$ sudo tee /tmp/runner-sudoers.tmp  <<< 1450 bytes, sha256:7342004721e5
 $ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
 $ sudo chmod 0440 /tmp/runner-sudoers.tmp
 $ sudo chown root:root /tmp/runner-sudoers.tmp
@@ -1140,8 +1124,7 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/safer-runner/Corefile, \\
     /usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers, \\
     /usr/sbin/iptables -L DOCKER-USER -n --line-numbers, \\
     /usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers, \\
-    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers, \\
-    /opt/safer-runner/bin/teardown ""
+    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
 
 runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 
@@ -1150,10 +1133,6 @@ runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 DNS=127.0.0.1
 DNSSEC=yes
 DNSStubListener=no",
-  "/opt/safer-runner/bin/teardown": "#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f /run/safer-runner/proxy/mitmproxy-ca.pem /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/mitmproxy-ca.p12
-",
   "/opt/safer-runner/proxy/policy.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py>
 ",
   "/opt/safer-runner/proxy/policy_core.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py>
@@ -1242,9 +1221,6 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
-$ sudo chown root:root /opt/safer-runner/bin/teardown
-$ sudo chmod 0755 /opt/safer-runner/bin/teardown
 $ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
@@ -1355,7 +1331,7 @@ $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
 $ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3687 bytes, sha256:4330be89fb8c
-$ sudo tee /tmp/runner-sudoers.tmp  <<< 1491 bytes, sha256:05d1e5236f7b
+$ sudo tee /tmp/runner-sudoers.tmp  <<< 1450 bytes, sha256:7342004721e5
 $ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
 $ sudo chmod 0440 /tmp/runner-sudoers.tmp
 $ sudo chown root:root /tmp/runner-sudoers.tmp
@@ -1595,8 +1571,7 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/safer-runner/Corefile, \\
     /usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers, \\
     /usr/sbin/iptables -L DOCKER-USER -n --line-numbers, \\
     /usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers, \\
-    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers, \\
-    /opt/safer-runner/bin/teardown ""
+    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
 
 runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 
@@ -1605,10 +1580,6 @@ runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 DNS=127.0.0.1
 DNSSEC=yes
 DNSStubListener=no",
-  "/opt/safer-runner/bin/teardown": "#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f /run/safer-runner/proxy/mitmproxy-ca.pem /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/mitmproxy-ca.p12
-",
   "/opt/safer-runner/proxy/policy.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py>
 ",
   "/opt/safer-runner/proxy/policy_core.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py>
@@ -1698,9 +1669,6 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
-$ sudo chown root:root /opt/safer-runner/bin/teardown
-$ sudo chmod 0755 /opt/safer-runner/bin/teardown
 $ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
@@ -1826,7 +1794,7 @@ $ sudo touch /etc/safer-runner/validation-state.json
 $ sudo chown root:root /etc/safer-runner/validation-state.json
 $ sudo chmod 0600 /etc/safer-runner/validation-state.json
 $ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 4118 bytes, sha256:8aad3d76b7af
-$ sudo tee /tmp/runner-sudoers.tmp  <<< 1491 bytes, sha256:05d1e5236f7b
+$ sudo tee /tmp/runner-sudoers.tmp  <<< 1450 bytes, sha256:7342004721e5
 $ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
 $ sudo chmod 0440 /tmp/runner-sudoers.tmp
 $ sudo chown root:root /tmp/runner-sudoers.tmp
@@ -2041,10 +2009,6 @@ Defaults loglinelen=0
 DNS=127.0.0.1
 DNSSEC=yes
 DNSStubListener=no",
-  "/opt/safer-runner/bin/teardown": "#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f /run/safer-runner/proxy/mitmproxy-ca.pem /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/mitmproxy-ca.p12
-",
   "/opt/safer-runner/proxy/policy.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py>
 ",
   "/opt/safer-runner/proxy/policy_core.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py>
@@ -2128,9 +2092,6 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
-$ sudo chown root:root /opt/safer-runner/bin/teardown
-$ sudo chmod 0755 /opt/safer-runner/bin/teardown
 $ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
@@ -2278,9 +2239,6 @@ $ sudo install -d -m 0755 -o root -g root /run/safer-runner
 $ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
 $ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
 $ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
-$ sudo tee /opt/safer-runner/bin/teardown [silent]  <<< 223 bytes, sha256:6abf7ddcc62d
-$ sudo chown root:root /opt/safer-runner/bin/teardown
-$ sudo chmod 0755 /opt/safer-runner/bin/teardown
 $ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py

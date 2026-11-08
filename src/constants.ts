@@ -1,5 +1,5 @@
 /**
- * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
+ * Paths, users and pinned versions shared by the v2 setup and post-step code.
  */
 
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
@@ -30,7 +30,6 @@ export const INSTALL_DIR = '/opt/safer-runner';
 export const MITMDUMP_BIN = `${INSTALL_DIR}/bin/mitmdump`;
 export const ADDON_DIR = `${INSTALL_DIR}/proxy`;
 export const ADDON_FILES = ['policy.py', 'policy_core.py'];
-export const TEARDOWN_BIN = `${INSTALL_DIR}/bin/teardown`;
 export const COREDNS_BIN = `${INSTALL_DIR}/bin/coredns`;
 
 /** Root-owned config. policy.json is read by the addon at (re)start. */

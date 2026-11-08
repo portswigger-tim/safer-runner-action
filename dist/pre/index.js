@@ -814,10 +814,10 @@ function readInputs() {
 "use strict";
 
 /**
- * Paths, users and pinned versions shared by the v2 setup, report and teardown code.
+ * Paths, users and pinned versions shared by the v2 setup and post-step code.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.TEARDOWN_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
 exports.MITMPROXY_VERSION = '12.3.1';
 exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
@@ -843,7 +843,6 @@ exports.INSTALL_DIR = '/opt/safer-runner';
 exports.MITMDUMP_BIN = `${exports.INSTALL_DIR}/bin/mitmdump`;
 exports.ADDON_DIR = `${exports.INSTALL_DIR}/proxy`;
 exports.ADDON_FILES = ['policy.py', 'policy_core.py'];
-exports.TEARDOWN_BIN = `${exports.INSTALL_DIR}/bin/teardown`;
 exports.COREDNS_BIN = `${exports.INSTALL_DIR}/bin/coredns`;
 /** Root-owned config. policy.json is read by the addon at (re)start. */
 exports.ETC_DIR = '/etc/safer-runner';
@@ -3273,6 +3272,9 @@ async function configure(h, o, _after) {
  * The proxy's per-run CA: its TLS identity for intercepted connections. Generated as the proxy
  * user straight into its tmpfs confdir; the private key is never written anywhere else, and
  * never through writeFiles (it is not an inert file).
+ *
+ * Nothing deletes the key: it lives on tmpfs and dies with the VM. GitHub-hosted (ephemeral)
+ * runners are the only supported model.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -3309,11 +3311,8 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.generateCa = generateCa;
-exports.teardownHelper = teardownHelper;
-exports.installTeardown = installTeardown;
 const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
-const files_1 = __nccwpck_require__(3087);
 const host_1 = __nccwpck_require__(7020);
 /**
  * Generate the per-run CA: RSA-2048 (broadest client compatibility), 3-day validity, key
@@ -3344,23 +3343,6 @@ async function generateCa(h) {
     // mitmproxy looks for <confdir>/mitmproxy-ca.pem (key + cert)
     await (0, host_1.sudo)(['install', '-m', '0644', '-o', 'root', '-g', 'root', cert, constants_1.CA_CERT_FILE], {}, h);
     return Object.freeze({});
-}
-/**
- * Root-owned teardown helper. The only privileged command the post step needs, so with
- * disable-sudo it is the single extra sudoers entry (exact path, no arguments).
- * Deleting the key on disk is all it does: the running proxy keeps the CA in memory so the
- * runner can still finish the job through it; the VM is destroyed afterwards. It removes
- * exactly the key files generateCa() and mitmproxy create.
- */
-function teardownHelper() {
-    const script = `#!/bin/sh
-# safer-runner: destroy the ephemeral CA private key (written by the action, root-owned).
-rm -f ${constants_1.PROXY_CA_KEY_FILE} ${constants_1.PROXY_CONF_DIR}/ca-key.pem ${constants_1.PROXY_CONF_DIR}/mitmproxy-ca.p12
-`;
-    return { kind: 'file', path: constants_1.TEARDOWN_BIN, content: script, mode: '0755', owner: 'root:root' };
-}
-async function installTeardown(h, _ca) {
-    await (0, files_1.writeFiles)(h, [teardownHelper()]);
 }
 
 
@@ -3845,9 +3827,7 @@ function getValidationSudoCommands() {
     ];
     return [
         ...files.map(file => `/usr/bin/cat ${file}`),
-        ...baseline_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, baseline_1.iptablesListArgs)(chain).join(' ')}`),
-        // post-step teardown (destroys the CA key). `""` = no arguments allowed.
-        `${constants_1.TEARDOWN_BIN} ""`
+        ...baseline_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, baseline_1.iptablesListArgs)(chain).join(' ')}`)
     ];
 }
 /**
@@ -3867,8 +3847,7 @@ exports.INTERNAL_SUDO_COMMANDS = [
     // setupSudoLogging() on sudo-rs
     'systemctl restart rsyslog',
     // SystemValidator.writeBaseline()
-    ...baseline_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
-    constants_1.TEARDOWN_BIN
+    ...baseline_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' '))
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 /**
  * Generate the sudoers rules the action always needs for post-action validation
@@ -4247,7 +4226,6 @@ async function runSetup(inputs, h = host_1.realHost) {
     const proxyRendered = mitmproxy.render({ policy, ports });
     const proxyConfig = await mitmproxy.writeConfig(h, proxyRendered);
     const ca = await (0, ca_1.generateCa)(h);
-    await (0, ca_1.installTeardown)(h, ca);
     // 4. Proxy
     const proxy = await timed('Start proxy', () => mitmproxy.start(h, proxyRendered, ports, proxyConfig, ca));
     // 5. Trust - before any traffic is forced through the proxy (`trust` is also the dockerd
