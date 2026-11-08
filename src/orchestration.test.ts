@@ -818,7 +818,7 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
   return v;
 }
 
-/** L22: the post step. */
+/** L22, L25: the post step. */
 function postInvariants(t: Entry[]): string[] {
   const v: string[] = [];
   const sudo = t.filter(e => e.argv[0] === 'sudo');
@@ -827,6 +827,12 @@ function postInvariants(t: Entry[]): string[] {
   if (read < 0 || summary < 0 || read > summary) v.push('L22: the integrity check must run before the report');
   for (const e of sudo) {
     if (!sudoersAllows(e.argv.slice(1))) v.push(`L22: post step needs sudo outside the restricted sudoers: ${line(e)}`);
+  }
+  // L25: one comparison - the baseline and each file and chain are read once, so the verdict
+  // (fail-on-tampering) and the summary cannot disagree
+  const reads = sudo.map(line);
+  for (const r of new Set(reads)) {
+    if (reads.filter(x => x === r).length > 1) v.push(`L25: the integrity check read ${r} more than once`);
   }
   return v;
 }
@@ -1112,6 +1118,17 @@ describe('invariants have teeth (mutation check)', () => {
   ])('%s: %s', (id, _what, mutate) => {
     const v = setupInvariants(mutate(base), x);
     expect(ids(v)).toContain(id);
+  });
+
+  it('L25: the integrity check reads each file once (one comparison)', () => {
+    const read: Entry = { argv: ['sudo', 'cat', '/etc/resolv.conf'] };
+    const t: Entry[] = [
+      { argv: ['sudo', '-n', 'cat', VALIDATION_STATE_FILE] },
+      read,
+      read,
+      { argv: ['<summary.write>'] }
+    ];
+    expect(ids(postInvariants(t))).toEqual(['L25']);
   });
 
   it('L22: the post step must not need sudo beyond the restricted sudoers', () => {

@@ -1,327 +1,252 @@
-import { BASELINE_WRITE_COMMANDS, SystemValidator } from './baseline';
-import { INTERNAL_SUDO_COMMANDS, type SudoLogging } from '../services/sudo';
-import * as fs from 'fs';
 import * as crypto from 'crypto';
-import * as path from 'path';
+import { VALIDATION_STATE_FILE } from '../constants';
+import { INTERNAL_SUDO_COMMANDS, type SudoLogging } from '../services/sudo';
+import type { Host } from '../system/host';
+import {
+  BASELINE_WRITE_COMMANDS,
+  CRITICAL_FILES,
+  IPTABLES_CHAINS,
+  captureBaseline,
+  iptablesListArgs
+} from './baseline';
+import { checkIntegrity, compare, parseBaseline, renderDetails } from './check';
+
+jest.mock('@actions/core');
 
 /** sudo logging's token (a test stands in for setupSudoLogging) */
 const LOGGING = Object.freeze({}) as SudoLogging;
+const FILES = ['/etc/safer-runner/Corefile', '/etc/resolv.conf'];
+const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
-const TEST_STATE_FILE = '/tmp/safer-runner-test-validation-state.json';
-
-// Mock SystemValidator that provides test iptables output and file reading without sudo
-class TestSystemValidator extends SystemValidator {
-  private mockIptablesOutput: Map<string, string> = new Map();
-
-  // Override to provide mock iptables output
-  protected async getIptablesChainOutput(chain: string): Promise<string> {
-    return this.mockIptablesOutput.get(chain) || '';
-  }
-
-  // Helper method to set mock iptables output for tests
-  setMockIptablesOutput(chain: string, output: string): void {
-    this.mockIptablesOutput.set(chain, output);
-  }
-
-  // Override to keep the baseline in a test file instead of the root-owned location
-  protected async writeBaseline(json: string): Promise<void> {
-    fs.writeFileSync(TEST_STATE_FILE, json);
-  }
-
-  protected async readBaseline(): Promise<string | null> {
-    return fs.existsSync(TEST_STATE_FILE) ? fs.readFileSync(TEST_STATE_FILE, 'utf8') : null;
-  }
-
-  // Override to read files without sudo for local testing
-  protected async calculateFileChecksum(filePath: string): Promise<string | null> {
-    try {
-      const fileContent = fs.readFileSync(filePath);
-      return crypto.createHash('sha256').update(fileContent).digest('hex');
-    } catch (error) {
-      if ((error as any).code === 'ENOENT') {
-        return null;
-      }
-      throw error;
+/**
+ * A runner with files (read with `sudo cat`) and iptables chains (listed with `sudo iptables`).
+ * A file's content may be a function: it is called on every read.
+ */
+function runner(files: Record<string, string | (() => string)>, chains: Record<string, string> = {}) {
+  const fsys = new Map(Object.entries(files));
+  const calls: string[] = [];
+  const read = (p: string) => {
+    const c = fsys.get(p);
+    return typeof c === 'function' ? c() : c;
+  };
+  const exec = (cmd: string, args: string[], input?: string): { code: number; stdout: string } => {
+    calls.push([cmd, ...args].join(' '));
+    const a = cmd !== 'sudo' ? [cmd, ...args] : args[0] === '-n' ? args.slice(1) : args;
+    if (a[0] === 'cat') {
+      const c = read(a[1]);
+      return c === undefined ? { code: 1, stdout: '' } : { code: 0, stdout: c };
     }
-  }
+    if (a[0] === 'iptables') {
+      const spec = Object.keys(chains).find(k => iptablesListArgs(k).join(' ') === a.slice(1).join(' '));
+      return spec ? { code: 0, stdout: chains[spec] } : { code: 1, stdout: '' };
+    }
+    if (a[0] === 'tee') fsys.set(a[1], input ?? '');
+    return { code: 0, stdout: '' };
+  };
+  const host: Host = {
+    run: async (cmd, args, opts) => exec(cmd, args, opts?.input?.toString()).code,
+    output: async (cmd, args) => {
+      const r = exec(cmd, args);
+      return { exitCode: r.code, stdout: r.stdout, stderr: '' };
+    }
+  };
+  return { host, calls, fsys };
 }
 
-describe('SystemValidator', () => {
-  let validator: TestSystemValidator;
-  let testFiles: string[];
-  const testDir = '/tmp/safer-runner-test';
+const CHAINS = { INPUT: 'Chain INPUT (policy ACCEPT)\n', SAFER_RUNNER_OUT: 'Chain SAFER_RUNNER_OUT\n1 REJECT\n' };
 
-  // Sample iptables output for testing
-  const sampleIptablesOutput = {
-    INPUT: `Chain INPUT (policy ACCEPT)
-num  target     prot opt source               destination
-1    ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0
-2    DROP       all  --  192.168.1.0/24       0.0.0.0/0
-`,
-    OUTPUT: `Chain OUTPUT (policy ACCEPT)
-num  target     prot opt source               destination
-1    ACCEPT     all  --  0.0.0.0/0            10.0.0.0/8
-2    ACCEPT     all  --  0.0.0.0/0            172.16.0.0/12
-`,
-    FORWARD: `Chain FORWARD (policy DROP)
-num  target     prot opt source               destination
-`
-  };
+/** A runner with the baseline already captured. */
+async function captured(chains: Record<string, string> = { ...CHAINS }) {
+  const r = runner({ [FILES[0]]: 'corefile\n', [FILES[1]]: 'nameserver 127.0.0.1\n' }, chains);
+  await captureBaseline(r.host, FILES, LOGGING);
+  r.calls.length = 0;
+  return r;
+}
 
-  beforeEach(() => {
-    // Create test directory
-    if (!fs.existsSync(testDir)) {
-      fs.mkdirSync(testDir, { recursive: true });
-    }
-
-    // Create test files that simulate critical system files
-    testFiles = [
-      path.join(testDir, 'dnsmasq.conf'),
-      path.join(testDir, 'resolv.conf'),
-      path.join(testDir, 'no-stub.conf')
-    ];
-
-    testFiles.forEach((file, idx) => {
-      fs.writeFileSync(file, `test content ${idx}\n`);
-    });
-
-    // Initialize test validator with mock iptables output
-    validator = new TestSystemValidator(testFiles);
-    validator.setMockIptablesOutput('INPUT', sampleIptablesOutput.INPUT);
-    validator.setMockIptablesOutput('OUTPUT', sampleIptablesOutput.OUTPUT);
-    validator.setMockIptablesOutput('FORWARD', sampleIptablesOutput.FORWARD);
+describe('captureBaseline', () => {
+  it('reads each file and chain, then stores the baseline root-owned 0600', async () => {
+    const r = runner({ [FILES[0]]: 'a', [FILES[1]]: 'b' }, CHAINS);
+    await captureBaseline(r.host, FILES, LOGGING);
+    expect(r.calls).toEqual([
+      ...FILES.map(f => `sudo cat ${f}`),
+      ...IPTABLES_CHAINS.map(c => `sudo iptables ${iptablesListArgs(c).join(' ')}`),
+      ...BASELINE_WRITE_COMMANDS.map(a => `sudo ${a.join(' ')}`)
+    ]);
+    const state = JSON.parse(r.fsys.get(VALIDATION_STATE_FILE) as string);
+    expect(state.files.map((f: { path: string; checksum: string }) => [f.path, f.checksum])).toEqual([
+      [FILES[0], sha('a')],
+      [FILES[1], sha('b')]
+    ]);
+    // every monitored chain, an absent one as empty
+    expect(state.iptablesRules.map((c: { chain: string }) => c.chain)).toEqual([...IPTABLES_CHAINS]);
+    expect(state.iptablesRules[0]).toMatchObject({ rules: CHAINS.INPUT, checksum: sha(CHAINS.INPUT) });
+    expect(state.iptablesRules[1]).toMatchObject({ rules: '', checksum: sha('') });
   });
 
-  afterEach(() => {
-    // Cleanup test files and directory
-    if (fs.existsSync(testDir)) {
-      fs.rmSync(testDir, { recursive: true, force: true });
-    }
-
-    // Cleanup validation state file
-    const stateFile = TEST_STATE_FILE;
-    if (fs.existsSync(stateFile)) {
-      fs.unlinkSync(stateFile);
-    }
+  it('fails, writing nothing, when a file is missing (a setup failure)', async () => {
+    const r = runner({ [FILES[0]]: 'a' });
+    await expect(captureBaseline(r.host, FILES, LOGGING)).rejects.toThrow(`Critical file ${FILES[1]} missing`);
+    expect(r.fsys.has(VALIDATION_STATE_FILE)).toBe(false);
   });
 
-  describe('File checksum calculation', () => {
-    it('should calculate correct SHA256 checksum for file content', () => {
-      const testContent = 'test content for validation\n';
-      const testFile = path.join(testDir, 'test-checksum.conf');
-      fs.writeFileSync(testFile, testContent);
+  it('needs sudo logging on first (a compile-time order check)', () => {
+    const { host } = runner({});
+    // @ts-expect-error - capturing the baseline before sudo logging is on does not compile
+    const early = () => captureBaseline(host, FILES, {});
+    expect(early).toBeInstanceOf(Function);
+  });
+});
 
-      const expectedChecksum = crypto.createHash('sha256').update(testContent).digest('hex');
-
-      expect(expectedChecksum).toBeDefined();
-      expect(expectedChecksum).toHaveLength(64); // SHA256 produces 64 hex characters
-    });
-
-    it('should produce different checksums for different content', () => {
-      const content1 = 'content one';
-      const content2 = 'content two';
-
-      const checksum1 = crypto.createHash('sha256').update(content1).digest('hex');
-      const checksum2 = crypto.createHash('sha256').update(content2).digest('hex');
-
-      expect(checksum1).not.toBe(checksum2);
-    });
+describe('checkIntegrity (one pass)', () => {
+  it('nothing changed: intact, and every file and chain read exactly once', async () => {
+    const r = await captured();
+    const result = await checkIntegrity(r.host);
+    expect(result.intact).toBe(true);
+    expect(result.details.status).toBe('verified');
+    expect(r.calls).toEqual([
+      `sudo -n cat ${VALIDATION_STATE_FILE}`,
+      ...FILES.map(f => `sudo cat ${f}`),
+      ...IPTABLES_CHAINS.map(c => `sudo iptables ${iptablesListArgs(c).join(' ')}`)
+    ]);
   });
 
-  describe('Post-setup baseline capture', () => {
-    it('needs sudo logging on first (a compile-time order check)', () => {
-      // @ts-expect-error - capturing the baseline before sudo logging is on does not compile
-      const early = () => validator.capturePostSetupBaseline({});
-      expect(early).toBeInstanceOf(Function);
-    });
+  it('a changed file: not intact, shown as TAMPERED', async () => {
+    const r = await captured();
+    r.fsys.set(FILES[1], 'nameserver 8.8.8.8\n');
+    const result = await checkIntegrity(r.host);
+    expect(result.intact).toBe(false);
+    expect(result.details.status).toBe('tampered');
+    expect(result.details.body).toContain(
+      `| ${FILES[1]} | ⚠️ TAMPERED | ${sha('nameserver 127.0.0.1\n').slice(0, 16)} -> ${sha('nameserver 8.8.8.8\n').slice(0, 16)} |`
+    );
+  });
 
-    it('should capture post-setup baseline without errors', async () => {
-      await expect(validator.capturePostSetupBaseline(LOGGING)).resolves.not.toThrow();
-    });
+  it('a deleted file: not intact, shown as DELETED', async () => {
+    const r = await captured();
+    r.fsys.delete(FILES[0]);
+    const result = await checkIntegrity(r.host);
+    expect(result.intact).toBe(false);
+    expect(result.details.body).toContain(
+      `| ${FILES[0]} | 🚨 DELETED | ${sha('corefile\n').slice(0, 16)} -> MISSING |`
+    );
+  });
 
-    it('should create validation state file', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-      const stateFile = TEST_STATE_FILE;
+  it('a changed chain: not intact', async () => {
+    const chains = { ...CHAINS };
+    const r = await captured(chains);
+    chains.SAFER_RUNNER_OUT = 'Chain SAFER_RUNNER_OUT\n';
+    const result = await checkIntegrity(r.host);
+    expect(result.intact).toBe(false);
+    expect(result.details.body).toContain('| SAFER_RUNNER_OUT | ⚠️ TAMPERED |');
+  });
 
-      expect(fs.existsSync(stateFile)).toBe(true);
-    });
+  it('the verdict and the summary come from the same read (they cannot disagree)', async () => {
+    // a file that changes between reads: a second pass could see a different state
+    let reads = 0;
+    const r = runner({ [FILES[0]]: () => (++reads === 1 ? 'x' : `x${reads}`), [FILES[1]]: 'y' });
+    await captureBaseline(r.host, FILES, LOGGING);
+    reads = 0;
+    const result = await checkIntegrity(r.host);
+    expect(reads).toBe(1);
+    expect(result.intact).toBe(true);
+    expect(result.details.status).toBe('verified');
+  });
 
-    it('should capture checksums for all critical files', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-      const stateFile = TEST_STATE_FILE;
-      const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-
-      expect(state.files).toHaveLength(testFiles.length);
-      expect(state.files.every((f: any) => f.checksum && f.path && f.timestamp)).toBe(true);
+  it('a missing baseline is not intact (unavailable)', async () => {
+    const r = runner({});
+    expect(await checkIntegrity(r.host)).toEqual({
+      intact: false,
+      details: { status: 'unavailable', body: 'No validation data available.\n\n' }
     });
   });
 
-  describe('Baseline validation', () => {
-    it('should verify against baseline successfully when nothing changed', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-      const validationResult = await validator.verifyAgainstBaseline();
-
-      expect(validationResult).toBe(true);
-    });
-
-    it('should detect file tampering', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-
-      // Tamper with one of the test files
-      fs.writeFileSync(testFiles[0], 'TAMPERED CONTENT\n');
-
-      const validationResult = await validator.verifyAgainstBaseline();
-
-      expect(validationResult).toBe(false);
-    });
-
-    it('should detect file deletion', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-
-      // Delete one of the test files
-      fs.unlinkSync(testFiles[0]);
-
-      const validationResult = await validator.verifyAgainstBaseline();
-
-      expect(validationResult).toBe(false);
-    });
-
-    it('should return false when baseline state file does not exist', async () => {
-      const validationResult = await validator.verifyAgainstBaseline();
-
-      expect(validationResult).toBe(false);
-    });
+  it.each([
+    ['not JSON', '{not json'],
+    ['without a file list', '{"timestamp":"t"}']
+  ])('a baseline that is %s is not intact (tampered)', async (_what, raw) => {
+    const r = runner({ [VALIDATION_STATE_FILE]: raw });
+    const result = await checkIntegrity(r.host);
+    expect(result.intact).toBe(false);
+    expect(result.details.status).toBe('tampered');
+    expect(result.details.body).toMatch(/^Failed to generate report: /);
   });
 
-  describe('Validation report generation', () => {
-    it('should generate validation report', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-      const report = await validator.generateValidationReport();
+  it('a file whose read cannot run is not intact (UNREADABLE)', async () => {
+    const r = await captured();
+    const output = r.host.output;
+    r.host.output = async (cmd, args, opts) => {
+      if (args.join(' ') === `cat ${FILES[0]}`) throw new Error('spawn sudo ENOENT');
+      return output(cmd, args, opts);
+    };
+    const result = await checkIntegrity(r.host);
+    expect(result.intact).toBe(false);
+    expect(result.details.body).toContain(`| ${FILES[0]} | 🚨 UNREADABLE |`);
+  });
+});
 
-      expect(report).toBeDefined();
-      expect(typeof report).toBe('string');
-      expect(report.length).toBeGreaterThan(0);
+describe('compare + renderDetails (pure)', () => {
+  it('renders the file and chain tables', () => {
+    const state = parseBaseline(
+      JSON.stringify({
+        timestamp: 'T0',
+        files: [
+          { path: '/a', checksum: 'a'.repeat(64), timestamp: 'T0' },
+          { path: '/b', checksum: 'b'.repeat(64), timestamp: 'T0' }
+        ],
+        iptablesRules: [
+          { chain: 'INPUT', rules: '', checksum: 'c'.repeat(64), timestamp: 'T0' },
+          { chain: 'DOCKER-USER', rules: '', checksum: 'd'.repeat(64), timestamp: 'T0' }
+        ]
+      })
+    );
+    const rows = compare(state, {
+      files: new Map([
+        ['/a', 'a'.repeat(64)],
+        ['/b', null]
+      ]),
+      chains: new Map([['INPUT', 'e'.repeat(64)]])
     });
-
-    it('should include key sections in report', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-      const report = await validator.generateValidationReport();
-
-      // Check for expected report sections
-      expect(report).toContain('Config File Tamper Detection');
-      expect(report).toContain('<details>');
-      expect(report).toContain('<summary>');
-      expect(report).toContain('</details>');
-      expect(report).toContain('Configuration Files');
-      expect(report).toContain('Firewall Rules');
-      expect(report).toContain('Baseline:');
-      expect(report).toContain('Verified:');
-    });
-
-    it('should show VERIFIED status for unchanged files', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-      const report = await validator.generateValidationReport();
-
-      expect(report).toContain('VERIFIED');
-      // Should NOT have warning emoji when no tampering
-      expect(report).not.toContain('⚠️ Config File Tamper Detection');
-    });
-
-    it('should show TAMPERED status for modified files', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-
-      // Tamper with a file
-      fs.writeFileSync(testFiles[0], 'MODIFIED CONTENT\n');
-
-      const report = await validator.generateValidationReport();
-
-      expect(report).toContain('TAMPERED');
-      // Should have warning emoji when tampering detected
-      expect(report).toContain('⚠️ Config File Tamper Detection');
-    });
-
-    it('should show DELETED status for removed files', async () => {
-      await validator.capturePostSetupBaseline(LOGGING);
-
-      // Delete a file
-      fs.unlinkSync(testFiles[0]);
-
-      const report = await validator.generateValidationReport();
-
-      expect(report).toContain('DELETED');
-      // Should have warning emoji when file deletion detected
-      expect(report).toContain('⚠️ Config File Tamper Detection');
-    });
-
-    it('should handle missing baseline state gracefully', async () => {
-      const report = await validator.generateValidationReport();
-
-      expect(report).toContain('No validation data available');
+    expect(renderDetails(state, rows, 'T1')).toEqual({
+      status: 'tampered',
+      body:
+        '**Baseline:** T0\n**Verified:** T1\n\n' +
+        '**Configuration Files**\n\n| File | Status | Checksum Comparison |\n|------|--------|--------------------|\n' +
+        `| /a | VERIFIED | ${'a'.repeat(16)} (unchanged) |\n` +
+        `| /b | 🚨 DELETED | ${'b'.repeat(16)} -> MISSING |\n` +
+        '\n**Firewall Rules**\n\n| Chain | Status | Checksum Comparison |\n|-------|--------|--------------|\n' +
+        `| INPUT | ⚠️ TAMPERED | ${'c'.repeat(16)} -> ${'e'.repeat(16)} |\n` +
+        `| DOCKER-USER | 🚨 MISSING | ${'d'.repeat(16)} -> MISSING |\n` +
+        '\n'
     });
   });
+});
 
-  describe('File tampering detection', () => {
-    it('should handle missing critical files gracefully during initialization', () => {
-      // Create validator with non-existent files
-      const nonExistentFiles = ['/tmp/does-not-exist-1.conf', '/tmp/does-not-exist-2.conf'];
-      const testValidator = new TestSystemValidator(nonExistentFiles);
-
-      // Should fail during baseline capture because files don't exist
-      expect(testValidator.capturePostSetupBaseline(LOGGING)).rejects.toThrow();
-    });
+describe('Baseline storage (M1)', () => {
+  it('is root-owned 0600 under /etc/safer-runner, never a runner-writable path', () => {
+    const targets = new Set(BASELINE_WRITE_COMMANDS.map(c => c[c.length - 1]));
+    expect(Array.from(targets)).toEqual(['/etc/safer-runner/validation-state.json']);
+    expect(BASELINE_WRITE_COMMANDS).toContainEqual(['chown', 'root:root', '/etc/safer-runner/validation-state.json']);
+    expect(BASELINE_WRITE_COMMANDS).toContainEqual(['chmod', '0600', '/etc/safer-runner/validation-state.json']);
   });
 
-  describe('Integration scenarios', () => {
-    it('should handle complete workflow: capture -> validate -> report', async () => {
-      // Capture baseline
-      await validator.capturePostSetupBaseline(LOGGING);
-
-      // Verify (should pass)
-      const isValid = await validator.verifyAgainstBaseline();
-      expect(isValid).toBe(true);
-
-      // Generate report
-      const report = await validator.generateValidationReport();
-      expect(report).toContain('VERIFIED');
-    });
-
-    it('should detect tampering in complete workflow', async () => {
-      // Capture baseline
-      await validator.capturePostSetupBaseline(LOGGING);
-
-      // Tamper with files
-      fs.writeFileSync(testFiles[1], 'TAMPERED\n');
-
-      // Verify (should fail)
-      const isValid = await validator.verifyAgainstBaseline();
-      expect(isValid).toBe(false);
-
-      // Generate report (should show tampering)
-      const report = await validator.generateValidationReport();
-      expect(report).toContain('TAMPERED');
-    });
+  it('restricts the mode before writing the content', () => {
+    const idx = (verb: string) => BASELINE_WRITE_COMMANDS.findIndex(c => c[0] === verb);
+    expect(idx('chmod')).toBeLessThan(idx('tee'));
+    expect(idx('chown')).toBeLessThan(idx('tee'));
   });
 
-  describe('Baseline storage (M1)', () => {
-    it('is root-owned 0600 under /etc/safer-runner, never a runner-writable path', () => {
-      const targets = new Set(BASELINE_WRITE_COMMANDS.map(c => c[c.length - 1]));
-      expect(Array.from(targets)).toEqual(['/etc/safer-runner/validation-state.json']);
-      expect(BASELINE_WRITE_COMMANDS).toContainEqual(['chown', 'root:root', '/etc/safer-runner/validation-state.json']);
-      expect(BASELINE_WRITE_COMMANDS).toContainEqual(['chmod', '0600', '/etc/safer-runner/validation-state.json']);
-    });
+  it("keeps the action's own baseline writes out of the sudo report", () => {
+    for (const c of BASELINE_WRITE_COMMANDS) expect(INTERNAL_SUDO_COMMANDS).toContain(c.join(' '));
+  });
 
-    it('restricts the mode before writing the content', () => {
-      const idx = (cmd: string) => BASELINE_WRITE_COMMANDS.findIndex(c => c[0] === cmd);
-      expect(idx('chmod')).toBeLessThan(idx('tee'));
-      expect(idx('chown')).toBeLessThan(idx('tee'));
-    });
-
-    it("keeps the action's own baseline writes out of the sudo report", () => {
-      for (const c of BASELINE_WRITE_COMMANDS) expect(INTERNAL_SUDO_COMMANDS).toContain(c.join(' '));
-    });
-
-    it('reports no integrity (fails closed) when the baseline cannot be read', async () => {
-      expect(await validator.verifyAgainstBaseline()).toBe(false);
-    });
+  it('monitors the config the controls depend on', () => {
+    expect(CRITICAL_FILES).toEqual([
+      '/etc/safer-runner/Corefile',
+      '/etc/resolv.conf',
+      '/etc/systemd/resolved.conf.d/no-stub.conf',
+      '/etc/safer-runner/policy.json',
+      '/opt/safer-runner/proxy/policy.py',
+      '/opt/safer-runner/proxy/policy_core.py'
+    ]);
   });
 });

@@ -25,7 +25,7 @@ import {
 
 jest.mock('@actions/core');
 
-/** the baseline's token (a test stands in for capturePostSetupBaseline) */
+/** the baseline's token (a test stands in for captureBaseline) */
 const BASELINE = Object.freeze({}) as BaselineCaptured;
 const LOG = '/var/log/safer-runner/sudo.log';
 
