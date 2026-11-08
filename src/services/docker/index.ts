@@ -168,9 +168,10 @@ async function waitForDocker(h: Host, timeoutMs: number): Promise<boolean> {
  * containers alive across the restart. Must run after the CA is in the system store and
  * before the firewall (Docker rebuilds its own chains on restart).
  *
- * Returns true when daemon.json was written (it then belongs in the integrity baseline).
+ * Says whether daemon.json was written (it then belongs in the integrity baseline) and whether
+ * dockerd was restarted.
  */
-async function restartForCaTrust(h: Host): Promise<boolean> {
+async function restartForCaTrust(h: Host): Promise<{ configWritten: boolean; restarted: boolean }> {
   const before = await runningContainers(h);
   const { stdout: existing } = await h.output('sudo', ['cat', DOCKER_DAEMON_JSON], {
     ignoreReturnCode: true,
@@ -182,7 +183,7 @@ async function restartForCaTrust(h: Host): Promise<boolean> {
       `${DOCKER_DAEMON_JSON} is not a JSON object: dockerd not restarted, so a dockerd that pulled images ` +
         'before this action may not trust the proxy CA (docker pull: x509 errors)'
     );
-    return false;
+    return { configWritten: false, restarted: false };
   }
   if (merged.changed) {
     await sudo(['install', '-d', '-m', '0755', '/etc/docker'], {}, h);
@@ -207,7 +208,7 @@ async function restartForCaTrust(h: Host): Promise<boolean> {
       `${lost.length} container(s) stopped across the dockerd restart: ${lost.map(i => i.slice(0, 12)).join(', ')}`
     );
   }
-  return true;
+  return { configWritten: true, restarted: true };
 }
 
 /**
@@ -220,16 +221,17 @@ export async function prepare(
   h: Host,
   policy: DockerPolicy,
   _trust: TrustInstalled
-): Promise<{ active: boolean; configWritten: boolean; prepared: DockerPrepared }> {
+): Promise<{ active: boolean; configWritten: boolean; restarted: boolean; prepared: DockerPrepared }> {
   const active = policy !== 'stop' && (await isDockerActive(h));
   let configWritten = false;
+  let restarted = false;
   if (active) {
     const services = await runningContainers(h);
     if (policy === 'keep' || services.length > 0) {
-      configWritten = await timed('Restart dockerd (CA trust)', () => restartForCaTrust(h));
+      ({ configWritten, restarted } = await timed('Restart dockerd (CA trust)', () => restartForCaTrust(h)));
     }
   }
-  return { active, configWritten, prepared: Object.freeze({}) as DockerPrepared };
+  return { active, configWritten, restarted, prepared: Object.freeze({}) as DockerPrepared };
 }
 
 /** Where the docker events recording starts: the post step reads the use of docker after it. */

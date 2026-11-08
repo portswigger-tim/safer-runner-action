@@ -4,7 +4,7 @@
  */
 
 import { code } from './markdown';
-import type { Alert, Diagnostic } from './section';
+import type { Alert, RunnerSystem, ScoreRow } from './section';
 
 export type SelfTest = { name: string; ok: boolean; detail: string };
 export type IntegrityDetails = { status: 'verified' | 'tampered' | 'unavailable'; body: string };
@@ -18,70 +18,55 @@ export const ADVISORY_REPORT_NOTE =
   "files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls " +
   "themselves are root-owned and don't depend on it.</sub>";
 
-export interface Check {
-  /** '' for no chip */
-  chip: string;
+export interface Checks {
+  score: ScoreRow;
   alerts: Alert[];
-  diagnostic?: Diagnostic;
-}
-
-export function selfTestCheck(selfTests: SelfTest[]): Check {
-  const ok = selfTests.filter(t => t.ok).length;
-  const failed = selfTests.filter(t => !t.ok);
-  if (!selfTests.length) return { chip: '', alerts: [], diagnostic: { summary: 'self-tests not run', body: '' } };
-  return {
-    chip: `${failed.length ? '❌' : '🧪'} self-tests ${ok}/${selfTests.length}`,
-    alerts: failed.length
-      ? [
-          {
-            kind: 'CAUTION',
-            text: `**Self-test failed:** ${failed.map(t => `\`${t.name}\``).join(', ')} — the proxy may not be enforcing as designed on this runner.`
-          }
-        ]
-      : [],
-    diagnostic: {
-      summary: `self-tests ${ok}/${selfTests.length} ${failed.length ? '✗' : '✓'}`,
-      body:
-        '**Self-tests**\n\n' +
-        selfTests
-          .map(t => `- ${t.ok ? '✅' : '❌'} ${code(t.name)} — ${t.detail.replace(/[<>|`*_[\]]/g, '\\$&')}`)
-          .join('\n') +
-        '\n\n'
-    }
-  };
+  runnerSystem: RunnerSystem;
 }
 
 /**
- * The post-run tamper check. Its chip is advisory (ADVISORY_REPORT_NOTE), and a check that could
- * not run is unknown, never a pass.
+ * The self-tests and the tamper check: one scorecard row, failures as alerts, the details under
+ * Runner System. A tamper check that could not run is unknown, never a pass (ADVISORY_REPORT_NOTE).
  */
-export function integrityCheck(integrity: IntegrityDetails | undefined): Check {
+export function setupChecks(selfTests: SelfTest[], integrity: IntegrityDetails | undefined): Checks {
+  const ok = selfTests.filter(t => t.ok).length;
+  const failed = selfTests.filter(t => !t.ok);
   const s = integrity?.status;
-  const chip =
-    s === 'tampered'
-      ? '🚨 config tampered'
-      : s === 'verified'
-        ? '🔎 no config change seen (advisory)'
-        : '❔ config unverified';
-  const alerts: Alert[] =
-    s === 'tampered'
-      ? [
-          {
-            kind: 'CAUTION',
-            text: '**Safer Runner configuration changed during the job** — see the config file check under Diagnostics.'
-          }
-        ]
-      : [];
-  if (!integrity) return { chip, alerts };
-  let body = `**Config file tamper check** (advisory) — ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
-  body += integrity.body + '\n\n';
+  const alerts: Alert[] = [];
+  if (failed.length) {
+    alerts.push({
+      kind: 'CAUTION',
+      text: `**Self-test failed:** ${failed.map(t => `\`${t.name}\``).join(', ')}: the proxy may not be enforcing as designed on this runner.`
+    });
+  }
+  if (s === 'tampered') {
+    alerts.push({
+      kind: 'CAUTION',
+      text: '**Safer Runner configuration changed during the job**: see the setup checks under Runner System.'
+    });
+  }
+  const tests = selfTests.length ? `self-tests ${ok}/${selfTests.length}` : 'self-tests not run';
+  const config =
+    s === 'verified' ? 'no config change seen (advisory)' : s === 'tampered' ? 'config CHANGED' : 'config not verified';
+  const text = `${tests} · ${config}`;
+
+  let body = '';
+  if (selfTests.length) {
+    body +=
+      '**Self-tests**\n\n' +
+      selfTests
+        .map(t => `- ${t.ok ? '✅' : '⚠️'} ${code(t.name)}: ${t.detail.replace(/[<>|`*_[\]]/g, '\\$&')}`)
+        .join('\n') +
+      '\n\n';
+  }
+  if (integrity) {
+    body += `**Config file tamper check** (advisory): ${s === 'verified' ? 'all verified' : s === 'tampered' ? '⚠️ CHANGED' : 'no baseline'}\n\n`;
+    body += integrity.body + '\n\n';
+  }
   body += `${ADVISORY_REPORT_NOTE}\n\n`;
   return {
-    chip,
+    score: { verdict: failed.length || s !== 'verified' ? 'advisory' : 'allowed', area: 'Setup', text },
     alerts,
-    diagnostic: {
-      summary: s === 'verified' ? 'config unchanged ✓' : s === 'tampered' ? 'config CHANGED ⚠️' : 'config: no baseline',
-      body
-    }
+    runnerSystem: { summary: `setup checks: ${text}`, body }
   };
 }

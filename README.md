@@ -56,9 +56,11 @@ jobs:
       - run: npm ci
 ```
 
-Start in `mode: analyze` (the default). Nothing is blocked. The job summary lists every host the
-job contacted, flags the ones enforce would block, and suggests an `allowed-domains` block to
-paste. Switch to `enforce` once the list is right. GitHub's own endpoints (checkout, artifacts,
+Start in `mode: analyze` (the default). Nothing is blocked. The job summary opens with a scorecard
+of what enforce would block, then one **Suggested Enforce Configuration** block to paste: the
+`allowed-domains`, `sudo-config` and `docker` settings this job needs (an `http-filter` is offered
+as an option). Review it, switch to `enforce`, and the details below the summary show every host,
+sudo command and container the job used. GitHub's own endpoints (checkout, artifacts,
 cache, OIDC) are allowed automatically.
 
 ### Inputs

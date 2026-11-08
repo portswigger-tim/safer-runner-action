@@ -32,6 +32,12 @@ have: `analyze` never changes either, and reports what `enforce` would block.
   would stop service containers is flagged. Only kinds, counts and image names are shown. Best
   effort: in `analyze` the job has docker, so it can stop the recording.
 - **Hardening:** redact sudo arguments in the job summary and log.
+- **Hardening:** reject repeated wildcards in a domain label.
+- **A shorter job summary.** It opens with a scorecard and, in `analyze`, one Suggested Enforce
+  Configuration block to paste (the inputs this job needs to run under `enforce`; ADVISORY
+  settings are marked). Network, sudo and docker details follow, with what the action itself did
+  collapsed under Runner System. The suggested `uses:` line keeps the repository and ref the
+  workflow used.
 
 ## v2.3.0
 

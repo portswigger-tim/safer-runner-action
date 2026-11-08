@@ -159,7 +159,11 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   // 1. Allowlist - fetched while normal DNS and direct egress still work
   const { domains: githubDomains, source } = await resolveGitHubDomains();
   core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
-  const { config: policy, warnings } = buildPolicyConfig({
+  const {
+    config: policy,
+    warnings,
+    user
+  } = buildPolicyConfig({
     mode,
     githubDomains,
     allowedDomains: inputs.allowedDomains,
@@ -271,8 +275,14 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
         // the sudo policy the post step evaluates (analyze) or reports (enforce)
         ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
         ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
+        // the job's own allowlist and http-filter as applied: the post step suggests from these,
+        // never from inputs read again at post time
+        allowedDomains: user.allowed,
+        passthroughDomains: user.passthrough,
+        httpFilterSet: inputs.httpFilter.length > 0,
         dockerRetained: dockerAccess.access === 'retained',
-        docker: dockerAccess,
+        // the summary shows the dockerd restart for CA trust (F1) as the action's own docker change
+        docker: { ...dockerAccess, caRestart: dockerd.restarted },
         ...(dockerEvents ? { dockerEvents } : {}),
         failOnTampering: inputs.failOnTampering,
         containerTls: CONTAINER_TLS,

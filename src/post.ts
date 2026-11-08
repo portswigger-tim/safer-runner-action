@@ -2,12 +2,15 @@ import * as core from '@actions/core';
 import * as fs from 'fs';
 import { SELFTEST_FILE, SUDO_LOG } from './constants';
 import { SETUP_MARKER } from './setup/run';
-import { compose, jobLog, reportSections } from './report/compose';
+import { compose, reportSections, suggestedForLog } from './report/compose';
+import { jobLog as proxyJobLog } from './services/mitmproxy/report';
+import { jobLog as sudoJobLog } from './services/sudo/report';
+import { jobLog as dockerJobLog } from './services/docker/report';
 import { observeProxy } from './services/mitmproxy/observe';
 import { observeFirewall } from './services/iptables/observe';
 import { observeDns } from './services/coredns/observe';
 import { observeSudoPolicy, type SudoMarker } from './services/sudo/observe';
-import { readSudoUsage } from './services/sudo';
+import { SETUP_FINAL_SUDO, readSudoUsage } from './services/sudo';
 import { observeContainers, observeDockerPolicy, type DockerMarker } from './services/docker/observe';
 import { type SelfTestWindow } from './setup/selftest';
 import { checkIntegrity, type IntegrityResult } from './integrity/check';
@@ -16,12 +19,28 @@ import { effectiveFailOnTampering } from './config/inputs';
 
 interface SetupMarker extends SudoMarker, DockerMarker {
   dockerRetained?: boolean;
+  /** the job's own allowed-domains and passthrough-domains entries, as setup applied them */
+  allowedDomains?: string[];
+  passthroughDomains?: string[];
+  /** the job sets http-filter */
+  httpFilterSet?: boolean;
   /** resolved fail-on-tampering (mode-aware); kept in the root-owned marker, not re-read from inputs */
   failOnTampering?: boolean;
   /** flow-log byte range the setup self-tests wrote */
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
   dnsSelfTestName?: string;
+}
+
+const log = (lines: string[]) => lines.forEach(l => core.info(l));
+
+/** A file's size in bytes, read without stat (undefined when it cannot be read). */
+function fileSize(file: string): number | undefined {
+  try {
+    return fs.readFileSync(file).length;
+  } catch {
+    return undefined;
+  }
 }
 
 function readSelfTests(): { name: string; ok: boolean; detail: string }[] {
@@ -46,6 +65,10 @@ function readSetupMarker(): SetupMarker | null {
  * tmpfs, with it).
  */
 async function run(): Promise<void> {
+  // let the job's last flow, syslog and sudo lines land (sudo-rs reaches the sudo log through
+  // rsyslog), then take the sudo log as this step found it: anything after is this step's own
+  await new Promise(r => setTimeout(r, 1000));
+  const sudoLogBytes = fileSize(SUDO_LOG);
   const marker = readSetupMarker();
   const mode = marker?.mode;
   if (!marker || !mode) {
@@ -64,16 +87,29 @@ async function run(): Promise<void> {
   const intact = integrity?.intact === true;
 
   try {
-    await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
-    // each service's observations (its own log, and its policy where it has one)
-    const proxy = observeProxy(marker.selfTestWindow);
+    // Each service's observations (its own log, and its policy where it has one). Its full lists
+    // go to the job log as soon as it has them, so a later failure never loses them (names and
+    // sudo arguments redacted like the summary: the job log is just as public).
+    const proxy = observeProxy(marker.selfTestWindow, {
+      allowed: marker.allowedDomains,
+      passthrough: marker.passthroughDomains,
+      httpFilterSet: marker.httpFilterSet
+    });
+    log(proxyJobLog(proxy.observed));
     const firewall = observeFirewall();
     const containers = await observeContainers(proxy.records, firewall);
     const dnsRefused = observeDns(marker.dnsSelfTestName);
     const selfTests = readSelfTests();
-    const sudo = readSudoUsage(SUDO_LOG);
-    const sudoPolicy = observeSudoPolicy(mode, marker, sudo.ran);
+    const restricted = mode === 'enforce' && marker.sudoRetained !== true;
+    const sudo = readSudoUsage(SUDO_LOG, {
+      postStartBytes: sudoLogBytes,
+      setupFinal: restricted ? SETUP_FINAL_SUDO.restricted : SETUP_FINAL_SUDO.unrestricted,
+      markerAt: marker.at ? new Date(marker.at) : undefined
+    });
+    const sudoPolicy = observeSudoPolicy(mode, marker, sudo?.ran ?? []);
+    log(sudoJobLog({ usage: sudo, policy: sudoPolicy }));
     const dockerPolicy = await observeDockerPolicy(marker);
+    log(dockerJobLog(dockerPolicy));
 
     // each service's part, then the summary from the parts
     const sections = reportSections({
@@ -85,6 +121,7 @@ async function run(): Promise<void> {
       sudo,
       sudoPolicy,
       job: process.env.GITHUB_JOB || 'unknown',
+      actionRepository: process.env.GITHUB_ACTION_REPOSITORY,
       actionRef: process.env.GITHUB_ACTION_REF,
       ...proxy.observed,
       firewall,
@@ -93,9 +130,12 @@ async function run(): Promise<void> {
       integrity: integrity?.details,
       containers
     });
-    // Full lists in the job log, so nothing is ever silently dropped from the summary (names
-    // and sudo arguments redacted like the summary: the job log is just as public).
-    for (const line of jobLog(sections)) core.info(line);
+    const block = suggestedForLog(sections);
+    if (block) {
+      core.startGroup('Suggested enforce configuration');
+      log(block.split('\n'));
+      core.endGroup();
+    }
     await core.summary.addRaw(compose(sections)).write();
   } catch (error) {
     core.warning(`Failed to generate the safer-runner report: ${error}`);

@@ -17,6 +17,8 @@
     {"pattern": "hosted-compute-*.githubapp.com", "host": "x.hosted-compute-a.githubapp.com", "expect": false},
     {"pattern": "hosted-compute-*.githubapp.com", "host": "hosted-compute-a.b.githubapp.com", "expect": false},
     {"pattern": "hosted-compute-*.githubapp.com", "host": "githubapp.com", "expect": false},
+    {"pattern": "api-*.example.com", "host": "api-v2.example.com", "expect": true},
+    {"pattern": "api-*.example.com", "host": "api-v2.x.example.com", "expect": false},
     {"pattern": "productionresultssa1.blob.core.windows.net", "host": "productionresultssa1.blob.core.windows.net", "expect": true},
     {"pattern": "productionresultssa1.blob.core.windows.net", "host": "productionresultssa10.blob.core.windows.net", "expect": false},
     {"pattern": "productionresultssa1.blob.core.windows.net", "host": "evil.blob.core.windows.net", "expect": false},
@@ -95,7 +97,7 @@
   "valid_path_patterns": ["*", "/", "", "/twirp/*", "*/git-receive-pack", "portswigger-tim/*/git-receive-pack", "pre*", "v2/*/blobs/*", "a:b", "@scope/*"],
   "selftest_comment": "The action's own setup probe (src/setup/selftest.ts repointSelfTest; proxy/policy_core.py is_selftest_probe), exempt from http-filter.",
   "selftest_probe": {"host": "github.com", "method": "GET", "path": "/robots.txt", "dst_ip": "192.0.2.1"},
-  "invalid_patterns": ["", "com", "*", "*.com", "example.*", "1.2.3.4", "exa mple.com", "*.foo-*.example.com", "-bad.example.com"],
+  "invalid_patterns": ["", "com", "*", "*.com", "example.*", "1.2.3.4", "exa mple.com", "*.foo-*.example.com", "-bad.example.com", "svc.***.corp.example.com", "a**b.example.com", "**.example.com"],
   "front_doors": ["*.blob.core.windows.net", "*.dfs.core.windows.net", "*.file.core.windows.net", "*.queue.core.windows.net", "*.table.core.windows.net", "*.web.core.windows.net"],
   "front_door_hosts": [
     {"host": "productionresultssa0.blob.core.windows.net", "expect": true},

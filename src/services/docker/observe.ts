@@ -15,7 +15,7 @@ import type { DockerPolicyReport } from './report';
 export interface DockerMarker {
   mode: Mode;
   /** the docker policy and the verified access (G4) */
-  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
+  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running'; caRestart?: boolean };
   /** analyze: where the docker events recording started */
   dockerEvents?: DockerEventsStart;
   /** when setup wrote the marker */

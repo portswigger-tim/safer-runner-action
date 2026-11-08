@@ -55,6 +55,8 @@ jest.mock('@actions/core', () => ({
   exportVariable: (k: string, v: string) => mockHost.record({ argv: ['<export>', `${k}=${v}`] }),
   group: async (_name: string, fn: () => Promise<unknown>) => fn(),
   startGroup: () => undefined,
+  saveState: () => undefined,
+  getState: () => '',
   endGroup: () => undefined,
   isDebug: () => false,
   summary: {
@@ -1315,9 +1317,10 @@ describe('post step transcript', () => {
     // nothing deletes the CA key: it is on tmpfs and dies with the VM
     expect(h.files.has(PROXY_CA_KEY_FILE)).toBe(true);
     expect(transcriptText(h.transcript)).toMatchSnapshot('transcript');
-    expect(h.summaryText).toContain('🔎 no config change seen (advisory)');
+    expect(h.summaryText).toContain('| ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |');
     // setup's own sudo, as logged, is never reported as the workflow's
-    expect(h.summaryText).toContain('no workflow sudo');
+    expect(h.summaryText).toContain('The job ran no sudo.');
+    expect(h.summaryText).toMatch(/Safer Runner ran \d+ sudo commands<\/summary>/);
     // redaction holds in the summary and in the job log
     expect(h.summaryText).toContain('‹redacted›');
     expect(h.summaryText).not.toContain(CANARY);
@@ -1327,7 +1330,8 @@ describe('post step transcript', () => {
   it('enforce: a changed file fails the job (fail-on-tampering)', async () => {
     const h = await jobThenPost(x => x.files.set('/etc/resolv.conf', 'nameserver 8.8.8.8\n'));
     expect(postInvariants(h.transcript)).toEqual([]);
-    expect(h.summaryText).toContain('🚨 config tampered');
+    expect(h.summaryText).toContain('| ⚠️ | Setup | self-tests 3/3 · config CHANGED |');
+    expect(h.summaryText).toContain('> [!CAUTION]\n> **Safer Runner configuration changed during the job**');
     expect(h.failed).toEqual([expect.stringContaining('tampered with')]);
   });
 
@@ -1338,7 +1342,7 @@ describe('post step transcript', () => {
 
   it('enforce: an unreadable baseline counts as not intact', async () => {
     const h = await jobThenPost(x => x.files.delete(VALIDATION_STATE_FILE));
-    expect(h.summaryText).toContain('❔ config unverified');
+    expect(h.summaryText).toContain('config not verified');
     expect(h.failed).toEqual([expect.stringContaining('could not be verified')]);
   });
 
@@ -1393,12 +1397,11 @@ describe('post step transcript', () => {
 
     it('the job used docker: what enforce would block, and `docker: keep` with its caveat', async () => {
       const h = await analyzeThenPost([...healthcheck, ...jobUse, ...healthcheck]);
-      expect(h.summaryText).toContain('<kbd>7 docker uses would be blocked</kbd>');
       expect(h.summaryText).toContain(
-        '**Enforce would block docker, which this job used after setup** (`docker: stop`: 2 container actions, ' +
-          '1 exec into a container, 3 image actions, 1 network change; listed under Diagnostics)'
+        '| 🟠 | Docker | used after setup (2 container actions, 1 exec into a container, 3 image actions, ' +
+          '1 network change): enforce would block it |'
       );
-      expect(h.summaryText).toContain('> ```yaml\n> docker: keep\n> ```');
+      expect(h.summaryText).toContain('    docker: keep # ⚠️ docker is root-equivalent: enforce is ADVISORY\n');
       expect(h.summaryText).toContain('enforce with `docker: keep` is ADVISORY');
       expect(h.summaryText).toContain(
         'Images: `alpine:3.20`, `postgres:16`, `ghcr.io/acme/app:‹redacted›`, `ghcr.io/acme/app:release.‹redacted›`'
@@ -1415,18 +1418,18 @@ describe('post step transcript', () => {
       expect(h.log).toContain('info: docker WOULD_BLOCK exec x1');
       expect(h.summaryText).not.toContain('should run unchanged');
       expect(h.summaryText).not.toMatch(/nothing would be blocked/i);
-      expect(h.summaryText).toContain('**No host would be blocked.**');
+      expect(h.summaryText).toContain('**Under enforce, this job would be blocked in Docker.**');
+      // the block also reaches the job log, the same text
+      expect(h.log).toContain('info:     docker: keep # ⚠️ docker is root-equivalent: enforce is ADVISORY');
     });
 
     it('only the service containers ran: docker: stop would stop them; leave docker unset', async () => {
       const h = await analyzeThenPost([...healthcheck, ...healthcheck]);
-      expect(h.summaryText).toContain('<kbd>1 service container would be stopped</kbd>');
-      expect(h.summaryText).toContain(
-        "**`docker: stop` would stop this job's 1 service container.** Leave `docker` unset"
-      );
+      expect(h.summaryText).toContain('| 🟠 | Docker | `docker: stop` would stop 1 service container |');
+      expect(h.summaryText).toContain('    docker: remove-group\n');
+      expect(h.summaryText).toContain('`remove-group` keeps them running and still takes docker from the job');
       expect(h.summaryText).toContain('No use of docker after setup was seen.');
       expect(h.summaryText).not.toContain('docker: keep');
-      expect(h.summaryText).not.toContain('docker uses would be blocked');
     });
 
     it('defaults, a recording that stopped early and saw nothing: no all-clear at the top', async () => {
@@ -1434,11 +1437,8 @@ describe('post step transcript', () => {
       h.units.delete(constants.DOCKER_EVENTS_UNIT);
       await post(h);
       expect(h.failed).toEqual([]);
-      expect(h.summaryText).toContain('<kbd>⚠️ docker use partly unseen</kbd>');
-      expect(h.summaryText).toContain(
-        '**No use of docker after setup was seen, but the recording did not cover the whole job**, and enforce ' +
-          '(`docker: remove-group`) would block any use it missed.'
-      );
+      expect(h.summaryText).toContain('| ⚠️ | Docker | no use seen, but the recording did not cover the whole job |');
+      expect(h.summaryText).toContain('The recording did not cover the whole job');
       expect(h.summaryText).not.toMatch(/nothing would be blocked/i);
       expect(h.summaryText).not.toContain('should run unchanged');
     });
@@ -1455,8 +1455,10 @@ describe('post step transcript', () => {
         docker: { active: true, dockerUser: true, containers: [] }
       });
       await post(h);
-      expect(h.summaryText).toContain('No use of docker after setup was seen. `docker: stop` would also fit.');
-      expect(h.summaryText).not.toMatch(/docker use|docker: keep|Enforce would block docker/);
+      expect(h.summaryText).toContain(
+        '| ✅ | Docker | no use after setup: `docker: remove-group` fits (`docker: stop` would too) |'
+      );
+      expect(h.summaryText).not.toMatch(/docker: keep|enforce would block it/);
     });
   });
 
@@ -1470,12 +1472,53 @@ describe('post step transcript', () => {
     expect(postInvariants(h.transcript)).toEqual([]);
     expect(h.failed).toEqual([]);
     // update and `install *` are in the sudo-config; remove is not
-    expect(h.summaryText).toContain('<kbd>1 sudo command would be blocked</kbd>');
-    expect(h.summaryText).toContain('**Enforce would block 1 sudo command this job ran**');
-    expect(h.summaryText).toContain(
-      'Enforce would block (1):\n\n```console\n$ sudo /usr/bin/apt-get remove -y jq\n```'
-    );
+    expect(h.summaryText).toContain('| 🟠 | Sudo | 1 command would be blocked |');
+    expect(h.summaryText).toContain('| 🟠 | `sudo /usr/bin/apt-get remove -y jq` | enforce would block it |');
+    expect(h.summaryText).toContain('| ⚠️ | `sudo /usr/bin/apt-get update` | allowed by `sudo-config` |');
     expect(h.log).toContain('info: sudo WOULD_BLOCK /usr/bin/apt-get remove -y jq');
+  });
+
+  it('analyze: the suggestion comes from the allowlist setup applied, never from inputs read again at post time', async () => {
+    const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze (defaults)')!.s);
+    h.append(
+      FLOW_LOG,
+      JSON.stringify({
+        ev: 'tls',
+        verdict: 'WOULD_BLOCK',
+        reason: 'sni-not-allowed',
+        layer: 'sni',
+        sni: 'pypi.org',
+        client: '10.1.0.4:51000'
+      }) + '\n'
+    );
+    // the post stage re-evaluates `with:`: an input sourced from the job's env can differ by then
+    h.inputs['allowed-domains'] = '*.com evil.example';
+    h.inputs['http-filter'] = 'pypi.org: { "*": GET }';
+    await post(h);
+    const block = h.summaryText.match(/```yaml\n([\s\S]*?)\n```/)![1];
+    expect(block).toContain('    allowed-domains: |\n      registry.npmjs.org\n      pypi.org');
+    expect(block).not.toMatch(/\*\.com|evil\.example|http-filter/);
+  });
+
+  it("a forged action state cannot hide the job's sudo: the action's own is found by its place in the log", async () => {
+    const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze (defaults)')!.s);
+    // the job runs one of the action's own command lines
+    expect(await h.exec('sudo', ['cat', '/etc/resolv.conf'], {})).toBe(0);
+    process.env['STATE_setup-end-main'] = '99999999999';
+    process.env['STATE_setup-end-pre'] = '99999999999';
+    try {
+      await post(h);
+    } finally {
+      delete process.env['STATE_setup-end-main'];
+      delete process.env['STATE_setup-end-pre'];
+    }
+    expect(h.summaryText).toContain('`sudo /usr/bin/cat /etc/resolv.conf` | enforce would block it |');
+    // only that one: setup's own lines (before its last command) and this step's stay the action's
+    expect(h.log.filter(l => l.startsWith('info: sudo (workflow)'))).toEqual([
+      'info: sudo (workflow) /usr/bin/cat /etc/resolv.conf'
+    ]);
+    // the action's own sudo (setup, and this step's checks) stays under Runner System
+    expect(h.summaryText).toMatch(/Safer Runner ran \d+ sudo commands<\/summary>/);
   });
 
   // the job log is as public as the summary: a credential passed as a sudo argument is in neither
@@ -1494,7 +1537,7 @@ describe('post step transcript', () => {
         expect(h.log).toContain(`info: ${l} /usr/bin/apt-get -u root -p ‹redacted› appdb`);
         expect(h.log).toContain(`info: ${l} /usr/bin/nproc --token=‹redacted›`);
       }
-      expect(h.summaryText).toContain('$ sudo /usr/bin/apt-get -u root -p ‹redacted› appdb');
+      expect(h.summaryText).toContain('`sudo /usr/bin/apt-get -u root -p ‹redacted› appdb`');
       expect(h.summaryText).not.toContain(canary);
       expect(h.log.join('\n')).not.toContain(canary);
     }

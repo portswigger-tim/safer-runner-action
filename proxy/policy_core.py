@@ -94,6 +94,9 @@ def validate_pattern(pattern):
     labels = p.split(".")
     if not all(_LABEL.match(label) for label in labels):
         raise PolicyError(f"invalid domain pattern: {pattern!r}")
+    # one `*` per run: a masked value (`***`) must fail here, never widen to a wildcard
+    if any("**" in label for label in labels):
+        raise PolicyError(f"repeated wildcard in a label: {pattern!r}")
     if any("*" in label for label in labels[-2:]):
         raise PolicyError(f"wildcard too broad (in the registrable part): {pattern!r}")
     if p.startswith("*.") and "*" in p[2:]:

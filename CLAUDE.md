@@ -322,10 +322,28 @@ The raw logs are **not redacted**. Never upload them from a public repository.
 setup self-test traffic dropped), then `reportSections` (each service's pure `report()`, returning
 a `Section`) and `compose`. Each service owns its part: the proxy (blocked and allowed hosts,
 `http-filter`), the firewall and the resolver (diagnostics), sudo and docker (with containers).
-The only join is the DNS diagnostics leaving out names the proxy part already shows. The summary shows the verdict first (mode, ADVISORY label,
-post-run status chip), then traffic grouped by cause: blocked or would-block hosts, allowed
-hosts, container egress, the `http-filter` section, sudo usage, and diagnostics (self-tests,
-DNS refused, integrity). In analyze it suggests an `allowed-domains` block.
+The only join is the DNS part leaving out names the proxy part already shows. Each part's full
+lists go to the job log as soon as it has them (`jobLog` in each `report.ts`).
+
+Layout (`compose.ts`): a banner (`docs/assets/banner.svg` from the repository and ref the
+workflow used, `GITHUB_ACTION_REPOSITORY`/`GITHUB_ACTION_REF`, both validated; none for `uses: ./`);
+`# 📋 Summary` (mode and ADVISORY chips, a verdict line, CAUTION/IMPORTANT alerts, a scorecard
+with a verdict column ✅ 🟠 ⛔ ⚠️), `## 🔧 Suggested Enforce Configuration` (analyze: ONE `uses:`
+block with every service's `Suggestion`, written by the `yaml` library and round-trip tested
+through `readInputs`; an ADVISORY input carries a `# ⚠️` comment; `http-filter` is in the block
+only when the job sets it, else an option below; enforce: one line, with the ADVISORY reasons);
+`# 🔎 Detail` with `## 🌐 Network`, `## 🔑 Sudo`, `## 🐳 Docker`, each with a collapsed
+`🖥️ Runner System` for what the ACTION did (its own sudo, docker change, dockerd CA restart),
+the GitHub baseline it trusts, and the DNS and firewall layers; the setup checks last. Emoji are
+functional only (`SUMMARY_EMOJI`, checked on every golden). The `uses:` line echoes the
+workflow's own repository and ref (a fork or mirror stays itself), else a placeholder.
+
+The action's own sudo is told from the job's by command line AND place in the sudo log
+(`readSudoUsage`, `classifySudoCommands`): up to setup's own last sudo command (`SETUP_FINAL_SUDO`,
+its first entry, near the marker's time) and from the log's size when the post step started. The
+same line run by a job step counts as the job's. The post step suggests from what setup recorded in
+the root-owned setup marker (the applied `allowed-domains` / `passthrough-domains` entries and
+whether `http-filter` is set), never from inputs read again at post time.
 
 - Names go through `src/report/redact.ts`: labels that look encoded are shown as `‹redacted›`; refused
   request paths are shown as `‹path hidden›`. This is best effort, not a guarantee.

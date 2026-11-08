@@ -137,6 +137,8 @@ export function validatePattern(pattern: string): string {
   if (isIpLiteral(p)) throw new Error(`IP literals are not allowed in patterns: '${pattern}'`);
   const labels = p.split('.');
   if (!labels.every(l => LABEL.test(l))) throw new Error(`invalid domain pattern: '${pattern}'`);
+  // one `*` per run: a masked value (`***`) must fail here, never widen to a wildcard
+  if (labels.some(l => l.includes('**'))) throw new Error(`repeated wildcard in a label: '${pattern}'`);
   if (labels.slice(-2).some(l => l.includes('*'))) {
     throw new Error(`wildcard too broad (in the registrable part): '${pattern}'`);
   }
@@ -256,6 +258,8 @@ export interface PolicyBuildResult {
   config: PolicyConfig;
   /** Problems with user input (entries dropped); the caller surfaces them. */
   warnings: string[];
+  /** the job's own allowed-domains and passthrough-domains entries, as applied (invalid ones dropped) */
+  user: { allowed: string[]; passthrough: string[] };
 }
 
 function uniq(xs: string[]): string[] {
@@ -336,10 +340,8 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
     }
   }
   const user = cleanUserPatterns(opts.allowedDomains, 'allowed-domains', warnings);
-  const passthrough = uniq([
-    ...MANDATORY_PASSTHROUGH,
-    ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
-  ]);
+  const userPassthrough = cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings);
+  const passthrough = uniq([...MANDATORY_PASSTHROUGH, ...userPassthrough]);
   const deny = opts.blockRiskySubdomains ? [...RISKY_GITHUB_SUBDOMAINS] : [];
   const allow = uniq([...github, ...user]);
   const httpFilter = buildHttpFilter(
@@ -363,6 +365,7 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
       container_port: opts.containerPort,
       http_filter: httpFilter
     },
-    warnings
+    warnings,
+    user: { allowed: user, passthrough: userPassthrough }
   };
 }

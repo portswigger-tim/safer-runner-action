@@ -1,6 +1,6 @@
 import { REDACTED } from '../../report/redact';
 import { evaluateDocker } from './config';
-import { dockerUseCount, dockerUseText, imageLabel, report } from './report';
+import { dockerUseCount, dockerUseText, imageLabel, jobLog, report } from './report';
 
 describe('imageLabel (an image name in the summary)', () => {
   it('shows ordinary names whole', () => {
@@ -47,33 +47,49 @@ describe('dockerUseText', () => {
 describe('docker report (its Section)', () => {
   const ENFORCE = { mode: 'enforce', enforce: true } as const;
   const ANALYZE = { mode: 'analyze', enforce: false } as const;
-  const used = {
-    policy: 'remove-group',
-    observed: { uses: { container: 2 }, images: [], services: 0, partial: false },
-    evaluation: evaluateDocker('remove-group', { uses: { container: 2 }, images: [], services: 0, partial: false })
-  };
+  const observed = { uses: { container: 2 }, images: [], services: 0, partial: false };
+  const used = { policy: 'remove-group', observed, evaluation: evaluateDocker('remove-group', observed) };
 
-  it('enforce with docker kept: ADVISORY, a chip and a WARNING', () => {
+  it('enforce with docker kept: ADVISORY row and chip', () => {
     const s = report({ retained: true, docker: { requested: 'keep', access: 'retained' } }, ENFORCE);
-    expect(s.advisory).toBe('docker');
-    expect(s.chips).toEqual(['⚠️ docker retained']);
-    expect(s.alerts.map(a => a.kind)).toEqual(['WARNING']);
-    expect(s.diagnostics[0].summary).toBe('docker retained');
+    expect(s.score[0]).toMatchObject({ verdict: 'advisory', area: 'Docker' });
+    expect(s.advisory.map(a => a.chip)).toEqual(['⚠️ docker retained']);
   });
 
-  it('analyze: a use enforce would block is a chip, a quoted IMPORTANT part, blocking, and a job-log line', () => {
+  it('analyze: a use enforce would block is a row, and docker: keep is suggested as ADVISORY', () => {
     const s = report(
       { retained: true, docker: { requested: 'remove-group', access: 'retained' }, policy: used },
       ANALYZE
     );
-    expect(s.advisory).toBe('');
-    expect(s.blocking).toBe(true);
-    expect(s.chips).toEqual(['2 docker uses would be blocked']);
-    expect(s.alerts).toEqual([expect.objectContaining({ kind: 'IMPORTANT', quoted: true })]);
-    expect(s.jobLog).toEqual(['docker WOULD_BLOCK container x2']);
+    expect(s.score[0].verdict).toBe('would-block');
+    expect(s.suggestions).toEqual([
+      { input: 'docker', value: 'keep', advisory: 'docker is root-equivalent: enforce is ADVISORY' }
+    ]);
+    expect(s.advisory).toEqual([]);
   });
 
-  it('no container traffic: no body', () => {
-    expect(report({ retained: false }, ENFORCE).body).toBe('');
+  it("the action's docker change (and the dockerd CA restart) go under Runner System", () => {
+    const s = report(
+      { retained: false, docker: { requested: 'remove-group', access: 'group-removed', caRestart: true } },
+      ENFORCE
+    );
+    expect(s.runnerSystem[0].summary).toBe('docker removed from the runner user · dockerd restarted to trust the CA');
+  });
+
+  it('analyze, dockerd running but not evaluated (the evaluation failed): unknown, never an all-clear', () => {
+    const s = report({ retained: true, docker: { requested: 'remove-group', access: 'retained' } }, ANALYZE);
+    expect(s.score[0]).toMatchObject({
+      verdict: 'advisory',
+      text: "not evaluated: the job's use of docker was not seen"
+    });
+    const notRunning = report(
+      { retained: false, docker: { requested: 'remove-group', access: 'not-running' } },
+      ANALYZE
+    );
+    expect(notRunning.score[0]).toMatchObject({ verdict: 'allowed', text: 'daemon not running' });
+  });
+
+  it('job log: the uses enforce would block', () => {
+    expect(jobLog(used)).toEqual(['docker WOULD_BLOCK container x2']);
   });
 });

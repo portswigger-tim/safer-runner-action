@@ -311,7 +311,7 @@ Nov  3 16:23:53 : runner :  PWD=/home/runner/work ; USER=nobody ; COMMAND=/usr/b
 `
       );
 
-      const u = readSudoUsage(log);
+      const u = readSudoUsage(log)!;
       expect(u.ran.map(c => `${c.command} ${c.args}`.trim())).toEqual([
         '/usr/bin/apt-get install -y jq',
         '/usr/bin/true'
@@ -334,7 +334,7 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
 `
       );
 
-      const u = readSudoUsage(log);
+      const u = readSudoUsage(log)!;
       expect(u.ran).toEqual([]);
       expect(u.internal).toHaveLength(2);
       expect(u.refused).toHaveLength(1);
@@ -349,7 +349,7 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
         `Nov  3 16:24:32 : runner : a password is required ; PWD=/ ; USER=root ; COMMAND=/usr/bin/tee /tmp/runner-sudoers.tmp
 `
       );
-      const u = readSudoUsage(log);
+      const u = readSudoUsage(log)!;
       expect(u.refused).toHaveLength(1);
       expect(u.internal).toEqual([]);
     });
@@ -360,7 +360,7 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
         log,
         'Nov  3 16:23:51 : runner :  PWD=/ ; USER=root ; COMMAND=/home/runner/cat /etc/resolv.conf\n'
       );
-      expect(readSudoUsage(log).ran).toHaveLength(1);
+      expect(readSudoUsage(log)!.ran).toHaveLength(1);
     });
 
     it('reports a workflow that removes the sudo logging config (the action never does)', () => {
@@ -371,7 +371,7 @@ Nov  3 16:24:33 : runner : a password is required ; PWD=/ ; USER=root ;
 Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LOGGING_RSYSLOG_FILE}
 `
       );
-      expect(readSudoUsage(log).ran).toHaveLength(2);
+      expect(readSudoUsage(log)!.ran).toHaveLength(2);
     });
   });
 
@@ -399,7 +399,7 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
           `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/sbin/iptables-save`
         ].join('\n') + '\n'
       );
-      const u = readSudoUsage(log);
+      const u = readSudoUsage(log)!;
       expect(u.ran).toEqual([]);
       expect(u.refused.map(c => c.command)).toEqual([
         '/usr/bin/true',
@@ -409,8 +409,25 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
       expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv']);
     });
 
-    it('is empty for a missing file', () => {
-      expect(readSudoUsage(path.join(dir, 'missing.log'))).toEqual({ ran: [], refused: [], internal: [] });
+    it("the action's line run again by a job step is the job's: attributed by position, before deduplicating", () => {
+      const log = path.join(dir, 'sudo.log');
+      const line = (t: string, cmd = 'mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner') =>
+        `Nov  4 ${t} : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/${cmd}\n`;
+      // setup's last command, then a job step running the same line in the same second, then the post step
+      const setup = line('19:17:13');
+      const job = line('19:17:13');
+      const post = line('19:20:00', 'cat /etc/resolv.conf');
+      fs.writeFileSync(log, setup + job + post);
+      const u = readSudoUsage(log, {
+        postStartBytes: Buffer.byteLength(setup + job),
+        setupFinal: 'mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner'
+      })!;
+      expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/mv', '/usr/bin/cat']);
+      expect(u.ran.map(c => c.command)).toEqual(['/usr/bin/mv']);
+    });
+
+    it('is undefined for a missing file (unknown, not "no sudo")', () => {
+      expect(readSudoUsage(path.join(dir, 'missing.log'))).toBeUndefined();
     });
   });
 

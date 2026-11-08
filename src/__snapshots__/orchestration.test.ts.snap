@@ -106,7 +106,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"dockerRetained":true,"docker":{"requested":"remove-group","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true}},"dockerEvents":{"since":"<ts>","containers":[]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"allowedDomains":["registry.npmjs.org"],"passthroughDomains":[],"httpFilterSet":false,"dockerRetained":true,"docker":{"requested":"remove-group","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true},"caRestart":true},"dockerEvents":{"since":"<ts>","containers":[]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -413,7 +413,7 @@ $ sudo systemctl stop safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-docker-events --description=safer-runner docker events recorder (analyze) --uid=root --gid=root -p Restart=no -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p PrivateNetwork=yes -p CapabilityBoundingSet= -p ReadWritePaths=/var/log/safer-runner -p StandardOutput=append:/var/log/safer-runner/docker-events.jsonl --setenv=DOCKER_CONFIG=/run/safer-runner/docker-cli-none /usr/bin/docker -H unix:///var/run/docker.sock events --format {{json .}}
 $ systemctl is-active --quiet safer-runner-docker-events [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 512 bytes, sha256:e0aa2fa1b1b3
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 615 bytes, sha256:cc7adffa470f
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -527,7 +527,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"sudoConfig":["/usr/bin/apt-get update","/usr/bin/apt-get install *","/usr/bin/nproc"],"dockerRetained":true,"docker":{"requested":"remove-group","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true}},"dockerEvents":{"since":"<ts>","containers":[]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"sudoConfig":["/usr/bin/apt-get update","/usr/bin/apt-get install *","/usr/bin/nproc"],"allowedDomains":[],"passthroughDomains":[],"httpFilterSet":false,"dockerRetained":true,"docker":{"requested":"remove-group","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true},"caRestart":true},"dockerEvents":{"since":"<ts>","containers":[]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -834,7 +834,7 @@ $ sudo systemctl stop safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-docker-events --description=safer-runner docker events recorder (analyze) --uid=root --gid=root -p Restart=no -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p PrivateNetwork=yes -p CapabilityBoundingSet= -p ReadWritePaths=/var/log/safer-runner -p StandardOutput=append:/var/log/safer-runner/docker-events.jsonl --setenv=DOCKER_CONFIG=/run/safer-runner/docker-cli-none /usr/bin/docker -H unix:///var/run/docker.sock events --format {{json .}}
 $ systemctl is-active --quiet safer-runner-docker-events [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 599 bytes, sha256:253bd7324446
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 682 bytes, sha256:2859c8f67858
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -950,7 +950,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"dockerRetained":false,"docker":{"requested":"remove-group","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":true,"socketAccessible":false}},"failOnTampering":false,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"allowedDomains":[],"passthroughDomains":[],"httpFilterSet":false,"dockerRetained":false,"docker":{"requested":"remove-group","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":true,"socketAccessible":false},"caRestart":false},"failOnTampering":false,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -1227,7 +1227,7 @@ $ sudo chmod 0644 /var/log/safer-runner/selftest.json
 $ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
 $ id -nG runner [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 452 bytes, sha256:dd3a24d1731b
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 536 bytes, sha256:45866d450ad0
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -1340,7 +1340,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"dockerRetained":true,"docker":{"requested":"remove-group","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true}},"dockerEvents":{"since":"<ts>","containers":[]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"allowedDomains":[],"passthroughDomains":[],"httpFilterSet":false,"dockerRetained":true,"docker":{"requested":"remove-group","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true},"caRestart":true},"dockerEvents":{"since":"<ts>","containers":[]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -1647,7 +1647,7 @@ $ sudo systemctl stop safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-docker-events --description=safer-runner docker events recorder (analyze) --uid=root --gid=root -p Restart=no -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p PrivateNetwork=yes -p CapabilityBoundingSet= -p ReadWritePaths=/var/log/safer-runner -p StandardOutput=append:/var/log/safer-runner/docker-events.jsonl --setenv=DOCKER_CONFIG=/run/safer-runner/docker-cli-none /usr/bin/docker -H unix:///var/run/docker.sock events --format {{json .}}
 $ systemctl is-active --quiet safer-runner-docker-events [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 512 bytes, sha256:e0aa2fa1b1b3
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 595 bytes, sha256:de22090dea60
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -1765,7 +1765,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"dockerRetained":true,"docker":{"requested":"stop","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true}},"dockerEvents":{"since":"<ts>","containers":["c0ffee0000000000000000000000000000000000000000000000000000000001"]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"analyze","sudoRetained":false,"allowedDomains":[],"passthroughDomains":[],"httpFilterSet":false,"dockerRetained":true,"docker":{"requested":"stop","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true},"caRestart":true},"dockerEvents":{"since":"<ts>","containers":["c0ffee0000000000000000000000000000000000000000000000000000000001"]},"failOnTampering":false,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,609],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -2072,7 +2072,7 @@ $ sudo systemctl stop safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemctl reset-failed safer-runner-docker-events [ignore-rc] [silent]
 $ sudo systemd-run --unit=safer-runner-docker-events --description=safer-runner docker events recorder (analyze) --uid=root --gid=root -p Restart=no -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p PrivateNetwork=yes -p CapabilityBoundingSet= -p ReadWritePaths=/var/log/safer-runner -p StandardOutput=append:/var/log/safer-runner/docker-events.jsonl --setenv=DOCKER_CONFIG=/run/safer-runner/docker-cli-none /usr/bin/docker -H unix:///var/run/docker.sock events --format {{json .}}
 $ systemctl is-active --quiet safer-runner-docker-events [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 570 bytes, sha256:20a201cb9c89
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 653 bytes, sha256:48a486fdbabc
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -2198,7 +2198,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"dockerRetained":false,"docker":{"requested":"remove-group","access":"group-removed","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":false,"socketAccessible":false}},"failOnTampering":true,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"allowedDomains":["registry.npmjs.org","example.org","*.example.org"],"passthroughDomains":[],"httpFilterSet":true,"dockerRetained":false,"docker":{"requested":"remove-group","access":"group-removed","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":false,"socketAccessible":false},"caRestart":false},"failOnTampering":true,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -2520,7 +2520,7 @@ $ sudo chmod 600 /var/run/docker.sock [ignore-rc]
 $ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
 $ id -nG runner [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 451 bytes, sha256:15b15d3fa474
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 584 bytes, sha256:8db6a8b7aaff
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -2651,7 +2651,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"dockerRetained":false,"docker":{"requested":"remove-group","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":false,"socketAccessible":false}},"failOnTampering":true,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"allowedDomains":["registry.npmjs.org","example.org","*.example.org"],"passthroughDomains":[],"httpFilterSet":true,"dockerRetained":false,"docker":{"requested":"remove-group","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":false,"socketAccessible":false},"caRestart":false},"failOnTampering":true,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -2961,7 +2961,7 @@ $ sudo gpasswd -d runner docker [ignore-rc]
 $ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
 $ id -nG runner [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 452 bytes, sha256:e83a10108392
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 585 bytes, sha256:c7576b44db58
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo chown syslog:adm /var/log/safer-runner/sudo.log
@@ -3091,7 +3091,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"sudoConfig":["/usr/bin/apt-get update","/usr/bin/apt-get install *","/usr/bin/nproc"],"dockerRetained":false,"docker":{"requested":"remove-group","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":false,"socketAccessible":false}},"failOnTampering":true,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"sudoConfig":["/usr/bin/apt-get update","/usr/bin/apt-get install *","/usr/bin/nproc"],"allowedDomains":["registry.npmjs.org","example.org","*.example.org"],"passthroughDomains":[],"httpFilterSet":true,"dockerRetained":false,"docker":{"requested":"remove-group","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":false,"socketAccessible":false},"caRestart":false},"failOnTampering":true,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -3408,7 +3408,7 @@ $ sudo gpasswd -d runner docker [ignore-rc]
 $ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
 $ id -nG runner [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 539 bytes, sha256:da93b60fc6c5
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 672 bytes, sha256:3413958cdc3d
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo chown syslog:adm /var/log/safer-runner/sudo.log
@@ -3543,7 +3543,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"dockerRetained":true,"docker":{"requested":"keep","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true}},"failOnTampering":true,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"allowedDomains":["registry.npmjs.org","example.org","*.example.org"],"passthroughDomains":[],"httpFilterSet":true,"dockerRetained":true,"docker":{"requested":"keep","access":"retained","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":true,"socketAccessible":true},"caRestart":true},"failOnTampering":true,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -3875,7 +3875,7 @@ $ sudo chmod 0644 /var/log/safer-runner/selftest.json
 $ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
 $ id -nG runner [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 435 bytes, sha256:fdc308486b86
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 567 bytes, sha256:9144f3ad93df
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -4006,7 +4006,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":true,"dockerRetained":false,"docker":{"requested":"stop","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":true,"socketAccessible":true}},"failOnTampering":true,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":true,"allowedDomains":["registry.npmjs.org","example.org","*.example.org"],"passthroughDomains":[],"httpFilterSet":true,"dockerRetained":false,"docker":{"requested":"stop","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":true,"socketAccessible":true},"caRestart":false},"failOnTampering":true,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -4286,7 +4286,7 @@ $ sudo systemctl disable docker.service [ignore-rc]
 $ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
 $ id -nG runner [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 441 bytes, sha256:8480cdd765fe
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 574 bytes, sha256:3a96e63b6784
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
@@ -4411,7 +4411,7 @@ MIIBfake3
   }
 }
 ",
-  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"sudoConfig":["/usr/bin/apt-get update","/usr/bin/apt-get install *","/usr/bin/nproc"],"dockerRetained":false,"docker":{"requested":"remove-group","access":"group-removed","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":false,"socketAccessible":false}},"failOnTampering":true,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"sudoConfig":["/usr/bin/apt-get update","/usr/bin/apt-get install *","/usr/bin/nproc"],"allowedDomains":["registry.npmjs.org","example.org","*.example.org"],"passthroughDomains":[],"httpFilterSet":true,"dockerRetained":false,"docker":{"requested":"remove-group","access":"group-removed","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":false,"socketAccessible":false},"caRestart":false},"failOnTampering":true,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
 ",
   "/etc/safer-runner/validation-state.json": "{
   "files": [
@@ -4740,7 +4740,7 @@ $ sudo chmod 600 /var/run/docker.sock [ignore-rc]
 $ systemctl is-active --quiet docker.service [ignore-rc] [silent]
 $ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
 $ id -nG runner [ignore-rc] [silent]
-$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 538 bytes, sha256:2fc0acc638b9
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 671 bytes, sha256:0734c6d4d78d
 $ sudo touch /var/log/safer-runner/sudo.log
 $ sudo chmod 0644 /var/log/safer-runner/sudo.log
 $ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629

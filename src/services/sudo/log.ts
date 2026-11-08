@@ -93,11 +93,8 @@ function joinContinuationLines(content: string): string[] {
   return joined;
 }
 
-/**
- * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
- * entry is matched as one line.
- */
-export function parseSudoLogsFromString(content: string): SudoCommand[] {
+/** Every sudo log entry, in order (wrapped and multi-line entries joined first). */
+export function parseSudoLogEntries(content: string): SudoCommand[] {
   const commands: SudoCommand[] = [];
   for (const line of joinContinuationLines(content)) {
     const cmd = parseSudoLogLine(line);
@@ -105,9 +102,39 @@ export function parseSudoLogsFromString(content: string): SudoCommand[] {
       commands.push(cmd);
     }
   }
+  return commands;
+}
 
-  // Deduplicate and limit to 1000 commands
-  return deduplicateSudoCommands(commands).slice(0, 1000);
+/** The sudo log's entries, deduplicated and limited to 1000. */
+export function parseSudoLogsFromString(content: string): SudoCommand[] {
+  return deduplicateSudoCommands(parseSudoLogEntries(content)).slice(0, 1000);
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * A sudo log timestamp (`Nov  7 12:00:01`, no year, the runner's clock in UTC) as epoch seconds,
+ * in the year that puts it at or before `now` (a log line is never from the future); null if it
+ * does not parse.
+ */
+export function sudoLogSeconds(timestamp: string, now: Date): number | null {
+  const m = timestamp.match(/^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+  const month = m ? MONTHS.indexOf(m[1]) : -1;
+  if (!m || month < 0) return null;
+  const at = (year: number) => Date.UTC(year, month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
+  const year = now.getUTCFullYear();
+  return at(year) > now.getTime() / 1000 + 86400 ? at(year - 1) : at(year);
+}
+
+/**
+ * Where the action's own sudo is in the log, by entry position (the log is in order): entries up
+ * to `setupEnd` (setup's last sudo command; -1 when it was not found) and from `postStart` (the
+ * first entry after the log's size when the post step began its own sudo). Best effort: a
+ * background process the job left running can still run sudo during the post step.
+ */
+export interface ActionSudoBounds {
+  setupEnd: number;
+  postStart: number;
 }
 
 /**
@@ -115,7 +142,7 @@ export function parseSudoLogsFromString(content: string): SudoCommand[] {
  * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
  * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
  */
-function isInternal(cmd: SudoCommand, internal: Set<string>): boolean {
+export function isInternal(cmd: SudoCommand, internal: Set<string>): boolean {
   const withArgs = (c: string) => (cmd.args ? `${c} ${cmd.args}` : c);
   const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
   if (match) {
@@ -133,14 +160,45 @@ export interface SudoUsage {
   internal: SudoCommand[];
 }
 
-/** Split parsed sudo log entries by who ran them and whether they were allowed. */
-export function classifySudoCommands(commands: SudoCommand[], internalCommands: string[]): SudoUsage {
+/**
+ * Split parsed sudo log entries (in log order) by who ran them and whether they were allowed.
+ * With `bounds`, a command is the action's own only if it matches one of its command lines AND
+ * sits where the action ran sudo (setup, or the post step); the same line run by a job step is the
+ * job's. Without them (an older setup), by the command line alone.
+ */
+export function classifySudoCommands(
+  commands: SudoCommand[],
+  internalCommands: string[],
+  bounds?: ActionSudoBounds
+): SudoUsage {
   const internal = new Set(internalCommands);
   const usage: SudoUsage = { ran: [], refused: [], internal: [] };
-  for (const cmd of commands) {
+  const byAction = (i: number) => !bounds || i <= bounds.setupEnd || i >= bounds.postStart;
+  commands.forEach((cmd, i) => {
     if (cmd.denied) usage.refused.push(cmd);
-    else if (isInternal(cmd, internal)) usage.internal.push(cmd);
+    else if (isInternal(cmd, internal) && byAction(i)) usage.internal.push(cmd);
     else usage.ran.push(cmd);
-  }
+  });
   return usage;
+}
+
+/**
+ * Setup's last sudo command in the log: the first allowed entry of `line` (setup runs before any
+ * job step, so its own is the first), at most `slack` seconds after `notBefore` when both times
+ * are known. -1 when it is not there (then nothing before the post step is the action's).
+ */
+export function setupEndIndex(
+  commands: SudoCommand[],
+  line: string,
+  notBefore?: Date,
+  slack = 300,
+  now: Date = new Date()
+): number {
+  const set = new Set([line]);
+  const latest = notBefore ? notBefore.getTime() / 1000 + slack : Infinity;
+  return commands.findIndex(c => {
+    if (c.denied || !isInternal(c, set)) return false;
+    const at = sudoLogSeconds(c.timestamp, now);
+    return at === null || at <= latest;
+  });
 }

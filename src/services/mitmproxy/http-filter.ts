@@ -77,11 +77,11 @@ export function summarizeHttpFilter(records: FlowRecord[], suggest?: Suggester):
 }
 
 /**
- * The suggestion as the `http-filter` input, written by the `yaml` library that reads the input
- * (inputs.ts parseHttpFilter), so a pasted suggestion reads back as printed. Names, path segments
- * and methods are also checked before this (proxy/suggest.py, src/report/suggest.ts).
+ * The suggestion as the `http-filter` input's value, written by the `yaml` library that reads the
+ * input (inputs.ts parseHttpFilter), so a pasted suggestion reads back as printed. Names, path
+ * segments and methods are also checked before this (proxy/suggest.py, src/report/suggest.ts).
  */
-export function httpFilterYaml(s: HttpFilterSuggestion): string {
+export function httpFilterValue(s: HttpFilterSuggestion): string {
   const hosts = new YAMLMap();
   for (const h of s.hosts) {
     const rules = new YAMLMap();
@@ -95,6 +95,10 @@ export function httpFilterYaml(s: HttpFilterSuggestion): string {
   }
   const doc = new Document();
   doc.contents = hosts;
-  const input = doc.toString({ lineWidth: 0 });
-  return stringify({ 'http-filter': input }, { blockQuote: 'literal', lineWidth: 0 }).replace(/\n$/, '');
+  return doc.toString({ lineWidth: 0 });
+}
+
+/** The suggestion as an `http-filter:` input block. */
+export function httpFilterYaml(s: HttpFilterSuggestion): string {
+  return stringify({ 'http-filter': httpFilterValue(s) }, { blockQuote: 'literal', lineWidth: 0 }).replace(/\n$/, '');
 }
