@@ -755,6 +755,15 @@ describe('enforce labelling (review H2)', () => {
     expect(buildReport({ ...base, mode: 'analyze', dockerRetained: true })).not.toContain('ADVISORY');
   });
 
+  it('analyze: the docker policy is shown as not applied, with the state as it is', () => {
+    const md = buildReport({ ...base, mode: 'analyze', docker: { requested: 'remove-group', access: 'retained' } });
+    expect(md).toContain('docker unchanged (analyze)');
+    expect(md).toContain(
+      '**Docker** — policy `docker: remove-group` (analyze: evaluated, not applied); verified at setup: runner user can use docker'
+    );
+    expect(md).not.toContain('docker retained');
+  });
+
   it('reports the verified docker state, not just the input (G4)', () => {
     const removed = buildReport({
       ...base,

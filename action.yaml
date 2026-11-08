@@ -87,13 +87,13 @@ inputs:
     required: false
   docker:
     description: >-
-      Override docker access for the runner user (docker is root-equivalent: a step can use it to
-      remove the egress controls). "keep": leave docker as it is. "remove-group": remove the
-      runner user from the docker group and lock the socket to root. "stop": stop and disable the
-      docker daemon. `enforce` removes docker access ("remove-group"); `analyze` keeps it
-      ("keep"). In enforce, "keep" makes the job "enforce (ADVISORY)", and a removal that does not
-      take effect (verified on the runner) fails the job. Leave unset to follow the mode (unset
-      differs from an explicit value).
+      Docker access for the runner user (docker is root-equivalent: a step can use it to remove
+      the egress controls). "remove-group" (unset): remove the runner user from the docker group
+      and lock the socket to root. "stop": stop and disable the docker daemon. "keep": leave
+      docker as it is, which makes `enforce` "enforce (ADVISORY)". `enforce` applies it, and a
+      removal that does not take effect (verified on the runner) fails the job; `analyze` never
+      changes docker, it reports the job's use of docker that enforce would block and suggests a
+      setting.
     required: false
   fail-on-tampering:
     description: >-

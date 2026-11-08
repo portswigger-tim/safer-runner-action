@@ -5,7 +5,7 @@
 
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import { DOCKER_DAEMON_JSON } from '../../constants';
+import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants';
 import type { SelfTestsRun } from '../../setup/selftest';
 import { recordingHost } from '../../system/testing';
 import type { TrustInstalled } from '../mitmproxy/trust';
@@ -20,16 +20,28 @@ import {
   isRunnerInDockerGroup,
   mergeLiveRestore,
   parseContainerAddresses,
+  planDocker,
   prepare,
   readDockerState,
-  stopDockerService
+  observeDocker,
+  startEventRecorder,
+  stopDockerService,
+  type ApplyingDocker,
+  type DockerPlan,
+  type DockerPrepared
 } from '.';
 
 jest.mock('@actions/core');
 jest.mock('fs', () => {
   const actual = jest.requireActual('fs');
-  return { ...actual, existsSync: jest.fn(actual.existsSync), accessSync: jest.fn(actual.accessSync) };
+  return {
+    ...actual,
+    existsSync: jest.fn(actual.existsSync),
+    accessSync: jest.fn(actual.accessSync),
+    readFileSync: jest.fn(actual.readFileSync)
+  };
 });
+const mockRead = fs.readFileSync as unknown as jest.Mock;
 const mockExists = fs.existsSync as unknown as jest.Mock;
 const mockAccess = fs.accessSync as unknown as jest.Mock;
 const actualFs = jest.requireActual('fs');
@@ -37,6 +49,9 @@ const actualFs = jest.requireActual('fs');
 /** tokens for tests that call a step directly */
 const TRUST = Object.freeze({}) as TrustInstalled;
 const SELF_TESTS = Object.freeze({}) as SelfTestsRun;
+/** the access changes, as only planDocker() makes them (enforce) */
+const REMOVE_GROUP = planDocker('enforce', 'remove-group').apply;
+const STOP = planDocker('enforce', 'stop').apply;
 
 interface World {
   inGroup: boolean;
@@ -96,7 +111,7 @@ describe('docker access (docker input)', () => {
   describe('disableDockerForRunner (docker: remove-group)', () => {
     it('removes the runner from the group and locks the socket to root', async () => {
       const { host, calls } = runner();
-      expect(await disableDockerForRunner(host)).toEqual([]);
+      expect(await disableDockerForRunner(host, REMOVE_GROUP)).toEqual([]);
       expect(sudoCalls(calls)).toEqual([
         `gpasswd -d ${RUNNER_USERNAME} ${DOCKER_GROUP} [ignore-rc]`,
         `chown root:root ${DOCKER_SOCKET} [ignore-rc]`,
@@ -107,20 +122,20 @@ describe('docker access (docker input)', () => {
 
     it('is idempotent: skips the group change and a missing socket', async () => {
       const { host, calls } = runner({ inGroup: false, socket: false });
-      expect(await disableDockerForRunner(host)).toEqual([]);
+      expect(await disableDockerForRunner(host, REMOVE_GROUP)).toEqual([]);
       expect(sudoCalls(calls)).toEqual([]);
     });
 
     it('reports failed steps instead of swallowing them (G4)', async () => {
       const { host } = runner({ failing: /gpasswd/ });
-      expect(await disableDockerForRunner(host)).toEqual([`sudo gpasswd -d runner docker exited 3`]);
+      expect(await disableDockerForRunner(host, REMOVE_GROUP)).toEqual([`sudo gpasswd -d runner docker exited 3`]);
     });
   });
 
   describe('stopDockerService (docker: stop)', () => {
     it('stops, then disables, the socket and the service', async () => {
       const { host, calls } = runner();
-      expect(await stopDockerService(host)).toEqual([]);
+      expect(await stopDockerService(host, STOP)).toEqual([]);
       expect(sudoCalls(calls)).toEqual([
         'systemctl stop docker.socket [ignore-rc]',
         'systemctl stop docker.service [ignore-rc]',
@@ -131,7 +146,7 @@ describe('docker access (docker input)', () => {
 
     it('reports failed steps instead of swallowing them (G4)', async () => {
       const { host } = runner({ failing: /systemctl (stop|disable)/ });
-      expect(await stopDockerService(host)).toHaveLength(4);
+      expect(await stopDockerService(host, STOP)).toHaveLength(4);
     });
   });
 
@@ -185,9 +200,11 @@ describe('docker access (docker input)', () => {
 });
 
 describe('applyAccessPolicy (G4: verified by observation)', () => {
+  const enforce = (docker: 'keep' | 'remove-group' | 'stop') => planDocker('enforce', docker);
+
   it('remove-group: records the verified state', async () => {
     const { host } = runner();
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'remove-group' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, enforce('remove-group'), SELF_TESTS);
     expect(r).toEqual({
       requested: 'remove-group',
       access: 'group-removed',
@@ -198,42 +215,47 @@ describe('applyAccessPolicy (G4: verified by observation)', () => {
 
   it('stop: records the daemon as not running', async () => {
     const { host, calls } = runner();
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, enforce('stop'), SELF_TESTS);
     expect(r.access).toBe('not-running');
     expect(calls.some(c => c.includes('gpasswd'))).toBe(false);
   });
 
   it.each(['remove-group', 'stop'] as const)('enforce: fails closed when %s did not take', async docker => {
     const { host } = runner({ failing: /gpasswd|chmod|chown|systemctl (stop|disable)/ });
-    await expect(applyAccessPolicy(host, { mode: 'enforce', docker }, SELF_TESTS)).rejects.toThrow(
+    await expect(applyAccessPolicy(host, enforce(docker), SELF_TESTS)).rejects.toThrow(
       new RegExp(`docker: ${docker} did not take effect.*exited 3`)
     );
   });
 
   it('enforce: fails closed even when every command "succeeded" but access remains', async () => {
     const { host } = runner({ sticky: true });
-    await expect(applyAccessPolicy(host, { mode: 'enforce', docker: 'remove-group' }, SELF_TESTS)).rejects.toThrow(
-      /still use docker/
-    );
+    await expect(applyAccessPolicy(host, enforce('remove-group'), SELF_TESTS)).rejects.toThrow(/still use docker/);
   });
 
-  it('analyze: a failed removal warns and never breaks the job', async () => {
-    const { host } = runner({ sticky: true, failing: /gpasswd/ });
-    const r = await applyAccessPolicy(host, { mode: 'analyze', docker: 'remove-group' }, SELF_TESTS);
-    expect(r.access).toBe('retained');
-    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('did not take effect'));
-  });
+  it.each(['keep', 'remove-group', 'stop'] as const)(
+    'analyze never changes docker access (docker: %s): it only reads the state',
+    async docker => {
+      const plan = planDocker('analyze', docker);
+      expect(plan).toEqual({ mode: 'analyze', policy: docker, applied: 'keep', apply: { removal: null } });
+      const { host, calls, w } = runner();
+      const r = await applyAccessPolicy(host, plan, SELF_TESTS);
+      expect(r).toMatchObject({ requested: docker, access: 'retained' });
+      expect(sudoCalls(calls)).toEqual([]);
+      expect(w).toMatchObject({ inGroup: true, daemon: true, socketUnit: true, locked: false });
+      expect(core.warning).not.toHaveBeenCalled();
+    }
+  );
 
   it('a step failure with access verifiably gone is only a warning', async () => {
     const { host } = runner({ failing: /systemctl disable/ });
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, enforce('stop'), SELF_TESTS);
     expect(r.access).toBe('not-running');
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('systemctl disable docker.socket exited 3'));
   });
 
   it('enforce + keep is ADVISORY', async () => {
     const { host, calls } = runner();
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'keep' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, enforce('keep'), SELF_TESTS);
     expect(calls.some(c => c.includes('gpasswd'))).toBe(false);
     expect(r.access).toBe('retained');
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('ADVISORY'), {
@@ -241,17 +263,42 @@ describe('applyAccessPolicy (G4: verified by observation)', () => {
     });
   });
 
-  it('analyze + keep says nothing', async () => {
-    const { host } = runner();
-    await applyAccessPolicy(host, { mode: 'analyze', docker: 'keep' }, SELF_TESTS);
-    expect(core.warning).not.toHaveBeenCalled();
-  });
-
   it('needs the self-tests first (a compile-time order check)', () => {
     const { host } = runner();
     // @ts-expect-error - changing docker access before the self-tests ran does not compile
-    const early = () => applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, {});
+    const early = () => applyAccessPolicy(host, enforce('stop'), {});
     expect(early).toBeInstanceOf(Function);
+  });
+
+  it('only planDocker() can make an access change (a compile-time check)', () => {
+    const { host } = runner();
+    // @ts-expect-error - a plain object is not an access change (analyze never makes one)
+    const forged = () => stopDockerService(host, { removal: 'stop' });
+    // @ts-expect-error - nor is an analyze plan's, even asserted non-null (it is an object, not null)
+    const fromAnalyze = () => disableDockerForRunner(host, planDocker('analyze', 'remove-group').apply!);
+    const plan: DockerPlan = planDocker('enforce', 'remove-group');
+    // @ts-expect-error - nor a plan's whose mode the caller does not know, without checking `removal`
+    const unchecked = () => disableDockerForRunner(host, plan.apply!);
+    expect([forged, fromAnalyze, unchecked]).toHaveLength(3);
+  });
+
+  it('a plan says its own mode: one changed by hand to analyze is refused before any command', async () => {
+    const { host, calls } = runner();
+    const handMade: DockerPlan = { ...planDocker('enforce', 'stop'), mode: 'analyze' };
+    await expect(applyAccessPolicy(host, handMade, SELF_TESTS)).rejects.toThrow('analyze never changes docker access');
+    expect(calls).toEqual([]);
+  });
+
+  it('a change that is not the one asked for is refused at run time too, before any command', async () => {
+    const { host, calls } = runner();
+    const noChange = planDocker('analyze', 'stop').apply as unknown as ApplyingDocker;
+    await expect(stopDockerService(host, noChange)).rejects.toThrow('docker: stop without an enforce plan');
+    await expect(disableDockerForRunner(host, noChange)).rejects.toThrow(
+      'docker: remove-group without an enforce plan'
+    );
+    await expect(stopDockerService(host, REMOVE_GROUP)).rejects.toThrow('without an enforce plan');
+    await expect(disableDockerForRunner(host, STOP)).rejects.toThrow('without an enforce plan');
+    expect(calls).toEqual([]);
   });
 });
 
@@ -318,7 +365,110 @@ describe('prepare (F1: dockerd trusts the CA before the firewall)', () => {
   });
 });
 
+describe('startEventRecorder (analyze: the use of docker after setup)', () => {
+  const PREPARED = Object.freeze({}) as DockerPrepared;
+  beforeEach(() => jest.useFakeTimers({ now: new Date('2026-11-08T12:00:00Z') }));
+  afterEach(() => jest.useRealTimers());
+
+  it('starts the recorder (never restarted, no network) and notes the containers already running', async () => {
+    const { host, calls } = recordingHost(
+      () => 0,
+      l => (l === 'sudo docker ps -q --no-trunc' ? 'c1\nc2\n' : '')
+    );
+    expect(await startEventRecorder(host, PREPARED)).toEqual({
+      since: '2026-11-08T12:00:00.000Z',
+      containers: ['c1', 'c2']
+    });
+    const run = calls.find(c => c.startsWith(`sudo systemd-run --unit=${DOCKER_EVENTS_UNIT} `))!;
+    expect(run).toContain(' -p Restart=no ');
+    expect(run).not.toContain('Restart=always');
+    expect(run).toContain(' -p PrivateNetwork=yes ');
+    expect(run).toContain(` -p StandardOutput=append:${DOCKER_EVENTS_LOG} `);
+    expect(run).toMatch(/ \/usr\/bin\/docker -H unix:\/\/\/var\/run\/docker\.sock events --format \{\{json \.\}\}$/);
+    expect(calls.indexOf(`sudo touch ${DOCKER_EVENTS_LOG}`)).toBeLessThan(calls.indexOf(run));
+  });
+
+  it('dockerd not running: records nothing, and never connects (socket activation would start it)', async () => {
+    const { host, calls } = runner({ daemon: false });
+    expect(await startEventRecorder(host, PREPARED)).toBeNull();
+    expect(calls).toEqual(['systemctl is-active --quiet docker.service [ignore-rc] [silent]']);
+  });
+
+  it('a recorder that does not start is a warning, never a setup failure', async () => {
+    const { host } = recordingHost(l => (l === `systemctl is-active --quiet ${DOCKER_EVENTS_UNIT}` ? 3 : 0));
+    const done = startEventRecorder(host, PREPARED);
+    await jest.advanceTimersByTimeAsync(6_000);
+    expect(await done).toBeNull();
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('docker events: not recorded'));
+  });
+
+  it('needs dockerd settled first (a compile-time order check)', () => {
+    const { host } = runner();
+    // @ts-expect-error - recording before dockerd restarted for the CA does not compile
+    const early = () => startEventRecorder(host, {});
+    expect(early).toBeInstanceOf(Function);
+  });
+});
+
+describe('observeDocker (analyze, post step)', () => {
+  const at = '2026-11-08T12:00:00.000Z';
+
+  it('no recording, dockerd running: asks it for what it still holds since setup (partial)', async () => {
+    const { host, calls } = recordingHost(
+      () => 0,
+      l =>
+        l.startsWith('docker events ')
+          ? JSON.stringify({ Type: 'image', Action: 'pull', Actor: { ID: 'alpine:3.20', Attributes: {} } }) + '\n'
+          : ''
+    );
+    expect(await observeDocker(host, undefined, at, 'retained')).toEqual({
+      uses: { image: 1 },
+      images: ['alpine:3.20'],
+      services: 0,
+      partial: true
+    });
+    expect(calls).toContainEqual(
+      expect.stringMatching(/^docker events --since 1794139200 --until \d+ --format \{\{json \.\}\}/)
+    );
+  });
+
+  it('no recording, dockerd stopped: never asks (that would start it through socket activation)', async () => {
+    const { host, calls } = runner({ daemon: false });
+    expect(await observeDocker(host, undefined, at, 'retained')).toMatchObject({ uses: {}, partial: true });
+    expect(calls.some(c => c.startsWith('docker '))).toBe(false);
+  });
+
+  it('recorded execs, dockerd stopped since: never asks it for healthchecks (it would start)', async () => {
+    const exec = JSON.stringify({ Type: 'container', Action: 'exec_create: /bin/sh -c x', Actor: { ID: 'c1' } });
+    mockRead.mockImplementation((p: string, enc?: unknown) =>
+      p === DOCKER_EVENTS_LOG ? exec + '\n' : actualFs.readFileSync(p, enc)
+    );
+    // the recorder ended with dockerd
+    const { host, calls } = runner({ daemon: false, failing: /safer-runner-docker-events/ });
+    const o = await observeDocker(host, { since: at, containers: ['c1'] }, at, 'retained');
+    expect(o).toMatchObject({ uses: { exec: 1 }, services: 1, partial: true });
+    expect(calls.some(c => c.startsWith('docker '))).toBe(false);
+    expect(calls).toContain('systemctl is-active --quiet docker.service [ignore-rc] [silent]');
+  });
+
+  it('docker not running at setup or now: nothing to miss, so not partial', async () => {
+    const { host } = runner({ daemon: false, socketUnit: false });
+    expect(await observeDocker(host, undefined, at, 'not-running')).toEqual({
+      uses: {},
+      images: [],
+      services: 0,
+      partial: false
+    });
+  });
+});
+
 describe('containerAddresses', () => {
+  it('never asks a stopped dockerd (socket activation would start it)', async () => {
+    const { host, calls } = runner({ daemon: false });
+    expect(await containerAddresses(host)).toEqual(new Map());
+    expect(calls).toEqual(['systemctl is-active --quiet docker.service [ignore-rc] [silent]']);
+  });
+
   it('shows addresses only when the runner has lost docker access', async () => {
     const { host } = recordingHost(l => (l.startsWith('docker ') ? 1 : 0));
     expect(await containerAddresses(host)).toEqual(new Map());

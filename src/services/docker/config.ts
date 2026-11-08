@@ -1,11 +1,85 @@
 /**
- * Docker's pure parts: the observed-access classification, the daemon.json merge for the CA
- * restart (F1), and the container address parser for the report. No I/O.
+ * Docker's pure parts: the access plan (what the docker input changes, by mode), the
+ * observed-access classification, the daemon.json merge for the CA restart (F1), and the
+ * container address parser for the report. No I/O.
  */
+
+import type { DockerPolicy } from '../../config/inputs';
+import { DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT, LOG_DIR } from '../../constants';
+import type { Mode } from '../../policy';
+import type { DockerEvent } from '../../report/logs/docker-events';
+import type { UnitSpec } from '../../system/types';
+import { HARDENING } from '../../system/unit';
 
 export const RUNNER_USERNAME = 'runner';
 export const DOCKER_GROUP = 'docker';
 export const DOCKER_SOCKET = '/var/run/docker.sock';
+
+declare const applyingDocker: unique symbol;
+/**
+ * A change to docker access that setup makes: only in enforce, and only for a policy that
+ * removes access. Minted only by planDocker(), so analyze changing docker access does not
+ * compile (the functions that change it take one).
+ */
+export type ApplyingDocker = { readonly removal: Exclude<DockerPolicy, 'keep'>; readonly [applyingDocker]: true };
+
+declare const noDockerChange: unique symbol;
+/**
+ * No change to docker access (analyze, or keep). An object, not null, so a non-null assertion
+ * (`plan.apply!`) cannot turn it into an ApplyingDocker: getting one out of a plan takes a check
+ * of `removal`.
+ */
+export type NoDockerChange = { readonly removal: null; readonly [noDockerChange]: true };
+const NO_CHANGE = Object.freeze({ removal: null }) as NoDockerChange;
+
+export interface DockerPlan<A extends ApplyingDocker | NoDockerChange = ApplyingDocker | NoDockerChange> {
+  /** the mode the plan was made for: applyAccessPolicy takes it from here, never separately */
+  mode: Mode;
+  /** the docker policy: the input, or remove-group when unset */
+  policy: DockerPolicy;
+  /** what setup leaves in place: the policy in enforce; analyze never changes docker (keep) */
+  applied: DockerPolicy;
+  /** the change setup makes: only in enforce, for a policy that removes access */
+  apply: A;
+}
+
+/**
+ * The docker policy as setup applies it. enforce applies it; analyze never changes docker access
+ * (it evaluates the policy in the post step instead), so docker stays usable and is treated as
+ * `keep` (the CA restart and the container rules follow from that).
+ */
+export function planDocker(mode: 'analyze', policy: DockerPolicy): DockerPlan<NoDockerChange>;
+export function planDocker(mode: 'enforce', policy: Exclude<DockerPolicy, 'keep'>): DockerPlan<ApplyingDocker>;
+export function planDocker(mode: Mode, policy: DockerPolicy): DockerPlan;
+export function planDocker(mode: Mode, policy: DockerPolicy): DockerPlan {
+  if (mode !== 'enforce' || policy === 'keep') return { mode, policy, applied: 'keep', apply: NO_CHANGE };
+  return { mode, policy, applied: policy, apply: Object.freeze({ removal: policy }) as ApplyingDocker };
+}
+
+/**
+ * analyze: the docker events recorder. It only subscribes (`docker events`) and appends each
+ * event to DOCKER_EVENTS_LOG, so the post step sees every use of docker after setup (dockerd
+ * itself keeps only the latest events). Never restarted: reconnecting to a stopped daemon
+ * would start it through socket activation. No network, no capabilities; the docker CLI reads no
+ * config (no context can point it elsewhere) and talks to the socket named here.
+ */
+export function eventRecorderUnit(): UnitSpec {
+  return {
+    unit: DOCKER_EVENTS_UNIT,
+    description: 'safer-runner docker events recorder (analyze)',
+    user: 'root',
+    restart: 'no',
+    props: [
+      ...HARDENING,
+      'PrivateNetwork=yes',
+      'CapabilityBoundingSet=',
+      `ReadWritePaths=${LOG_DIR}`,
+      `StandardOutput=append:${DOCKER_EVENTS_LOG}`
+    ],
+    env: { DOCKER_CONFIG: '/run/safer-runner/docker-cli-none' },
+    argv: ['/usr/bin/docker', '-H', `unix://${DOCKER_SOCKET}`, 'events', '--format', '{{json .}}']
+  };
+}
 
 /** Docker access as observed on the runner (not as requested). */
 export interface DockerState {
@@ -65,4 +139,115 @@ export function parseContainerAddresses(output: string): Map<string, string> {
     for (const ip of ips) if (ip && !out.has(ip)) out.set(ip, name);
   }
   return out;
+}
+
+/** A kind of docker use the job made after setup: each one fails once enforce removes docker. */
+export type DockerUse = 'container' | 'exec' | 'image' | 'build' | 'network' | 'volume' | 'other';
+export const DOCKER_USES: DockerUse[] = ['container', 'exec', 'image', 'build', 'network', 'volume', 'other'];
+
+/** Container actions dockerd makes on its own (no client asked): not a use of docker. */
+const DAEMON_ACTIONS = new Set(['die', 'oom', 'exec_die', 'exec_detach', 'health_status']);
+/** What dockerd does on its own when a container exits: it leaves its networks and volumes. */
+const DAEMON_TEARDOWN: Record<string, string> = { network: 'disconnect', volume: 'unmount' };
+
+/**
+ * The commands a container's healthcheck runs, as dockerd names them in its exec events
+ * (`exec_create: <entrypoint> <args>`). `test` and `shell` are the container's
+ * Config.Healthcheck.Test and Config.Shell.
+ */
+export function healthcheckCommands(test: unknown, shell: unknown): string[] {
+  if (!Array.isArray(test) || !test.every(t => typeof t === 'string')) return [];
+  const [kind, ...rest] = test as string[];
+  if (kind === 'CMD') return [rest.join(' ').trim()];
+  if (kind !== 'CMD-SHELL' || rest.length !== 1) return [];
+  const sh =
+    Array.isArray(shell) && shell.length && shell.every(t => typeof t === 'string') ? shell : ['/bin/sh', '-c'];
+  return [[...sh, rest[0]].join(' ').trim()];
+}
+
+export interface DockerObserved {
+  /** the job's use of docker after setup: kind -> events */
+  uses: Partial<Record<DockerUse, number>>;
+  /** images the job used (as docker names them; the report sanitises them) */
+  images: string[];
+  /** containers already running at setup (service containers) */
+  services: number;
+  /** some use may be missing: the recording did not cover the whole job */
+  partial: boolean;
+}
+
+/**
+ * The job's use of docker in the events after setup. Not a use: what dockerd does on its own
+ * (a container exiting and leaving its networks and volumes, its healthcheck and health status,
+ * its own reload). Read-only calls (`docker ps`, `logs`, `inspect`, `login`) leave no event. `healthchecks` maps
+ * a container to its healthcheck commands (healthcheckCommands): an exec of exactly that is the
+ * healthcheck, any other exec (a step's `docker exec`) is a use.
+ */
+export function classifyDockerEvents(
+  events: readonly DockerEvent[],
+  healthchecks: ReadonlyMap<string, readonly string[]> = new Map()
+): Pick<DockerObserved, 'uses' | 'images'> {
+  const uses: Partial<Record<DockerUse, number>> = {};
+  const images: string[] = [];
+  const add = (k: DockerUse) => (uses[k] = (uses[k] ?? 0) + 1);
+  for (const e of events) {
+    if (e.type === 'daemon' || DAEMON_TEARDOWN[e.type] === e.action) continue;
+    if (e.type === 'container') {
+      if (DAEMON_ACTIONS.has(e.action)) continue;
+      if (e.action.startsWith('exec_')) {
+        if (e.command !== undefined && healthchecks.get(e.id)?.includes(e.command.trim())) continue;
+        add('exec');
+      } else add('container');
+    } else if (e.type === 'image') add('image');
+    else if (e.type === 'builder') add('build');
+    else if (e.type === 'network') add('network');
+    else if (e.type === 'volume') add('volume');
+    else add('other');
+    if (e.image && !images.includes(e.image)) images.push(e.image);
+  }
+  return { uses, images };
+}
+
+/** The docker setting to run this job under enforce: report only, never applied. */
+export interface DockerSuggestion {
+  input: 'docker';
+  value: DockerPolicy;
+  /** the value keeps docker (root-equivalent): enforce would be ADVISORY */
+  advisory: boolean;
+  /** the value differs from the job's policy */
+  change: boolean;
+}
+
+export interface DockerEvaluation {
+  /** the uses the policy would block in enforce (remove-group, stop): kind -> events */
+  wouldBlock: Partial<Record<DockerUse, number>>;
+  /** stop: the service containers it would stop */
+  wouldStop: number;
+  /** the least docker access that breaks nothing observed */
+  fits: DockerPolicy;
+  suggestion: DockerSuggestion;
+}
+
+/**
+ * Analyze: what the docker policy would break in enforce, and the setting to suggest. Any use of
+ * docker after setup needs `keep` (docker has no allowlist), which makes enforce ADVISORY; a
+ * policy that would break nothing is kept as it is. Never suggests `stop` over the default:
+ * `remove-group` already takes docker from the job.
+ */
+export function evaluateDocker(policy: DockerPolicy, observed: DockerObserved): DockerEvaluation {
+  const used = DOCKER_USES.some(k => (observed.uses[k] ?? 0) > 0);
+  const wouldBlock = policy === 'keep' ? {} : { ...observed.uses };
+  const wouldStop = policy === 'stop' ? observed.services : 0;
+  const fits: DockerPolicy = used ? 'keep' : observed.services ? 'remove-group' : 'stop';
+  const value: DockerPolicy = used
+    ? 'keep'
+    : policy === 'keep' || (policy === 'stop' && observed.services)
+      ? 'remove-group'
+      : policy;
+  return {
+    wouldBlock,
+    wouldStop,
+    fits,
+    suggestion: { input: 'docker', value, advisory: value === 'keep', change: value !== policy }
+  };
 }

@@ -35,24 +35,22 @@ describe('resolveDisableSudo (review H2: the policy removes sudo by default; the
   });
 });
 
-describe('resolveDocker (enforce removes docker by default)', () => {
-  it('defaults to remove-group in enforce and keep in analyze', () => {
-    expect(resolveDocker('', 'enforce')).toEqual(['remove-group', true]);
-    expect(resolveDocker('  ', 'enforce')).toEqual(['remove-group', true]);
-    expect(resolveDocker('', 'analyze')).toEqual(['keep', true]);
+describe('resolveDocker (the policy removes docker by default, in either mode)', () => {
+  it('defaults to remove-group (the mode decides whether it is applied: planDocker)', () => {
+    expect(resolveDocker('')).toEqual(['remove-group', true]);
+    expect(resolveDocker('  ')).toEqual(['remove-group', true]);
   });
 
-  it('an explicit value always wins, in either mode', () => {
-    expect(resolveDocker('keep', 'enforce')).toEqual(['keep', false]);
-    expect(resolveDocker('stop', 'enforce')).toEqual(['stop', false]);
-    expect(resolveDocker(' Remove-Group ', 'analyze')).toEqual(['remove-group', false]);
-    expect(resolveDocker('stop', 'analyze')).toEqual(['stop', false]);
+  it('an explicit value always wins', () => {
+    expect(resolveDocker('keep')).toEqual(['keep', false]);
+    expect(resolveDocker('stop')).toEqual(['stop', false]);
+    expect(resolveDocker(' Remove-Group ')).toEqual(['remove-group', false]);
   });
 
   it('rejects the old boolean spellings and anything else', () => {
-    expect(() => resolveDocker('true', 'enforce')).toThrow(/docker must be one of keep, remove-group, stop/);
-    expect(() => resolveDocker('false', 'enforce')).toThrow();
-    expect(() => resolveDocker('disable', 'enforce')).toThrow();
+    expect(() => resolveDocker('true')).toThrow(/docker must be one of keep, remove-group, stop/);
+    expect(() => resolveDocker('false')).toThrow();
+    expect(() => resolveDocker('disable')).toThrow();
   });
 });
 
@@ -120,12 +118,13 @@ describe('readInputs', () => {
     });
   });
 
-  it('analyze with nothing set: the sudo policy still removes sudo (analyze only evaluates it)', () => {
+  it('analyze with nothing set: the sudo and docker policies still remove them (analyze only evaluates them)', () => {
     inputs({});
     expect(readInputs()).toMatchObject({
       mode: 'analyze',
       disableSudo: true,
-      docker: 'keep',
+      docker: 'remove-group',
+      dockerDefaulted: true,
       failOnTampering: false
     });
   });

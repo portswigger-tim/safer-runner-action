@@ -7,7 +7,7 @@
  *
  * Each scenario records the ordered transcript of every command, fetch, DNS lookup and exported
  * variable, plus the files setup left behind, and snapshots both. On top of the snapshots, the
- * setup and post-step ordering rules (L1-L24, see setupInvariants) are checked as executable
+ * setup and post-step ordering rules (L1-L29, see setupInvariants) are checked as executable
  * invariants, and a mutation check proves each rule fails when its order is broken.
  */
 
@@ -197,6 +197,8 @@ class FakeHost {
   flavour: 'sudo' | 'sudo-rs' = 'sudo';
   docker = { active: true, dockerUser: true, inGroup: true, socketLocked: false, containers: [] as string[] };
   users = new Set<string>();
+  /** transient units started (systemd-run) */
+  units = new Set<string>();
   proxyUp = false;
   dnsUp = false;
   sudoLogging = false;
@@ -370,6 +372,7 @@ class FakeHost {
         return this.systemctl(a);
       case 'systemd-run': {
         const unit = a.find(x => x.startsWith('--unit='))?.slice(7);
+        if (unit) this.units.add(unit);
         if (unit === constants.PROXY_UNIT) {
           this.proxyUp = true;
           // the addon's own startup record (python json.dumps spacing)
@@ -411,7 +414,7 @@ class FakeHost {
     const [, verb, ...rest] = a;
     const unit = rest.filter(x => !x.startsWith('-'))[0];
     const dockerUnit = unit === 'docker' || unit === 'docker.service' || unit === 'docker.socket';
-    if (verb === 'is-active') return { code: dockerUnit && this.docker.active ? 0 : 3 };
+    if (verb === 'is-active') return { code: (dockerUnit && this.docker.active) || this.units.has(unit) ? 0 : 3 };
     if (verb === 'stop' && dockerUnit) this.docker.active = false;
     if (verb === 'restart' && unit === 'rsyslog' && this.files.has(SUDO_LOGGING_RSYSLOG_FILE)) this.sudoLogging = true;
     return { code: 0 };
@@ -446,6 +449,14 @@ class FakeHost {
         code: 0,
         stdout: JSON.stringify([{ Driver: 'bridge', IPAM: { Config: [{ Subnet: '172.17.0.0/16' }] } }])
       };
+    }
+    if (a[1] === 'inspect' && a[3].includes('Healthcheck')) {
+      // the service container has a healthcheck; anything else is gone (exit 1, like docker)
+      const known = a.slice(4).filter(id => this.docker.containers.includes(id));
+      const lines = known.map(
+        id => `${JSON.stringify(id)}\t${JSON.stringify({ Test: ['CMD-SHELL', 'pg_isready -U postgres'] })}\tnull`
+      );
+      return { code: known.length === a.length - 4 ? 0 : 1, stdout: lines.join('\n') + '\n' };
     }
     if (a[1] === 'inspect') return { code: 0, stdout: '/redis 172.17.0.2\n' };
     throw new Error(`fake runner: unhandled docker command: ${a.join(' ')}`);
@@ -633,7 +644,7 @@ function writtenFiles(h: FakeHost): Record<string, string> {
   return out;
 }
 
-// ------------------------------------------------------------------ invariants (L1-L24)
+// ------------------------------------------------------------------ invariants (L1-L29)
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const re = (s: string) => new RegExp(`^${esc(s)}`);
@@ -683,6 +694,10 @@ const P = {
   selftestWrite: re(`sudo tee ${constants.SELFTEST_FILE}`),
   dockerPolicy:
     /^sudo (gpasswd -d runner docker|chown root:root \/var\/run\/docker\.sock|chmod 600 \/var\/run\/docker\.sock|systemctl (stop|disable) docker\.(socket|service))$/,
+  /** anything that changes who can use docker, or whether it runs (wider than what setup does) */
+  dockerAccessChange:
+    /^sudo ((gpasswd|usermod|deluser|groupmod)\b.*\bdocker\b|(chown|chmod|chgrp|setfacl|rm|mv)\b.*docker\.sock|systemctl (stop|disable|mask|kill) docker(\.(socket|service))?$)/,
+  dockerEventsRun: re(`sudo systemd-run --unit=${constants.DOCKER_EVENTS_UNIT}`),
   marker: re(`sudo tee ${SETUP_MARKER}`),
   loggingClassic: re(`sudo mv /tmp/safer-runner-sudo-logging.tmp ${SUDO_LOGGING_SUDOERS_FILE}`),
   loggingRsTee: re(`sudo tee ${SUDO_LOGGING_RSYSLOG_FILE}`),
@@ -842,6 +857,13 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
     for (const e of touched) v.push(`L26: analyze changed the runner's sudoers: ${line(e)}`);
   }
 
+  // L28: analyze never changes docker access (it evaluates the docker policy in the post step)
+  if (x.mode === 'analyze') {
+    for (const e of t.filter(e => P.dockerAccessChange.test(line(e)))) {
+      v.push(`L28: analyze changed docker access: ${line(e)}`);
+    }
+  }
+
   // L27: the restricted sudoers is exactly the validation commands plus the job's sudo-config
   // lines, as root only; a command with no arguments carries "" (bare, it would allow any)
   const sudoersTee = t.find(e => line(e) === 'sudo tee /tmp/runner-sudoers.tmp');
@@ -866,8 +888,23 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
     }
   }
 
+  // L29: analyze records the use of docker (read only) once dockerd has settled, and only when
+  // dockerd already runs (never started through socket activation); enforce never does
+  const recording = x.mode === 'analyze' && x.containerRules;
+  if (recording) {
+    before('L29', P.dockerRestart, P.dockerEventsRun, { optional: !x.dockerRestart });
+    before('L29', P.selftestWrite, P.dockerEventsRun);
+    before('L29', P.dockerEventsRun, P.marker);
+    const run = t.find(e => P.dockerEventsRun.test(line(e)));
+    if (run && !(run.argv.includes('Restart=no') && run.argv.includes('PrivateNetwork=yes'))) {
+      v.push('L29: the docker events recorder must never restart (it would start dockerd) and has no network');
+    }
+  } else if (at(P.dockerEventsRun) >= 0) {
+    v.push('L29: docker events recorded outside analyze, or with dockerd not running');
+  }
+
   // L23: each unit is stopped and reset before systemd-run (a re-run in main must not collide)
-  for (const unit of [constants.PROXY_UNIT, constants.DNS_UNIT]) {
+  for (const unit of [constants.PROXY_UNIT, constants.DNS_UNIT, ...(recording ? [constants.DOCKER_EVENTS_UNIT] : [])]) {
     before('L23', re(`sudo systemctl stop ${unit}`), re(`sudo systemd-run --unit=${unit}`));
     before('L23', re(`sudo systemctl reset-failed ${unit}`), re(`sudo systemd-run --unit=${unit}`));
   }
@@ -964,6 +1001,31 @@ const SCENARIOS: { s: Scenario; x: Omit<Expect, 'mode' | 'flavour'> }[] = [
       inputs: { ...ENFORCE.inputs, 'sudo-config': SUDO_CONFIG }
     },
     x: { disableSudo: true, dockerRestart: false, containerRules: false, sudoConfig: SUDO_CONFIG_LINES }
+  },
+  {
+    // analyze evaluates the docker policy, never applies it: docker stays usable, so dockerd
+    // still restarts for the CA and the containers get the container rules
+    s: {
+      ...ENFORCE,
+      name: 'analyze, docker: stop with running service containers',
+      inputs: { mode: 'analyze', docker: 'stop' },
+      docker: { active: true, dockerUser: true, containers: CONTAINER_IDS }
+    },
+    x: { disableSudo: true, dockerRestart: true, containerRules: true }
+  },
+  {
+    s: { ...ENFORCE, name: 'analyze, docker: remove-group', inputs: { mode: 'analyze', docker: 'remove-group' } },
+    x: { disableSudo: true, dockerRestart: true, containerRules: true }
+  },
+  {
+    // nothing to record, and docker events would start dockerd through socket activation
+    s: {
+      ...ENFORCE,
+      name: 'analyze, docker not running',
+      inputs: { mode: 'analyze' },
+      docker: { active: false, dockerUser: false, containers: [] }
+    },
+    x: { disableSudo: true, dockerRestart: false, containerRules: false }
   },
   {
     // the one behaviour change: analyze evaluates disable-sudo and sudo-config, never applies them
@@ -1290,6 +1352,114 @@ describe('post step transcript', () => {
     expect(h.log).toContainEqual(expect.stringMatching(/^warning: Unreadable sudo-config in the setup marker/));
   });
 
+  describe('analyze: the docker policy against the use of docker after setup', () => {
+    const STOP = () => SCENARIOS.find(c => c.s.name === 'analyze, docker: stop with running service containers')!.s;
+    const SERVICE = CONTAINER_IDS[0];
+    const RUN = 'babe' + '0'.repeat(59) + '1';
+    /** one line as `docker events --format '{{json .}}'` writes it */
+    const ev = (Type: string, Action: string, ID: string, Attributes: Record<string, string> = {}) =>
+      JSON.stringify({ status: Action, id: ID, Type, Action, Actor: { ID, Attributes }, scope: 'local', time: 1 }) +
+      '\n';
+    const healthcheck = [
+      ev('container', 'exec_create: /bin/sh -c pg_isready -U postgres', SERVICE, {
+        image: 'postgres:16',
+        execID: 'e1'
+      }),
+      ev('container', 'exec_start: /bin/sh -c pg_isready -U postgres', SERVICE, { image: 'postgres:16', execID: 'e1' }),
+      ev('container', 'exec_die', SERVICE, { image: 'postgres:16', execID: 'e1', exitCode: '0' }),
+      ev('container', 'health_status: healthy', SERVICE, { image: 'postgres:16' })
+    ];
+    const jobUse = [
+      ev('image', 'pull', 'alpine:3.20', { name: 'alpine' }),
+      ev('container', 'create', RUN, { image: 'alpine:3.20', name: 'eager_turing' }),
+      ev('network', 'connect', 'f00dbabe0001', { container: RUN, name: 'bridge', type: 'bridge' }),
+      ev('container', 'start', RUN, { image: 'alpine:3.20', name: 'eager_turing' }),
+      ev('container', 'die', RUN, { image: 'alpine:3.20', exitCode: '0' }),
+      // a step's own docker exec into the service: its command is never shown
+      ev('container', `exec_create: psql -c select '${CANARY}'`, SERVICE, { image: 'postgres:16', execID: 'e2' }),
+      ev('image', 'tag', 'sha256:0123', { name: `ghcr.io/acme/app:${CANARY}` }),
+      ev('image', 'tag', 'sha256:0456', { name: 'ghcr.io/acme/app:release.k3j9x8q2' })
+    ];
+
+    async function analyzeThenPost(events: string[], recorderStopped = false): Promise<FakeHost> {
+      const h = await setup(STOP());
+      for (const e of events) h.append(constants.DOCKER_EVENTS_LOG, e);
+      if (recorderStopped) h.units.delete(constants.DOCKER_EVENTS_UNIT);
+      await post(h);
+      expect(postInvariants(h.transcript)).toEqual([]);
+      expect(h.failed).toEqual([]);
+      return h;
+    }
+
+    it('the job used docker: what enforce would block, and `docker: keep` with its caveat', async () => {
+      const h = await analyzeThenPost([...healthcheck, ...jobUse, ...healthcheck]);
+      expect(h.summaryText).toContain('<kbd>7 docker uses would be blocked</kbd>');
+      expect(h.summaryText).toContain(
+        '**Enforce would block docker, which this job used after setup** (`docker: stop`: 2 container actions, ' +
+          '1 exec into a container, 3 image actions, 1 network change; listed under Diagnostics)'
+      );
+      expect(h.summaryText).toContain('> ```yaml\n> docker: keep\n> ```');
+      expect(h.summaryText).toContain('enforce with `docker: keep` is ADVISORY');
+      expect(h.summaryText).toContain(
+        'Images: `alpine:3.20`, `postgres:16`, `ghcr.io/acme/app:‹redacted›`, `ghcr.io/acme/app:release.‹redacted›`'
+      );
+      expect(h.summaryText).toContain('1 container already ran at setup (service containers)');
+      // the healthcheck is dockerd's own; an exec command, container names: never shown
+      expect(h.summaryText).not.toContain('pg_isready');
+      expect(h.summaryText).not.toContain('eager_turing');
+      for (const out of [h.summaryText, h.log.join('\n')]) {
+        expect(out).not.toContain(CANARY);
+        expect(out).not.toContain('k3j9x8q2');
+      }
+      expect(h.log).toContain('info: docker WOULD_BLOCK container x2');
+      expect(h.log).toContain('info: docker WOULD_BLOCK exec x1');
+      expect(h.summaryText).not.toContain('should run unchanged');
+      expect(h.summaryText).not.toMatch(/nothing would be blocked/i);
+      expect(h.summaryText).toContain('**No host would be blocked.**');
+    });
+
+    it('only the service containers ran: docker: stop would stop them; leave docker unset', async () => {
+      const h = await analyzeThenPost([...healthcheck, ...healthcheck]);
+      expect(h.summaryText).toContain('<kbd>1 service container would be stopped</kbd>');
+      expect(h.summaryText).toContain(
+        "**`docker: stop` would stop this job's 1 service container.** Leave `docker` unset"
+      );
+      expect(h.summaryText).toContain('No use of docker after setup was seen.');
+      expect(h.summaryText).not.toContain('docker: keep');
+      expect(h.summaryText).not.toContain('docker uses would be blocked');
+    });
+
+    it('defaults, a recording that stopped early and saw nothing: no all-clear at the top', async () => {
+      const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze (defaults)')!.s);
+      h.units.delete(constants.DOCKER_EVENTS_UNIT);
+      await post(h);
+      expect(h.failed).toEqual([]);
+      expect(h.summaryText).toContain('<kbd>⚠️ docker use partly unseen</kbd>');
+      expect(h.summaryText).toContain(
+        '**No use of docker after setup was seen, but the recording did not cover the whole job**, and enforce ' +
+          '(`docker: remove-group`) would block any use it missed.'
+      );
+      expect(h.summaryText).not.toMatch(/nothing would be blocked/i);
+      expect(h.summaryText).not.toContain('should run unchanged');
+    });
+
+    it('a recording that stopped early is said to be partial', async () => {
+      const h = await analyzeThenPost([], true);
+      expect(h.summaryText).toContain('The recording did not cover the whole job');
+    });
+
+    it('no docker at all, under the default: nothing to change, and stop would also fit', async () => {
+      const h = await setup({
+        ...STOP(),
+        inputs: { mode: 'analyze' },
+        docker: { active: true, dockerUser: true, containers: [] }
+      });
+      await post(h);
+      expect(h.summaryText).toContain('No use of docker after setup was seen. `docker: stop` would also fit.');
+      expect(h.summaryText).not.toMatch(/docker use|docker: keep|Enforce would block docker/);
+    });
+  });
+
   it('analyze: the sudo the policy (disable-sudo + sudo-config) would block, sudo left as it was', async () => {
     const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze, disable-sudo: true, sudo-config')!.s);
     // the job's own sudo: untouched in analyze, and logged
@@ -1396,6 +1566,58 @@ describe('invariants have teeth (mutation check)', () => {
     expect(setupInvariants(t, ax)).toEqual([]);
     const restricted = [...t, { argv: ['sudo', 'mv', '/tmp/runner-sudoers.tmp', '/etc/sudoers.d/runner'] }];
     expect(ids(setupInvariants(restricted, ax))).toContain('L26');
+  });
+
+  it.each([
+    ['sudo', 'gpasswd', '-d', 'runner', 'docker'],
+    ['sudo', 'chmod', '600', '/var/run/docker.sock'],
+    ['sudo', 'systemctl', 'stop', 'docker.service'],
+    ['sudo', 'systemctl', 'disable', 'docker']
+  ])('L28: analyze changes no docker access (%s %s %s ...)', async (...argv) => {
+    const analyze = SCENARIOS.find(c => c.s.name === 'analyze, docker: stop with running service containers')!;
+    const t = (await setup(analyze.s)).transcript;
+    const ax: Expect = { ...analyze.x, mode: 'analyze', flavour: 'sudo' };
+    expect(setupInvariants(t, ax)).toEqual([]);
+    const marker = first(t, P.marker);
+    const changed = [...t.slice(0, marker), { argv }, ...t.slice(marker)];
+    expect(ids(setupInvariants(changed, ax))).toEqual(['L28']);
+  });
+
+  describe('L29 has teeth (mutation check)', () => {
+    const analyze = () => SCENARIOS.find(c => c.s.name === 'analyze, docker: stop with running service containers')!;
+    const ax = (): Expect => ({ ...analyze().x, mode: 'analyze', flavour: 'sudo' });
+
+    it.each([
+      ['started before the dockerd restart', (t: Entry[]) => moveBefore(t, P.dockerEventsRun, P.dockerRestart)],
+      ['started after the setup marker', (t: Entry[]) => moveBefore(t, P.marker, P.dockerEventsRun)],
+      [
+        'restarted on exit (would start dockerd)',
+        (t: Entry[]) =>
+          t.map(e =>
+            P.dockerEventsRun.test(line(e))
+              ? { ...e, argv: e.argv.map(a => (a === 'Restart=no' ? 'Restart=always' : a)) }
+              : e
+          )
+      ],
+      ['not started', (t: Entry[]) => t.filter(e => !P.dockerEventsRun.test(line(e)))]
+    ])('%s', async (_what, mutate) => {
+      const t = (await setup(analyze().s)).transcript;
+      expect(setupInvariants(t, ax())).toEqual([]);
+      expect(ids(setupInvariants(mutate(t), ax()))).toContain('L29');
+    });
+
+    it('recorded in enforce', async () => {
+      const t = (await setup(ENFORCE)).transcript;
+      const x: Expect = { ...SCENARIOS[0].x, mode: 'enforce', flavour: 'sudo' };
+      expect(setupInvariants(t, x)).toEqual([]);
+      const marker = first(t, P.marker);
+      const recorded = [
+        ...t.slice(0, marker),
+        { argv: ['sudo', 'systemd-run', `--unit=${constants.DOCKER_EVENTS_UNIT}`] },
+        ...t.slice(marker)
+      ];
+      expect(ids(setupInvariants(recorded, x))).toContain('L29');
+    });
   });
 
   it('L25: the integrity check reads each file once (one comparison)', () => {

@@ -18,7 +18,7 @@ import { parseSudoConfig, type SudoRule } from '../services/sudo/config';
 
 /**
  * What happens to docker access. Docker group membership is root-equivalent (a step can use
- * it to remove the egress controls), so enforce removes it by default.
+ * it to remove the egress controls), so the policy removes it by default.
  * - keep: leave docker as it is
  * - remove-group: remove the runner user from the docker group and lock the socket to root
  * - stop: stop and disable the docker daemon
@@ -44,7 +44,7 @@ export interface Inputs {
   sudoConfig: SudoRule[];
   /** effective value: see resolveDocker() */
   docker: DockerPolicy;
-  /** true when docker was not set and the mode decided it */
+  /** true when docker was not set (the policy then removes docker access) */
   dockerDefaulted: boolean;
   /** effective value: see resolveFailOnTampering() */
   failOnTampering: boolean;
@@ -83,12 +83,13 @@ export function resolveDisableSudo(raw: string): [boolean, boolean] {
 }
 
 /**
- * docker. Unset means remove-group in enforce (docker is root-equivalent, mirroring
- * disable-sudo), keep in analyze.
+ * docker: the docker policy. Unset means remove-group, in either mode (docker is root-equivalent,
+ * mirroring disable-sudo). The mode decides whether the policy is applied (enforce) or only
+ * evaluated (analyze never changes docker; see planDocker).
  */
-export function resolveDocker(raw: string, mode: Mode): [DockerPolicy, boolean] {
+export function resolveDocker(raw: string): [DockerPolicy, boolean] {
   const v = (raw || '').trim().toLowerCase();
-  if (v === '') return [mode === 'enforce' ? 'remove-group' : 'keep', true];
+  if (v === '') return ['remove-group', true];
   if ((DOCKER_POLICIES as string[]).includes(v)) return [v as DockerPolicy, false];
   throw new Error(`docker must be one of ${DOCKER_POLICIES.join(', ')}, got "${raw}"`);
 }
@@ -301,7 +302,7 @@ export function readInputs(): Inputs {
   if (sudoConfig.length && !disableSudo) {
     throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
   }
-  const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
+  const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'));
   const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
   const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
   return {

@@ -18,7 +18,7 @@ const TOKENS: Record<string, { owner: string; invariants: string[] }> = {
   ProxyReady: { owner: 'services/mitmproxy/index.ts', invariants: ['L9'] },
   TrustInstalled: { owner: 'services/mitmproxy/trust.ts', invariants: ['L10'] },
   FirewallOn: { owner: 'services/iptables/index.ts', invariants: ['L14', 'L15'] },
-  DockerPrepared: { owner: 'services/docker/index.ts', invariants: ['L12'] },
+  DockerPrepared: { owner: 'services/docker/index.ts', invariants: ['L12', 'L29'] },
   SelfTestsRun: { owner: 'setup/selftest.ts', invariants: ['L15', 'L16'] },
   SudoLogging: { owner: 'services/sudo/index.ts', invariants: ['L18'] },
   BaselineCaptured: { owner: 'integrity/baseline.ts', invariants: ['L19', 'L21'] }
@@ -64,11 +64,14 @@ describe('readiness tokens', () => {
 });
 
 /**
- * Validated inputs: a branded type made only by its parser, so security-relevant text (the
- * sudoers file) is never built from a string that was not checked.
+ * Validated inputs: a branded type made only by its parser or planner, so security-relevant
+ * text (the sudoers file) is never built from a string that was not checked, and a privilege
+ * change (docker access) is never made outside enforce.
  */
 const VALIDATED: Record<string, string> = {
-  SudoRule: 'services/sudo/config.ts'
+  SudoRule: 'services/sudo/config.ts',
+  ApplyingDocker: 'services/docker/config.ts',
+  NoDockerChange: 'services/docker/config.ts'
 };
 
 describe('validated inputs', () => {

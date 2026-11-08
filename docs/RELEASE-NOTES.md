@@ -2,7 +2,8 @@
 
 ## v2.4.0 (unreleased)
 
-Sudo gets the analyze-then-enforce flow the egress allowlist and `http-filter` already have.
+Sudo and docker get the analyze-then-enforce flow the egress allowlist and `http-filter` already
+have: `analyze` never changes either, and reports what `enforce` would block.
 
 - **New `sudo-config` input.** With sudo removed in `enforce`, the job may still run these exact
   sudo command lines as root (a YAML list, on top of the action's own read-only checks). The
@@ -20,6 +21,16 @@ Sudo gets the analyze-then-enforce flow the egress allowlist and `http-filter` a
   runner (analyze only evaluates it); in `enforce` it is the same as before.
 - **`sudo-config` with `disable-sudo: false` is rejected** (sudo is kept, so the list would have
   no effect).
+- **Behaviour change: `mode: analyze` never changes docker access.** `docker: remove-group` or
+  `docker: stop` in `analyze` is now evaluated, not applied (setup warns), and docker stays usable
+  for the job. To remove docker access, use `mode: enforce`.
+- **`docker` defaults to `remove-group` in both modes.** In `analyze` this changes nothing on the
+  runner (analyze only evaluates it); in `enforce` it is the same as before.
+- **`analyze` reports and suggests for docker.** It records the job's use of docker after setup
+  (read only) and the summary lists what `enforce` would block under your `docker` setting, then
+  suggests one: a job that uses docker needs `docker: keep` (ADVISORY), and `docker: stop` that
+  would stop service containers is flagged. Only kinds, counts and image names are shown. Best
+  effort: in `analyze` the job has docker, so it can stop the recording.
 
 ## v2.3.0
 

@@ -5,19 +5,27 @@
 
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import type { DockerPolicy, Inputs } from '../../config/inputs';
-import { DOCKER_DAEMON_JSON } from '../../constants';
+import type { DockerPolicy } from '../../config/inputs';
+import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants';
 import type { SelfTestsRun } from '../../setup/selftest';
 import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
+import { startUnit } from '../../system/unit';
+import { parseDockerEvents } from '../../report/logs/docker-events';
 import type { TrustInstalled } from '../mitmproxy/trust';
 import {
   DOCKER_GROUP,
   DOCKER_SOCKET,
   RUNNER_USERNAME,
+  classifyDockerEvents,
   dockerAccess,
+  eventRecorderUnit,
+  healthcheckCommands,
   mergeLiveRestore,
   parseContainerAddresses,
+  type ApplyingDocker,
   type DockerAccess,
+  type DockerObserved,
+  type DockerPlan,
   type DockerState
 } from './config';
 
@@ -45,7 +53,12 @@ async function step(h: Host, args: string[]): Promise<string | null> {
  * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
  * afterwards - the caller fails closed on that, not on these messages.
  */
-export async function disableDockerForRunner(h: Host, socket: string = DOCKER_SOCKET): Promise<string[]> {
+export async function disableDockerForRunner(
+  h: Host,
+  apply: ApplyingDocker,
+  socket: string = DOCKER_SOCKET
+): Promise<string[]> {
+  if (apply?.removal !== 'remove-group') throw new Error('docker: remove-group without an enforce plan for it');
   core.info('Removing the runner user from the docker group and locking the docker socket...');
   const failed: string[] = [];
   if (await isRunnerInDockerGroup(h)) {
@@ -68,7 +81,8 @@ export async function disableDockerForRunner(h: Host, socket: string = DOCKER_SO
  * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
  * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
-export async function stopDockerService(h: Host): Promise<string[]> {
+export async function stopDockerService(h: Host, apply: ApplyingDocker): Promise<string[]> {
+  if (apply?.removal !== 'stop') throw new Error('docker: stop without an enforce plan for it');
   core.info('Stopping and disabling the docker daemon...');
   const failed: string[] = [];
   for (const verb of ['stop', 'disable']) {
@@ -218,38 +232,155 @@ export async function prepare(
   return { active, configWritten, prepared: Object.freeze({}) as DockerPrepared };
 }
 
+/** Where the docker events recording starts: the post step reads the use of docker after it. */
+export interface DockerEventsStart {
+  /** when the recorder started */
+  since: string;
+  /** containers already running then (service containers): not the job's use of docker */
+  containers: string[];
+}
+
+/**
+ * analyze: start the docker events recorder (eventRecorderUnit), once dockerd has settled (it
+ * restarts for the CA first). Only when docker.service is already running: `docker events`
+ * against a socket-activated daemon would start it. Best effort: analyze never fails on it, and
+ * the post step then calls its docker evaluation partial. Returns null when not recording.
+ */
+export async function startEventRecorder(h: Host, _prepared: DockerPrepared): Promise<DockerEventsStart | null> {
+  if (!(await unitActive(h, 'docker.service'))) {
+    core.info('docker events: docker.service is not running, so nothing is recorded (analyze never starts it)');
+    return null;
+  }
+  const containers = await runningContainers(h);
+  const since = new Date().toISOString();
+  try {
+    await sudo(['touch', DOCKER_EVENTS_LOG], {}, h);
+    await sudo(['chmod', '0644', DOCKER_EVENTS_LOG], {}, h);
+    await startUnit(h, eventRecorderUnit(), {
+      ready: () => unitActive(h, DOCKER_EVENTS_UNIT),
+      pollMs: 200,
+      timeoutMs: 5000,
+      diagnostics: [
+        ['systemctl', 'status', DOCKER_EVENTS_UNIT, '--no-pager', '-l'],
+        ['journalctl', '-u', DOCKER_EVENTS_UNIT, '--no-pager', '-n', '20']
+      ],
+      timeoutError: () => new Error('the recorder did not start within 5s')
+    });
+  } catch (error) {
+    core.warning(`docker events: not recorded (${error}); the summary's docker evaluation will be partial`);
+    return null;
+  }
+  core.info(`docker events: recording to ${DOCKER_EVENTS_LOG} (${containers.length} container(s) already running)`);
+  return { since, containers };
+}
+
+/** At most this many containers are asked for their healthcheck. */
+const MAX_INSPECT = 50;
+
+/**
+ * The healthcheck commands of these containers (healthcheckCommands). Without sudo: the runner
+ * kept docker in analyze. A container that is gone has none. Only a running dockerd is asked:
+ * connecting to a stopped one would start it through socket activation.
+ */
+async function healthchecks(h: Host, ids: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (!ids.length || !(await unitActive(h, 'docker.service'))) return out;
+  // JSON values, tab separated (JSON never holds a raw tab); never the env or anything else
+  const fmt = '{{json .Id}}\t{{json .Config.Healthcheck}}\t{{json .Config.Shell}}';
+  const { stdout } = await h.output('docker', ['inspect', '--format', fmt, ...ids.slice(0, MAX_INSPECT)], {
+    ignoreReturnCode: true,
+    silent: true
+  });
+  for (const line of stdout.split('\n')) {
+    try {
+      const [id, check, shell] = line.split('\t').map(v => JSON.parse(v));
+      if (typeof id === 'string') out.set(id, healthcheckCommands(check?.Test, shell));
+    } catch {
+      // not a line of ours
+    }
+  }
+  return out;
+}
+
+/**
+ * analyze, post step: the job's use of docker after setup. From the recorder's log
+ * (startEventRecorder); partial when it did not record the whole job. Without a recorder, from
+ * what dockerd still holds, and only if dockerd runs (asking a stopped one would start it).
+ * `access` is the docker access setup verified: with neither the daemon nor its socket running
+ * then or now, the job had no docker to use, so nothing is missing.
+ */
+export async function observeDocker(
+  h: Host,
+  recorded: DockerEventsStart | undefined,
+  setupAt: string | undefined,
+  access?: DockerAccess
+): Promise<DockerObserved> {
+  let text = '';
+  let partial = true;
+  const running = !recorded && (await unitActive(h, 'docker.service'));
+  if (!recorded && !running && access === 'not-running' && !(await unitActive(h, 'docker.socket'))) {
+    partial = false;
+  } else if (recorded) {
+    try {
+      text = fs.readFileSync(DOCKER_EVENTS_LOG, 'utf8');
+      // still subscribed: dockerd never stopped or restarted during the job
+      partial = !(await unitActive(h, DOCKER_EVENTS_UNIT));
+    } catch {
+      text = '';
+    }
+  } else if (setupAt && running) {
+    const since = String(Math.floor(Date.parse(setupAt) / 1000));
+    const until = String(Math.ceil(Date.now() / 1000));
+    const r = await h.output('docker', ['events', '--since', since, '--until', until, '--format', '{{json .}}'], {
+      ignoreReturnCode: true,
+      silent: true
+    });
+    text = r.exitCode === 0 ? r.stdout : '';
+  }
+  const events = parseDockerEvents(text);
+  const execs = Array.from(
+    new Set(events.filter(e => e.type === 'container' && e.command !== undefined).map(e => e.id))
+  );
+  const { uses, images } = classifyDockerEvents(events, await healthchecks(h, execs));
+  return { uses, images, services: recorded?.containers.length ?? 0, partial };
+}
+
 /** What the setup marker (and so the report) records about docker: requested AND verified. */
 export interface DockerOutcome {
+  /** the docker policy (the input, or remove-group when unset); applied only in enforce */
   requested: DockerPolicy;
   access: DockerAccess;
   state: DockerState;
 }
 
 /**
- * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
- * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
- * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ * Apply the docker plan (enforce only: see planDocker), then verify the runner user's real docker
+ * access (G4). Docker is root-equivalent, so a removal that did not take fails setup closed
+ * instead of leaving a reversible boundary. `keep` in enforce is ADVISORY, like sudo. analyze
+ * only reads the state.
  */
-export async function applyAccessPolicy(
-  h: Host,
-  inputs: Pick<Inputs, 'mode' | 'docker'>,
-  _selfTests: SelfTestsRun
-): Promise<DockerOutcome> {
-  const { mode, docker } = inputs;
+export async function applyAccessPolicy(h: Host, plan: DockerPlan, _selfTests: SelfTestsRun): Promise<DockerOutcome> {
+  const { apply, mode } = plan;
+  if (mode !== 'enforce' && apply.removal !== null) throw new Error('docker: analyze never changes docker access');
+  const docker = plan.applied;
   const failures =
-    docker === 'stop' ? await stopDockerService(h) : docker === 'remove-group' ? await disableDockerForRunner(h) : [];
+    apply.removal === null
+      ? []
+      : apply.removal === 'stop'
+        ? await stopDockerService(h, apply)
+        : await disableDockerForRunner(h, apply);
   const state = await readDockerState(h);
   const access = dockerAccess(state);
   core.info(
-    `docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+    `docker: ${plan.policy}${mode === 'analyze' ? ' (analyze: not applied)' : ''} -> verified ${access} ` +
+      `(daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
       `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`
   );
-  if (docker !== 'keep' && access === 'retained') {
-    const msg =
-      `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
-      (failures.length ? `: ${failures.join('; ')}` : '');
-    if (mode === 'enforce') throw new Error(msg);
-    core.warning(msg);
+  if (apply.removal !== null && access === 'retained') {
+    throw new Error(
+      `docker: ${apply.removal} did not take effect - the runner user can still use docker (root-equivalent)` +
+        (failures.length ? `: ${failures.join('; ')}` : '')
+    );
   } else if (failures.length) {
     core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
   }
@@ -261,15 +392,17 @@ export async function applyAccessPolicy(
       { title: 'safer-runner: enforce (ADVISORY - docker retained)' }
     );
   }
-  return { requested: docker, access, state };
+  return { requested: plan.policy, access, state };
 }
 
 /**
  * Container IP -> name for the report. Without sudo: under the default enforce the runner has
  * lost docker access, and the report then shows addresses only. Containers already removed
- * (`docker run --rm`) are not listed either.
+ * (`docker run --rm`) are not listed either. Only a running dockerd is asked: connecting to a
+ * stopped one would start it through socket activation.
  */
 export async function containerAddresses(h: Host = realHost): Promise<Map<string, string>> {
+  if (!(await unitActive(h, 'docker.service'))) return new Map();
   const opts = { ignoreReturnCode: true, silent: true };
   const ids = await h.output('docker', ['ps', '-aq'], opts);
   const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];

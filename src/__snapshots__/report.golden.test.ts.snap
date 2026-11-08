@@ -1,25 +1,16 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
-exports[`job summary golden snapshots analyze: sudo the policy would block, with the suggested sudo-config 1`] = `
+exports[`job summary golden snapshots analyze: docker: keep with no use of docker (partial recording) 1`] = `
 "## 🛡️ Safer Runner — egress
 
-<kbd>📊 ANALYZE</kbd> <kbd>1 sudo command would be blocked</kbd> <kbd>🧪 self-tests 3/3</kbd>
+<kbd>📊 ANALYZE</kbd> <kbd>⚠️ docker use partly unseen</kbd> <kbd>🧪 self-tests 3/3</kbd>
 
 > [!IMPORTANT]
-> **Enforce would block 1 sudo command this job ran** (enforce removes sudo, except your \`sudo-config\` lines; listed under Diagnostics). Drop that usage, or allow the exact command lines with \`sudo-config\` (review each line):
+> **No use of docker after setup was seen, but \`docker: keep\` keeps it**, so enforce would be ADVISORY (docker is root-equivalent). Remove \`docker: keep\` to make enforce a boundary.
 >
-> \`\`\`yaml
-> sudo-config: |
->   - /usr/bin/apt-get install -y jq
->   - /usr/sbin/service nginx restart
-> \`\`\`
->
-> Not suggested: 1 with arguments that look like a secret, 1 run as another user.
->
-> A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Enforce with any \`sudo-config\` is ADVISORY. Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.
+> The recording did not cover the whole job (dockerd stopped, restarted or was not running at setup), so some use of docker may be missing. Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.
 
-
-**✅ Nothing would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
 
 ### Allowed — this job's hosts (2)
 
@@ -41,7 +32,122 @@ exports[`job summary golden snapshots analyze: sudo the policy would block, with
 </details>
 
 <details>
-<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · workflow ran 2 sudo commands (1 by Safer Runner) · enforce would block 1 · docker retained</summary>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · no workflow sudo (1 by Safer Runner) · docker unchanged (analyze)</summary>
+
+**Self-tests**
+
+- ✅ \`sni-block\` — SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
+- ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
+- ✅ \`dns-exact\` — srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
+
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
+
+**Docker** — policy \`docker: keep\` (analyze: evaluated, not applied); verified at setup: runner user can use docker
+
+No use of docker after setup was seen.
+
+The recording did not cover the whole job (dockerd stopped, restarted or was not running at setup), so some use of docker may be missing.
+
+</details>
+
+<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+"
+`;
+
+exports[`job summary golden snapshots analyze: docker: stop would stop the service containers 1`] = `
+"## 🛡️ Safer Runner — egress
+
+<kbd>📊 ANALYZE</kbd> <kbd>2 service containers would be stopped</kbd> <kbd>🧪 self-tests 3/3</kbd>
+
+> [!IMPORTANT]
+> **\`docker: stop\` would stop this job's 2 service containers.** Leave \`docker\` unset: \`remove-group\` keeps them running and still takes docker from the job.
+>
+> Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.
+
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+
+### Allowed — this job's hosts (2)
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+
+<details>
+<summary>🐙 <b>GitHub platform</b> — 2 hosts · 2 requests · 4.2 KiB · expected for every job</summary>
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
+| \`hosted-compute-abc.githubapp.com\` <sub>🔀 passthrough</sub> | — | n/a | n/a |
+
+<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>
+
+</details>
+
+<details>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · no workflow sudo (1 by Safer Runner) · docker unchanged (analyze)</summary>
+
+**Self-tests**
+
+- ✅ \`sni-block\` — SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
+- ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
+- ✅ \`dns-exact\` — srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
+
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
+
+**Docker** — policy \`docker: stop\` (analyze: evaluated, not applied); verified at setup: runner user can use docker
+
+No use of docker after setup was seen. 2 containers already ran at setup (service containers).
+
+</details>
+
+<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+"
+`;
+
+exports[`job summary golden snapshots analyze: sudo the policy would block, with the suggested sudo-config 1`] = `
+"## 🛡️ Safer Runner — egress
+
+<kbd>📊 ANALYZE</kbd> <kbd>1 sudo command would be blocked</kbd> <kbd>🧪 self-tests 3/3</kbd>
+
+> [!IMPORTANT]
+> **Enforce would block 1 sudo command this job ran** (enforce removes sudo, except your \`sudo-config\` lines; listed under Diagnostics). Drop that usage, or allow the exact command lines with \`sudo-config\` (review each line):
+>
+> \`\`\`yaml
+> sudo-config: |
+>   - /usr/bin/apt-get install -y jq
+>   - /usr/sbin/service nginx restart
+> \`\`\`
+>
+> Not suggested: 1 with arguments that look like a secret, 1 run as another user.
+>
+> A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Enforce with any \`sudo-config\` is ADVISORY. Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.
+
+
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+
+### Allowed — this job's hosts (2)
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+
+<details>
+<summary>🐙 <b>GitHub platform</b> — 2 hosts · 2 requests · 4.2 KiB · expected for every job</summary>
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
+| \`hosted-compute-abc.githubapp.com\` <sub>🔀 passthrough</sub> | — | n/a | n/a |
+
+<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>
+
+</details>
+
+<details>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · workflow ran 2 sudo commands (1 by Safer Runner) · enforce would block 1 · docker unchanged (analyze)</summary>
 
 **Self-tests**
 
@@ -62,7 +168,7 @@ Enforce would block (1):
 $ sudo /usr/bin/apt-get install -y jq
 \`\`\`
 
-**Docker** — \`docker: keep\`; verified at setup: runner user can use docker
+**Docker** — policy \`docker: keep\` (analyze: evaluated, not applied); verified at setup: runner user can use docker
 
 </details>
 
@@ -70,7 +176,7 @@ $ sudo /usr/bin/apt-get install -y jq
 "
 `;
 
-exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker kept 1`] = `
+exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker policy not applied 1`] = `
 "## 🛡️ Safer Runner — egress
 
 <kbd>📊 ANALYZE</kbd> <kbd>9 hosts would be blocked</kbd> <kbd>2 requests the http-filter would refuse</kbd> <kbd>🧪 self-tests 3/3</kbd>
@@ -189,7 +295,7 @@ http-filter: |
 </details>
 
 <details>
-<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · 1 allowed outside the proxy · 2 DNS lookup enforce would refuses · workflow ran 1 sudo command (1 by Safer Runner) · enforce would block 1 · docker retained</summary>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · 1 allowed outside the proxy · 2 DNS lookup enforce would refuses · workflow ran 1 sudo command (1 by Safer Runner) · enforce would block 1 · docker unchanged (analyze)</summary>
 
 **Self-tests**
 
@@ -211,7 +317,67 @@ http-filter: |
 $ sudo /usr/bin/apt-get install -y jq
 \`\`\`
 
-**Docker** — \`docker: keep\`; verified at setup: runner user can use docker
+**Docker** — policy \`docker: remove-group\` (analyze: evaluated, not applied); verified at setup: runner user can use docker
+
+</details>
+
+<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+"
+`;
+
+exports[`job summary golden snapshots analyze: the job used docker, so enforce would block it (docker: keep suggested) 1`] = `
+"## 🛡️ Safer Runner — egress
+
+<kbd>📊 ANALYZE</kbd> <kbd>10 docker uses would be blocked</kbd> <kbd>🧪 self-tests 3/3</kbd>
+
+> [!IMPORTANT]
+> **Enforce would block docker, which this job used after setup** (\`docker: remove-group\`: 4 container actions, 1 exec into a container, 2 image actions, 1 build, 2 network changes; listed under Diagnostics). Move the docker work to a job that does not run under enforce, or keep docker (review first):
+>
+> \`\`\`yaml
+> docker: keep
+> \`\`\`
+>
+> Docker access is root-equivalent: any step can use it to remove the egress controls, so enforce with \`docker: keep\` is ADVISORY.
+>
+> Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.
+
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+
+### Allowed — this job's hosts (2)
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+
+<details>
+<summary>🐙 <b>GitHub platform</b> — 2 hosts · 2 requests · 4.2 KiB · expected for every job</summary>
+
+| Host | Requests | Data | Responses |
+|:--|--:|--:|:--|
+| \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
+| \`hosted-compute-abc.githubapp.com\` <sub>🔀 passthrough</sub> | — | n/a | n/a |
+
+<sub>🔀 passthrough = checked by TLS name only — not decrypted, so no byte counts.</sub>
+
+</details>
+
+<details>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · no workflow sudo (1 by Safer Runner) · docker unchanged (analyze)</summary>
+
+**Self-tests**
+
+- ✅ \`sni-block\` — SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
+- ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
+- ✅ \`dns-exact\` — srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
+
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
+
+**Docker** — policy \`docker: remove-group\` (analyze: evaluated, not applied); verified at setup: runner user can use docker
+
+Used after setup: 4 container actions, 1 exec into a container, 2 image actions, 1 build, 2 network changes. 1 container already ran at setup (service containers).
+
+Images: \`alpine:3.20\`, \`postgres:16\`, \`ghcr.io/acme/app:1.4.2\`
 
 </details>
 

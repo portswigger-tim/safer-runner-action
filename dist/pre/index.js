@@ -545,13 +545,14 @@ function resolveDisableSudo(raw) {
     return v === null ? [true, true] : [v, false];
 }
 /**
- * docker. Unset means remove-group in enforce (docker is root-equivalent, mirroring
- * disable-sudo), keep in analyze.
+ * docker: the docker policy. Unset means remove-group, in either mode (docker is root-equivalent,
+ * mirroring disable-sudo). The mode decides whether the policy is applied (enforce) or only
+ * evaluated (analyze never changes docker; see planDocker).
  */
-function resolveDocker(raw, mode) {
+function resolveDocker(raw) {
     const v = (raw || '').trim().toLowerCase();
     if (v === '')
-        return [mode === 'enforce' ? 'remove-group' : 'keep', true];
+        return ['remove-group', true];
     if (exports.DOCKER_POLICIES.includes(v))
         return [v, false];
     throw new Error(`docker must be one of ${exports.DOCKER_POLICIES.join(', ')}, got "${raw}"`);
@@ -763,7 +764,7 @@ function readInputs() {
     if (sudoConfig.length && !disableSudo) {
         throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
     }
-    const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
+    const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'));
     const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
     const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
     return {
@@ -853,7 +854,7 @@ function strictYaml(raw, name, o) {
  * Paths, users and pinned versions shared by the v2 setup and post-step code.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SOURCES = exports.COREDNS_ASSET_ID = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SOURCES = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.DOCKER_EVENTS_UNIT = exports.DOCKER_EVENTS_LOG = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SOURCES = exports.COREDNS_ASSET_ID = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SOURCES = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
 exports.MITMPROXY_VERSION = '12.3.1';
 exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
@@ -920,6 +921,9 @@ exports.DNS_LOG = `${exports.LOG_DIR}/dns.log`;
 exports.SUDO_LOG = `${exports.LOG_DIR}/sudo.log`;
 exports.FIREWALL_LOG = `${exports.LOG_DIR}/firewall.log`;
 exports.SELFTEST_FILE = `${exports.LOG_DIR}/selftest.json`;
+/** analyze: the docker events seen after setup (one JSON object per line; services/docker) */
+exports.DOCKER_EVENTS_LOG = `${exports.LOG_DIR}/docker-events.jsonl`;
+exports.DOCKER_EVENTS_UNIT = 'safer-runner-docker-events';
 /** iptables chains we own (filter + nat), and the LOG prefixes they use. */
 exports.FILTER_CHAIN = 'SAFER_RUNNER_OUT';
 exports.NAT_CHAIN = 'SAFER_RUNNER_NAT';
@@ -1674,6 +1678,56 @@ function readRefusedNames(file) {
 
 /***/ }),
 
+/***/ 7333:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/** Parser for the docker events the analyze recorder writes (`docker events --format '{{json .}}'`). */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDockerEvents = parseDockerEvents;
+const str = (v) => (typeof v === 'string' ? v : undefined);
+/** Parse the recorder's log; a line that is not a docker event is skipped. */
+function parseDockerEvents(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        if (!line.trim())
+            continue;
+        let e;
+        try {
+            e = JSON.parse(line);
+        }
+        catch {
+            continue;
+        }
+        if (e === null || typeof e !== 'object')
+            continue;
+        const actor = (e.Actor ?? {});
+        const attrs = (actor.Attributes ?? {});
+        const type = str(e.Type);
+        const raw = str(e.Action);
+        const id = str(actor.ID) ?? '';
+        if (!type || !raw)
+            continue;
+        const sep = raw.indexOf(': ');
+        const action = sep < 0 ? raw : raw.slice(0, sep);
+        const command = sep < 0 ? undefined : raw.slice(sep + 2);
+        // image events: the reference (`alpine:3.20`), or for an image ID (`sha256:...`) its name
+        const image = type === 'container'
+            ? str(attrs.image)
+            : type === 'image'
+                ? id.startsWith('sha256:')
+                    ? str(attrs.name)
+                    : id
+                : undefined;
+        out.push({ type, action, id, ...(command !== undefined ? { command } : {}), ...(image ? { image } : {}) });
+    }
+    return out;
+}
+
+
+/***/ }),
+
 /***/ 8305:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -2195,22 +2249,60 @@ async function cutover(h, _dns) {
 /***/ }),
 
 /***/ 8290:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 /**
- * Docker's pure parts: the observed-access classification, the daemon.json merge for the CA
- * restart (F1), and the container address parser for the report. No I/O.
+ * Docker's pure parts: the access plan (what the docker input changes, by mode), the
+ * observed-access classification, the daemon.json merge for the CA restart (F1), and the
+ * container address parser for the report. No I/O.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.DOCKER_USES = exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.planDocker = planDocker;
+exports.eventRecorderUnit = eventRecorderUnit;
 exports.dockerAccess = dockerAccess;
 exports.mergeLiveRestore = mergeLiveRestore;
 exports.parseContainerAddresses = parseContainerAddresses;
+exports.healthcheckCommands = healthcheckCommands;
+exports.classifyDockerEvents = classifyDockerEvents;
+exports.evaluateDocker = evaluateDocker;
+const constants_1 = __nccwpck_require__(8729);
+const unit_1 = __nccwpck_require__(812);
 exports.RUNNER_USERNAME = 'runner';
 exports.DOCKER_GROUP = 'docker';
 exports.DOCKER_SOCKET = '/var/run/docker.sock';
+const NO_CHANGE = Object.freeze({ removal: null });
+function planDocker(mode, policy) {
+    if (mode !== 'enforce' || policy === 'keep')
+        return { mode, policy, applied: 'keep', apply: NO_CHANGE };
+    return { mode, policy, applied: policy, apply: Object.freeze({ removal: policy }) };
+}
+/**
+ * analyze: the docker events recorder. It only subscribes (`docker events`) and appends each
+ * event to DOCKER_EVENTS_LOG, so the post step sees every use of docker after setup (dockerd
+ * itself keeps only the latest events). Never restarted: reconnecting to a stopped daemon
+ * would start it through socket activation. No network, no capabilities; the docker CLI reads no
+ * config (no context can point it elsewhere) and talks to the socket named here.
+ */
+function eventRecorderUnit() {
+    return {
+        unit: constants_1.DOCKER_EVENTS_UNIT,
+        description: 'safer-runner docker events recorder (analyze)',
+        user: 'root',
+        restart: 'no',
+        props: [
+            ...unit_1.HARDENING,
+            'PrivateNetwork=yes',
+            'CapabilityBoundingSet=',
+            `ReadWritePaths=${constants_1.LOG_DIR}`,
+            `StandardOutput=append:${constants_1.DOCKER_EVENTS_LOG}`
+        ],
+        env: { DOCKER_CONFIG: '/run/safer-runner/docker-cli-none' },
+        argv: ['/usr/bin/docker', '-H', `unix://${exports.DOCKER_SOCKET}`, 'events', '--format', '{{json .}}']
+    };
+}
 function dockerAccess(s) {
     if (!s.daemonActive && !s.socketUnitActive)
         return 'not-running';
@@ -2255,6 +2347,90 @@ function parseContainerAddresses(output) {
                 out.set(ip, name);
     }
     return out;
+}
+exports.DOCKER_USES = ['container', 'exec', 'image', 'build', 'network', 'volume', 'other'];
+/** Container actions dockerd makes on its own (no client asked): not a use of docker. */
+const DAEMON_ACTIONS = new Set(['die', 'oom', 'exec_die', 'exec_detach', 'health_status']);
+/** What dockerd does on its own when a container exits: it leaves its networks and volumes. */
+const DAEMON_TEARDOWN = { network: 'disconnect', volume: 'unmount' };
+/**
+ * The commands a container's healthcheck runs, as dockerd names them in its exec events
+ * (`exec_create: <entrypoint> <args>`). `test` and `shell` are the container's
+ * Config.Healthcheck.Test and Config.Shell.
+ */
+function healthcheckCommands(test, shell) {
+    if (!Array.isArray(test) || !test.every(t => typeof t === 'string'))
+        return [];
+    const [kind, ...rest] = test;
+    if (kind === 'CMD')
+        return [rest.join(' ').trim()];
+    if (kind !== 'CMD-SHELL' || rest.length !== 1)
+        return [];
+    const sh = Array.isArray(shell) && shell.length && shell.every(t => typeof t === 'string') ? shell : ['/bin/sh', '-c'];
+    return [[...sh, rest[0]].join(' ').trim()];
+}
+/**
+ * The job's use of docker in the events after setup. Not a use: what dockerd does on its own
+ * (a container exiting and leaving its networks and volumes, its healthcheck and health status,
+ * its own reload). Read-only calls (`docker ps`, `logs`, `inspect`, `login`) leave no event. `healthchecks` maps
+ * a container to its healthcheck commands (healthcheckCommands): an exec of exactly that is the
+ * healthcheck, any other exec (a step's `docker exec`) is a use.
+ */
+function classifyDockerEvents(events, healthchecks = new Map()) {
+    const uses = {};
+    const images = [];
+    const add = (k) => (uses[k] = (uses[k] ?? 0) + 1);
+    for (const e of events) {
+        if (e.type === 'daemon' || DAEMON_TEARDOWN[e.type] === e.action)
+            continue;
+        if (e.type === 'container') {
+            if (DAEMON_ACTIONS.has(e.action))
+                continue;
+            if (e.action.startsWith('exec_')) {
+                if (e.command !== undefined && healthchecks.get(e.id)?.includes(e.command.trim()))
+                    continue;
+                add('exec');
+            }
+            else
+                add('container');
+        }
+        else if (e.type === 'image')
+            add('image');
+        else if (e.type === 'builder')
+            add('build');
+        else if (e.type === 'network')
+            add('network');
+        else if (e.type === 'volume')
+            add('volume');
+        else
+            add('other');
+        if (e.image && !images.includes(e.image))
+            images.push(e.image);
+    }
+    return { uses, images };
+}
+/**
+ * Analyze: what the docker policy would break in enforce, and the setting to suggest. Any use of
+ * docker after setup needs `keep` (docker has no allowlist), which makes enforce ADVISORY; a
+ * policy that would break nothing is kept as it is. Never suggests `stop` over the default:
+ * `remove-group` already takes docker from the job.
+ */
+function evaluateDocker(policy, observed) {
+    const used = exports.DOCKER_USES.some(k => (observed.uses[k] ?? 0) > 0);
+    const wouldBlock = policy === 'keep' ? {} : { ...observed.uses };
+    const wouldStop = policy === 'stop' ? observed.services : 0;
+    const fits = used ? 'keep' : observed.services ? 'remove-group' : 'stop';
+    const value = used
+        ? 'keep'
+        : policy === 'keep' || (policy === 'stop' && observed.services)
+            ? 'remove-group'
+            : policy;
+    return {
+        wouldBlock,
+        wouldStop,
+        fits,
+        suggestion: { input: 'docker', value, advisory: value === 'keep', change: value !== policy }
+    };
 }
 
 
@@ -2311,12 +2487,16 @@ exports.stopDockerService = stopDockerService;
 exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
 exports.readDockerState = readDockerState;
 exports.prepare = prepare;
+exports.startEventRecorder = startEventRecorder;
+exports.observeDocker = observeDocker;
 exports.applyAccessPolicy = applyAccessPolicy;
 exports.containerAddresses = containerAddresses;
 const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const host_1 = __nccwpck_require__(7020);
+const unit_1 = __nccwpck_require__(812);
+const docker_events_1 = __nccwpck_require__(7333);
 const config_1 = __nccwpck_require__(8290);
 __exportStar(__nccwpck_require__(8290), exports);
 /** A sudo step whose failure is collected, not thrown: the verified state decides. */
@@ -2333,7 +2513,9 @@ async function step(h, args) {
  * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
  * afterwards - the caller fails closed on that, not on these messages.
  */
-async function disableDockerForRunner(h, socket = config_1.DOCKER_SOCKET) {
+async function disableDockerForRunner(h, apply, socket = config_1.DOCKER_SOCKET) {
+    if (apply?.removal !== 'remove-group')
+        throw new Error('docker: remove-group without an enforce plan for it');
     core.info('Removing the runner user from the docker group and locking the docker socket...');
     const failed = [];
     if (await isRunnerInDockerGroup(h)) {
@@ -2357,7 +2539,9 @@ async function disableDockerForRunner(h, socket = config_1.DOCKER_SOCKET) {
  * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
  * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
-async function stopDockerService(h) {
+async function stopDockerService(h, apply) {
+    if (apply?.removal !== 'stop')
+        throw new Error('docker: stop without an enforce plan for it');
     core.info('Stopping and disabling the docker daemon...');
     const failed = [];
     for (const verb of ['stop', 'disable']) {
@@ -2491,23 +2675,130 @@ async function prepare(h, policy, _trust) {
     return { active, configWritten, prepared: Object.freeze({}) };
 }
 /**
- * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
- * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
- * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ * analyze: start the docker events recorder (eventRecorderUnit), once dockerd has settled (it
+ * restarts for the CA first). Only when docker.service is already running: `docker events`
+ * against a socket-activated daemon would start it. Best effort: analyze never fails on it, and
+ * the post step then calls its docker evaluation partial. Returns null when not recording.
  */
-async function applyAccessPolicy(h, inputs, _selfTests) {
-    const { mode, docker } = inputs;
-    const failures = docker === 'stop' ? await stopDockerService(h) : docker === 'remove-group' ? await disableDockerForRunner(h) : [];
+async function startEventRecorder(h, _prepared) {
+    if (!(await unitActive(h, 'docker.service'))) {
+        core.info('docker events: docker.service is not running, so nothing is recorded (analyze never starts it)');
+        return null;
+    }
+    const containers = await runningContainers(h);
+    const since = new Date().toISOString();
+    try {
+        await (0, host_1.sudo)(['touch', constants_1.DOCKER_EVENTS_LOG], {}, h);
+        await (0, host_1.sudo)(['chmod', '0644', constants_1.DOCKER_EVENTS_LOG], {}, h);
+        await (0, unit_1.startUnit)(h, (0, config_1.eventRecorderUnit)(), {
+            ready: () => unitActive(h, constants_1.DOCKER_EVENTS_UNIT),
+            pollMs: 200,
+            timeoutMs: 5000,
+            diagnostics: [
+                ['systemctl', 'status', constants_1.DOCKER_EVENTS_UNIT, '--no-pager', '-l'],
+                ['journalctl', '-u', constants_1.DOCKER_EVENTS_UNIT, '--no-pager', '-n', '20']
+            ],
+            timeoutError: () => new Error('the recorder did not start within 5s')
+        });
+    }
+    catch (error) {
+        core.warning(`docker events: not recorded (${error}); the summary's docker evaluation will be partial`);
+        return null;
+    }
+    core.info(`docker events: recording to ${constants_1.DOCKER_EVENTS_LOG} (${containers.length} container(s) already running)`);
+    return { since, containers };
+}
+/** At most this many containers are asked for their healthcheck. */
+const MAX_INSPECT = 50;
+/**
+ * The healthcheck commands of these containers (healthcheckCommands). Without sudo: the runner
+ * kept docker in analyze. A container that is gone has none. Only a running dockerd is asked:
+ * connecting to a stopped one would start it through socket activation.
+ */
+async function healthchecks(h, ids) {
+    const out = new Map();
+    if (!ids.length || !(await unitActive(h, 'docker.service')))
+        return out;
+    // JSON values, tab separated (JSON never holds a raw tab); never the env or anything else
+    const fmt = '{{json .Id}}\t{{json .Config.Healthcheck}}\t{{json .Config.Shell}}';
+    const { stdout } = await h.output('docker', ['inspect', '--format', fmt, ...ids.slice(0, MAX_INSPECT)], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    for (const line of stdout.split('\n')) {
+        try {
+            const [id, check, shell] = line.split('\t').map(v => JSON.parse(v));
+            if (typeof id === 'string')
+                out.set(id, (0, config_1.healthcheckCommands)(check?.Test, shell));
+        }
+        catch {
+            // not a line of ours
+        }
+    }
+    return out;
+}
+/**
+ * analyze, post step: the job's use of docker after setup. From the recorder's log
+ * (startEventRecorder); partial when it did not record the whole job. Without a recorder, from
+ * what dockerd still holds, and only if dockerd runs (asking a stopped one would start it).
+ * `access` is the docker access setup verified: with neither the daemon nor its socket running
+ * then or now, the job had no docker to use, so nothing is missing.
+ */
+async function observeDocker(h, recorded, setupAt, access) {
+    let text = '';
+    let partial = true;
+    const running = !recorded && (await unitActive(h, 'docker.service'));
+    if (!recorded && !running && access === 'not-running' && !(await unitActive(h, 'docker.socket'))) {
+        partial = false;
+    }
+    else if (recorded) {
+        try {
+            text = fs.readFileSync(constants_1.DOCKER_EVENTS_LOG, 'utf8');
+            // still subscribed: dockerd never stopped or restarted during the job
+            partial = !(await unitActive(h, constants_1.DOCKER_EVENTS_UNIT));
+        }
+        catch {
+            text = '';
+        }
+    }
+    else if (setupAt && running) {
+        const since = String(Math.floor(Date.parse(setupAt) / 1000));
+        const until = String(Math.ceil(Date.now() / 1000));
+        const r = await h.output('docker', ['events', '--since', since, '--until', until, '--format', '{{json .}}'], {
+            ignoreReturnCode: true,
+            silent: true
+        });
+        text = r.exitCode === 0 ? r.stdout : '';
+    }
+    const events = (0, docker_events_1.parseDockerEvents)(text);
+    const execs = Array.from(new Set(events.filter(e => e.type === 'container' && e.command !== undefined).map(e => e.id)));
+    const { uses, images } = (0, config_1.classifyDockerEvents)(events, await healthchecks(h, execs));
+    return { uses, images, services: recorded?.containers.length ?? 0, partial };
+}
+/**
+ * Apply the docker plan (enforce only: see planDocker), then verify the runner user's real docker
+ * access (G4). Docker is root-equivalent, so a removal that did not take fails setup closed
+ * instead of leaving a reversible boundary. `keep` in enforce is ADVISORY, like sudo. analyze
+ * only reads the state.
+ */
+async function applyAccessPolicy(h, plan, _selfTests) {
+    const { apply, mode } = plan;
+    if (mode !== 'enforce' && apply.removal !== null)
+        throw new Error('docker: analyze never changes docker access');
+    const docker = plan.applied;
+    const failures = apply.removal === null
+        ? []
+        : apply.removal === 'stop'
+            ? await stopDockerService(h, apply)
+            : await disableDockerForRunner(h, apply);
     const state = await readDockerState(h);
     const access = (0, config_1.dockerAccess)(state);
-    core.info(`docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+    core.info(`docker: ${plan.policy}${mode === 'analyze' ? ' (analyze: not applied)' : ''} -> verified ${access} ` +
+        `(daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
         `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`);
-    if (docker !== 'keep' && access === 'retained') {
-        const msg = `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
-            (failures.length ? `: ${failures.join('; ')}` : '');
-        if (mode === 'enforce')
-            throw new Error(msg);
-        core.warning(msg);
+    if (apply.removal !== null && access === 'retained') {
+        throw new Error(`docker: ${apply.removal} did not take effect - the runner user can still use docker (root-equivalent)` +
+            (failures.length ? `: ${failures.join('; ')}` : ''));
     }
     else if (failures.length) {
         core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
@@ -2517,14 +2808,17 @@ async function applyAccessPolicy(h, inputs, _selfTests) {
             'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
             'or docker: stop unless the job needs docker.', { title: 'safer-runner: enforce (ADVISORY - docker retained)' });
     }
-    return { requested: docker, access, state };
+    return { requested: plan.policy, access, state };
 }
 /**
  * Container IP -> name for the report. Without sudo: under the default enforce the runner has
  * lost docker access, and the report then shows addresses only. Containers already removed
- * (`docker run --rm`) are not listed either.
+ * (`docker run --rm`) are not listed either. Only a running dockerd is asked: connecting to a
+ * stopped one would start it through socket activation.
  */
 async function containerAddresses(h = host_1.realHost) {
+    if (!(await unitActive(h, 'docker.service')))
+        return new Map();
     const opts = { ignoreReturnCode: true, silent: true };
     const ids = await h.output('docker', ['ps', '-aq'], opts);
     const list = ids.exitCode === 0 ? ids.stdout.split('\n').filter(Boolean) : [];
@@ -4159,6 +4453,12 @@ async function runSetup(inputs, h = host_1.realHost) {
     if (mode === 'enforce' && inputs.dockerDefaulted) {
         core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
     }
+    // analyze never changes docker access: it evaluates the policy in the post step
+    const dockerPlan = docker.planDocker(mode, inputs.docker);
+    if (mode === 'analyze' && inputs.docker !== 'keep' && !inputs.dockerDefaulted) {
+        core.warning(`docker: ${inputs.docker} is not applied in analyze mode: analyze never changes docker access. Use ` +
+            `mode: enforce to ${inputs.docker === 'stop' ? 'stop docker' : 'remove docker access'}.`, { title: 'safer-runner: analyze does not change docker' });
+    }
     const sudoFlavour = await sudo.detectSudoFlavour(h);
     core.info(`sudo implementation: ${sudoFlavour}`);
     const ports = await mitmproxy.allocateProxyPorts();
@@ -4216,7 +4516,7 @@ async function runSetup(inputs, h = host_1.realHost) {
     });
     // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
     // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
-    const dockerd = await docker.prepare(h, inputs.docker, trust);
+    const dockerd = await docker.prepare(h, dockerPlan.applied, trust);
     // 8. Firewall: only once the resolver points at CoreDNS, the CA is trusted and dockerd settled
     const { containerRules, firewall } = await timed('Configure firewall', () => iptables.configure(h, {
         mode,
@@ -4243,7 +4543,9 @@ async function runSetup(inputs, h = host_1.realHost) {
         core.warning(msg);
     }
     // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-    const dockerAccess = await docker.applyAccessPolicy(h, inputs, selfTests);
+    const dockerAccess = await docker.applyAccessPolicy(h, dockerPlan, selfTests);
+    // analyze: record the use of docker from here on, for the post step's docker evaluation
+    const dockerEvents = mode === 'analyze' && dockerd.active ? await docker.startEventRecorder(h, dockerd.prepared) : null;
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
         input: Buffer.from(JSON.stringify({
             mode,
@@ -4253,6 +4555,7 @@ async function runSetup(inputs, h = host_1.realHost) {
             ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
             dockerRetained: dockerAccess.access === 'retained',
             docker: dockerAccess,
+            ...(dockerEvents ? { dockerEvents } : {}),
             failOnTampering: inputs.failOnTampering,
             containerTls: policy_1.CONTAINER_TLS,
             containerRules,
@@ -4748,7 +5051,8 @@ async function installPinnedBinary(sources, sha256, member, dest, label, h = hos
 
 /**
  * Transient systemd units: outside the runner's process tree (the runner's orphan cleanup
- * would otherwise kill them before "Complete job"), restarted on any exit, sandboxed.
+ * would otherwise kill them before "Complete job"), restarted on any exit unless the unit says
+ * otherwise, sandboxed.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HARDENING = void 0;
@@ -4764,10 +5068,7 @@ function transientUnitArgs(u) {
         `--description=${u.description}`,
         `--uid=${u.user}`,
         `--gid=${u.user}`,
-        '-p',
-        'Restart=always',
-        '-p',
-        'RestartSec=1',
+        ...(u.restart === 'no' ? ['-p', 'Restart=no'] : ['-p', 'Restart=always', '-p', 'RestartSec=1']),
         ...u.props.flatMap(p => ['-p', p]),
         ...Object.entries(u.env ?? {}).map(([k, v]) => `--setenv=${k}=${v}`),
         ...u.argv

@@ -11,6 +11,8 @@
  */
 
 import type { FlowRecord } from './flowlog';
+import { evaluateDocker, type DockerObserved } from './services/docker/config';
+import type { DockerPolicy } from './config/inputs';
 import type { SudoUsage } from './report/logs/sudo-log';
 import {
   buildReport,
@@ -28,6 +30,8 @@ const NOW = new Date('2026-11-07T12:34:56Z');
 const CANARY = '5ec7e7c0ffee1234';
 const PATH_CANARY = 'pathcanary-0f1e2d3c4b5a';
 const METHOD_CANARY = 'EXFILMETHODCANARY';
+/** Encoded-looking pieces of a dotted image tag (each piece is checked on its own). */
+const TAG_CANARIES = ['k3j9x8q2', 'a1b2c3'];
 
 const fw = (prefix: string, src: string, dst: string, proto: string, dport: string, uid = '1001') =>
   `Nov  7 12:00:00 vm kernel: [1.2] ${prefix}: IN= OUT=eth0 SRC=${src} DST=${dst} LEN=60 PROTO=${proto} SPT=4 DPT=${dport} UID=${uid} GID=${uid}`;
@@ -429,6 +433,12 @@ const FIREWALL_ANALYZE = [
 const plain = (x: string) => x;
 const encoded = (x: string) => `${CANARY}.${x}`;
 
+/** analyze: the docker policy evaluated against what the job did */
+function dockerPolicy(policy: DockerPolicy, o: Partial<DockerObserved>) {
+  const observed: DockerObserved = { uses: {}, images: [], services: 0, partial: false, ...o };
+  return { policy, observed, evaluation: evaluateDocker(policy, observed) };
+}
+
 function report(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'hosts'>): string {
   return buildReport({
     job: 'build',
@@ -470,7 +480,7 @@ describe('job summary golden snapshots', () => {
     ).toMatchSnapshot();
   });
 
-  it('analyze: suggestions, sudo usage, docker kept', () => {
+  it('analyze: suggestions, sudo usage, docker policy not applied', () => {
     const records = [...allowedTraffic(), ...refusedTraffic('WOULD_BLOCK', plain)];
     expect(
       report({
@@ -480,7 +490,7 @@ describe('job summary golden snapshots', () => {
         firewall: parseFirewallLog(FIREWALL_ANALYZE),
         dnsRefused: ['exfil.example.net', 'tunnel.example.com'],
         sudo: SUDO,
-        docker: { requested: 'keep', access: 'retained' },
+        docker: { requested: 'remove-group', access: 'retained' },
         integrity: undefined
       })
     ).toMatchSnapshot();
@@ -581,6 +591,46 @@ describe('job summary golden snapshots', () => {
       })
     ).toMatchSnapshot();
   });
+
+  it('analyze: the job used docker, so enforce would block it (docker: keep suggested)', () => {
+    expect(
+      report({
+        mode: 'analyze',
+        hosts: summarizeFlows(allowedTraffic()),
+        integrity: undefined,
+        docker: { requested: 'remove-group', access: 'retained' },
+        dockerPolicy: dockerPolicy('remove-group', {
+          uses: { container: 4, exec: 1, image: 2, build: 1, network: 2 },
+          images: ['alpine:3.20', 'postgres:16', 'ghcr.io/acme/app:1.4.2'],
+          services: 1
+        })
+      })
+    ).toMatchSnapshot();
+  });
+
+  it('analyze: docker: stop would stop the service containers', () => {
+    expect(
+      report({
+        mode: 'analyze',
+        hosts: summarizeFlows(allowedTraffic()),
+        integrity: undefined,
+        docker: { requested: 'stop', access: 'retained' },
+        dockerPolicy: dockerPolicy('stop', { services: 2 })
+      })
+    ).toMatchSnapshot();
+  });
+
+  it('analyze: docker: keep with no use of docker (partial recording)', () => {
+    expect(
+      report({
+        mode: 'analyze',
+        hosts: summarizeFlows(allowedTraffic()),
+        integrity: undefined,
+        docker: { requested: 'keep', access: 'retained' },
+        dockerPolicy: dockerPolicy('keep', { partial: true })
+      })
+    ).toMatchSnapshot();
+  });
 });
 
 describe('redaction canary (C5)', () => {
@@ -613,7 +663,17 @@ describe('redaction canary (C5)', () => {
       httpFilter: summarizeHttpFilter(records, () => SUGGESTION),
       firewall,
       containers: summarizeContainers(records, firewall),
-      dnsRefused: [encoded('dns-only.example.net'), encoded('exfil.example.net')]
+      dnsRefused: [encoded('dns-only.example.net'), encoded('exfil.example.net')],
+      // analyze: image names the job used, one with an encoded tag and one with an encoded path
+      dockerPolicy: dockerPolicy('remove-group', {
+        uses: { container: 1, image: 2 },
+        images: [
+          `ghcr.io/acme/app:${CANARY}`,
+          `registry.example.com/${CANARY}/app:1`,
+          `ghcr.io/acme/app:release.${TAG_CANARIES[0]}`,
+          `registry/x:build.${TAG_CANARIES[1]}`
+        ]
+      })
     });
   }
 
@@ -627,7 +687,8 @@ describe('redaction canary (C5)', () => {
       'Did not resolve',
       'Other',
       'Container egress',
-      'DNS '
+      'DNS ',
+      ...(mode === 'analyze' ? ['Images: '] : [])
     ]) {
       expect(md).toContain(section);
     }
@@ -636,6 +697,7 @@ describe('redaction canary (C5)', () => {
     expect(md).not.toContain(CANARY);
     expect(md).not.toContain(PATH_CANARY);
     expect(md).not.toContain(METHOD_CANARY);
+    for (const c of TAG_CANARIES) expect(md).not.toContain(c);
   });
 
   // Allowed names are redacted too, as in the host tables: a name under an allowed wildcard
