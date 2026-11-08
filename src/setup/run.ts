@@ -30,7 +30,7 @@ import { realHost, type Host } from '../system/host';
 import { resolveGitHubDomains } from '../config/github-domains';
 import * as sudo from '../services/sudo';
 import * as docker from '../services/docker';
-import { CRITICAL_FILES, SystemValidator } from '../integrity/baseline';
+import { CRITICAL_FILES, captureBaseline } from '../integrity/baseline';
 
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 export const SETUP_MARKER = '/etc/safer-runner/setup-complete';
@@ -255,12 +255,11 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   // 11. Sudo: logging on, then the integrity baseline, then sudo restricted - the last step
   const sudoRendered = sudo.render({ flavour: sudoFlavour, logFile: SUDO_LOG });
   const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);
-  const validator = new SystemValidator([
-    ...CRITICAL_FILES,
-    sudoRendered.logging.path,
-    ...(dockerd.configWritten ? [DOCKER_DAEMON_JSON] : [])
-  ]);
-  const baseline = await validator.capturePostSetupBaseline(sudoLogging);
+  const baseline = await captureBaseline(
+    h,
+    [...CRITICAL_FILES, sudoRendered.logging.path, ...(dockerd.configWritten ? [DOCKER_DAEMON_JSON] : [])],
+    sudoLogging
+  );
   if (inputs.disableSudo) {
     await sudo.restrictSudo(h, sudoRendered, baseline);
   }

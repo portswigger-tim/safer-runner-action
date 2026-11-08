@@ -202,6 +202,8 @@ class FakeHost {
   sudoRestricted = false;
   /** ip6tables-restore fails (a kernel without ip6tables support) */
   ip6RestoreFails = false;
+  /** a command line (`cmd args...`) that exits 1 */
+  failing: RegExp | null = null;
   /** bumped on every ruleset applied, and by a tampering step */
   iptablesGeneration = 0;
 
@@ -278,7 +280,9 @@ class FakeHost {
       ...(opts.silent ? { silent: true } : {})
     });
     let r: Result;
-    if (cmd === 'sudo' && args[0] === '--version') {
+    if (this.failing?.test([cmd, ...args].join(' '))) {
+      r = { code: 1, stderr: 'injected failure' };
+    } else if (cmd === 'sudo' && args[0] === '--version') {
       r = { code: 0, stdout: this.flavour === 'sudo-rs' ? 'sudo-rs 0.2.13-0ubuntu1.2\n' : 'Sudo version 1.9.15p5\n' };
     } else if (cmd === 'sudo') {
       const a = sudoArgv(args);
@@ -818,7 +822,7 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
   return v;
 }
 
-/** L22: the post step. */
+/** L22, L25: the post step. */
 function postInvariants(t: Entry[]): string[] {
   const v: string[] = [];
   const sudo = t.filter(e => e.argv[0] === 'sudo');
@@ -827,6 +831,12 @@ function postInvariants(t: Entry[]): string[] {
   if (read < 0 || summary < 0 || read > summary) v.push('L22: the integrity check must run before the report');
   for (const e of sudo) {
     if (!sudoersAllows(e.argv.slice(1))) v.push(`L22: post step needs sudo outside the restricted sudoers: ${line(e)}`);
+  }
+  // L25: one comparison - the baseline and each file and chain are read once, so the verdict
+  // (fail-on-tampering) and the summary cannot disagree
+  const reads = sudo.map(line);
+  for (const r of new Set(reads)) {
+    if (reads.filter(x => x === r).length > 1) v.push(`L25: the integrity check read ${r} more than once`);
   }
   return v;
 }
@@ -977,6 +987,74 @@ describe('setup transcript (runSetup on a recording fake runner)', () => {
   });
 });
 
+/** Run the pre or main step (each starts on import) until it has finished. */
+async function runStep(h: FakeHost, entry: './pre' | './main'): Promise<void> {
+  const from = h.log.length;
+  const done = () =>
+    h.log
+      .slice(from)
+      .some(l =>
+        /^(setFailed: |warning: safer-runner setup failed|info: ✅ safer-runner v2 (active|already active))/.test(l)
+      );
+  jest.isolateModules(() => {
+    require(entry);
+  });
+  for (let i = 0; i < 2000 && !done(); i++) await jest.advanceTimersByTimeAsync(100);
+  expect(done()).toBe(true);
+}
+
+describe('pre then main: the setup marker', () => {
+  const ANALYZE_NO_SUDO: Scenario = {
+    ...ENFORCE,
+    name: 'analyze, disable-sudo: true',
+    inputs: { mode: 'analyze', 'disable-sudo': 'true' }
+  };
+
+  it('a failure after the marker fails the pre step when disable-sudo is on (main will not retry)', async () => {
+    const h = newHost(ANALYZE_NO_SUDO);
+    h.failing = P.visudo; // the restricted sudoers is rejected: sudo is never removed
+    await runStep(h, './pre');
+    expect(h.files.has(SETUP_MARKER)).toBe(true);
+    expect(h.sudoRestricted).toBe(false);
+    expect(h.failed).toEqual([expect.stringContaining('setup failed before sudo was removed (disable-sudo: true)')]);
+    // main sees the marker and skips: the job must already have failed
+    await runStep(h, './main');
+    expect(h.log).toContain('info: ✅ safer-runner v2 already active (configured in the pre step)');
+    expect(h.sudoRestricted).toBe(false);
+    expect(h.failed).toHaveLength(1);
+  });
+
+  it('without disable-sudo, a failure after the marker stays a warning in analyze', async () => {
+    const h = newHost({ ...ANALYZE_NO_SUDO, inputs: { mode: 'analyze' } });
+    h.failing = P.baselineTee;
+    await runStep(h, './pre');
+    expect(h.failed).toEqual([]);
+    expect(h.log).toContainEqual(expect.stringMatching(/^warning: .*after the setup marker/));
+  });
+
+  it('a failure before the marker is retried by main, which fails closed', async () => {
+    const h = newHost(ANALYZE_NO_SUDO);
+    h.failing = P.updateCa;
+    await runStep(h, './pre');
+    expect(h.files.has(SETUP_MARKER)).toBe(false);
+    expect(h.failed).toEqual([]);
+    expect(h.log).toContainEqual(expect.stringContaining('The main step will retry.'));
+    await runStep(h, './main');
+    expect(h.failed).toEqual([expect.stringContaining('safer-runner setup failed')]);
+  });
+
+  it('a failure before the marker that main retries successfully ends with sudo removed', async () => {
+    const h = newHost(ANALYZE_NO_SUDO);
+    h.failing = P.updateCa;
+    await runStep(h, './pre');
+    h.failing = null;
+    await runStep(h, './main');
+    expect(h.failed).toEqual([]);
+    expect(h.files.has(SETUP_MARKER)).toBe(true);
+    expect(h.sudoRestricted).toBe(true);
+  });
+});
+
 describe('post step transcript', () => {
   async function jobThenPost(tamper?: (h: FakeHost) => void): Promise<FakeHost> {
     const h = await setup(ENFORCE);
@@ -1112,6 +1190,17 @@ describe('invariants have teeth (mutation check)', () => {
   ])('%s: %s', (id, _what, mutate) => {
     const v = setupInvariants(mutate(base), x);
     expect(ids(v)).toContain(id);
+  });
+
+  it('L25: the integrity check reads each file once (one comparison)', () => {
+    const read: Entry = { argv: ['sudo', 'cat', '/etc/resolv.conf'] };
+    const t: Entry[] = [
+      { argv: ['sudo', '-n', 'cat', VALIDATION_STATE_FILE] },
+      read,
+      read,
+      { argv: ['<summary.write>'] }
+    ];
+    expect(ids(postInvariants(t))).toEqual(['L25']);
   });
 
   it('L22: the post step must not need sudo beyond the restricted sudoers', () => {

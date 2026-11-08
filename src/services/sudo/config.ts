@@ -101,7 +101,7 @@ export const INTERNAL_SUDO_COMMANDS: string[] = [
   `rm -f ${SUDOERS_TEMP_FILE}`,
   // setupSudoLogging() on sudo-rs
   'systemctl restart rsyslog',
-  // SystemValidator.writeBaseline()
+  // captureBaseline() (integrity/baseline.ts)
   ...BASELINE_WRITE_COMMANDS.map(args => args.join(' '))
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 

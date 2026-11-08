@@ -21,7 +21,8 @@ import { containerAddresses } from './services/docker';
 import { actionRoot } from './services/mitmproxy';
 import { type SelfTestWindow, withoutSelfTests } from './setup/selftest';
 import { readSudoUsage } from './services/sudo';
-import { SystemValidator } from './integrity/baseline';
+import { checkIntegrity, type IntegrityResult } from './integrity/check';
+import { realHost } from './system/host';
 import { parseAllowedDomains, type Mode } from './policy';
 import { effectiveFailOnTampering } from './config/inputs';
 
@@ -83,14 +84,15 @@ async function run(): Promise<void> {
     return;
   }
 
-  // integrity first, outside the report: a report failure must never skip fail-on-tampering
-  const validator = new SystemValidator();
-  let intact = false;
+  // integrity first, outside the report: a report failure must never skip fail-on-tampering.
+  // One comparison: the verdict here and the summary's details come from the same reads.
+  let integrity: IntegrityResult | undefined;
   try {
-    intact = await validator.verifyAgainstBaseline();
+    integrity = await checkIntegrity(realHost);
   } catch (error) {
     core.warning(`Integrity check failed: ${error}`);
   }
+  const intact = integrity?.intact === true;
 
   try {
     await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
@@ -123,7 +125,6 @@ async function run(): Promise<void> {
       );
     }
 
-    const integrity = await validator.generateValidationDetails();
     const sudo = readSudoUsage(SUDO_LOG);
     for (const c of sudo.ran) core.info(`sudo (workflow) ${c.command} ${c.args}`);
     for (const c of sudo.refused) core.info(`sudo REFUSED ${c.command} ${c.args}`);
@@ -145,7 +146,7 @@ async function run(): Promise<void> {
         ...parseAllowedDomains(core.getInput('passthrough-domains'))
       ],
       selfTests,
-      integrity,
+      integrity: integrity?.details,
       containers,
       httpFilter,
       platformEndpoints: readPlatformAutoAllowed()
