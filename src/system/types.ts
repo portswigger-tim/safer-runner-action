@@ -31,6 +31,8 @@ export interface UnitSpec {
   props: string[];
   /** `--setenv` entries, in order */
   env?: Record<string, string>;
+  /** restart on any exit (the default), or never: a unit whose restart would change the system */
+  restart?: 'always' | 'no';
   argv: string[];
 }
 

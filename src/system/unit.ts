@@ -1,6 +1,7 @@
 /**
  * Transient systemd units: outside the runner's process tree (the runner's orphan cleanup
- * would otherwise kill them before "Complete job"), restarted on any exit, sandboxed.
+ * would otherwise kill them before "Complete job"), restarted on any exit unless the unit says
+ * otherwise, sandboxed.
  */
 
 import { sleep, sudo, type Host } from './host';
@@ -16,10 +17,7 @@ export function transientUnitArgs(u: UnitSpec): string[] {
     `--description=${u.description}`,
     `--uid=${u.user}`,
     `--gid=${u.user}`,
-    '-p',
-    'Restart=always',
-    '-p',
-    'RestartSec=1',
+    ...(u.restart === 'no' ? ['-p', 'Restart=no'] : ['-p', 'Restart=always', '-p', 'RestartSec=1']),
     ...u.props.flatMap(p => ['-p', p]),
     ...Object.entries(u.env ?? {}).map(([k, v]) => `--setenv=${k}=${v}`),
     ...u.argv

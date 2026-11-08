@@ -260,6 +260,9 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
 
   // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
   const dockerAccess = await docker.applyAccessPolicy(h, mode, dockerPlan, selfTests);
+  // analyze: record the use of docker from here on, for the post step's docker evaluation
+  const dockerEvents =
+    mode === 'analyze' && dockerd.active ? await docker.startEventRecorder(h, dockerd.prepared) : null;
   await exec.exec('sudo', ['tee', SETUP_MARKER], {
     input: Buffer.from(
       JSON.stringify({
@@ -270,6 +273,7 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
         ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
         dockerRetained: dockerAccess.access === 'retained',
         docker: dockerAccess,
+        ...(dockerEvents ? { dockerEvents } : {}),
         failOnTampering: inputs.failOnTampering,
         containerTls: CONTAINER_TLS,
         containerRules,

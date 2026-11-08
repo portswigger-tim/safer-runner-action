@@ -7,7 +7,7 @@
  *
  * Each scenario records the ordered transcript of every command, fetch, DNS lookup and exported
  * variable, plus the files setup left behind, and snapshots both. On top of the snapshots, the
- * setup and post-step ordering rules (L1-L28, see setupInvariants) are checked as executable
+ * setup and post-step ordering rules (L1-L29, see setupInvariants) are checked as executable
  * invariants, and a mutation check proves each rule fails when its order is broken.
  */
 
@@ -197,6 +197,8 @@ class FakeHost {
   flavour: 'sudo' | 'sudo-rs' = 'sudo';
   docker = { active: true, dockerUser: true, inGroup: true, socketLocked: false, containers: [] as string[] };
   users = new Set<string>();
+  /** transient units started (systemd-run) */
+  units = new Set<string>();
   proxyUp = false;
   dnsUp = false;
   sudoLogging = false;
@@ -370,6 +372,7 @@ class FakeHost {
         return this.systemctl(a);
       case 'systemd-run': {
         const unit = a.find(x => x.startsWith('--unit='))?.slice(7);
+        if (unit) this.units.add(unit);
         if (unit === constants.PROXY_UNIT) {
           this.proxyUp = true;
           // the addon's own startup record (python json.dumps spacing)
@@ -411,7 +414,7 @@ class FakeHost {
     const [, verb, ...rest] = a;
     const unit = rest.filter(x => !x.startsWith('-'))[0];
     const dockerUnit = unit === 'docker' || unit === 'docker.service' || unit === 'docker.socket';
-    if (verb === 'is-active') return { code: dockerUnit && this.docker.active ? 0 : 3 };
+    if (verb === 'is-active') return { code: (dockerUnit && this.docker.active) || this.units.has(unit) ? 0 : 3 };
     if (verb === 'stop' && dockerUnit) this.docker.active = false;
     if (verb === 'restart' && unit === 'rsyslog' && this.files.has(SUDO_LOGGING_RSYSLOG_FILE)) this.sudoLogging = true;
     return { code: 0 };
@@ -633,7 +636,7 @@ function writtenFiles(h: FakeHost): Record<string, string> {
   return out;
 }
 
-// ------------------------------------------------------------------ invariants (L1-L28)
+// ------------------------------------------------------------------ invariants (L1-L29)
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const re = (s: string) => new RegExp(`^${esc(s)}`);
@@ -686,6 +689,7 @@ const P = {
   /** anything that changes who can use docker, or whether it runs (wider than what setup does) */
   dockerAccessChange:
     /^sudo ((gpasswd|usermod|deluser|groupmod)\b.*\bdocker\b|(chown|chmod|chgrp|setfacl|rm|mv)\b.*docker\.sock|systemctl (stop|disable|mask|kill) docker(\.(socket|service))?$)/,
+  dockerEventsRun: re(`sudo systemd-run --unit=${constants.DOCKER_EVENTS_UNIT}`),
   marker: re(`sudo tee ${SETUP_MARKER}`),
   loggingClassic: re(`sudo mv /tmp/safer-runner-sudo-logging.tmp ${SUDO_LOGGING_SUDOERS_FILE}`),
   loggingRsTee: re(`sudo tee ${SUDO_LOGGING_RSYSLOG_FILE}`),
@@ -876,8 +880,23 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
     }
   }
 
+  // L29: analyze records the use of docker (read only) once dockerd has settled, and only when
+  // dockerd already runs (never started through socket activation); enforce never does
+  const recording = x.mode === 'analyze' && x.containerRules;
+  if (recording) {
+    before('L29', P.dockerRestart, P.dockerEventsRun, { optional: !x.dockerRestart });
+    before('L29', P.selftestWrite, P.dockerEventsRun);
+    before('L29', P.dockerEventsRun, P.marker);
+    const run = t.find(e => P.dockerEventsRun.test(line(e)));
+    if (run && !(run.argv.includes('Restart=no') && run.argv.includes('PrivateNetwork=yes'))) {
+      v.push('L29: the docker events recorder must never restart (it would start dockerd) and has no network');
+    }
+  } else if (at(P.dockerEventsRun) >= 0) {
+    v.push('L29: docker events recorded outside analyze, or with dockerd not running');
+  }
+
   // L23: each unit is stopped and reset before systemd-run (a re-run in main must not collide)
-  for (const unit of [constants.PROXY_UNIT, constants.DNS_UNIT]) {
+  for (const unit of [constants.PROXY_UNIT, constants.DNS_UNIT, ...(recording ? [constants.DOCKER_EVENTS_UNIT] : [])]) {
     before('L23', re(`sudo systemctl stop ${unit}`), re(`sudo systemd-run --unit=${unit}`));
     before('L23', re(`sudo systemctl reset-failed ${unit}`), re(`sudo systemd-run --unit=${unit}`));
   }
@@ -989,6 +1008,16 @@ const SCENARIOS: { s: Scenario; x: Omit<Expect, 'mode' | 'flavour'> }[] = [
   {
     s: { ...ENFORCE, name: 'analyze, docker: remove-group', inputs: { mode: 'analyze', docker: 'remove-group' } },
     x: { disableSudo: true, dockerRestart: true, containerRules: true }
+  },
+  {
+    // nothing to record, and docker events would start dockerd through socket activation
+    s: {
+      ...ENFORCE,
+      name: 'analyze, docker not running',
+      inputs: { mode: 'analyze' },
+      docker: { active: false, dockerUser: false, containers: [] }
+    },
+    x: { disableSudo: true, dockerRestart: false, containerRules: false }
   },
   {
     // the one behaviour change: analyze evaluates disable-sudo and sudo-config, never applies them
@@ -1436,6 +1465,43 @@ describe('invariants have teeth (mutation check)', () => {
     const marker = first(t, P.marker);
     const changed = [...t.slice(0, marker), { argv }, ...t.slice(marker)];
     expect(ids(setupInvariants(changed, ax))).toEqual(['L28']);
+  });
+
+  describe('L29 has teeth (mutation check)', () => {
+    const analyze = () => SCENARIOS.find(c => c.s.name === 'analyze, docker: stop with running service containers')!;
+    const ax = (): Expect => ({ ...analyze().x, mode: 'analyze', flavour: 'sudo' });
+
+    it.each([
+      ['started before the dockerd restart', (t: Entry[]) => moveBefore(t, P.dockerEventsRun, P.dockerRestart)],
+      ['started after the setup marker', (t: Entry[]) => moveBefore(t, P.marker, P.dockerEventsRun)],
+      [
+        'restarted on exit (would start dockerd)',
+        (t: Entry[]) =>
+          t.map(e =>
+            P.dockerEventsRun.test(line(e))
+              ? { ...e, argv: e.argv.map(a => (a === 'Restart=no' ? 'Restart=always' : a)) }
+              : e
+          )
+      ],
+      ['not started', (t: Entry[]) => t.filter(e => !P.dockerEventsRun.test(line(e)))]
+    ])('%s', async (_what, mutate) => {
+      const t = (await setup(analyze().s)).transcript;
+      expect(setupInvariants(t, ax())).toEqual([]);
+      expect(ids(setupInvariants(mutate(t), ax()))).toContain('L29');
+    });
+
+    it('recorded in enforce', async () => {
+      const t = (await setup(ENFORCE)).transcript;
+      const x: Expect = { ...SCENARIOS[0].x, mode: 'enforce', flavour: 'sudo' };
+      expect(setupInvariants(t, x)).toEqual([]);
+      const marker = first(t, P.marker);
+      const recorded = [
+        ...t.slice(0, marker),
+        { argv: ['sudo', 'systemd-run', `--unit=${constants.DOCKER_EVENTS_UNIT}`] },
+        ...t.slice(marker)
+      ];
+      expect(ids(setupInvariants(recorded, x))).toContain('L29');
+    });
   });
 
   it('L25: the integrity check reads each file once (one comparison)', () => {

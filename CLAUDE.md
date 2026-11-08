@@ -142,7 +142,7 @@ The action is a `node24` JavaScript action with `pre`, `main` and `post` entry p
 Each step depends on the one before it. Where a step needs an earlier one, it takes that
 step's readiness token (a branded type only the owning module can mint, listed in
 `src/system/tokens.test.ts`), so the wrong order does not compile; `src/orchestration.test.ts`
-checks the same order (L1-L28) on a recording fake runner.
+checks the same order (L1-L29) on a recording fake runner.
 
 1. Job-container guard: a job `container:` is unsupported (enforce fails, analyze warns).
 2. Allowlist: GitHub domains from `api.github.com/meta` (before DNS changes), plus user entries.
@@ -156,7 +156,8 @@ checks the same order (L1-L28) on a recording fake runner.
 9. Firewall: nat REDIRECT and filter chains, plus the container rules when docker runs.
 10. Live self-tests (`src/setup/selftest.ts`).
 11. Docker policy (`docker` input; enforce only, analyze never changes it), then verify real
-    docker access. In enforce, a removal that did not take fails setup.
+    docker access. In enforce, a removal that did not take fails setup. In analyze, if dockerd
+    runs, start the docker events recorder.
 12. Write the setup marker, set up sudo logging, capture the integrity baseline, and
     **restrict sudo last**.
 
@@ -239,7 +240,11 @@ checks the same order (L1-L28) on a recording fake runner.
      `planDocker` (`config.ts`) makes the `ApplyingDocker` that the functions changing access
      require, and only in enforce, so analyze changing it does not compile (L28 checks the
      transcript). Analyze is treated as `keep` (the dockerd CA restart and the container rules
-     still apply).
+     still apply), and records the use of docker after setup for the post step: a transient unit
+     runs `docker events` (read only; `eventRecorderUnit`), started only if `docker.service`
+     already runs and never restarted, since connecting to a stopped daemon would start it
+     through socket activation (L29). The setup marker records when it started and the
+     containers already running then.
    - **Defaults** (`src/config/inputs.ts`): unset `disable-sudo` is `true` and unset `docker` is
      `remove-group`, in both modes (analyze only evaluates them). Unset `fail-on-tampering` is
      mode-aware: on in enforce, off in analyze. An explicit value always wins. Enforce with sudo
@@ -290,6 +295,7 @@ All logs are in `/var/log/safer-runner/` and are readable without sudo:
 | `firewall.log` | rsyslog | iptables LOG lines (prefixes `SaferRunner-Drop:`, `-Egress:`, `-CDrop:`, `-CEgress:`) |
 | `sudo.log` | sudo / rsyslog | sudo usage |
 | `selftest.json` | setup | self-test results |
+| `docker-events.jsonl` | analyze: `docker events` (unit `safer-runner-docker-events`) | the docker events after setup, one JSON object per line |
 
 Config and state are root-owned in `/etc/safer-runner/` (`policy.json`, `Corefile`, `ca.pem`,
 `setup-complete`, `validation-state.json`). Binaries and the addon are in `/opt/safer-runner/`.
@@ -397,7 +403,7 @@ Python only: `npm run test:py`.
 - `orchestration.test.ts` - `runSetup` and the post step on a recording fake runner that fakes
   only external boundaries (`@actions/*`, `fs`, `os`, `dns`, `net`, randomness, timers).
   Snapshots the command transcript and the files setup writes, checks the ordering invariants
-  L1-L28, and proves each one bites with a mutation check. Also pre then main around the setup
+  L1-L29, and proves each one bites with a mutation check. Also pre then main around the setup
   marker.
 - `system/tokens.test.ts` - every readiness token is minted only by its owning module and has an
   ordering invariant; `system/system.test.ts` - `writeFiles` and transient units.

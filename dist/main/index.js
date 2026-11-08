@@ -854,7 +854,7 @@ function strictYaml(raw, name, o) {
  * Paths, users and pinned versions shared by the v2 setup and post-step code.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SOURCES = exports.COREDNS_ASSET_ID = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SOURCES = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.DOCKER_EVENTS_UNIT = exports.DOCKER_EVENTS_LOG = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SOURCES = exports.COREDNS_ASSET_ID = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SOURCES = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
 exports.MITMPROXY_VERSION = '12.3.1';
 exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
@@ -921,6 +921,9 @@ exports.DNS_LOG = `${exports.LOG_DIR}/dns.log`;
 exports.SUDO_LOG = `${exports.LOG_DIR}/sudo.log`;
 exports.FIREWALL_LOG = `${exports.LOG_DIR}/firewall.log`;
 exports.SELFTEST_FILE = `${exports.LOG_DIR}/selftest.json`;
+/** analyze: the docker events seen after setup (one JSON object per line; services/docker) */
+exports.DOCKER_EVENTS_LOG = `${exports.LOG_DIR}/docker-events.jsonl`;
+exports.DOCKER_EVENTS_UNIT = 'safer-runner-docker-events';
 /** iptables chains we own (filter + nat), and the LOG prefixes they use. */
 exports.FILTER_CHAIN = 'SAFER_RUNNER_OUT';
 exports.NAT_CHAIN = 'SAFER_RUNNER_NAT';
@@ -2180,7 +2183,7 @@ async function cutover(h, _dns) {
 /***/ }),
 
 /***/ 8290:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -2192,9 +2195,12 @@ async function cutover(h, _dns) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
 exports.planDocker = planDocker;
+exports.eventRecorderUnit = eventRecorderUnit;
 exports.dockerAccess = dockerAccess;
 exports.mergeLiveRestore = mergeLiveRestore;
 exports.parseContainerAddresses = parseContainerAddresses;
+const constants_1 = __nccwpck_require__(8729);
+const unit_1 = __nccwpck_require__(812);
 exports.RUNNER_USERNAME = 'runner';
 exports.DOCKER_GROUP = 'docker';
 exports.DOCKER_SOCKET = '/var/run/docker.sock';
@@ -2207,6 +2213,30 @@ function planDocker(mode, policy) {
     if (mode !== 'enforce' || policy === 'keep')
         return { policy, applied: 'keep', apply: null };
     return { policy, applied: policy, apply: Object.freeze({ removal: policy }) };
+}
+/**
+ * analyze: the docker events recorder. It only subscribes (`docker events`) and appends each
+ * event to DOCKER_EVENTS_LOG, so the post step sees every use of docker after setup (dockerd
+ * itself keeps only the latest events). Never restarted: reconnecting to a stopped daemon
+ * would start it through socket activation. No network, no capabilities; the docker CLI reads no
+ * config (no context can point it elsewhere) and talks to the socket named here.
+ */
+function eventRecorderUnit() {
+    return {
+        unit: constants_1.DOCKER_EVENTS_UNIT,
+        description: 'safer-runner docker events recorder (analyze)',
+        user: 'root',
+        restart: 'no',
+        props: [
+            ...unit_1.HARDENING,
+            'PrivateNetwork=yes',
+            'CapabilityBoundingSet=',
+            `ReadWritePaths=${constants_1.LOG_DIR}`,
+            `StandardOutput=append:${constants_1.DOCKER_EVENTS_LOG}`
+        ],
+        env: { DOCKER_CONFIG: '/run/safer-runner/docker-cli-none' },
+        argv: ['/usr/bin/docker', '-H', `unix://${exports.DOCKER_SOCKET}`, 'events', '--format', '{{json .}}']
+    };
 }
 function dockerAccess(s) {
     if (!s.daemonActive && !s.socketUnitActive)
@@ -2308,12 +2338,14 @@ exports.stopDockerService = stopDockerService;
 exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
 exports.readDockerState = readDockerState;
 exports.prepare = prepare;
+exports.startEventRecorder = startEventRecorder;
 exports.applyAccessPolicy = applyAccessPolicy;
 exports.containerAddresses = containerAddresses;
 const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const host_1 = __nccwpck_require__(7020);
+const unit_1 = __nccwpck_require__(812);
 const config_1 = __nccwpck_require__(8290);
 __exportStar(__nccwpck_require__(8290), exports);
 /** A sudo step whose failure is collected, not thrown: the verified state decides. */
@@ -2486,6 +2518,40 @@ async function prepare(h, policy, _trust) {
         }
     }
     return { active, configWritten, prepared: Object.freeze({}) };
+}
+/**
+ * analyze: start the docker events recorder (eventRecorderUnit), once dockerd has settled (it
+ * restarts for the CA first). Only when docker.service is already running: `docker events`
+ * against a socket-activated daemon would start it. Best effort: analyze never fails on it, and
+ * the post step then calls its docker evaluation partial. Returns null when not recording.
+ */
+async function startEventRecorder(h, _prepared) {
+    if (!(await unitActive(h, 'docker.service'))) {
+        core.info('docker events: docker.service is not running, so nothing is recorded (analyze never starts it)');
+        return null;
+    }
+    const containers = await runningContainers(h);
+    const since = new Date().toISOString();
+    try {
+        await (0, host_1.sudo)(['touch', constants_1.DOCKER_EVENTS_LOG], {}, h);
+        await (0, host_1.sudo)(['chmod', '0644', constants_1.DOCKER_EVENTS_LOG], {}, h);
+        await (0, unit_1.startUnit)(h, (0, config_1.eventRecorderUnit)(), {
+            ready: () => unitActive(h, constants_1.DOCKER_EVENTS_UNIT),
+            pollMs: 200,
+            timeoutMs: 5000,
+            diagnostics: [
+                ['systemctl', 'status', constants_1.DOCKER_EVENTS_UNIT, '--no-pager', '-l'],
+                ['journalctl', '-u', constants_1.DOCKER_EVENTS_UNIT, '--no-pager', '-n', '20']
+            ],
+            timeoutError: () => new Error('the recorder did not start within 5s')
+        });
+    }
+    catch (error) {
+        core.warning(`docker events: not recorded (${error}); the summary's docker evaluation will be partial`);
+        return null;
+    }
+    core.info(`docker events: recording to ${constants_1.DOCKER_EVENTS_LOG} (${containers.length} container(s) already running)`);
+    return { since, containers };
 }
 /**
  * Apply the docker plan (enforce only: see planDocker), then verify the runner user's real docker
@@ -4251,6 +4317,8 @@ async function runSetup(inputs, h = host_1.realHost) {
     }
     // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
     const dockerAccess = await docker.applyAccessPolicy(h, mode, dockerPlan, selfTests);
+    // analyze: record the use of docker from here on, for the post step's docker evaluation
+    const dockerEvents = mode === 'analyze' && dockerd.active ? await docker.startEventRecorder(h, dockerd.prepared) : null;
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
         input: Buffer.from(JSON.stringify({
             mode,
@@ -4260,6 +4328,7 @@ async function runSetup(inputs, h = host_1.realHost) {
             ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
             dockerRetained: dockerAccess.access === 'retained',
             docker: dockerAccess,
+            ...(dockerEvents ? { dockerEvents } : {}),
             failOnTampering: inputs.failOnTampering,
             containerTls: policy_1.CONTAINER_TLS,
             containerRules,
@@ -4755,7 +4824,8 @@ async function installPinnedBinary(sources, sha256, member, dest, label, h = hos
 
 /**
  * Transient systemd units: outside the runner's process tree (the runner's orphan cleanup
- * would otherwise kill them before "Complete job"), restarted on any exit, sandboxed.
+ * would otherwise kill them before "Complete job"), restarted on any exit unless the unit says
+ * otherwise, sandboxed.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HARDENING = void 0;
@@ -4771,10 +4841,7 @@ function transientUnitArgs(u) {
         `--description=${u.description}`,
         `--uid=${u.user}`,
         `--gid=${u.user}`,
-        '-p',
-        'Restart=always',
-        '-p',
-        'RestartSec=1',
+        ...(u.restart === 'no' ? ['-p', 'Restart=no'] : ['-p', 'Restart=always', '-p', 'RestartSec=1']),
         ...u.props.flatMap(p => ['-p', p]),
         ...Object.entries(u.env ?? {}).map(([k, v]) => `--setenv=${k}=${v}`),
         ...u.argv

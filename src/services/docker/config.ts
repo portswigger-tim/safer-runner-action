@@ -5,7 +5,10 @@
  */
 
 import type { DockerPolicy } from '../../config/inputs';
+import { DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT, LOG_DIR } from '../../constants';
 import type { Mode } from '../../policy';
+import type { UnitSpec } from '../../system/types';
+import { HARDENING } from '../../system/unit';
 
 export const RUNNER_USERNAME = 'runner';
 export const DOCKER_GROUP = 'docker';
@@ -36,6 +39,31 @@ export interface DockerPlan {
 export function planDocker(mode: Mode, policy: DockerPolicy): DockerPlan {
   if (mode !== 'enforce' || policy === 'keep') return { policy, applied: 'keep', apply: null };
   return { policy, applied: policy, apply: Object.freeze({ removal: policy }) as ApplyingDocker };
+}
+
+/**
+ * analyze: the docker events recorder. It only subscribes (`docker events`) and appends each
+ * event to DOCKER_EVENTS_LOG, so the post step sees every use of docker after setup (dockerd
+ * itself keeps only the latest events). Never restarted: reconnecting to a stopped daemon
+ * would start it through socket activation. No network, no capabilities; the docker CLI reads no
+ * config (no context can point it elsewhere) and talks to the socket named here.
+ */
+export function eventRecorderUnit(): UnitSpec {
+  return {
+    unit: DOCKER_EVENTS_UNIT,
+    description: 'safer-runner docker events recorder (analyze)',
+    user: 'root',
+    restart: 'no',
+    props: [
+      ...HARDENING,
+      'PrivateNetwork=yes',
+      'CapabilityBoundingSet=',
+      `ReadWritePaths=${LOG_DIR}`,
+      `StandardOutput=append:${DOCKER_EVENTS_LOG}`
+    ],
+    env: { DOCKER_CONFIG: '/run/safer-runner/docker-cli-none' },
+    argv: ['/usr/bin/docker', '-H', `unix://${DOCKER_SOCKET}`, 'events', '--format', '{{json .}}']
+  };
 }
 
 /** Docker access as observed on the runner (not as requested). */

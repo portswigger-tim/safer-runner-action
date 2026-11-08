@@ -74,6 +74,9 @@ export const DNS_LOG = `${LOG_DIR}/dns.log`;
 export const SUDO_LOG = `${LOG_DIR}/sudo.log`;
 export const FIREWALL_LOG = `${LOG_DIR}/firewall.log`;
 export const SELFTEST_FILE = `${LOG_DIR}/selftest.json`;
+/** analyze: the docker events seen after setup (one JSON object per line; services/docker) */
+export const DOCKER_EVENTS_LOG = `${LOG_DIR}/docker-events.jsonl`;
+export const DOCKER_EVENTS_UNIT = 'safer-runner-docker-events';
 
 /** iptables chains we own (filter + nat), and the LOG prefixes they use. */
 export const FILTER_CHAIN = 'SAFER_RUNNER_OUT';

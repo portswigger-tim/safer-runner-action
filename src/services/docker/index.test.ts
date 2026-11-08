@@ -5,7 +5,7 @@
 
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import { DOCKER_DAEMON_JSON } from '../../constants';
+import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants';
 import type { SelfTestsRun } from '../../setup/selftest';
 import { recordingHost } from '../../system/testing';
 import type { TrustInstalled } from '../mitmproxy/trust';
@@ -23,7 +23,9 @@ import {
   planDocker,
   prepare,
   readDockerState,
-  stopDockerService
+  startEventRecorder,
+  stopDockerService,
+  type DockerPrepared
 } from '.';
 
 jest.mock('@actions/core');
@@ -330,6 +332,51 @@ describe('prepare (F1: dockerd trusts the CA before the firewall)', () => {
     const { host } = runner();
     // @ts-expect-error - restarting dockerd before the CA is in the system store does not compile
     const early = () => prepare(host, 'keep', {});
+    expect(early).toBeInstanceOf(Function);
+  });
+});
+
+describe('startEventRecorder (analyze: the use of docker after setup)', () => {
+  const PREPARED = Object.freeze({}) as DockerPrepared;
+  beforeEach(() => jest.useFakeTimers({ now: new Date('2026-11-08T12:00:00Z') }));
+  afterEach(() => jest.useRealTimers());
+
+  it('starts the recorder (never restarted, no network) and notes the containers already running', async () => {
+    const { host, calls } = recordingHost(
+      () => 0,
+      l => (l === 'sudo docker ps -q --no-trunc' ? 'c1\nc2\n' : '')
+    );
+    expect(await startEventRecorder(host, PREPARED)).toEqual({
+      since: '2026-11-08T12:00:00.000Z',
+      containers: ['c1', 'c2']
+    });
+    const run = calls.find(c => c.startsWith(`sudo systemd-run --unit=${DOCKER_EVENTS_UNIT} `))!;
+    expect(run).toContain(' -p Restart=no ');
+    expect(run).not.toContain('Restart=always');
+    expect(run).toContain(' -p PrivateNetwork=yes ');
+    expect(run).toContain(` -p StandardOutput=append:${DOCKER_EVENTS_LOG} `);
+    expect(run).toMatch(/ \/usr\/bin\/docker -H unix:\/\/\/var\/run\/docker\.sock events --format \{\{json \.\}\}$/);
+    expect(calls.indexOf(`sudo touch ${DOCKER_EVENTS_LOG}`)).toBeLessThan(calls.indexOf(run));
+  });
+
+  it('dockerd not running: records nothing, and never connects (socket activation would start it)', async () => {
+    const { host, calls } = runner({ daemon: false });
+    expect(await startEventRecorder(host, PREPARED)).toBeNull();
+    expect(calls).toEqual(['systemctl is-active --quiet docker.service [ignore-rc] [silent]']);
+  });
+
+  it('a recorder that does not start is a warning, never a setup failure', async () => {
+    const { host } = recordingHost(l => (l === `systemctl is-active --quiet ${DOCKER_EVENTS_UNIT}` ? 3 : 0));
+    const done = startEventRecorder(host, PREPARED);
+    await jest.advanceTimersByTimeAsync(6_000);
+    expect(await done).toBeNull();
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('docker events: not recorded'));
+  });
+
+  it('needs dockerd settled first (a compile-time order check)', () => {
+    const { host } = runner();
+    // @ts-expect-error - recording before dockerd restarted for the CA does not compile
+    const early = () => startEventRecorder(host, {});
     expect(early).toBeInstanceOf(Function);
   });
 });

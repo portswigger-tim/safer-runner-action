@@ -7,15 +7,17 @@ import * as core from '@actions/core';
 import * as fs from 'fs';
 import type { DockerPolicy } from '../../config/inputs';
 import type { Mode } from '../../policy';
-import { DOCKER_DAEMON_JSON } from '../../constants';
+import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants';
 import type { SelfTestsRun } from '../../setup/selftest';
 import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
+import { startUnit } from '../../system/unit';
 import type { TrustInstalled } from '../mitmproxy/trust';
 import {
   DOCKER_GROUP,
   DOCKER_SOCKET,
   RUNNER_USERNAME,
   dockerAccess,
+  eventRecorderUnit,
   mergeLiveRestore,
   parseContainerAddresses,
   type ApplyingDocker,
@@ -223,6 +225,48 @@ export async function prepare(
     }
   }
   return { active, configWritten, prepared: Object.freeze({}) as DockerPrepared };
+}
+
+/** Where the docker events recording starts: the post step reads the use of docker after it. */
+export interface DockerEventsStart {
+  /** when the recorder started */
+  since: string;
+  /** containers already running then (service containers): not the job's use of docker */
+  containers: string[];
+}
+
+/**
+ * analyze: start the docker events recorder (eventRecorderUnit), once dockerd has settled (it
+ * restarts for the CA first). Only when docker.service is already running: `docker events`
+ * against a socket-activated daemon would start it. Best effort: analyze never fails on it, and
+ * the post step then calls its docker evaluation partial. Returns null when not recording.
+ */
+export async function startEventRecorder(h: Host, _prepared: DockerPrepared): Promise<DockerEventsStart | null> {
+  if (!(await unitActive(h, 'docker.service'))) {
+    core.info('docker events: docker.service is not running, so nothing is recorded (analyze never starts it)');
+    return null;
+  }
+  const containers = await runningContainers(h);
+  const since = new Date().toISOString();
+  try {
+    await sudo(['touch', DOCKER_EVENTS_LOG], {}, h);
+    await sudo(['chmod', '0644', DOCKER_EVENTS_LOG], {}, h);
+    await startUnit(h, eventRecorderUnit(), {
+      ready: () => unitActive(h, DOCKER_EVENTS_UNIT),
+      pollMs: 200,
+      timeoutMs: 5000,
+      diagnostics: [
+        ['systemctl', 'status', DOCKER_EVENTS_UNIT, '--no-pager', '-l'],
+        ['journalctl', '-u', DOCKER_EVENTS_UNIT, '--no-pager', '-n', '20']
+      ],
+      timeoutError: () => new Error('the recorder did not start within 5s')
+    });
+  } catch (error) {
+    core.warning(`docker events: not recorded (${error}); the summary's docker evaluation will be partial`);
+    return null;
+  }
+  core.info(`docker events: recording to ${DOCKER_EVENTS_LOG} (${containers.length} container(s) already running)`);
+  return { since, containers };
 }
 
 /** What the setup marker (and so the report) records about docker: requested AND verified. */
