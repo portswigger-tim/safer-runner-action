@@ -18,6 +18,7 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
 import { VALIDATION_STATE_FILE } from '../constants';
+import type { SudoLogging } from '../services/sudo';
 
 interface FileChecksum {
   path: string;
@@ -82,6 +83,13 @@ export const BASELINE_WRITE_COMMANDS: string[][] = [
   ['tee', VALIDATION_STATE_FILE]
 ];
 
+declare const baselineCaptured: unique symbol;
+/**
+ * The baseline is stored (root-owned 0600), with sudo logging already on. Minted only by
+ * capturePostSetupBaseline(); restricting sudo takes it, so it comes after.
+ */
+export type BaselineCaptured = { readonly [baselineCaptured]: true };
+
 export class SystemValidator {
   private criticalFiles: string[];
 
@@ -94,7 +102,7 @@ export class SystemValidator {
    * Capture post-setup baseline checksums after all configuration is complete
    * This baseline will be verified in the post-action to detect tampering
    */
-  async capturePostSetupBaseline(): Promise<void> {
+  async capturePostSetupBaseline(_logging: SudoLogging): Promise<BaselineCaptured> {
     core.info('📋 Capturing post-setup security baseline...');
 
     const state: ValidationState = {
@@ -130,6 +138,7 @@ export class SystemValidator {
     // Save validation state
     await this.writeBaseline(JSON.stringify(state, null, 2));
     core.info(`💾 Security baseline saved to ${VALIDATION_STATE_FILE}`);
+    return Object.freeze({}) as BaselineCaptured;
   }
 
   /**

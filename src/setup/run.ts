@@ -28,7 +28,7 @@ import { dnsProbeName, runSelfTests } from './selftest';
 import * as coredns from '../services/coredns';
 import { realHost, type Host } from '../system/host';
 import { resolveGitHubDomains } from '../config/github-domains';
-import { detectSudoFlavour, disableSudoForRunner, getSudoLoggingConfigFile, setupSudoLogging } from '../services/sudo';
+import * as sudo from '../services/sudo';
 import * as docker from '../services/docker';
 import { CRITICAL_FILES, SystemValidator } from '../integrity/baseline';
 
@@ -92,9 +92,9 @@ export const JOB_CONTAINER_MESSAGE =
   '`services:` and `docker run` steps instead (their egress is controlled).';
 
 /**
- * `h` is where the converted services run their commands. Until every service takes a Host
- * (docker, sudo and the integrity baseline still use @actions/exec directly), it is a test seam
- * only: pass anything but realHost and part of setup still runs on the real machine.
+ * `h` is where the converted services run their commands. Until every step takes a Host (the
+ * integrity baseline and a few setup steps here still use @actions/exec directly), it is a test
+ * seam only: pass anything but realHost and part of setup still runs on the real machine.
  */
 export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void> {
   const { mode } = inputs;
@@ -124,7 +124,7 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
     core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
   }
 
-  const sudoFlavour = await detectSudoFlavour();
+  const sudoFlavour = await sudo.detectSudoFlavour(h);
   core.info(`sudo implementation: ${sudoFlavour}`);
 
   const ports = await mitmproxy.allocateProxyPorts();
@@ -253,15 +253,17 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
     ),
     silent: true
   });
-  await setupSudoLogging(SUDO_LOG, sudoFlavour);
+  // 11. Sudo: logging on, then the integrity baseline, then sudo restricted - the last step
+  const sudoRendered = sudo.render({ flavour: sudoFlavour, logFile: SUDO_LOG });
+  const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);
   const validator = new SystemValidator([
     ...CRITICAL_FILES,
-    getSudoLoggingConfigFile(sudoFlavour),
+    sudoRendered.logging.path,
     ...(dockerd.configWritten ? [DOCKER_DAEMON_JSON] : [])
   ]);
-  await validator.capturePostSetupBaseline();
+  const baseline = await validator.capturePostSetupBaseline(sudoLogging);
   if (inputs.disableSudo) {
-    await disableSudoForRunner(sudoFlavour);
+    await sudo.restrictSudo(h, sudoRendered, baseline);
   }
 
   core.info(`✅ safer-runner v2 active in ${mode} mode`);

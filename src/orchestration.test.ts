@@ -763,6 +763,8 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
   before('L17', P.dockerPolicy, P.marker, { optional: true, aLast: true });
   before('L17', P.selftestWrite, P.marker);
 
+  // the baseline (and everything after it) runs with sudo logging on (sudo-rs: see loggingStart)
+  before('L18', x.flavour === 'sudo' ? P.loggingClassic : P.loggingRsTee, P.baselineTouch);
   const logging = loggingStart(t, x.flavour);
   const markerAt = at(P.marker);
   if (logging < 0) v.push('L18: sudo logging was never turned on');
@@ -1101,9 +1103,20 @@ describe('invariants have teeth (mutation check)', () => {
       'a workflow-looking sudo command after logging started',
       (t: Entry[]) => [...t.slice(0, -1), { argv: ['sudo', 'cat', '/etc/shadow'] }, t[t.length - 1]]
     ],
+    [
+      'L18',
+      'baseline written before sudo logging is on',
+      (t: Entry[]) => moveBefore(t, P.baselineTouch, P.loggingClassic)
+    ],
     ['L21', 'sudo restricted before the baseline', (t: Entry[]) => moveBefore(t, P.sudoersMv, P.baselineTouch)],
+    [
+      'L21',
+      'a privileged step after sudo is restricted',
+      (t: Entry[]) => [...t, { argv: ['sudo', 'systemctl', 'restart', 'rsyslog'] }]
+    ],
     ['L24', 'iptables-restore with its failure ignored', (t: Entry[]) => ignoreAt(t, P.restore4)],
-    ['L24', 'the sudoers move with its failure ignored', (t: Entry[]) => ignoreAt(t, P.sudoersMv)]
+    ['L24', 'the sudoers move with its failure ignored', (t: Entry[]) => ignoreAt(t, P.sudoersMv)],
+    ['L24', 'the sudo-logging move with its failure ignored', (t: Entry[]) => ignoreAt(t, P.loggingClassic)]
   ])('%s: %s', (id, _what, mutate) => {
     const v = setupInvariants(mutate(base), x);
     expect(ids(v)).toContain(id);

@@ -1110,7 +1110,7 @@ class SystemValidator {
      * Capture post-setup baseline checksums after all configuration is complete
      * This baseline will be verified in the post-action to detect tampering
      */
-    async capturePostSetupBaseline() {
+    async capturePostSetupBaseline(_logging) {
         core.info('📋 Capturing post-setup security baseline...');
         const state = {
             files: [],
@@ -1144,6 +1144,7 @@ class SystemValidator {
         // Save validation state
         await this.writeBaseline(JSON.stringify(state, null, 2));
         core.info(`💾 Security baseline saved to ${constants_1.VALIDATION_STATE_FILE}`);
+        return Object.freeze({});
     }
     /**
      * Store the baseline root-owned (0600) under /etc/safer-runner, never in a runner-writable
@@ -3755,14 +3756,164 @@ async function distributeTrust(h, _proxy) {
 
 /***/ }),
 
+/***/ 5665:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * Sudo's pure config: the sudo-logging config for each sudo implementation, the restricted
+ * sudoers file, and the list of the action's own sudo commands. No I/O.
+ *
+ * Sudoers text must be valid for BOTH implementations: no wildcards among command arguments
+ * (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no `log_allowed`.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
+exports.parseSudoFlavour = parseSudoFlavour;
+exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
+exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
+exports.buildSudoLoggingDropIn = buildSudoLoggingDropIn;
+exports.getValidationSudoCommands = getValidationSudoCommands;
+exports.getRequiredSudoCommands = getRequiredSudoCommands;
+exports.buildRestrictedSudoers = buildRestrictedSudoers;
+exports.render = render;
+const baseline_1 = __nccwpck_require__(1333);
+const constants_1 = __nccwpck_require__(8729);
+exports.RUNNER_USERNAME = 'runner';
+/** Classic sudo: sudoers drop-in enabling `Defaults logfile=` */
+exports.SUDO_LOGGING_SUDOERS_FILE = '/etc/sudoers.d/00-sudo-logging';
+/** sudo-rs: rsyslog rule copying sudo's syslog messages into the safer-runner log file */
+exports.SUDO_LOGGING_RSYSLOG_FILE = '/etc/rsyslog.d/10-sudo-safer-runner.conf';
+/** The runner's own sudoers file, replaced by the restricted one (disable-sudo) */
+exports.RUNNER_SUDOERS_FILE = `/etc/sudoers.d/${exports.RUNNER_USERNAME}`;
+exports.SUDOERS_TEMP_FILE = `/tmp/${exports.RUNNER_USERNAME}-sudoers.tmp`;
+exports.SUDO_LOGGING_TEMP_FILE = '/tmp/safer-runner-sudo-logging.tmp';
+/**
+ * Determine the sudo implementation from `sudo --version` output
+ * sudo-rs prints "sudo-rs 0.2.13-0ubuntu1.2", classic sudo prints "Sudo version 1.9.15p5"
+ */
+function parseSudoFlavour(versionOutput) {
+    return /^\s*sudo-rs\b/im.test(versionOutput) ? 'sudo-rs' : 'sudo';
+}
+/**
+ * Path of the config file that enables sudo logging for the given sudo implementation
+ * This file is added to the integrity validation baseline
+ */
+function getSudoLoggingConfigFile(flavour) {
+    return flavour === 'sudo-rs' ? exports.SUDO_LOGGING_RSYSLOG_FILE : exports.SUDO_LOGGING_SUDOERS_FILE;
+}
+/**
+ * Build the rsyslog rule used on sudo-rs to capture sudo usage into a dedicated log file
+ *
+ * sudo-rs logs "runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/id" to syslog.
+ * The template prefixes it with an RFC3164 timestamp so the file matches the
+ * classic sudo logfile format understood by report/logs/sudo-log.ts.
+ */
+function buildSudoRsyslogConfig(logFile) {
+    return `template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")
+if $programname == 'sudo' and $msg contains 'COMMAND=' then {
+  action(type="omfile" file="${logFile}" template="SaferRunnerSudo")
+}
+`;
+}
+/** Classic sudo: the `Defaults logfile=` drop-in */
+function buildSudoLoggingDropIn(logFile) {
+    return `Defaults logfile=${logFile}\nDefaults loglinelen=0\n`;
+}
+/**
+ * Commands run by post-action integrity validation (see src/integrity/baseline.ts)
+ * These are the only sudo commands the runner keeps after sudo is restricted.
+ */
+function getValidationSudoCommands() {
+    const files = [
+        ...baseline_1.CRITICAL_FILES,
+        constants_1.DOCKER_DAEMON_JSON,
+        exports.SUDO_LOGGING_SUDOERS_FILE,
+        exports.SUDO_LOGGING_RSYSLOG_FILE,
+        constants_1.VALIDATION_STATE_FILE
+    ];
+    return [
+        ...files.map(file => `/usr/bin/cat ${file}`),
+        ...baseline_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, baseline_1.iptablesListArgs)(chain).join(' ')}`),
+        // post-step teardown (destroys the CA key). `""` = no arguments allowed.
+        `${constants_1.TEARDOWN_BIN} ""`
+    ];
+}
+/**
+ * Sudo commands run by the action itself while sudo logging is active
+ * Filtered out of sudo reports - they are internal operations, not workflow activity.
+ * Paths are matched by basename so /usr/sbin vs /usr/bin resolution doesn't matter.
+ */
+exports.INTERNAL_SUDO_COMMANDS = [
+    ...getValidationSudoCommands(),
+    // restrictSudo()
+    `tee ${exports.SUDOERS_TEMP_FILE}`,
+    `visudo -c -f ${exports.SUDOERS_TEMP_FILE}`,
+    `chmod 0440 ${exports.SUDOERS_TEMP_FILE}`,
+    `chown root:root ${exports.SUDOERS_TEMP_FILE}`,
+    `mv ${exports.SUDOERS_TEMP_FILE} ${exports.RUNNER_SUDOERS_FILE}`,
+    `rm -f ${exports.SUDOERS_TEMP_FILE}`,
+    // setupSudoLogging() on sudo-rs
+    'systemctl restart rsyslog',
+    // SystemValidator.writeBaseline()
+    ...baseline_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
+    constants_1.TEARDOWN_BIN
+].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
+/**
+ * Generate the sudoers rules the action always needs for post-action validation
+ *
+ * Only exact read-only commands are allowed: no wildcards (embedded wildcards are
+ * unsupported by sudo-rs, and any wildcard matches arbitrary extra arguments), and nothing that can
+ * write files or modify sudo/syslog configuration.
+ *
+ * @param username - The username to generate rules for
+ * @returns Sudoers configuration string with required commands
+ */
+function getRequiredSudoCommands(username = exports.RUNNER_USERNAME) {
+    const commands = getValidationSudoCommands();
+    return `
+# Required commands for post-action validation
+# These are automatically added by safer-runner-action
+Cmnd_Alias SAFER_RUNNER_VALIDATION = ${commands.join(', \\\n    ')}
+
+${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
+`;
+}
+/** The restricted sudoers file that replaces RUNNER_SUDOERS_FILE (disable-sudo). */
+function buildRestrictedSudoers() {
+    return `# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation.
+# All other sudo commands will be denied.
+${getRequiredSudoCommands(exports.RUNNER_USERNAME)}
+`;
+}
+function render(f) {
+    return {
+        flavour: f.flavour,
+        logFile: f.logFile,
+        logging: {
+            path: getSudoLoggingConfigFile(f.flavour),
+            content: f.flavour === 'sudo-rs' ? buildSudoRsyslogConfig(f.logFile) : buildSudoLoggingDropIn(f.logFile)
+        },
+        sudoers: buildRestrictedSudoers()
+    };
+}
+
+
+/***/ }),
+
 /***/ 3275:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
 /**
- * Sudo logging and configuration module
- * Handles sudo logging setup and removing the runner user's sudo (disable-sudo)
+ * Sudo: logging the job's sudo use, and removing the runner user's sudo (disable-sudo). Pure
+ * parts are in ./config.ts.
+ *
+ * Order (each step takes the previous one's token): setupSudoLogging() -> the integrity baseline
+ * (integrity/baseline.ts) -> restrictSudo(), the last privileged step of setup.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -3797,70 +3948,31 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
-exports.parseSudoFlavour = parseSudoFlavour;
 exports.detectSudoFlavour = detectSudoFlavour;
-exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
-exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
 exports.setupSudoLogging = setupSudoLogging;
-exports.getValidationSudoCommands = getValidationSudoCommands;
-exports.getRequiredSudoCommands = getRequiredSudoCommands;
-exports.disableSudoForRunner = disableSudoForRunner;
+exports.restrictSudo = restrictSudo;
 exports.readSudoUsage = readSudoUsage;
 const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
 const sudo_parser_1 = __nccwpck_require__(7516);
-const baseline_1 = __nccwpck_require__(1333);
-const constants_1 = __nccwpck_require__(8729);
-// Constants
-exports.RUNNER_USERNAME = 'runner';
-/** Classic sudo: sudoers drop-in enabling `Defaults logfile=` */
-exports.SUDO_LOGGING_SUDOERS_FILE = '/etc/sudoers.d/00-sudo-logging';
-/** sudo-rs: rsyslog rule copying sudo's syslog messages into the safer-runner log file */
-exports.SUDO_LOGGING_RSYSLOG_FILE = '/etc/rsyslog.d/10-sudo-safer-runner.conf';
-const SUDOERS_TEMP_FILE = `/tmp/${exports.RUNNER_USERNAME}-sudoers.tmp`;
-const SUDO_LOGGING_TEMP_FILE = '/tmp/safer-runner-sudo-logging.tmp';
-/**
- * Determine the sudo implementation from `sudo --version` output
- * sudo-rs prints "sudo-rs 0.2.13-0ubuntu1.2", classic sudo prints "Sudo version 1.9.15p5"
- */
-function parseSudoFlavour(versionOutput) {
-    return /^\s*sudo-rs\b/im.test(versionOutput) ? 'sudo-rs' : 'sudo';
-}
+const host_1 = __nccwpck_require__(7020);
+const config_1 = __nccwpck_require__(5665);
+__exportStar(__nccwpck_require__(5665), exports);
 /**
  * Detect which sudo implementation is active on the runner
  */
-async function detectSudoFlavour() {
+async function detectSudoFlavour(h) {
     try {
-        const { stdout } = await exec.getExecOutput('sudo', ['--version'], { silent: true, ignoreReturnCode: true });
-        return parseSudoFlavour(stdout);
+        const { stdout } = await h.output('sudo', ['--version'], { silent: true, ignoreReturnCode: true });
+        return (0, config_1.parseSudoFlavour)(stdout);
     }
     catch {
         return 'sudo';
     }
-}
-/**
- * Path of the config file that enables sudo logging for the given sudo implementation
- * This file is added to the integrity validation baseline
- */
-function getSudoLoggingConfigFile(flavour) {
-    return flavour === 'sudo-rs' ? exports.SUDO_LOGGING_RSYSLOG_FILE : exports.SUDO_LOGGING_SUDOERS_FILE;
-}
-/**
- * Build the rsyslog rule used on sudo-rs to capture sudo usage into a dedicated log file
- *
- * sudo-rs logs "runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/id" to syslog.
- * The template prefixes it with an RFC3164 timestamp so the file matches the
- * classic sudo logfile format understood by parsers/sudo-parser.ts.
- */
-function buildSudoRsyslogConfig(logFile) {
-    return `template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")
-if $programname == 'sudo' and $msg contains 'COMMAND=' then {
-  action(type="omfile" file="${logFile}" template="SaferRunnerSudo")
-}
-`;
 }
 /**
  * Configure sudo logging to capture all sudo usage
@@ -3869,127 +3981,52 @@ if $programname == 'sudo' and $msg contains 'COMMAND=' then {
  * - Classic sudo: `Defaults logfile=<logFile>` sudoers drop-in
  * - sudo-rs: rsyslog rule filtering sudo's syslog messages into <logFile>
  *
- * Must run while the runner still has unrestricted sudo (i.e. before
- * disableSudoForRunner).
- *
- * @param logFile - Path to sudo log file (e.g., /var/log/safer-runner/main-sudo.log)
- * @param flavour - Sudo implementation (detected if omitted)
+ * Must run while the runner still has unrestricted sudo (i.e. before restrictSudo).
  */
-async function setupSudoLogging(logFile, flavour) {
-    const sudoFlavour = flavour ?? (await detectSudoFlavour());
-    core.info(`Configuring sudo logging to ${logFile} (${sudoFlavour})...`);
+async function setupSudoLogging(h, r) {
+    core.info(`Configuring sudo logging to ${r.logFile} (${r.flavour})...`);
     // Create the log file and make it readable by the runner
-    await exec.exec('sudo', ['touch', logFile]);
-    await exec.exec('sudo', ['chmod', '0644', logFile]);
-    if (sudoFlavour === 'sudo-rs') {
+    await (0, host_1.sudo)(['touch', r.logFile], {}, h);
+    await (0, host_1.sudo)(['chmod', '0644', r.logFile], {}, h);
+    if (r.flavour === 'sudo-rs') {
         // sudo-rs has no logfile setting - capture its syslog output with rsyslog instead
-        await exec.exec('sudo', ['chown', 'syslog:adm', logFile]);
-        await exec.exec('sudo', ['tee', exports.SUDO_LOGGING_RSYSLOG_FILE], {
-            input: Buffer.from(buildSudoRsyslogConfig(logFile)),
-            silent: true
-        });
-        await exec.exec('sudo', ['systemctl', 'restart', 'rsyslog']);
+        await (0, host_1.sudo)(['chown', 'syslog:adm', r.logFile], {}, h);
+        await (0, host_1.sudo)(['tee', r.logging.path], { input: Buffer.from(r.logging.content), silent: true }, h);
+        await (0, host_1.sudo)(['systemctl', 'restart', 'rsyslog'], {}, h);
     }
     else {
         // Stage the drop-in and move it into place last, so logging starts with no
         // further setup commands to capture (sudoers files must be 0440 root:root)
-        await exec.exec('sudo', ['tee', SUDO_LOGGING_TEMP_FILE], {
-            input: Buffer.from(`Defaults logfile=${logFile}\nDefaults loglinelen=0\n`),
-            silent: true
-        });
-        await exec.exec('sudo', ['chmod', '0440', SUDO_LOGGING_TEMP_FILE]);
-        await exec.exec('sudo', ['chown', 'root:root', SUDO_LOGGING_TEMP_FILE]);
-        await exec.exec('sudo', ['mv', SUDO_LOGGING_TEMP_FILE, exports.SUDO_LOGGING_SUDOERS_FILE]);
+        await (0, host_1.sudo)(['tee', config_1.SUDO_LOGGING_TEMP_FILE], { input: Buffer.from(r.logging.content), silent: true }, h);
+        await (0, host_1.sudo)(['chmod', '0440', config_1.SUDO_LOGGING_TEMP_FILE], {}, h);
+        await (0, host_1.sudo)(['chown', 'root:root', config_1.SUDO_LOGGING_TEMP_FILE], {}, h);
+        await (0, host_1.sudo)(['mv', config_1.SUDO_LOGGING_TEMP_FILE, r.logging.path], {}, h);
     }
-    core.info(`✅ Sudo logging configured to ${logFile}`);
+    core.info(`✅ Sudo logging configured to ${r.logFile}`);
+    return Object.freeze({});
 }
 /**
- * Commands run by post-action integrity validation (see src/integrity/baseline.ts)
- * These are the only sudo commands the runner keeps after sudo is restricted.
- */
-function getValidationSudoCommands() {
-    const files = [
-        ...baseline_1.CRITICAL_FILES,
-        constants_1.DOCKER_DAEMON_JSON,
-        exports.SUDO_LOGGING_SUDOERS_FILE,
-        exports.SUDO_LOGGING_RSYSLOG_FILE,
-        constants_1.VALIDATION_STATE_FILE
-    ];
-    return [
-        ...files.map(file => `/usr/bin/cat ${file}`),
-        ...baseline_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, baseline_1.iptablesListArgs)(chain).join(' ')}`),
-        // post-step teardown (destroys the CA key). `""` = no arguments allowed.
-        `${constants_1.TEARDOWN_BIN} ""`
-    ];
-}
-/**
- * Sudo commands run by the action itself while sudo logging is active
- * Filtered out of sudo reports - they are internal operations, not workflow activity.
- * Paths are matched by basename so /usr/sbin vs /usr/bin resolution doesn't matter.
- */
-exports.INTERNAL_SUDO_COMMANDS = [
-    ...getValidationSudoCommands(),
-    // disableSudoForRunner()
-    `tee ${SUDOERS_TEMP_FILE}`,
-    `visudo -c -f ${SUDOERS_TEMP_FILE}`,
-    `chmod 0440 ${SUDOERS_TEMP_FILE}`,
-    `chown root:root ${SUDOERS_TEMP_FILE}`,
-    `mv ${SUDOERS_TEMP_FILE} /etc/sudoers.d/${exports.RUNNER_USERNAME}`,
-    `rm -f ${SUDOERS_TEMP_FILE}`,
-    // setupSudoLogging() on sudo-rs
-    'systemctl restart rsyslog',
-    // SystemValidator.writeBaseline()
-    ...baseline_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' ')),
-    constants_1.TEARDOWN_BIN
-].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
-/**
- * Generate the sudoers rules the action always needs for post-action validation
+ * Disable sudo access for the runner user (disable-sudo). The last privileged step of setup:
+ * it takes the baseline's token, which takes sudo logging's.
  *
- * Only exact read-only commands are allowed: no wildcards (embedded wildcards are
- * unsupported by sudo-rs, and any wildcard matches arbitrary extra arguments), and nothing that can
- * write files or modify sudo/syslog configuration.
- *
- * @param username - The username to generate rules for
- * @returns Sudoers configuration string with required commands
+ * Replaces the sudoers file with only the read-only commands needed for post-action integrity
+ * validation (see getValidationSudoCommands()). The file is checked with the active visudo
+ * (visudo-rs on sudo-rs systems) before it is moved into place; a rejected file fails setup.
  */
-function getRequiredSudoCommands(username = exports.RUNNER_USERNAME) {
-    const commands = getValidationSudoCommands();
-    return `
-# Required commands for post-action validation
-# These are automatically added by safer-runner-action
-Cmnd_Alias SAFER_RUNNER_VALIDATION = ${commands.join(', \\\n    ')}
-
-${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
-`;
-}
-/**
- * Disable sudo access for the runner user
- * This prevents malicious code from using sudo to bypass security controls
- *
- * Replaces the sudoers file with only the read-only commands needed for
- * post-action integrity validation (see getValidationSudoCommands()). The file is checked
- * with the active visudo (visudo-rs on sudo-rs systems) before it is moved into place.
- */
-async function disableSudoForRunner(flavour) {
+async function restrictSudo(h, r, _baseline) {
     core.info('Restricting sudo access to validation commands only');
-    const sudoersFile = `/etc/sudoers.d/${exports.RUNNER_USERNAME}`;
-    const tempFile = SUDOERS_TEMP_FILE;
-    const config = `# Safer Runner Action - Validation-only sudo access
-# This configuration allows only the commands needed for post-action integrity validation.
-# All other sudo commands will be denied.
-${getRequiredSudoCommands(exports.RUNNER_USERNAME)}`;
-    await exec.exec('sudo', ['tee', tempFile], { input: Buffer.from(config + '\n') });
-    const visudo = await exec.getExecOutput('sudo', ['visudo', '-c', '-f', tempFile], { ignoreReturnCode: true });
+    await (0, host_1.sudo)(['tee', config_1.SUDOERS_TEMP_FILE], { input: Buffer.from(r.sudoers) }, h);
+    // the exit code is checked here, not ignored: a rejected file is never installed
+    const visudo = await h.output('sudo', ['visudo', '-c', '-f', config_1.SUDOERS_TEMP_FILE], { ignoreReturnCode: true });
     if (visudo.exitCode !== 0) {
-        await exec.exec('sudo', ['rm', '-f', tempFile], { ignoreReturnCode: true });
-        const sudoFlavour = flavour ?? (await detectSudoFlavour());
-        throw new Error(`Generated sudoers rejected by visudo (${sudoFlavour}): ${(visudo.stderr || visudo.stdout).trim()}`);
+        await (0, host_1.sudo)(['rm', '-f', config_1.SUDOERS_TEMP_FILE], { ignoreReturnCode: true }, h);
+        throw new Error(`Generated sudoers rejected by visudo (${r.flavour}): ${(visudo.stderr || visudo.stdout).trim()}`);
     }
     // Set permissions before moving into place
-    await exec.exec('sudo', ['chmod', '0440', tempFile]);
-    await exec.exec('sudo', ['chown', 'root:root', tempFile]);
-    await exec.exec('sudo', ['mv', tempFile, sudoersFile]);
-    core.info(`🔒 ${exports.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
+    await (0, host_1.sudo)(['chmod', '0440', config_1.SUDOERS_TEMP_FILE], {}, h);
+    await (0, host_1.sudo)(['chown', 'root:root', config_1.SUDOERS_TEMP_FILE], {}, h);
+    await (0, host_1.sudo)(['mv', config_1.SUDOERS_TEMP_FILE, config_1.RUNNER_SUDOERS_FILE], {}, h);
+    core.info(`🔒 ${config_1.RUNNER_USERNAME} user can only execute commands needed for integrity validation`);
 }
 /**
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
@@ -3998,7 +4035,7 @@ ${getRequiredSudoCommands(exports.RUNNER_USERNAME)}`;
 function readSudoUsage(logFile) {
     try {
         if (fs.existsSync(logFile)) {
-            return (0, sudo_parser_1.classifySudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), exports.INTERNAL_SUDO_COMMANDS);
+            return (0, sudo_parser_1.classifySudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS);
         }
     }
     catch (error) {
@@ -4082,7 +4119,7 @@ const selftest_1 = __nccwpck_require__(42);
 const coredns = __importStar(__nccwpck_require__(5212));
 const host_1 = __nccwpck_require__(7020);
 const github_domains_1 = __nccwpck_require__(2268);
-const sudo_1 = __nccwpck_require__(3275);
+const sudo = __importStar(__nccwpck_require__(3275));
 const docker = __importStar(__nccwpck_require__(6362));
 const baseline_1 = __nccwpck_require__(1333);
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
@@ -4136,9 +4173,9 @@ exports.JOB_CONTAINER_MESSAGE = 'safer-runner cannot protect a job that runs in 
     'container and cannot apply egress controls to the runner VM. Run the job on the runner and use ' +
     '`services:` and `docker run` steps instead (their egress is controlled).';
 /**
- * `h` is where the converted services run their commands. Until every service takes a Host
- * (docker, sudo and the integrity baseline still use @actions/exec directly), it is a test seam
- * only: pass anything but realHost and part of setup still runs on the real machine.
+ * `h` is where the converted services run their commands. Until every step takes a Host (the
+ * integrity baseline and a few setup steps here still use @actions/exec directly), it is a test
+ * seam only: pass anything but realHost and part of setup still runs on the real machine.
  */
 async function runSetup(inputs, h = host_1.realHost) {
     const { mode } = inputs;
@@ -4164,7 +4201,7 @@ async function runSetup(inputs, h = host_1.realHost) {
     if (mode === 'enforce' && inputs.dockerDefaulted) {
         core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
     }
-    const sudoFlavour = await (0, sudo_1.detectSudoFlavour)();
+    const sudoFlavour = await sudo.detectSudoFlavour(h);
     core.info(`sudo implementation: ${sudoFlavour}`);
     const ports = await mitmproxy.allocateProxyPorts();
     core.info(`Proxy listeners: host 127.0.0.1:${ports.port}, containers 127.0.0.1:${ports.containerPort}`);
@@ -4266,15 +4303,17 @@ async function runSetup(inputs, h = host_1.realHost) {
         }) + '\n'),
         silent: true
     });
-    await (0, sudo_1.setupSudoLogging)(constants_1.SUDO_LOG, sudoFlavour);
+    // 11. Sudo: logging on, then the integrity baseline, then sudo restricted - the last step
+    const sudoRendered = sudo.render({ flavour: sudoFlavour, logFile: constants_1.SUDO_LOG });
+    const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);
     const validator = new baseline_1.SystemValidator([
         ...baseline_1.CRITICAL_FILES,
-        (0, sudo_1.getSudoLoggingConfigFile)(sudoFlavour),
+        sudoRendered.logging.path,
         ...(dockerd.configWritten ? [constants_1.DOCKER_DAEMON_JSON] : [])
     ]);
-    await validator.capturePostSetupBaseline();
+    const baseline = await validator.capturePostSetupBaseline(sudoLogging);
     if (inputs.disableSudo) {
-        await (0, sudo_1.disableSudoForRunner)(sudoFlavour);
+        await sudo.restrictSudo(h, sudoRendered, baseline);
     }
     core.info(`✅ safer-runner v2 active in ${mode} mode`);
 }
