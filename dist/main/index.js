@@ -511,6 +511,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const net = __importStar(__nccwpck_require__(9278));
 const policy_1 = __nccwpck_require__(2224);
 const yaml_1 = __nccwpck_require__(8815);
+const yaml_2 = __nccwpck_require__(2040);
 exports.DOCKER_POLICIES = ['keep', 'remove-group', 'stop'];
 /** Quad9 (filtering, no logging of client IPs): primary + secondary. */
 exports.DEFAULT_DNS_SERVERS = ['9.9.9.9', '149.112.112.112'];
@@ -587,14 +588,6 @@ function unquote(s) {
         return t.slice(1, -1);
     return t;
 }
-/** Plain words for the YAML errors a user is most likely to hit; any other uses the library's text. */
-const YAML_HINTS = {
-    TAB_AS_INDENT: 'indent with spaces, not tabs',
-    BAD_INDENT: 'inconsistent indentation',
-    BLOCK_AS_IMPLICIT_KEY: 'inconsistent indentation (a line is indented more than the line above it)',
-    MULTILINE_IMPLICIT_KEY: 'inconsistent indentation (a key must be on one line)',
-    BAD_ALIAS: 'put a key or a value that starts with * in quotes, e.g. "*": GET'
-};
 /** A key as written: a host name or a path pattern, never a number or other YAML type. */
 function keyText(pair, where) {
     const k = pair.key;
@@ -641,38 +634,15 @@ function parseRules(map, src, at) {
 }
 /**
  * http-filter as YAML (JSON is YAML too), checked against its one shape: host -> { path ->
- * methods }. Anything else fails: duplicate keys, anchors, aliases, tags, document markers,
- * directives and deeper nesting are never resolved or ignored.
+ * methods }. Anything else fails: duplicate keys and deeper nesting are refused (strictYaml
+ * refuses the rest).
  */
 function parseFilterYaml(raw) {
-    const lines = new yaml_1.LineCounter();
-    const doc = (0, yaml_1.parseDocument)(raw, {
-        lineCounter: lines,
-        prettyErrors: false,
-        schema: 'core',
-        strict: true,
-        // duplicates are refused below, once `{ "*": GET, HEAD, "x": PUT, HEAD }` continuations are merged
-        uniqueKeys: false,
-        version: '1.2'
-    });
-    const line = (offset) => `http-filter line ${lines.linePos(offset).line}`;
-    const at = (n) => line(n?.range?.[0] ?? 0);
-    const problems = [...doc.errors, ...doc.warnings];
-    if (problems.length) {
-        const p = problems.find(e => e.code === 'BAD_ALIAS') ?? problems[0];
-        const text = YAML_HINTS[p.code] ??
-            `${p.message.split('\n')[0]} (check the indentation; write methods as GET, HEAD or [GET, HEAD], not "GET", HEAD)`;
-        throw new Error(`${line(p.pos[0])}: ${text}`);
-    }
-    if (doc.directives?.docStart || doc.directives?.docEnd) {
-        throw new Error('http-filter: remove the YAML document markers (--- and ...) and any % directives');
-    }
-    (0, yaml_1.visit)(doc, {
-        Node(_, n) {
-            if ((0, yaml_1.isAlias)(n) || n.anchor || n.tag) {
-                throw new Error(`${at(n)}: YAML anchors (&), aliases (*name) and tags (!) are not allowed`);
-            }
-        }
+    // duplicates are refused below, once `{ "*": GET, HEAD, "x": PUT, HEAD }` continuations are merged
+    const { doc, at } = (0, yaml_2.strictYaml)(raw, 'http-filter', {
+        fallback: 'check the indentation; write methods as GET, HEAD or [GET, HEAD], not "GET", HEAD',
+        hints: { BAD_ALIAS: 'put a key or a value that starts with * in quotes, e.g. "*": GET' },
+        uniqueKeys: false
     });
     if (doc.contents === null)
         return [];
@@ -803,6 +773,64 @@ function readInputs() {
         httpFilter: parseHttpFilter(core.getInput('http-filter', { trimWhitespace: false })),
         allowGithubPlatform: allowGithubPlatform ?? true
     };
+}
+
+
+/***/ }),
+
+/***/ 2040:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * Strict reading of the structured YAML inputs (http-filter, sudo-config).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.strictYaml = strictYaml;
+const yaml_1 = __nccwpck_require__(8815);
+/** Plain words for the YAML errors a user is most likely to hit; any other uses the library's text. */
+const YAML_HINTS = {
+    TAB_AS_INDENT: 'indent with spaces, not tabs',
+    BAD_INDENT: 'inconsistent indentation',
+    BLOCK_AS_IMPLICIT_KEY: 'inconsistent indentation (a line is indented more than the line above it)',
+    MULTILINE_IMPLICIT_KEY: 'inconsistent indentation (a key must be on one line)',
+    BAD_ALIAS: 'put a value that starts with * in quotes'
+};
+/**
+ * A YAML input, read strictly: core schema, YAML 1.2, no anchors, aliases, tags, document
+ * markers or directives (never resolved or ignored). Errors name the input and the line.
+ */
+function strictYaml(raw, name, o) {
+    const lines = new yaml_1.LineCounter();
+    const doc = (0, yaml_1.parseDocument)(raw, {
+        lineCounter: lines,
+        prettyErrors: false,
+        schema: 'core',
+        strict: true,
+        uniqueKeys: o.uniqueKeys ?? true,
+        version: '1.2'
+    });
+    const line = (offset) => `${name} line ${lines.linePos(offset).line}`;
+    const at = (n) => line(n?.range?.[0] ?? 0);
+    const hints = { ...YAML_HINTS, ...o.hints };
+    const problems = [...doc.errors, ...doc.warnings];
+    if (problems.length) {
+        const p = problems.find(e => e.code === 'BAD_ALIAS') ?? problems[0];
+        const text = hints[p.code] ?? `${p.message.split('\n')[0]} (${o.fallback})`;
+        throw new Error(`${line(p.pos[0])}: ${text}`);
+    }
+    if (doc.directives?.docStart || doc.directives?.docEnd) {
+        throw new Error(`${name}: remove the YAML document markers (--- and ...) and any % directives`);
+    }
+    (0, yaml_1.visit)(doc, {
+        Node(_, n) {
+            if ((0, yaml_1.isAlias)(n) || n.anchor || n.tag) {
+                throw new Error(`${at(n)}: YAML anchors (&), aliases (*name) and tags (!) are not allowed`);
+            }
+        }
+    });
+    return { doc, at };
 }
 
 
