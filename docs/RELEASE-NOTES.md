@@ -11,7 +11,8 @@ Sudo gets the analyze-then-enforce flow the egress allowlist and `http-filter` a
   the job root. The v1 `sudo-config` format is not accepted.
 - **`analyze` reports and suggests for sudo.** The summary lists the sudo commands `enforce`
   would block under your `disable-sudo` / `sudo-config`, and suggests a `sudo-config` built from
-  the job's own sudo use (exact lines only; secret-looking arguments are left out).
+  the job's own sudo use (exact lines only; secret-looking arguments are left out). Best effort:
+  the sudo log does not show `sudo -E` or argument boundaries, so check the job under `enforce`.
 - **Behaviour change: `mode: analyze` never changes sudo.** `disable-sudo: true` in `analyze`
   now reports what enforce would block and suggests a `sudo-config`, instead of removing sudo.
   To remove sudo, use `mode: enforce`.

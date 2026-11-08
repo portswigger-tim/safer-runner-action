@@ -70,11 +70,11 @@ inputs:
     default: 'true'
   disable-sudo:
     description: >-
-      Override whether sudo is removed from the runner user after setup. `enforce` removes it
-      (with sudo any step could remove the egress controls); `analyze` keeps it. Set `true` to
-      force removal or `false` to keep sudo; keeping sudo in `enforce` makes the job
-      "enforce (ADVISORY)" - the controls are applied but are not an enforced boundary. Leave
-      unset to follow the mode (unset and `false` are not the same).
+      Whether the runner user's sudo is removed after setup (with sudo any step could remove the
+      egress controls). Unset or `true`: `enforce` removes it; `analyze` never changes sudo, it
+      reports the sudo commands enforce would block and suggests a `sudo-config`. `false` keeps
+      sudo, which makes `enforce` "enforce (ADVISORY)" - the controls are applied but are not an
+      enforced boundary.
     required: false
   sudo-config:
     description: >-

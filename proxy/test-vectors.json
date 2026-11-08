@@ -1727,6 +1727,47 @@
           "other_user": 1,
           "over_cap": 0
         }
+      },
+      {
+        "name": "short password flags and environment variables",
+        "commands": [
+          {
+            "command": "/usr/bin/mysql",
+            "args": "-u root -p hunter2xyz",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/mysql",
+            "args": "-u root -phunter2xyz",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/mkdir",
+            "args": "-p /opt/x",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/ssh",
+            "args": "-p 22 host",
+            "targetUser": "root"
+          },
+          {
+            "command": "/usr/bin/apt-get",
+            "args": "update",
+            "targetUser": "root",
+            "env": true
+          }
+        ],
+        "rules": [
+          "/usr/bin/mkdir -p /opt/x",
+          "/usr/bin/ssh -p 22 host"
+        ],
+        "omitted": {
+          "secret": 2,
+          "unrepresentable": 1,
+          "other_user": 0,
+          "over_cap": 0
+        }
       }
     ],
     "match": [

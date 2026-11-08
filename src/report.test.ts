@@ -6,7 +6,7 @@ import { parseHttpFilter } from './config/inputs';
 import { parse as parseYaml } from 'yaml';
 import { buildPolicyConfig, type PolicyConfig } from './policy';
 import { withoutSelfTests } from './setup/selftest';
-import { SUDO_CONFIG_CAVEAT, suggestHttpFilter, suggestSudoConfig } from './report';
+import { SUDO_BEST_EFFORT, SUDO_CONFIG_CAVEAT, suggestHttpFilter, suggestSudoConfig } from './report';
 import { evaluateSudo, parseSudoConfig, ruleText } from './services/sudo/config';
 import {
   ADVISORY_REPORT_NOTE,
@@ -828,13 +828,22 @@ describe('enforce labelling (review H2)', () => {
       ...base,
       mode: 'analyze',
       sudo: { ran, refused: [], internal: [] },
-      sudoPolicy: { rules: [], kept: false, wouldBlock: ran, suggestion }
+      sudoPolicy: {
+        rules: [],
+        kept: false,
+        wouldBlock: ran,
+        suggestion,
+        flagged: { '/usr/bin/apt-get update': 'gives the job root (apt-get can run or write anything)' }
+      }
     });
-    expect(md).not.toContain('5ec7e7c0ffee1234 |');
     expect(md).toContain(SUDO_CONFIG_CAVEAT);
+    expect(md).toContain(SUDO_BEST_EFFORT);
     expect(md).toContain('Not suggested: 1 with arguments that look like a secret, 1 run as another user.');
     // the snippet, read back the way the action reads the input
     const block = md.match(/> ```yaml\n((?:> .*\n)+?)> ```/)![1].replace(/^> /gm, '');
+    expect(block).not.toContain('5ec7e7c0ffee1234');
+    expect(block).toContain('- /usr/bin/apt-get update # ⚠️ gives the job root');
+    // the warning is a YAML comment: the snippet still reads back as the same lines
     const rules = parseSudoConfig(parseYaml(block)['sudo-config']);
     expect(rules.map(ruleText)).toEqual(suggestion.rules);
     expect(evaluateSudo(rules, false, ran.slice(0, 2)).wouldBlock).toEqual([]);

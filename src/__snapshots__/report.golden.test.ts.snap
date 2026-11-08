@@ -16,7 +16,7 @@ exports[`job summary golden snapshots analyze: sudo the policy would block, with
 >
 > Not suggested: 1 with arguments that look like a secret, 1 run as another user.
 >
-> A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Enforce with any \`sudo-config\` is ADVISORY.
+> A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Enforce with any \`sudo-config\` is ADVISORY. Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.
 
 
 **✅ Nothing would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
@@ -92,6 +92,8 @@ exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker k
 > \`\`\`
 >
 > **Enforce would block 1 sudo command this job ran** (enforce removes sudo; listed under Diagnostics). Drop that usage, or allow the exact command lines with \`sudo-config\`.
+>
+> Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.
 
 
 |  |  |

@@ -120,7 +120,14 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   } else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
     core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
   }
-  for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig)) core.warning(w);
+  for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig, sudo.runnerWritableDirs())) core.warning(w);
+  if (mode === 'analyze' && inputs.disableSudo && !inputs.disableSudoDefaulted) {
+    core.warning(
+      'disable-sudo: true is not applied in analyze mode: analyze never changes sudo. The summary lists the ' +
+        'sudo commands enforce would block. Use mode: enforce to remove sudo.',
+      { title: 'safer-runner: analyze does not remove sudo' }
+    );
+  }
   if (mode === 'enforce' && inputs.disableSudo && inputs.sudoConfig.length) {
     // D1: never a boundary - no allowlist can be proven free of a command that gives root
     core.warning(

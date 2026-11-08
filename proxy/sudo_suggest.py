@@ -56,7 +56,19 @@ def looks_secret(arg):
 
 
 def has_secret(args):
-    return any(looks_secret(a) for a in args) or any(a.lower() in _SECRET_FLAGS for a in args[:-1])
+    """An argument that looks like a credential, or the value of a password-like flag."""
+    for i, a in enumerate(args):
+        nxt = args[i + 1] if i + 1 < len(args) else None
+        if looks_secret(a):
+            return True
+        if nxt is not None and a.lower() in _SECRET_FLAGS:
+            return True
+        # `mysql -p hunter2` / `-phunter2`; not `mkdir -p /x` (a path) or `ssh -p 22` (a port)
+        if a in ("-p", "-P") and nxt is not None and not nxt.startswith(("/", ".", "-")) and not nxt.isdigit():
+            return True
+        if len(a) > 2 and a[:2] in ("-p", "-P") and a[2] not in "-/." and not a[2:].isdigit():
+            return True
+    return False
 
 
 def suggest(commands):
@@ -71,7 +83,8 @@ def suggest(commands):
         line = " ".join([path, *args])
         if (c.get("targetUser") or "root") != "root":
             omitted["other_user"].add(line)
-        elif not representable(path, args):
+        elif c.get("env") or not representable(path, args):
+            # environment variables need SETENV, which a sudo-config rule never has
             omitted["unrepresentable"].add(line)
         elif has_secret(args):
             omitted["secret"].add(line)

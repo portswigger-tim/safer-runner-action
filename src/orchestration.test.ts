@@ -1280,6 +1280,16 @@ describe('post step transcript', () => {
     expect(h.failed).toEqual([expect.stringContaining('could not be verified')]);
   });
 
+  it('enforce: a recorded sudo-config that does not parse back still shows ADVISORY', async () => {
+    const h = await setup(SCENARIOS.find(c => c.s.name === 'enforce, sudo-config')!.s);
+    const marker = JSON.parse(h.files.get(SETUP_MARKER)!);
+    h.files.set(SETUP_MARKER, JSON.stringify({ ...marker, sudoConfig: ['/usr/bin/x a:b', 'not a line'] }));
+    await post(h);
+    expect(h.summaryText).toContain('⚠️ sudo allowlist (2)');
+    expect(h.summaryText).not.toContain('controls applied at setup');
+    expect(h.log).toContainEqual(expect.stringMatching(/^warning: Unreadable sudo-config in the setup marker/));
+  });
+
   it('analyze: the sudo the policy (disable-sudo + sudo-config) would block, sudo left as it was', async () => {
     const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze, disable-sudo: true, sudo-config')!.s);
     // the job's own sudo: untouched in analyze, and logged

@@ -69,12 +69,19 @@ export interface SudoPolicyReport {
   wouldBlock: SudoCommand[];
   /** analyze: the suggested sudo-config; undefined when it could not be built */
   suggestion?: SudoConfigSuggestion;
+  /** suggested lines that give the job root, sit under a runner-writable path, ...: line -> why */
+  flagged?: Record<string, string>;
 }
 
 /** Fixed caveat for every sudo-config: never shown as safe. */
 export const SUDO_CONFIG_CAVEAT =
   'A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, ' +
   'and root can remove the egress controls. Enforce with any `sudo-config` is ADVISORY.';
+
+/** What analyze cannot see in the sudo log. */
+export const SUDO_BEST_EFFORT =
+  'Best effort: the sudo log does not show `sudo -E` or where one argument ends and the next begins, ' +
+  'so a command shown as allowed can still be refused in enforce.';
 
 /**
  * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
@@ -546,11 +553,11 @@ function sudoAlert(f: Facts): string {
       'would be ADVISORY (sudo can remove the controls). To make enforce a boundary, remove `disable-sudo: false`';
   }
   const s = policy?.suggestion;
-  if (!s?.rules.length) return md + '.\n';
+  if (!s?.rules.length) return md + `.\n>\n> ${SUDO_BEST_EFFORT}\n`;
   md += ' (review each line):\n>\n';
   const yaml =
     'sudo-config: |\n' +
-    sudoConfigYaml(s.rules)
+    sudoConfigYaml(s.rules, policy?.flagged)
       .replace(/^(?=.)/gm, '  ')
       .trimEnd();
   md += quote(codeBlock('yaml', yaml)) + '\n';
@@ -561,7 +568,7 @@ function sudoAlert(f: Facts): string {
     s.omitted.over_cap ? `${s.omitted.over_cap} over the limit` : ''
   ].filter(Boolean);
   if (left.length) md += `>\n> Not suggested: ${left.join(', ')}.\n`;
-  return md + `>\n> ${SUDO_CONFIG_CAVEAT}\n`;
+  return md + `>\n> ${SUDO_CONFIG_CAVEAT} ${SUDO_BEST_EFFORT}\n`;
 }
 
 /** The scorecard, or the one-line clean verdict. */

@@ -11,6 +11,8 @@ export interface SudoCommand {
   args: string;
   /** Set when sudo refused the command (classic sudo logs refusals; sudo-rs does not) */
   denied?: boolean;
+  /** Set when the command was given environment variables (`sudo FOO=bar cmd`; values not kept) */
+  env?: boolean;
 }
 
 /**
@@ -25,13 +27,16 @@ const DENIED_PATTERN = /command not allowed|password is required|incorrect passw
  */
 export function parseSudoLogLine(line: string): SudoCommand | null {
   // Match sudo log format with timestamp
-  const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
+  // classic sudo logs variables set on the command line as `ENV=A=1 B=2 ;` before COMMAND
+  const match = line.match(
+    /^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*(ENV=[^;]*;\s*)?COMMAND=(.+)$/
+  );
 
   if (!match) {
     return null;
   }
 
-  const [, timestamp, user, targetUser, fullCommand] = match;
+  const [, timestamp, user, targetUser, env, fullCommand] = match;
 
   // Split command and args
   const commandParts = fullCommand.trim().split(/\s+/);
@@ -44,7 +49,8 @@ export function parseSudoLogLine(line: string): SudoCommand | null {
     targetUser,
     command,
     args,
-    ...(DENIED_PATTERN.test(line) && { denied: true })
+    ...(DENIED_PATTERN.test(line) && { denied: true }),
+    ...(env && { env: true })
   };
 }
 

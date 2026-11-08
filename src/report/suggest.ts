@@ -140,6 +140,11 @@ export function suggestSudoConfig(
   proxyDir: string,
   python = defaultPython()
 ): SudoConfigSuggestion {
-  const input = commands.map(c => ({ command: c.command, args: c.args, targetUser: c.targetUser }));
+  const input = commands.map(c => ({
+    command: c.command,
+    args: c.args,
+    targetUser: c.targetUser,
+    env: c.env === true
+  }));
   return parseSudoSuggestion(runSuggester('sudo_suggest', { commands: input }, proxyDir, python));
 }

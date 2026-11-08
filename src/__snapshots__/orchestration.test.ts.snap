@@ -849,6 +849,7 @@ exports[`setup transcript (runSetup on a recording fake runner) analyze, disable
 [
   "warning: sudo-config: '/usr/bin/apt-get update' gives the job root (apt-get can run or write anything), so sudo can remove the egress controls",
   "warning: sudo-config: '/usr/bin/apt-get install *' gives the job root (apt-get can run or write anything), so sudo can remove the egress controls",
+  "warning: disable-sudo: true is not applied in analyze mode: analyze never changes sudo. The summary lists the sudo commands enforce would block. Use mode: enforce to remove sudo.",
 ]
 `;
 

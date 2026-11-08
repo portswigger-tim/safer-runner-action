@@ -6,7 +6,9 @@ import {
   parseSudoLine,
   ruleAllows,
   ruleText,
+  runnerWritableDirs,
   sudoConfigWarnings,
+  sudoRuleWarning,
   type SudoRule
 } from './config';
 
@@ -101,6 +103,41 @@ describe('sudoConfigWarnings', () => {
       "sudo-config: '/usr/local/bin/tool sync *' allows any further arguments, including options"
     ]);
     expect(sudoConfigWarnings(parseSudoConfig('- /usr/sbin/service nginx restart'))).toEqual([]);
+  });
+
+  it('warns on a command under a runner-writable path (the job can replace it)', () => {
+    const writable = runnerWritableDirs({
+      RUNNER_TEMP: '/home/runner/work/_temp',
+      RUNNER_TOOL_CACHE: '/opt/hostedtoolcache',
+      GITHUB_WORKSPACE: '/srv/ws'
+    });
+    expect(writable).toEqual(
+      expect.arrayContaining(['/tmp/', '/opt/hostedtoolcache/', '/home/runner/work/_temp/', '/srv/ws/'])
+    );
+    expect(
+      sudoConfigWarnings(parseSudoConfig('- /opt/hostedtoolcache/x/1.0/bin/tool sync\n- /srv/ws/build.sh'), writable)
+    ).toEqual([
+      "sudo-config: '/opt/hostedtoolcache/x/1.0/bin/tool sync' is under a runner-writable path (/opt/hostedtoolcache/): the job can overwrite it and run it as root",
+      "sudo-config: '/srv/ws/build.sh' is under a runner-writable path (/srv/ws/): the job can overwrite it and run it as root"
+    ]);
+  });
+
+  it.each([
+    'timeout',
+    'nice',
+    'nohup',
+    'setsid',
+    'flock',
+    'runuser',
+    'busybox',
+    'strace',
+    'gdb',
+    'socat',
+    'curl',
+    'wget',
+    'truncate'
+  ])('%s is root-equivalent (a wrapper or a file writer)', base => {
+    expect(sudoRuleWarning(parseSudoLine(`/usr/bin/${base} x`))).toMatch(/gives the job root/);
   });
 });
 

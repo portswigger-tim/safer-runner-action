@@ -99,7 +99,10 @@ Each line is an absolute path and its exact arguments (a command with no argumen
 A lone trailing `*` allows one or more further arguments, options included: avoid it. Only
 letters, digits and `_ . / @ + -`. In `analyze`, the summary lists the sudo commands enforce
 would block and suggests a `sudo-config` from the job's own use (exact lines only; anything that
-looks like a secret is left out).
+looks like a secret is left out). This is best effort: the sudo log does not show `sudo -E` or
+where one argument ends and the next begins, so check the job under `enforce`. Setup warns about
+entries that give root or sit under a path the job can write (`/home`, `/tmp`, the tool cache,
+the workspace).
 
 **A sudo allowlist is not a boundary.** A command that can run code or write files (`apt-get`,
 `bash`, `tee`, `systemctl`, ...) gives the job root, and root can remove the egress controls.

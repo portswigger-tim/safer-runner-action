@@ -12,7 +12,11 @@ export interface SudoConfigSuggestion {
   omitted: { secret: number; unrepresentable: number; other_user: number; over_cap: number };
 }
 
-/** The suggestion as the sudo-config input value: a YAML list, read back by parseSudoConfig. */
-export function sudoConfigYaml(rules: string[]): string {
-  return stringify(rules, { lineWidth: 0 });
+/**
+ * The suggestion as the sudo-config input value: a YAML list, read back by parseSudoConfig.
+ * A flagged line (line -> why) gets a `# ⚠️ why` comment, which the input ignores.
+ */
+export function sudoConfigYaml(rules: string[], flagged: Record<string, string> = {}): string {
+  const items = stringify(rules, { lineWidth: 0 }).trimEnd().split('\n');
+  return items.map((item, i) => (flagged[rules[i]] ? `${item} # ⚠️ ${flagged[rules[i]]}` : item)).join('\n') + '\n';
 }

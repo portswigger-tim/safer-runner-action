@@ -120,7 +120,14 @@ Where the build settled a detail the sections above left open:
 - **Trailing `*`**: classic sudo needs the space before `*` (so at least one more argument);
   sudo-rs takes zero or more. The matcher (`ruleAllows`) takes the stricter: one or more.
 - **Label**: any `sudo-config` makes enforce ADVISORY (we cannot prove a command is not
-  root-equivalent). Setup warns on known root-equivalent commands and on a trailing `*`.
+  root-equivalent). Setup warns on known root-equivalent commands (shells, interpreters,
+  wrappers such as `timeout`/`nohup`/`setsid`, file writers such as `curl`/`tee`), on commands
+  under a runner-writable path (`/home`, `/tmp`, the tool cache, `RUNNER_TEMP`, the workspace),
+  and on a trailing `*`. The same warnings mark suggested lines (`# ⚠️` YAML comments).
+- **Best effort**: the sudo log does not show `sudo -E` or argument boundaries (arguments are
+  joined with spaces), so analyze can report a command as allowed that enforce refuses. Classic
+  sudo's `ENV=` (variables on the command line) is detected: such a command would be blocked (no
+  rule has SETENV) and is never suggested.
 - **Suggestions** (`proxy/sudo_suggest.py`): exact observed lines only, never a `*`, capped at 50.
   A line that ran as another user, cannot be expressed, or has a secret-looking argument is left
   out and counted.

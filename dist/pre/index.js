@@ -1684,11 +1684,12 @@ const DENIED_PATTERN = /command not allowed|password is required|incorrect passw
  */
 function parseSudoLogLine(line) {
     // Match sudo log format with timestamp
-    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
+    // classic sudo logs variables set on the command line as `ENV=A=1 B=2 ;` before COMMAND
+    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*(ENV=[^;]*;\s*)?COMMAND=(.+)$/);
     if (!match) {
         return null;
     }
-    const [, timestamp, user, targetUser, fullCommand] = match;
+    const [, timestamp, user, targetUser, env, fullCommand] = match;
     // Split command and args
     const commandParts = fullCommand.trim().split(/\s+/);
     const command = commandParts[0];
@@ -1699,7 +1700,8 @@ function parseSudoLogLine(line) {
         targetUser,
         command,
         args,
-        ...(DENIED_PATTERN.test(line) && { denied: true })
+        ...(DENIED_PATTERN.test(line) && { denied: true }),
+        ...(env && { env: true })
     };
 }
 /**
@@ -3510,7 +3512,7 @@ async function distributeTrust(h, _proxy) {
  * (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no `log_allowed`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SUDO_CONFIG_MAX_RULES = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
+exports.RUNNER_WRITABLE = exports.SUDO_CONFIG_MAX_RULES = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
 exports.parseSudoFlavour = parseSudoFlavour;
 exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
 exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
@@ -3523,6 +3525,8 @@ exports.render = render;
 exports.ruleText = ruleText;
 exports.parseSudoLine = parseSudoLine;
 exports.parseSudoConfig = parseSudoConfig;
+exports.runnerWritableDirs = runnerWritableDirs;
+exports.sudoRuleWarning = sudoRuleWarning;
 exports.sudoConfigWarnings = sudoConfigWarnings;
 exports.ruleAllows = ruleAllows;
 exports.evaluateSudo = evaluateSudo;
@@ -3627,7 +3631,6 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = ${commands.join(', \\\n    ')}
 ${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 `;
 }
-/** The restricted sudoers file that replaces RUNNER_SUDOERS_FILE (disable-sudo). */
 /**
  * One sudo-config rule as a sudoers command. A command with no arguments gets `""`: in sudoers
  * a bare command allows ANY arguments, `""` allows none. Every word is checked again here.
@@ -3760,22 +3763,41 @@ function parseSudoConfig(raw) {
 }
 /**
  * Commands that give whoever can run them as root a way to run anything else, or to write any
- * file. Not exhaustive: a warning nudges towards tight entries, never a guarantee.
+ * file: shells and interpreters, command wrappers, file writers, package and service managers.
+ * Not exhaustive: a warning nudges towards tight entries, never a guarantee.
  */
-const ROOT_EQUIVALENT = /^(sh|bash|dash|zsh|ksh|fish|python[0-9.]*|perl|ruby|node|nodejs|php|lua|env|su|sudo|visudo|tee|cp|mv|dd|install|chmod|chown|chgrp|ln|rm|systemctl|journalctl|docker|podman|iptables.*|ip6tables.*|nft|ip|mount|umount|kill|pkill|killall|apt|apt-get|aptitude|dpkg|snap|pip[0-9.]*|npm|npx|yarn|gem|cargo|vi|vim|nvim|nano|ed|emacs|less|more|man|find|xargs|awk|gawk|sed|tar|zip|unzip|rsync|scp|ssh|git|make|crontab|at|useradd|usermod|passwd|chroot|nsenter|unshare|setcap|insmod|modprobe|sysctl)$/;
-/** Guardrail warnings for the job log and summary. Every sudo-config makes enforce ADVISORY. */
-function sudoConfigWarnings(rules) {
-    const out = [];
-    for (const r of rules) {
-        const base = r.path.slice(r.path.lastIndexOf('/') + 1);
-        if (ROOT_EQUIVALENT.test(base)) {
-            out.push(`sudo-config: '${ruleText(r)}' gives the job root (${base} can run or write anything), so sudo can remove the egress controls`);
-        }
-        else if (r.anyRest) {
-            out.push(`sudo-config: '${ruleText(r)}' allows any further arguments, including options`);
-        }
+const ROOT_EQUIVALENT = /^(sh|bash|dash|zsh|ksh|fish|python[0-9.]*|perl|ruby|node|nodejs|php|lua|env|su|sudo|visudo|runuser|tee|cp|mv|dd|install|chmod|chown|chgrp|ln|rm|truncate|curl|wget|systemctl|journalctl|docker|podman|iptables.*|ip6tables.*|nft|ip|mount|umount|kill|pkill|killall|apt|apt-get|aptitude|dpkg|snap|pip[0-9.]*|npm|npx|yarn|gem|cargo|vi|vim|nvim|nano|ed|emacs|less|more|man|find|xargs|awk|gawk|sed|tar|zip|unzip|rsync|scp|ssh|git|make|crontab|at|useradd|usermod|passwd|chroot|nsenter|unshare|setcap|insmod|modprobe|sysctl|timeout|nice|ionice|nohup|stdbuf|setsid|flock|chrt|taskset|busybox|script|strace|ltrace|gdb|socat)$/;
+/**
+ * Directories the runner user can write: a command under one can be replaced by the job and then
+ * run as root. Plus the runner's own RUNNER_TEMP, RUNNER_TOOL_CACHE and GITHUB_WORKSPACE.
+ */
+exports.RUNNER_WRITABLE = ['/home/', '/tmp/', '/var/tmp/', '/opt/hostedtoolcache/', '/__w/', '/github/'];
+/** Directories from the runner environment that the job can write. */
+function runnerWritableDirs(env = process.env) {
+    const dirs = [env.RUNNER_TEMP, env.RUNNER_TOOL_CACHE, env.GITHUB_WORKSPACE]
+        .filter((d) => !!d && d.startsWith('/'))
+        .map(d => (d.endsWith('/') ? d : `${d}/`));
+    return Array.from(new Set([...exports.RUNNER_WRITABLE, ...dirs]));
+}
+/** Why one rule is risky, or null. Root-equivalent first, then a writable path, then `*`. */
+function sudoRuleWarning(r, writable = exports.RUNNER_WRITABLE) {
+    const base = r.path.slice(r.path.lastIndexOf('/') + 1);
+    if (ROOT_EQUIVALENT.test(base)) {
+        return `gives the job root (${base} can run or write anything), so sudo can remove the egress controls`;
     }
-    return out;
+    const dir = writable.find(d => r.path.startsWith(d));
+    if (dir)
+        return `is under a runner-writable path (${dir}): the job can overwrite it and run it as root`;
+    if (r.anyRest)
+        return 'allows any further arguments, including options';
+    return null;
+}
+/** Guardrail warnings for the job log. Every sudo-config makes enforce ADVISORY. */
+function sudoConfigWarnings(rules, writable = exports.RUNNER_WRITABLE) {
+    return rules.flatMap(r => {
+        const why = sudoRuleWarning(r, writable);
+        return why ? [`sudo-config: '${ruleText(r)}' ${why}`] : [];
+    });
 }
 /**
  * Does a rule allow this command (as the sudo log records it: absolute path, arguments joined
@@ -3794,13 +3816,16 @@ function ruleAllows(r, command, args) {
 /**
  * Analyze: the workflow's own sudo commands the declared policy would block in enforce. With sudo
  * kept (disable-sudo: false) nothing would be; otherwise everything the sudo-config rules don't
- * allow (they run as root only).
+ * allow (they run as root only, and allow no environment variables: no SETENV).
+ *
+ * Best effort: the sudo log shows neither `sudo -E` nor argument boundaries (arguments are joined
+ * with spaces), so a command this allows can still be refused in enforce.
  */
 function evaluateSudo(rules, kept, ran) {
     const allowed = [];
     const wouldBlock = [];
     for (const c of ran) {
-        const ok = kept || ((c.targetUser || 'root') === 'root' && rules.some(r => ruleAllows(r, c.command, c.args)));
+        const ok = kept || ((c.targetUser || 'root') === 'root' && !c.env && rules.some(r => ruleAllows(r, c.command, c.args)));
         (ok ? allowed : wouldBlock).push(c);
     }
     return { allowed, wouldBlock };
@@ -4104,8 +4129,12 @@ async function runSetup(inputs, h = host_1.realHost) {
     else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
         core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
     }
-    for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig))
+    for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig, sudo.runnerWritableDirs()))
         core.warning(w);
+    if (mode === 'analyze' && inputs.disableSudo && !inputs.disableSudoDefaulted) {
+        core.warning('disable-sudo: true is not applied in analyze mode: analyze never changes sudo. The summary lists the ' +
+            'sudo commands enforce would block. Use mode: enforce to remove sudo.', { title: 'safer-runner: analyze does not remove sudo' });
+    }
     if (mode === 'enforce' && inputs.disableSudo && inputs.sudoConfig.length) {
         // D1: never a boundary - no allowlist can be proven free of a command that gives root
         core.warning(`enforce is ADVISORY in this job: sudo-config keeps ${inputs.sudoConfig.length} sudo command ` +

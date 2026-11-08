@@ -23,7 +23,14 @@ import {
 import { containerAddresses } from './services/docker';
 import { actionRoot } from './services/mitmproxy';
 import { type SelfTestWindow, withoutSelfTests } from './setup/selftest';
-import { evaluateSudo, parseSudoLine, readSudoUsage, ruleText, type SudoRule } from './services/sudo';
+import {
+  evaluateSudo,
+  parseSudoLine,
+  readSudoUsage,
+  runnerWritableDirs,
+  sudoRuleWarning,
+  type SudoRule
+} from './services/sudo';
 import { checkIntegrity, type IntegrityResult } from './integrity/check';
 import { realHost } from './system/host';
 import { parseAllowedDomains, type Mode } from './policy';
@@ -82,12 +89,22 @@ function sudoPolicy(mode: Mode, marker: SetupMarker, ran: SudoCommand[]): SudoPo
     core.warning(`Unreadable sudo-config in the setup marker: ${error}`);
   }
   const kept = marker.sudoRetained === true || marker.sudoKept === true;
-  const policy: SudoPolicyReport = { rules: rules.map(ruleText), kept, wouldBlock: [] };
+  // the lines as recorded: if they do not parse back, the report still counts them (ADVISORY),
+  // and analyze evaluates against no rules (everything would be blocked)
+  const policy: SudoPolicyReport = { rules: [...(marker.sudoConfig ?? [])], kept, wouldBlock: [] };
   if (mode !== 'analyze') return policy;
   policy.wouldBlock = evaluateSudo(rules, kept, ran).wouldBlock;
   if (ran.length) {
     try {
-      policy.suggestion = suggestSudoConfig(ran, path.join(actionRoot(), 'proxy'));
+      const suggestion = suggestSudoConfig(ran, path.join(actionRoot(), 'proxy'));
+      const writable = runnerWritableDirs();
+      policy.suggestion = suggestion;
+      policy.flagged = Object.fromEntries(
+        suggestion.rules.flatMap(line => {
+          const why = sudoRuleWarning(parseSudoLine(line), writable);
+          return why ? [[line, why]] : [];
+        })
+      );
     } catch (error) {
       core.warning(`No suggested sudo-config: ${error}`);
     }
