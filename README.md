@@ -108,6 +108,17 @@ the workspace).
 `bash`, `tee`, `systemctl`, ...) gives the job root, and root can remove the egress controls.
 Enforce with any `sudo-config` is labelled **ADVISORY**.
 
+### Docker (`docker`)
+
+Unset, `docker` is `remove-group`: enforce takes docker from the job (the runner user leaves the
+`docker` group and the socket becomes root-only); service containers keep running. `stop` also
+stops the daemon and its containers. `analyze` never changes docker: the summary lists the job's
+use of docker after setup (container runs, `docker exec`, pulls and builds, container actions)
+that enforce would block, and suggests a `docker` setting. A job that uses docker needs
+`docker: keep`, which makes enforce **ADVISORY** (docker is root-equivalent): move that work to a
+job that does not run under enforce where you can. This is best effort: in analyze the job has
+docker, so it can stop the recording.
+
 ### Allowlist syntax
 
 The same patterns drive the proxy **and** DNS, so the two never disagree.

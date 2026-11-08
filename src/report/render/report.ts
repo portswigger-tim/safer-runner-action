@@ -20,6 +20,15 @@ import { httpFilterYaml, type HttpFilterReport, type HttpFilterSuggestion } from
 import { CONTAINER_PREFIXES, firewallSummary, type FirewallEvent, type FirewallSummary } from '../logs/firewall-log';
 import type { SudoCommand, SudoUsage } from '../logs/sudo-log';
 import { sudoConfigYaml, type SudoConfigSuggestion } from '../aggregate/sudo-config';
+import {
+  DOCKER_BEST_EFFORT,
+  DOCKER_KEEP_CAVEAT,
+  DOCKER_PARTIAL,
+  dockerUseCount,
+  dockerUseText,
+  imageLabel,
+  type DockerPolicyReport
+} from '../aggregate/docker';
 import { PATH_HIDDEN } from '../redact';
 import { capped, code, codeBlock, humanBytes, plural, table } from './markdown';
 
@@ -31,6 +40,8 @@ export interface ReportInput {
   dockerRetained?: boolean;
   /** the docker input and the access verified after applying it (G4) */
   docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
+  /** analyze: the job's use of docker, what the docker policy would break, and the suggestion */
+  dockerPolicy?: DockerPolicyReport;
   /** sudo log split by who ran what (analyze: tells the user enforce will remove sudo) */
   sudo?: SudoUsage;
   /** the sudo policy (disable-sudo, sudo-config) and, in analyze, what it would block */
@@ -340,6 +351,12 @@ interface Facts {
   sudoWouldBlock: number;
   /** enforce kept sudo-config lines: ADVISORY */
   sudoAllowlist: number;
+  /** analyze: docker uses the docker policy would block in enforce */
+  dockerWouldBlock: number;
+  /** analyze: service containers docker: stop would stop */
+  dockerWouldStop: number;
+  /** analyze: the docker alert (empty: none) */
+  dockerAlert: string;
   /** names to suggest for `allowed-domains` */
   suggest: string[];
   filterBlocks: HttpFilterReport['blocks'];
@@ -406,6 +423,9 @@ function facts(input: ReportInput): Facts {
     // without a policy (an older setup marker), every workflow sudo command: enforce removes sudo
     sudoWouldBlock: input.sudoPolicy ? input.sudoPolicy.wouldBlock.length : (input.sudo?.ran.length ?? 0),
     sudoAllowlist,
+    dockerWouldBlock: enforce ? 0 : dockerUseCount(input.dockerPolicy?.evaluation.wouldBlock ?? {}),
+    dockerWouldStop: enforce ? 0 : (input.dockerPolicy?.evaluation.wouldStop ?? 0),
+    dockerAlert: enforce || !input.dockerPolicy ? '' : dockerAlert(input.dockerPolicy),
     suggest: suggestedAllowlist(denied),
     filterBlocks,
     filtered: filterBlocks.reduce((a, b) => a + b.tries, 0),
@@ -428,7 +448,15 @@ function titleAndChips(f: Facts): string {
     if (f.filtered) chips.push(`${plural(f.filtered, 'request')} the http-filter would refuse`);
     if (input.sudoPolicy && f.sudoWouldBlock)
       chips.push(`${plural(f.sudoWouldBlock, 'sudo command')} would be blocked`);
-    if (!f.hostsDenied && !f.filtered && !(input.sudoPolicy && f.sudoWouldBlock))
+    if (f.dockerWouldBlock) chips.push(`${plural(f.dockerWouldBlock, 'docker use')} would be blocked`);
+    if (f.dockerWouldStop) chips.push(`${plural(f.dockerWouldStop, 'service container')} would be stopped`);
+    if (
+      !f.hostsDenied &&
+      !f.filtered &&
+      !(input.sudoPolicy && f.sudoWouldBlock) &&
+      !f.dockerWouldBlock &&
+      !f.dockerWouldStop
+    )
       chips.push('nothing would be blocked');
   }
   if (input.selfTests.length) {
@@ -510,7 +538,7 @@ function alerts(f: Facts): string {
     md += '> [!IMPORTANT]\n' + `> **${what.join('; ')}.** If this job failed, this is probably why — see below.\n\n`;
   }
 
-  if (!enforce && (suggest.length || sudoWouldBlock || sudoKeptRan)) {
+  if (!enforce && (suggest.length || sudoWouldBlock || sudoKeptRan || f.dockerAlert)) {
     md += '> [!IMPORTANT]\n';
     if (suggest.length) {
       md += `> **Enforce would block ${plural(suggest.length, 'host')} this job used.** Add ${suggest.length === 1 ? 'it' : 'them'} to run this job under \`mode: enforce\` (review each one first):\n>\n`;
@@ -528,9 +556,51 @@ function alerts(f: Facts): string {
       if (suggest.length) md += '>\n';
       md += sudoAlert(f) + '\n';
     }
+    if (f.dockerAlert) {
+      if (suggest.length || sudoWouldBlock || sudoKeptRan) md += '>\n';
+      md += f.dockerAlert + '\n';
+    }
     md += '\n';
   }
   return md;
+}
+
+/**
+ * Analyze: what the docker policy would break in enforce, and the docker setting to run the job
+ * under enforce (in an alert); '' when there is nothing to say. Report only.
+ */
+function dockerAlert(d: DockerPolicyReport): string {
+  const { policy, observed, evaluation: e } = d;
+  const uses = dockerUseText(observed.uses);
+  const caveat = observed.partial ? `${DOCKER_PARTIAL} ${DOCKER_BEST_EFFORT}` : DOCKER_BEST_EFFORT;
+  const blocked = dockerUseCount(e.wouldBlock);
+  let md: string;
+  if (blocked) {
+    md =
+      `> **Enforce would block docker, which this job used after setup** (\`docker: ${policy}\`: ${uses}; ` +
+      'listed under Diagnostics). Move the docker work to a job that does not run under enforce, or keep docker ' +
+      '(review first):\n>\n' +
+      codeBlock('yaml', 'docker: keep')
+        .split('\n')
+        .map(l => `> ${l}`)
+        .join('\n') +
+      `\n>\n> ${DOCKER_KEEP_CAVEAT}`;
+  } else if (e.wouldStop) {
+    md =
+      `> **\`docker: stop\` would stop this job's ${plural(e.wouldStop, 'service container')}.** Leave \`docker\` ` +
+      'unset: `remove-group` keeps them running and still takes docker from the job.';
+  } else if (policy === 'keep' && dockerUseCount(observed.uses)) {
+    md =
+      `> **This job used docker after setup (${uses}), and \`docker: keep\` keeps it**, so enforce would be ` +
+      `ADVISORY. ${DOCKER_KEEP_CAVEAT}`;
+  } else if (policy === 'keep') {
+    md =
+      '> **No use of docker after setup was seen, but `docker: keep` keeps it**, so enforce would be ADVISORY ' +
+      '(docker is root-equivalent). Remove `docker: keep` to make enforce a boundary.';
+  } else {
+    return '';
+  }
+  return md + `\n>\n> ${caveat}`;
 }
 
 /** Analyze: the sudo commands enforce would block, and the suggested sudo-config (in an alert). */
@@ -580,7 +650,7 @@ function scorecard(f: Facts): string {
     return enforce
       ? `**✅ Nothing blocked.** ${allowedLine} through the proxy.\n\n`
       : `**✅ Nothing would be blocked.** ${allowedLine} through the proxy.` +
-          (f.sudoWouldBlock ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
+          (f.sudoWouldBlock || f.dockerAlert ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
   }
   const rows: string[][] = [];
   if (bypass.length) rows.push(['🚨 **Bypass attempts**', `**${plural(bypass.length, 'host')} ${blockedWord}**`]);
@@ -849,6 +919,23 @@ function diagnostics(f: Facts): string {
       ? `\`docker: ${requested}\``
       : `policy \`docker: ${requested}\` (analyze: evaluated, not applied)`;
     body += `**Docker** — ${policy}; verified at setup: ${DOCKER_ACCESS_TEXT[access] ?? access}\n\n`;
+    const d = enforce ? undefined : input.dockerPolicy;
+    if (d) {
+      const uses = dockerUseText(d.observed.uses);
+      body += uses ? `Used after setup: ${uses}.` : 'No use of docker after setup was seen.';
+      if (d.observed.services)
+        body += ` ${plural(d.observed.services, 'container')} already ran at setup (service containers).`;
+      if (!uses && !d.observed.partial && d.evaluation.fits === 'stop' && d.policy !== 'stop') {
+        body += ' `docker: stop` would also fit.';
+      }
+      body += '\n\n';
+      if (d.observed.images.length) {
+        const shown = d.observed.images.slice(0, MAX_LIST).map(i => code(imageLabel(i)));
+        const more = d.observed.images.length - shown.length;
+        body += `Images: ${shown.join(', ')}${more > 0 ? ` +${more} more` : ''}\n\n`;
+      }
+      if (d.observed.partial) body += `${DOCKER_PARTIAL}\n\n`;
+    }
   }
   if (input.integrity) {
     const s = input.integrity.status;

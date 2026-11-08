@@ -42,7 +42,7 @@ policy would block, and what config would cover the legitimate part?"*
 | Egress (DNS+proxy) | `allowed-domains`, `passthrough-domains` | would-block hosts; suggest `allowed-domains` **(template — unchanged)** |
 | http-filter | `http-filter` | would-block paths/methods; suggest a filter **(unchanged)** |
 | **sudo** | **restore `sudo-config` (structured YAML, see below)** | sudo calls the allowlist would block; **suggest a `sudo-config` from `sudo.log`** (advisory, loudly caveated — a sudo allowlist is not a hard boundary) |
-| docker | `docker` (keep/remove-group/stop) | docker usage seen; note what `remove-group`/`stop` would have broken |
+| docker | `docker` (keep/remove-group/stop) | docker usage seen; note what `remove-group`/`stop` would have broken (built: see below) |
 | fail-on-tampering | `fail-on-tampering` | stays a post-hoc report (doesn't fit "suggest a config") |
 
 ## Decisions (signed off)
@@ -146,6 +146,40 @@ Where the build settled a detail the sections above left open:
   | either | false | lines | step fails | — |
   | analyze | unset / true | none / lines | unchanged | would-block list + suggested sudo-config |
   | analyze | false | none | unchanged | sudo kept: enforce would be ADVISORY |
+
+## Docker slice: as built
+
+Approved (Tim, 2026-11-08) with six decisions: adopt the docker behaviour change; keep the
+dockerd CA restart in analyze; show a `docker: keep` suggestion with its caveat; never suggest
+`stop` over the policy; record docker events with a recorder unit; leave `fail-on-tampering`
+mode-aware.
+
+- **Default and mode**: unset `docker` is `remove-group` in both modes (`resolveDocker`).
+  `planDocker(mode, policy)` returns the access change, an `ApplyingDocker`, only in enforce; the
+  functions that change docker access take one, so analyze changing it does not compile.
+  Analyze is treated as `keep`.
+- **The docker behaviour change**: analyze with an explicit `docker: remove-group` or `stop` no
+  longer applies it (setup warns). In that case dockerd now restarts for the proxy CA and the
+  containers get the container rules, as with analyze unset, because docker stays usable.
+- **Not access**: the dockerd CA restart and the `daemon.json` `live-restore` merge are the
+  proxy's precondition (F1) and run in analyze too. L28 (analyze changes no docker access)
+  covers the group, the socket and stopping or disabling the daemon.
+- **Signal**: analyze runs `docker events` in a transient unit from setup on
+  (`eventRecorderUnit`), read only, no network, never restarted, and only if `docker.service`
+  already runs: `docker events` against a socket-activated daemon would start it (L29). dockerd
+  holds only its latest events, so querying it at the end could miss an early use. Without a
+  recording, the post step asks dockerd for what it still holds (if it runs), and calls the
+  result partial.
+- **What counts as use** (`classifyDockerEvents`): every event except dockerd's own (exits,
+  `oom`, health status, its reload) and a container's healthcheck exec (the exec command equals
+  its `Config.Healthcheck`). A step's `docker exec` into a service container counts.
+- **`evaluate`**: `evaluateDocker(policy, observed)` returns what the policy would block (any
+  use, under `remove-group` or `stop`), the service containers `stop` would stop, and a
+  suggestion `{ input: 'docker', value, advisory, change }` for the report's later "Suggested
+  enforce configuration": any use needs `keep` (ADVISORY); `stop` with service containers, or
+  `keep` with no use, gets `remove-group`; otherwise the policy stays.
+- **Shown**: kinds, counts and image names (each part through the label check), never an exec
+  command, container name, label or the environment.
 
 ## Backwards-compat
 

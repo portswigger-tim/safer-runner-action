@@ -450,6 +450,14 @@ class FakeHost {
         stdout: JSON.stringify([{ Driver: 'bridge', IPAM: { Config: [{ Subnet: '172.17.0.0/16' }] } }])
       };
     }
+    if (a[1] === 'inspect' && a[3].includes('Healthcheck')) {
+      // the service container has a healthcheck; anything else is gone (exit 1, like docker)
+      const known = a.slice(4).filter(id => this.docker.containers.includes(id));
+      const lines = known.map(
+        id => `${JSON.stringify(id)}\t${JSON.stringify({ Test: ['CMD-SHELL', 'pg_isready -U postgres'] })}\tnull`
+      );
+      return { code: known.length === a.length - 4 ? 0 : 1, stdout: lines.join('\n') + '\n' };
+    }
     if (a[1] === 'inspect') return { code: 0, stdout: '/redis 172.17.0.2\n' };
     throw new Error(`fake runner: unhandled docker command: ${a.join(' ')}`);
   }
@@ -1342,6 +1350,92 @@ describe('post step transcript', () => {
     expect(h.summaryText).toContain('⚠️ sudo allowlist (2)');
     expect(h.summaryText).not.toContain('controls applied at setup');
     expect(h.log).toContainEqual(expect.stringMatching(/^warning: Unreadable sudo-config in the setup marker/));
+  });
+
+  describe('analyze: the docker policy against the use of docker after setup', () => {
+    const STOP = () => SCENARIOS.find(c => c.s.name === 'analyze, docker: stop with running service containers')!.s;
+    const SERVICE = CONTAINER_IDS[0];
+    const RUN = 'babe' + '0'.repeat(59) + '1';
+    /** one line as `docker events --format '{{json .}}'` writes it */
+    const ev = (Type: string, Action: string, ID: string, Attributes: Record<string, string> = {}) =>
+      JSON.stringify({ status: Action, id: ID, Type, Action, Actor: { ID, Attributes }, scope: 'local', time: 1 }) +
+      '\n';
+    const healthcheck = [
+      ev('container', 'exec_create: /bin/sh -c pg_isready -U postgres', SERVICE, {
+        image: 'postgres:16',
+        execID: 'e1'
+      }),
+      ev('container', 'exec_start: /bin/sh -c pg_isready -U postgres', SERVICE, { image: 'postgres:16', execID: 'e1' }),
+      ev('container', 'exec_die', SERVICE, { image: 'postgres:16', execID: 'e1', exitCode: '0' }),
+      ev('container', 'health_status: healthy', SERVICE, { image: 'postgres:16' })
+    ];
+    const jobUse = [
+      ev('image', 'pull', 'alpine:3.20', { name: 'alpine' }),
+      ev('container', 'create', RUN, { image: 'alpine:3.20', name: 'eager_turing' }),
+      ev('network', 'connect', 'f00dbabe0001', { container: RUN, name: 'bridge', type: 'bridge' }),
+      ev('container', 'start', RUN, { image: 'alpine:3.20', name: 'eager_turing' }),
+      ev('container', 'die', RUN, { image: 'alpine:3.20', exitCode: '0' }),
+      // a step's own docker exec into the service: its command is never shown
+      ev('container', `exec_create: psql -c select '${CANARY}'`, SERVICE, { image: 'postgres:16', execID: 'e2' }),
+      ev('image', 'tag', 'sha256:0123', { name: `ghcr.io/acme/app:${CANARY}` })
+    ];
+
+    async function analyzeThenPost(events: string[], recorderStopped = false): Promise<FakeHost> {
+      const h = await setup(STOP());
+      for (const e of events) h.append(constants.DOCKER_EVENTS_LOG, e);
+      if (recorderStopped) h.units.delete(constants.DOCKER_EVENTS_UNIT);
+      await post(h);
+      expect(postInvariants(h.transcript)).toEqual([]);
+      expect(h.failed).toEqual([]);
+      return h;
+    }
+
+    it('the job used docker: what enforce would block, and `docker: keep` with its caveat', async () => {
+      const h = await analyzeThenPost([...healthcheck, ...jobUse, ...healthcheck]);
+      expect(h.summaryText).toContain('<kbd>6 docker uses would be blocked</kbd>');
+      expect(h.summaryText).toContain(
+        '**Enforce would block docker, which this job used after setup** (`docker: stop`: 2 container actions, ' +
+          '1 exec into a container, 2 image actions, 1 network change; listed under Diagnostics)'
+      );
+      expect(h.summaryText).toContain('> ```yaml\n> docker: keep\n> ```');
+      expect(h.summaryText).toContain('enforce with `docker: keep` is ADVISORY');
+      expect(h.summaryText).toContain('Images: `alpine:3.20`, `postgres:16`, `ghcr.io/acme/app:‹redacted›`');
+      expect(h.summaryText).toContain('1 container already ran at setup (service containers)');
+      // the healthcheck is dockerd's own; an exec command, container names: never shown
+      expect(h.summaryText).not.toContain('pg_isready');
+      expect(h.summaryText).not.toContain('eager_turing');
+      for (const out of [h.summaryText, h.log.join('\n')]) expect(out).not.toContain(CANARY);
+      expect(h.log).toContain('info: docker WOULD_BLOCK container x2');
+      expect(h.log).toContain('info: docker WOULD_BLOCK exec x1');
+      expect(h.summaryText).not.toContain('should run unchanged');
+    });
+
+    it('only the service containers ran: docker: stop would stop them; leave docker unset', async () => {
+      const h = await analyzeThenPost([...healthcheck, ...healthcheck]);
+      expect(h.summaryText).toContain('<kbd>1 service container would be stopped</kbd>');
+      expect(h.summaryText).toContain(
+        "**`docker: stop` would stop this job's 1 service container.** Leave `docker` unset"
+      );
+      expect(h.summaryText).toContain('No use of docker after setup was seen.');
+      expect(h.summaryText).not.toContain('docker: keep');
+      expect(h.summaryText).not.toContain('docker uses would be blocked');
+    });
+
+    it('a recording that stopped early is said to be partial', async () => {
+      const h = await analyzeThenPost([], true);
+      expect(h.summaryText).toContain('The recording did not cover the whole job');
+    });
+
+    it('no docker at all, under the default: nothing to change, and stop would also fit', async () => {
+      const h = await setup({
+        ...STOP(),
+        inputs: { mode: 'analyze' },
+        docker: { active: true, dockerUser: true, containers: [] }
+      });
+      await post(h);
+      expect(h.summaryText).toContain('No use of docker after setup was seen. `docker: stop` would also fit.');
+      expect(h.summaryText).not.toMatch(/docker use|docker: keep|Enforce would block docker/);
+    });
   });
 
   it('analyze: the sudo the policy (disable-sudo + sudo-config) would block, sudo left as it was', async () => {

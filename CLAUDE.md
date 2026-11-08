@@ -80,8 +80,8 @@ src/
 ├── system/          # the Host port (host.ts), writeFiles, transient units, pinned installs,
 │                    #   shared types and readiness tokens (tokens.test.ts)
 └── report/          # the job summary
-    ├── logs/        # DNS / firewall / sudo log parsers (the flow log's is src/flowlog.ts)
-    ├── aggregate/   # flows, containers, http-filter (and its suggestion as YAML)
+    ├── logs/        # DNS / firewall / sudo log and docker events parsers (the flow log's is src/flowlog.ts)
+    ├── aggregate/   # flows, containers, http-filter (and its suggestion as YAML), sudo-config, docker
     ├── render/      # Markdown
     ├── redact.ts    # redaction of encoded-looking names and hidden paths in the summary
     └── suggest.ts   # runs proxy/suggest.py (python3 -I) for the suggested http-filter
@@ -244,7 +244,14 @@ checks the same order (L1-L29) on a recording fake runner.
      runs `docker events` (read only; `eventRecorderUnit`), started only if `docker.service`
      already runs and never restarted, since connecting to a stopped daemon would start it
      through socket activation (L29). The setup marker records when it started and the
-     containers already running then.
+     containers already running then. The post step (`observeDocker`) reads it, tells dockerd's
+     own events (exits, healthchecks, health status) from the job's use (`classifyDockerEvents`),
+     and `evaluateDocker` returns what the policy would block in enforce and a suggested setting
+     (`{ input: 'docker', value, advisory, change }`, report only): any use needs `keep`
+     (ADVISORY); `stop` that would stop service containers gets `remove-group`; `stop` is never
+     suggested over the policy. The summary shows kinds, counts and image names
+     (`report/aggregate/docker.ts`, `imageLabel`), never an exec command, container name or
+     label.
    - **Defaults** (`src/config/inputs.ts`): unset `disable-sudo` is `true` and unset `docker` is
      `remove-group`, in both modes (analyze only evaluates them). Unset `fail-on-tampering` is
      mode-aware: on in enforce, off in analyze. An explicit value always wins. Enforce with sudo
@@ -408,13 +415,13 @@ Python only: `npm run test:py`.
 - `system/tokens.test.ts` - every readiness token is minted only by its owning module and has an
   ordering invariant; `system/system.test.ts` - `writeFiles` and transient units.
 - `services/*` - per service: `coredns` (config + snapshot, index), `mitmproxy` (index, trust),
-  `iptables` (+ snapshot), `docker`, `sudo`; effects run against `recordingHost`
+  `iptables` (+ snapshot), `docker` (index, and config: plan, events, evaluation), `sudo`; effects run against `recordingHost`
   (`src/system/testing.ts`).
 - `setup/run`, `setup/selftest`, `pre`, `integrity/baseline` (capture and the one-pass check),
   `config/inputs`, `config/github-domains`, `policy`, `scripts/gen-github-domains`.
 - Report: `report.test.ts` (+ fixture `__fixtures__/beta2-enforce-flows.jsonl`),
   `report.golden.test.ts` (golden summaries + the redaction canary), `report/redact`,
-  `report/suggest`, `report/logs/*` (dns, sudo; fixture `coredns.log`).
+  `report/suggest`, `report/logs/*` (dns, sudo; fixture `coredns.log`), `report/aggregate/docker`.
 
 **Python**: `proxy/policy_core_test.py` and `proxy/suggest_test.py`, plus the shared `proxy/test-vectors.json` (which also pins the suggester's output).
 

@@ -11,17 +11,21 @@ import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../..
 import type { SelfTestsRun } from '../../setup/selftest';
 import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
 import { startUnit } from '../../system/unit';
+import { parseDockerEvents } from '../../report/logs/docker-events';
 import type { TrustInstalled } from '../mitmproxy/trust';
 import {
   DOCKER_GROUP,
   DOCKER_SOCKET,
   RUNNER_USERNAME,
+  classifyDockerEvents,
   dockerAccess,
   eventRecorderUnit,
+  healthcheckCommands,
   mergeLiveRestore,
   parseContainerAddresses,
   type ApplyingDocker,
   type DockerAccess,
+  type DockerObserved,
   type DockerPlan,
   type DockerState
 } from './config';
@@ -267,6 +271,76 @@ export async function startEventRecorder(h: Host, _prepared: DockerPrepared): Pr
   }
   core.info(`docker events: recording to ${DOCKER_EVENTS_LOG} (${containers.length} container(s) already running)`);
   return { since, containers };
+}
+
+/** At most this many containers are asked for their healthcheck. */
+const MAX_INSPECT = 50;
+
+/**
+ * The healthcheck commands of these containers (healthcheckCommands). Without sudo: the runner
+ * kept docker in analyze. A container that is gone has none.
+ */
+async function healthchecks(h: Host, ids: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (!ids.length) return out;
+  // JSON values, tab separated (JSON never holds a raw tab); never the env or anything else
+  const fmt = '{{json .Id}}\t{{json .Config.Healthcheck}}\t{{json .Config.Shell}}';
+  const { stdout } = await h.output('docker', ['inspect', '--format', fmt, ...ids.slice(0, MAX_INSPECT)], {
+    ignoreReturnCode: true,
+    silent: true
+  });
+  for (const line of stdout.split('\n')) {
+    try {
+      const [id, check, shell] = line.split('\t').map(v => JSON.parse(v));
+      if (typeof id === 'string') out.set(id, healthcheckCommands(check?.Test, shell));
+    } catch {
+      // not a line of ours
+    }
+  }
+  return out;
+}
+
+/**
+ * analyze, post step: the job's use of docker after setup. From the recorder's log
+ * (startEventRecorder); partial when it did not record the whole job. Without a recorder, from
+ * what dockerd still holds, and only if dockerd runs (asking a stopped one would start it).
+ * `access` is the docker access setup verified: with neither the daemon nor its socket running
+ * then or now, the job had no docker to use, so nothing is missing.
+ */
+export async function observeDocker(
+  h: Host,
+  recorded: DockerEventsStart | undefined,
+  setupAt: string | undefined,
+  access?: DockerAccess
+): Promise<DockerObserved> {
+  let text = '';
+  let partial = true;
+  const running = !recorded && (await unitActive(h, 'docker.service'));
+  if (!recorded && !running && access === 'not-running' && !(await unitActive(h, 'docker.socket'))) {
+    partial = false;
+  } else if (recorded) {
+    try {
+      text = fs.readFileSync(DOCKER_EVENTS_LOG, 'utf8');
+      // still subscribed: dockerd never stopped or restarted during the job
+      partial = !(await unitActive(h, DOCKER_EVENTS_UNIT));
+    } catch {
+      text = '';
+    }
+  } else if (setupAt && running) {
+    const since = String(Math.floor(Date.parse(setupAt) / 1000));
+    const until = String(Math.ceil(Date.now() / 1000));
+    const r = await h.output('docker', ['events', '--since', since, '--until', until, '--format', '{{json .}}'], {
+      ignoreReturnCode: true,
+      silent: true
+    });
+    text = r.exitCode === 0 ? r.stdout : '';
+  }
+  const events = parseDockerEvents(text);
+  const execs = Array.from(
+    new Set(events.filter(e => e.type === 'container' && e.command !== undefined).map(e => e.id))
+  );
+  const { uses, images } = classifyDockerEvents(events, await healthchecks(h, execs));
+  return { uses, images, services: recorded?.containers.length ?? 0, partial };
 }
 
 /** What the setup marker (and so the report) records about docker: requested AND verified. */

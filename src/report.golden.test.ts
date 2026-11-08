@@ -11,6 +11,8 @@
  */
 
 import type { FlowRecord } from './flowlog';
+import { evaluateDocker, type DockerObserved } from './services/docker/config';
+import type { DockerPolicy } from './config/inputs';
 import type { SudoUsage } from './report/logs/sudo-log';
 import {
   buildReport,
@@ -429,6 +431,12 @@ const FIREWALL_ANALYZE = [
 const plain = (x: string) => x;
 const encoded = (x: string) => `${CANARY}.${x}`;
 
+/** analyze: the docker policy evaluated against what the job did */
+function dockerPolicy(policy: DockerPolicy, o: Partial<DockerObserved>) {
+  const observed: DockerObserved = { uses: {}, images: [], services: 0, partial: false, ...o };
+  return { policy, observed, evaluation: evaluateDocker(policy, observed) };
+}
+
 function report(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'hosts'>): string {
   return buildReport({
     job: 'build',
@@ -581,6 +589,46 @@ describe('job summary golden snapshots', () => {
       })
     ).toMatchSnapshot();
   });
+
+  it('analyze: the job used docker, so enforce would block it (docker: keep suggested)', () => {
+    expect(
+      report({
+        mode: 'analyze',
+        hosts: summarizeFlows(allowedTraffic()),
+        integrity: undefined,
+        docker: { requested: 'remove-group', access: 'retained' },
+        dockerPolicy: dockerPolicy('remove-group', {
+          uses: { container: 4, exec: 1, image: 2, build: 1, network: 2 },
+          images: ['alpine:3.20', 'postgres:16', 'ghcr.io/acme/app:1.4.2'],
+          services: 1
+        })
+      })
+    ).toMatchSnapshot();
+  });
+
+  it('analyze: docker: stop would stop the service containers', () => {
+    expect(
+      report({
+        mode: 'analyze',
+        hosts: summarizeFlows(allowedTraffic()),
+        integrity: undefined,
+        docker: { requested: 'stop', access: 'retained' },
+        dockerPolicy: dockerPolicy('stop', { services: 2 })
+      })
+    ).toMatchSnapshot();
+  });
+
+  it('analyze: docker: keep with no use of docker (partial recording)', () => {
+    expect(
+      report({
+        mode: 'analyze',
+        hosts: summarizeFlows(allowedTraffic()),
+        integrity: undefined,
+        docker: { requested: 'keep', access: 'retained' },
+        dockerPolicy: dockerPolicy('keep', { partial: true })
+      })
+    ).toMatchSnapshot();
+  });
 });
 
 describe('redaction canary (C5)', () => {
@@ -613,7 +661,12 @@ describe('redaction canary (C5)', () => {
       httpFilter: summarizeHttpFilter(records, () => SUGGESTION),
       firewall,
       containers: summarizeContainers(records, firewall),
-      dnsRefused: [encoded('dns-only.example.net'), encoded('exfil.example.net')]
+      dnsRefused: [encoded('dns-only.example.net'), encoded('exfil.example.net')],
+      // analyze: image names the job used, one with an encoded tag and one with an encoded path
+      dockerPolicy: dockerPolicy('remove-group', {
+        uses: { container: 1, image: 2 },
+        images: [`ghcr.io/acme/app:${CANARY}`, `registry.example.com/${CANARY}/app:1`]
+      })
     });
   }
 
@@ -627,7 +680,8 @@ describe('redaction canary (C5)', () => {
       'Did not resolve',
       'Other',
       'Container egress',
-      'DNS '
+      'DNS ',
+      ...(mode === 'analyze' ? ['Images: '] : [])
     ]) {
       expect(md).toContain(section);
     }

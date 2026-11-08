@@ -16,11 +16,19 @@ import {
   summarizeFlows,
   summarizeHttpFilter,
   type AllowedRequest,
+  type DockerPolicyReport,
   type HttpFilterSuggestion,
   type SudoCommand,
   type SudoPolicyReport
 } from './report';
-import { containerAddresses } from './services/docker';
+import {
+  DOCKER_USES,
+  containerAddresses,
+  evaluateDocker,
+  observeDocker,
+  type DockerEventsStart
+} from './services/docker';
+import type { DockerPolicy } from './config/inputs';
 import { actionRoot } from './services/mitmproxy';
 import { type SelfTestWindow, withoutSelfTests } from './setup/selftest';
 import {
@@ -40,8 +48,12 @@ interface SetupMarker {
   mode: Mode;
   sudoRetained?: boolean;
   dockerRetained?: boolean;
-  /** the docker input and the verified access (G4) */
+  /** the docker policy and the verified access (G4) */
   docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
+  /** analyze: where the docker events recording started */
+  dockerEvents?: DockerEventsStart;
+  /** when setup wrote the marker */
+  at?: string;
   /** resolved fail-on-tampering (mode-aware); kept in the root-owned marker, not re-read from inputs */
   failOnTampering?: boolean;
   /** flow-log byte range the setup self-tests wrote */
@@ -112,6 +124,23 @@ function sudoPolicy(mode: Mode, marker: SetupMarker, ran: SudoCommand[]): SudoPo
   return policy;
 }
 
+/**
+ * Analyze: the job's use of docker after setup, what the docker policy setup recorded would
+ * break in enforce, and the docker setting to suggest. Report only.
+ */
+async function dockerPolicy(marker: SetupMarker): Promise<DockerPolicyReport | undefined> {
+  const policy = marker.docker?.requested as DockerPolicy | undefined;
+  if (marker.mode !== 'analyze' || !policy) return undefined;
+  try {
+    const observed = await observeDocker(realHost, marker.dockerEvents, marker.at, marker.docker?.access);
+    return { policy, observed, evaluation: evaluateDocker(policy, observed) };
+  } catch (error) {
+    // costs only the docker evaluation: the rest of the report still renders
+    core.warning(`No docker evaluation: ${error}`);
+    return undefined;
+  }
+}
+
 function readSetupMarker(): SetupMarker | null {
   try {
     return JSON.parse(fs.readFileSync(SETUP_MARKER, 'utf8')) as SetupMarker;
@@ -179,12 +208,18 @@ async function run(): Promise<void> {
     for (const c of sudo.refused) core.info(`sudo REFUSED ${c.command} ${c.args}`);
     const sudoPolicyReport = sudoPolicy(mode, marker, sudo.ran);
     for (const c of sudoPolicyReport.wouldBlock) core.info(`sudo WOULD_BLOCK ${c.command} ${c.args}`);
+    const dockerPolicyReport = await dockerPolicy(marker);
+    for (const k of DOCKER_USES) {
+      const n = dockerPolicyReport?.evaluation.wouldBlock[k];
+      if (n) core.info(`docker WOULD_BLOCK ${k} x${n}`);
+    }
 
     const md = buildReport({
       mode,
       sudoRetained: marker.sudoRetained === true,
       dockerRetained: marker.dockerRetained === true,
       docker: marker.docker,
+      dockerPolicy: dockerPolicyReport,
       sudo,
       sudoPolicy: sudoPolicyReport,
       job: process.env.GITHUB_JOB || 'unknown',

@@ -23,6 +23,7 @@ import {
   planDocker,
   prepare,
   readDockerState,
+  observeDocker,
   startEventRecorder,
   stopDockerService,
   type DockerPrepared
@@ -378,6 +379,45 @@ describe('startEventRecorder (analyze: the use of docker after setup)', () => {
     // @ts-expect-error - recording before dockerd restarted for the CA does not compile
     const early = () => startEventRecorder(host, {});
     expect(early).toBeInstanceOf(Function);
+  });
+});
+
+describe('observeDocker (analyze, post step)', () => {
+  const at = '2026-11-08T12:00:00.000Z';
+
+  it('no recording, dockerd running: asks it for what it still holds since setup (partial)', async () => {
+    const { host, calls } = recordingHost(
+      () => 0,
+      l =>
+        l.startsWith('docker events ')
+          ? JSON.stringify({ Type: 'image', Action: 'pull', Actor: { ID: 'alpine:3.20', Attributes: {} } }) + '\n'
+          : ''
+    );
+    expect(await observeDocker(host, undefined, at, 'retained')).toEqual({
+      uses: { image: 1 },
+      images: ['alpine:3.20'],
+      services: 0,
+      partial: true
+    });
+    expect(calls).toContainEqual(
+      expect.stringMatching(/^docker events --since 1794139200 --until \d+ --format \{\{json \.\}\}/)
+    );
+  });
+
+  it('no recording, dockerd stopped: never asks (that would start it through socket activation)', async () => {
+    const { host, calls } = runner({ daemon: false });
+    expect(await observeDocker(host, undefined, at, 'retained')).toMatchObject({ uses: {}, partial: true });
+    expect(calls.some(c => c.startsWith('docker '))).toBe(false);
+  });
+
+  it('docker not running at setup or now: nothing to miss, so not partial', async () => {
+    const { host } = runner({ daemon: false, socketUnit: false });
+    expect(await observeDocker(host, undefined, at, 'not-running')).toEqual({
+      uses: {},
+      images: [],
+      services: 0,
+      partial: false
+    });
   });
 });
 

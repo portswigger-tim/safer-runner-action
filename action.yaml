@@ -92,7 +92,8 @@ inputs:
       and lock the socket to root. "stop": stop and disable the docker daemon. "keep": leave
       docker as it is, which makes `enforce` "enforce (ADVISORY)". `enforce` applies it, and a
       removal that does not take effect (verified on the runner) fails the job; `analyze` never
-      changes docker.
+      changes docker, it reports the job's use of docker that enforce would block and suggests a
+      setting.
     required: false
   fail-on-tampering:
     description: >-

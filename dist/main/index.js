@@ -1662,6 +1662,56 @@ function readRefusedNames(file) {
 
 /***/ }),
 
+/***/ 7333:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/** Parser for the docker events the analyze recorder writes (`docker events --format '{{json .}}'`). */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDockerEvents = parseDockerEvents;
+const str = (v) => (typeof v === 'string' ? v : undefined);
+/** Parse the recorder's log; a line that is not a docker event is skipped. */
+function parseDockerEvents(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        if (!line.trim())
+            continue;
+        let e;
+        try {
+            e = JSON.parse(line);
+        }
+        catch {
+            continue;
+        }
+        if (e === null || typeof e !== 'object')
+            continue;
+        const actor = (e.Actor ?? {});
+        const attrs = (actor.Attributes ?? {});
+        const type = str(e.Type);
+        const raw = str(e.Action);
+        const id = str(actor.ID) ?? '';
+        if (!type || !raw)
+            continue;
+        const sep = raw.indexOf(': ');
+        const action = sep < 0 ? raw : raw.slice(0, sep);
+        const command = sep < 0 ? undefined : raw.slice(sep + 2);
+        // image events: the reference (`alpine:3.20`), or for an image ID (`sha256:...`) its name
+        const image = type === 'container'
+            ? str(attrs.image)
+            : type === 'image'
+                ? id.startsWith('sha256:')
+                    ? str(attrs.name)
+                    : id
+                : undefined;
+        out.push({ type, action, id, ...(command !== undefined ? { command } : {}), ...(image ? { image } : {}) });
+    }
+    return out;
+}
+
+
+/***/ }),
+
 /***/ 8305:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -2193,12 +2243,15 @@ async function cutover(h, _dns) {
  * container address parser for the report. No I/O.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.DOCKER_USES = exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
 exports.planDocker = planDocker;
 exports.eventRecorderUnit = eventRecorderUnit;
 exports.dockerAccess = dockerAccess;
 exports.mergeLiveRestore = mergeLiveRestore;
 exports.parseContainerAddresses = parseContainerAddresses;
+exports.healthcheckCommands = healthcheckCommands;
+exports.classifyDockerEvents = classifyDockerEvents;
+exports.evaluateDocker = evaluateDocker;
 const constants_1 = __nccwpck_require__(8729);
 const unit_1 = __nccwpck_require__(812);
 exports.RUNNER_USERNAME = 'runner';
@@ -2283,6 +2336,87 @@ function parseContainerAddresses(output) {
     }
     return out;
 }
+exports.DOCKER_USES = ['container', 'exec', 'image', 'build', 'network', 'volume', 'other'];
+/** Container actions dockerd makes on its own (no client asked): not a use of docker. */
+const DAEMON_ACTIONS = new Set(['die', 'oom', 'exec_die', 'exec_detach', 'health_status']);
+/**
+ * The commands a container's healthcheck runs, as dockerd names them in its exec events
+ * (`exec_create: <entrypoint> <args>`). `test` and `shell` are the container's
+ * Config.Healthcheck.Test and Config.Shell.
+ */
+function healthcheckCommands(test, shell) {
+    if (!Array.isArray(test) || !test.every(t => typeof t === 'string'))
+        return [];
+    const [kind, ...rest] = test;
+    if (kind === 'CMD')
+        return [rest.join(' ').trim()];
+    if (kind !== 'CMD-SHELL' || rest.length !== 1)
+        return [];
+    const sh = Array.isArray(shell) && shell.length && shell.every(t => typeof t === 'string') ? shell : ['/bin/sh', '-c'];
+    return [[...sh, rest[0]].join(' ').trim()];
+}
+/**
+ * The job's use of docker in the events after setup. Not a use: what dockerd does on its own
+ * (a container exiting, its healthcheck and health status, its own reload). `healthchecks` maps
+ * a container to its healthcheck commands (healthcheckCommands): an exec of exactly that is the
+ * healthcheck, any other exec (a step's `docker exec`) is a use.
+ */
+function classifyDockerEvents(events, healthchecks = new Map()) {
+    const uses = {};
+    const images = [];
+    const add = (k) => (uses[k] = (uses[k] ?? 0) + 1);
+    for (const e of events) {
+        if (e.type === 'daemon')
+            continue;
+        if (e.type === 'container') {
+            if (DAEMON_ACTIONS.has(e.action))
+                continue;
+            if (e.action.startsWith('exec_')) {
+                if (e.command !== undefined && healthchecks.get(e.id)?.includes(e.command.trim()))
+                    continue;
+                add('exec');
+            }
+            else
+                add('container');
+        }
+        else if (e.type === 'image')
+            add('image');
+        else if (e.type === 'builder')
+            add('build');
+        else if (e.type === 'network')
+            add('network');
+        else if (e.type === 'volume')
+            add('volume');
+        else
+            add('other');
+        if (e.image && !images.includes(e.image))
+            images.push(e.image);
+    }
+    return { uses, images };
+}
+/**
+ * Analyze: what the docker policy would break in enforce, and the setting to suggest. Any use of
+ * docker after setup needs `keep` (docker has no allowlist), which makes enforce ADVISORY; a
+ * policy that would break nothing is kept as it is. Never suggests `stop` over the default:
+ * `remove-group` already takes docker from the job.
+ */
+function evaluateDocker(policy, observed) {
+    const used = exports.DOCKER_USES.some(k => (observed.uses[k] ?? 0) > 0);
+    const wouldBlock = policy === 'keep' ? {} : { ...observed.uses };
+    const wouldStop = policy === 'stop' ? observed.services : 0;
+    const fits = used ? 'keep' : observed.services ? 'remove-group' : 'stop';
+    const value = used
+        ? 'keep'
+        : policy === 'keep' || (policy === 'stop' && observed.services)
+            ? 'remove-group'
+            : policy;
+    return {
+        wouldBlock,
+        wouldStop,
+        fits,
+        suggestion: { input: 'docker', value, advisory: value === 'keep', change: value !== policy }
+    };
+}
 
 
 /***/ }),
@@ -2339,6 +2473,7 @@ exports.isRunnerInDockerGroup = isRunnerInDockerGroup;
 exports.readDockerState = readDockerState;
 exports.prepare = prepare;
 exports.startEventRecorder = startEventRecorder;
+exports.observeDocker = observeDocker;
 exports.applyAccessPolicy = applyAccessPolicy;
 exports.containerAddresses = containerAddresses;
 const core = __importStar(__nccwpck_require__(7484));
@@ -2346,6 +2481,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const host_1 = __nccwpck_require__(7020);
 const unit_1 = __nccwpck_require__(812);
+const docker_events_1 = __nccwpck_require__(7333);
 const config_1 = __nccwpck_require__(8290);
 __exportStar(__nccwpck_require__(8290), exports);
 /** A sudo step whose failure is collected, not thrown: the verified state decides. */
@@ -2552,6 +2688,72 @@ async function startEventRecorder(h, _prepared) {
     }
     core.info(`docker events: recording to ${constants_1.DOCKER_EVENTS_LOG} (${containers.length} container(s) already running)`);
     return { since, containers };
+}
+/** At most this many containers are asked for their healthcheck. */
+const MAX_INSPECT = 50;
+/**
+ * The healthcheck commands of these containers (healthcheckCommands). Without sudo: the runner
+ * kept docker in analyze. A container that is gone has none.
+ */
+async function healthchecks(h, ids) {
+    const out = new Map();
+    if (!ids.length)
+        return out;
+    // JSON values, tab separated (JSON never holds a raw tab); never the env or anything else
+    const fmt = '{{json .Id}}\t{{json .Config.Healthcheck}}\t{{json .Config.Shell}}';
+    const { stdout } = await h.output('docker', ['inspect', '--format', fmt, ...ids.slice(0, MAX_INSPECT)], {
+        ignoreReturnCode: true,
+        silent: true
+    });
+    for (const line of stdout.split('\n')) {
+        try {
+            const [id, check, shell] = line.split('\t').map(v => JSON.parse(v));
+            if (typeof id === 'string')
+                out.set(id, (0, config_1.healthcheckCommands)(check?.Test, shell));
+        }
+        catch {
+            // not a line of ours
+        }
+    }
+    return out;
+}
+/**
+ * analyze, post step: the job's use of docker after setup. From the recorder's log
+ * (startEventRecorder); partial when it did not record the whole job. Without a recorder, from
+ * what dockerd still holds, and only if dockerd runs (asking a stopped one would start it).
+ * `access` is the docker access setup verified: with neither the daemon nor its socket running
+ * then or now, the job had no docker to use, so nothing is missing.
+ */
+async function observeDocker(h, recorded, setupAt, access) {
+    let text = '';
+    let partial = true;
+    const running = !recorded && (await unitActive(h, 'docker.service'));
+    if (!recorded && !running && access === 'not-running' && !(await unitActive(h, 'docker.socket'))) {
+        partial = false;
+    }
+    else if (recorded) {
+        try {
+            text = fs.readFileSync(constants_1.DOCKER_EVENTS_LOG, 'utf8');
+            // still subscribed: dockerd never stopped or restarted during the job
+            partial = !(await unitActive(h, constants_1.DOCKER_EVENTS_UNIT));
+        }
+        catch {
+            text = '';
+        }
+    }
+    else if (setupAt && running) {
+        const since = String(Math.floor(Date.parse(setupAt) / 1000));
+        const until = String(Math.ceil(Date.now() / 1000));
+        const r = await h.output('docker', ['events', '--since', since, '--until', until, '--format', '{{json .}}'], {
+            ignoreReturnCode: true,
+            silent: true
+        });
+        text = r.exitCode === 0 ? r.stdout : '';
+    }
+    const events = (0, docker_events_1.parseDockerEvents)(text);
+    const execs = Array.from(new Set(events.filter(e => e.type === 'container' && e.command !== undefined).map(e => e.id)));
+    const { uses, images } = (0, config_1.classifyDockerEvents)(events, await healthchecks(h, execs));
+    return { uses, images, services: recorded?.containers.length ?? 0, partial };
 }
 /**
  * Apply the docker plan (enforce only: see planDocker), then verify the runner user's real docker

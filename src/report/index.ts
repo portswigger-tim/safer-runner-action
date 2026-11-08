@@ -12,6 +12,8 @@ export * from './aggregate/flows';
 export * from './aggregate/containers';
 export * from './aggregate/http-filter';
 export * from './aggregate/sudo-config';
+export * from './aggregate/docker';
+export * from './logs/docker-events';
 export * from './render/markdown';
 export * from './render/report';
 export * from './redact';
