@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import { FIREWALL_LOG } from '../../constants';
 import { recordingHost } from '../../system/testing';
 import type { ResolverOn } from '../coredns';
+import type { DockerPrepared } from '../docker';
 import type { TrustInstalled } from '../mitmproxy/trust';
 import {
   LOGGING_RULE_FILE,
@@ -22,7 +23,11 @@ import {
 jest.mock('@actions/core');
 
 /** tokens for tests that call the step directly */
-const AFTER = { resolver: Object.freeze({}) as ResolverOn, trust: Object.freeze({}) as TrustInstalled };
+const AFTER = {
+  resolver: Object.freeze({}) as ResolverOn,
+  trust: Object.freeze({}) as TrustInstalled,
+  docker: Object.freeze({}) as DockerPrepared
+};
 
 const base = {
   proxyUid: 990,
@@ -308,14 +313,16 @@ describe('configure: the step', () => {
     expect(core.warning).toHaveBeenCalledWith('ip6tables rules could not be applied');
   });
 
-  it('needs the resolver switched over and the CA trusted first (a compile-time order check)', () => {
+  it('needs the resolver switched over, the CA trusted and dockerd settled first (a compile-time order check)', () => {
     const { host } = recordingHost();
     const o = { ...base, mode: 'enforce' as const };
     // @ts-expect-error - the firewall before the resolver points at CoreDNS does not compile
-    const noResolver = () => configure(host, o, { trust: AFTER.trust });
+    const noResolver = () => configure(host, o, { trust: AFTER.trust, docker: AFTER.docker });
     // @ts-expect-error - nor before the CA is in the trust stores
-    const noTrust = () => configure(host, o, { resolver: AFTER.resolver, trust: {} });
-    expect([noResolver, noTrust]).toHaveLength(2);
+    const noTrust = () => configure(host, o, { resolver: AFTER.resolver, trust: {}, docker: AFTER.docker });
+    // @ts-expect-error - nor before dockerd is settled (its restart rebuilds Docker's chains)
+    const noDocker = () => configure(host, o, { resolver: AFTER.resolver, trust: AFTER.trust });
+    expect([noResolver, noTrust, noDocker]).toHaveLength(3);
   });
 });
 
