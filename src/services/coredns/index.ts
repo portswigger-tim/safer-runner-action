@@ -15,7 +15,7 @@ import * as crypto from 'crypto';
 import * as dns from 'dns';
 import * as fs from 'fs';
 import * as os from 'os';
-import { COREDNS_BIN, COREDNS_SHA256, COREDNS_URL, DNS_LOG, DNS_UNIT } from '../../constants';
+import { COREDNS_BIN, COREDNS_SHA256, COREDNS_SOURCES, DNS_LOG, DNS_UNIT } from '../../constants';
 import { writeFiles } from '../../system/files';
 import { realHost, sudo, type Host } from '../../system/host';
 import { installPinnedBinary } from '../../system/install';
@@ -26,7 +26,7 @@ import { DNS_LISTEN, parseHostsNames, type LocalHosts } from './config';
 export { render, type CoreDnsFacts } from './config';
 
 export async function install(h: Host = realHost): Promise<void> {
-  await installPinnedBinary(COREDNS_URL, COREDNS_SHA256, 'coredns', COREDNS_BIN, 'coredns', h);
+  await installPinnedBinary(COREDNS_SOURCES, COREDNS_SHA256, 'coredns', COREDNS_BIN, 'coredns', h);
 }
 
 export interface DnsUser {

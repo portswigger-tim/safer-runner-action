@@ -853,12 +853,14 @@ function strictYaml(raw, name, o) {
  * Paths, users and pinned versions shared by the v2 setup and post-step code.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
+exports.SELFTEST_BOGUS_IP = exports.SELFTEST_HOST = exports.AZURE_WIRESERVER = exports.AZURE_IMDS = exports.DOCKER_DAEMON_JSON = exports.DOCKER_USER_CHAIN = exports.LOG_PREFIX_CEGRESS = exports.LOG_PREFIX_CDROP = exports.CONTAINER_FWD_CHAIN = exports.CONTAINER_NAT_CHAIN = exports.LOG_PREFIX_ANALYZE = exports.LOG_PREFIX_DROP = exports.NAT_CHAIN = exports.FILTER_CHAIN = exports.SELFTEST_FILE = exports.FIREWALL_LOG = exports.SUDO_LOG = exports.DNS_LOG = exports.FLOW_LOG = exports.LOG_DIR = exports.PROXY_CA_KEY_FILE = exports.PROXY_CONF_DIR = exports.CA_BUNDLE = exports.SYSTEM_CA_FILE = exports.VALIDATION_STATE_FILE = exports.CA_CERT_FILE = exports.COREFILE = exports.POLICY_FILE = exports.ETC_DIR = exports.COREDNS_BIN = exports.ADDON_FILES = exports.ADDON_DIR = exports.MITMDUMP_BIN = exports.INSTALL_DIR = exports.PROXY_STREAM_LARGE_BODIES = exports.PROXY_LISTEN_HOST = exports.PROXY_UNIT = exports.PROXY_USER = exports.DNS_UNIT = exports.COREDNS_SOURCES = exports.COREDNS_ASSET_ID = exports.COREDNS_SHA256 = exports.COREDNS_URL = exports.COREDNS_VERSION = exports.MITMPROXY_SOURCES = exports.MITMPROXY_SHA256 = exports.MITMPROXY_URL = exports.MITMPROXY_VERSION = void 0;
 /** mitmproxy is pinned: the policy addon uses layer classes that are not a stable API. */
 exports.MITMPROXY_VERSION = '12.3.1';
 exports.MITMPROXY_URL = `https://downloads.mitmproxy.org/${exports.MITMPROXY_VERSION}/mitmproxy-${exports.MITMPROXY_VERSION}-linux-x86_64.tar.gz`;
 /** sha256 of the tarball above (verified before anything is extracted). */
 exports.MITMPROXY_SHA256 = 'f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5';
+/** Where the tarball is downloaded from (mitmproxy publishes no GitHub release assets). */
+exports.MITMPROXY_SOURCES = [{ url: exports.MITMPROXY_URL }];
 /**
  * CoreDNS is the resolver (replaced dnsmasq): stock upstream release, sha256-pinned. It is
  * not in the Ubuntu 24.04/26.04 archives. amd64 only, like mitmproxy above.
@@ -867,6 +869,19 @@ exports.COREDNS_VERSION = '1.15.0';
 exports.COREDNS_URL = `https://github.com/coredns/coredns/releases/download/v${exports.COREDNS_VERSION}/coredns_${exports.COREDNS_VERSION}_linux_amd64.tgz`;
 /** sha256 of the tarball above (matches upstream's published .sha256). */
 exports.COREDNS_SHA256 = '2495c5b8f3fab6d0a336c397f1227b75406d86e6ec7125744a29df9e936ab8cd';
+/**
+ * The same release asset through the GitHub REST API: a different front door from
+ * github.com/.../releases/download, which has failed on its own (HTTP 504 for every repo) while
+ * the API kept serving. Asset ids are immutable: a re-uploaded asset gets a new id, this one
+ * then fails and the next source is used. Bump it with the version:
+ * `gh api repos/coredns/coredns/releases/tags/v<version> --jq '.assets[] | select(.name|endswith("_linux_amd64.tgz")) | .id'`
+ */
+exports.COREDNS_ASSET_ID = 661218351;
+/** Tried in order, each verified against COREDNS_SHA256. */
+exports.COREDNS_SOURCES = [
+    { url: `https://api.github.com/repos/coredns/coredns/releases/assets/${exports.COREDNS_ASSET_ID}`, api: true },
+    { url: exports.COREDNS_URL }
+];
 exports.DNS_UNIT = 'safer-runner-dns';
 /** Dedicated system user the proxy runs as. Its UID is exempt from the REDIRECT. */
 exports.PROXY_USER = 'safer-runner-proxy';
@@ -2066,7 +2081,7 @@ const config_1 = __nccwpck_require__(5744);
 var config_2 = __nccwpck_require__(5744);
 Object.defineProperty(exports, "render", ({ enumerable: true, get: function () { return config_2.render; } }));
 async function install(h = host_1.realHost) {
-    await (0, install_1.installPinnedBinary)(constants_1.COREDNS_URL, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns', h);
+    await (0, install_1.installPinnedBinary)(constants_1.COREDNS_SOURCES, constants_1.COREDNS_SHA256, 'coredns', constants_1.COREDNS_BIN, 'coredns', h);
 }
 /** The resolver's own system user: a random name and uid, no login, no home. */
 async function createUser(h) {
@@ -3254,7 +3269,7 @@ async function allocateProxyPorts(probe = canBind, random = Math.random) {
 }
 /** Download the pinned mitmproxy tarball, verify its sha256, install mitmdump root-owned. */
 async function install(h = host_1.realHost) {
-    await (0, install_1.installPinnedBinary)(constants_1.MITMPROXY_URL, constants_1.MITMPROXY_SHA256, 'mitmdump', constants_1.MITMDUMP_BIN, 'mitmproxy', h);
+    await (0, install_1.installPinnedBinary)(constants_1.MITMPROXY_SOURCES, constants_1.MITMPROXY_SHA256, 'mitmdump', constants_1.MITMDUMP_BIN, 'mitmproxy', h);
 }
 /** Create the proxy system user (idempotent). Returns its uid. */
 async function ensureUser(h) {
@@ -4626,12 +4641,16 @@ class DigestMismatch extends Error {
 function backoffMs(n, random = Math.random) {
     return Math.round(Math.min(BACKOFF_BASE_MS * 2 ** (n - 1), BACKOFF_MAX_MS) * (0.5 + random()));
 }
-/** One attempt: the body, or an error (HTTP status, network, timeout). */
-async function fetchOnce(url) {
+/** One request: the body, or an error (HTTP status, network, timeout). */
+async function fetchOnce(src) {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), exports.DOWNLOAD_TIMEOUT_MS);
     try {
-        const res = await fetch(url, { signal: abort.signal });
+        const res = await fetch(src.url, {
+            signal: abort.signal,
+            // the GitHub API refuses requests without a User-Agent; no credentials are ever sent
+            headers: { 'user-agent': 'safer-runner-action', ...(src.api ? { accept: 'application/octet-stream' } : {}) }
+        });
         if (!res.ok)
             throw new Error(`HTTP ${res.status}`);
         return Buffer.from(await res.arrayBuffer());
@@ -4646,30 +4665,38 @@ async function fetchOnce(url) {
     }
 }
 /**
- * Download a pinned release artefact and verify its sha256 before anything touches it. Network
- * errors, HTTP errors and timeouts are retried with backoff (DOWNLOAD_ATTEMPTS in all); a digest
- * mismatch fails at once.
+ * Download a pinned release artefact and verify its sha256 before anything touches it. Each
+ * round tries every source in order, moving straight to the next on any failure; there are
+ * DOWNLOAD_ATTEMPTS rounds, with backoff between them. A source that serves the wrong digest is
+ * not tried again (and nothing from it is written); every source is checked against the same
+ * pin. When every source has failed, setup fails.
  */
-async function downloadVerified(url, sha256, dest, label) {
+async function downloadVerified(sources, sha256, dest, label) {
     await (0, host_1.timed)(`download ${label}`, async () => {
         let lastError;
-        for (let attempt = 1; attempt <= exports.DOWNLOAD_ATTEMPTS; attempt++) {
-            if (attempt > 1)
-                await (0, host_1.sleep)(backoffMs(attempt - 1));
-            try {
-                const buf = await fetchOnce(url);
-                const digest = crypto.createHash('sha256').update(buf).digest('hex');
-                if (digest !== sha256) {
-                    throw new DigestMismatch(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
+        const mismatched = new Set();
+        for (let round = 1; round <= exports.DOWNLOAD_ATTEMPTS && mismatched.size < sources.length; round++) {
+            if (round > 1)
+                await (0, host_1.sleep)(backoffMs(round - 1));
+            for (const src of sources) {
+                if (mismatched.has(src))
+                    continue;
+                const from = new URL(src.url).host;
+                try {
+                    const buf = await fetchOnce(src);
+                    const digest = crypto.createHash('sha256').update(buf).digest('hex');
+                    if (digest !== sha256) {
+                        mismatched.add(src);
+                        throw new DigestMismatch(`sha256 mismatch for ${src.url}: got ${digest}, want ${sha256}`);
+                    }
+                    fs.writeFileSync(dest, buf);
+                    core.info(`${label}: downloaded from ${from}, sha256 verified`);
+                    return;
                 }
-                fs.writeFileSync(dest, buf);
-                return;
-            }
-            catch (e) {
-                lastError = e;
-                if (e instanceof DigestMismatch)
-                    break;
-                core.warning(`${label} download attempt ${attempt}/${exports.DOWNLOAD_ATTEMPTS} failed: ${e}`);
+                catch (e) {
+                    lastError = e;
+                    core.warning(`${label} download from ${from} failed (attempt ${round}/${exports.DOWNLOAD_ATTEMPTS}): ${e}`);
+                }
             }
         }
         throw new Error(`could not download ${label}: ${lastError}`);
@@ -4679,14 +4706,14 @@ async function downloadVerified(url, sha256, dest, label) {
  * Install one binary from a pinned, sha256-verified release tarball, root-owned 0755.
  * Skipped if the destination already exists (a re-run on the same VM).
  */
-async function installPinnedBinary(url, sha256, member, dest, label, h = host_1.realHost) {
+async function installPinnedBinary(sources, sha256, member, dest, label, h = host_1.realHost) {
     if (fs.existsSync(dest)) {
         core.info(`${label} already installed at ${dest}`);
         return;
     }
     const tmp = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || '/tmp', 'safer-runner-'));
     const tarball = path.join(tmp, `${label}.tar.gz`);
-    await downloadVerified(url, sha256, tarball, label);
+    await downloadVerified(sources, sha256, tarball, label);
     await (0, host_1.timed)(`extract ${label}`, async () => {
         await h.run('tar', ['-xzf', tarball, '-C', tmp, member]);
         await (0, host_1.sudo)(['install', '-d', '-m', '0755', '-o', 'root', '-g', 'root', path.dirname(dest)], {}, h);

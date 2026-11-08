@@ -467,6 +467,12 @@ Change the version and sha256 together in `src/constants.ts` (`MITMPROXY_*`, `CO
 mitmproxy also change `PINNED_MITMPROXY_VERSION` in `proxy/policy.py`: the addon uses mitmproxy
 internals and refuses any other version.
 
+For CoreDNS also change `COREDNS_ASSET_ID`: the same release asset through the GitHub REST API,
+tried first (a different front door from `github.com/.../releases/download`, which has failed on
+its own). The command to look it up is next to the constant. Every source in `*_SOURCES` is
+checked against the one pinned sha256 (`downloadVerified` in `src/system/install.ts`: each retry
+round tries every source in order, backoff between rounds).
+
 ### Add a domain-purpose or report change
 
 Edit `src/report/` (rendering in `render/report.ts`) and its tests. Run
