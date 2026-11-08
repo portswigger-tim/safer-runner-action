@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import { readInputs } from './config/inputs';
-import { runSetup, setupCompleted } from './setup/run';
+import { SETUP_END_STATE, runSetup, setupCompleted } from './setup/run';
 
 /**
  * Main step: normally a no-op because the pre step already applied everything. If pre did
@@ -13,7 +13,11 @@ async function run(): Promise<void> {
       return;
     }
     core.info('Pre step did not complete setup - configuring now');
-    await runSetup(readInputs());
+    try {
+      await runSetup(readInputs());
+    } finally {
+      core.saveState(SETUP_END_STATE.main, Math.ceil(Date.now() / 1000));
+    }
   } catch (error) {
     core.setFailed(`safer-runner setup failed: ${error}`);
   }

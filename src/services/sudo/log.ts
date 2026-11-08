@@ -93,11 +93,8 @@ function joinContinuationLines(content: string): string[] {
   return joined;
 }
 
-/**
- * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
- * entry is matched as one line.
- */
-export function parseSudoLogsFromString(content: string): SudoCommand[] {
+/** Every sudo log entry, in order (wrapped and multi-line entries joined first). */
+export function parseSudoLogEntries(content: string): SudoCommand[] {
   const commands: SudoCommand[] = [];
   for (const line of joinContinuationLines(content)) {
     const cmd = parseSudoLogLine(line);
@@ -105,9 +102,37 @@ export function parseSudoLogsFromString(content: string): SudoCommand[] {
       commands.push(cmd);
     }
   }
+  return commands;
+}
 
-  // Deduplicate and limit to 1000 commands
-  return deduplicateSudoCommands(commands).slice(0, 1000);
+/** The sudo log's entries, deduplicated and limited to 1000. */
+export function parseSudoLogsFromString(content: string): SudoCommand[] {
+  return deduplicateSudoCommands(parseSudoLogEntries(content)).slice(0, 1000);
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * A sudo log timestamp (`Nov  7 12:00:01`, no year, the runner's clock in UTC) as epoch seconds,
+ * in the year that puts it at or before `now` (a log line is never from the future); null if it
+ * does not parse.
+ */
+export function sudoLogSeconds(timestamp: string, now: Date): number | null {
+  const m = timestamp.match(/^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+  const month = m ? MONTHS.indexOf(m[1]) : -1;
+  if (!m || month < 0) return null;
+  const at = (year: number) => Date.UTC(year, month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
+  const year = now.getUTCFullYear();
+  return at(year) > now.getTime() / 1000 + 86400 ? at(year - 1) : at(year);
+}
+
+/**
+ * When the action itself runs sudo: up to the end of setup (pre, or main when pre did not set up)
+ * and from the start of the post step. Epoch seconds.
+ */
+export interface ActionSudoWindow {
+  setupEnd: number;
+  postStart: number;
 }
 
 /**
@@ -133,13 +158,28 @@ export interface SudoUsage {
   internal: SudoCommand[];
 }
 
-/** Split parsed sudo log entries by who ran them and whether they were allowed. */
-export function classifySudoCommands(commands: SudoCommand[], internalCommands: string[]): SudoUsage {
+/**
+ * Split parsed sudo log entries by who ran them and whether they were allowed. With `window`, a
+ * command is the action's own only if it matches one of its command lines AND ran while the
+ * action was running (setup, or the post step); the same line run by a job step is the job's.
+ * Without it (an older setup), by the command line alone.
+ */
+export function classifySudoCommands(
+  commands: SudoCommand[],
+  internalCommands: string[],
+  window?: ActionSudoWindow,
+  now: Date = new Date()
+): SudoUsage {
   const internal = new Set(internalCommands);
   const usage: SudoUsage = { ran: [], refused: [], internal: [] };
+  const byAction = (cmd: SudoCommand) => {
+    if (!window) return true;
+    const at = sudoLogSeconds(cmd.timestamp, now);
+    return at !== null && (at <= window.setupEnd || at >= window.postStart);
+  };
   for (const cmd of commands) {
     if (cmd.denied) usage.refused.push(cmd);
-    else if (isInternal(cmd, internal)) usage.internal.push(cmd);
+    else if (isInternal(cmd, internal) && byAction(cmd)) usage.internal.push(cmd);
     else usage.ran.push(cmd);
   }
   return usage;

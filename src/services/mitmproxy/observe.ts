@@ -58,6 +58,8 @@ export function observeProxy(selfTestWindow: SelfTestWindow | undefined): {
         ...parseAllowedDomains(core.getInput('allowed-domains')),
         ...parseAllowedDomains(core.getInput('passthrough-domains'))
       ],
+      allowedDomains: parseAllowedDomains(core.getInput('allowed-domains')),
+      httpFilterSet: core.getInput('http-filter').trim() !== '',
       platformEndpoints: readPlatformAutoAllowed()
     }
   };

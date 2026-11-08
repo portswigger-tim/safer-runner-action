@@ -8,7 +8,14 @@
 
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import { parseSudoLogsFromString, classifySudoCommands, type SudoUsage } from './log';
+import {
+  classifySudoCommands,
+  deduplicateSudoCommands,
+  parseSudoLogEntries,
+  type ActionSudoWindow,
+  type SudoCommand,
+  type SudoUsage
+} from './log';
 import type { BaselineCaptured } from '../../integrity/baseline';
 import { sudo, type Host } from '../../system/host';
 import {
@@ -112,10 +119,18 @@ export async function restrictSudo(h: Host, r: RestrictingSudo, _baseline: Basel
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
  * action's own commands (so the report never counts the action's sudo as the workflow's).
  */
-export function readSudoUsage(logFile: string): SudoUsage {
+export function readSudoUsage(logFile: string, window?: ActionSudoWindow): SudoUsage {
   try {
     if (fs.existsSync(logFile)) {
-      return classifySudoCommands(parseSudoLogsFromString(fs.readFileSync(logFile, 'utf-8')), INTERNAL_SUDO_COMMANDS);
+      // attributed entry by entry, before deduplication: the same line can be the action's at
+      // setup and the job's later
+      const u = classifySudoCommands(
+        parseSudoLogEntries(fs.readFileSync(logFile, 'utf-8')),
+        INTERNAL_SUDO_COMMANDS,
+        window
+      );
+      const dedup = (c: SudoCommand[]) => deduplicateSudoCommands(c).slice(0, 1000);
+      return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
     }
   } catch (error) {
     core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);

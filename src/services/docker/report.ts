@@ -10,8 +10,17 @@ import { DOCKER_USES } from './config';
 import { containerSection, type ContainerSummary } from './containers';
 import { MAX_LIST } from '../mitmproxy/flows';
 import { REDACTED, looksEncoded } from '../../report/redact';
-import { code, codeBlock, plural } from '../../report/markdown';
-import type { Alert, ReportContext, Section } from '../../report/section';
+import { code, plural, table } from '../../report/markdown';
+import {
+  VERDICT_ICON,
+  refusedVerdict,
+  type Advisory,
+  type ReportContext,
+  type RunnerSystem,
+  type ScoreRow,
+  type Section,
+  type Suggestion
+} from '../../report/section';
 
 export interface DockerPolicyReport {
   /** the docker policy setup recorded (the input, or remove-group when unset) */
@@ -77,8 +86,8 @@ export function imageLabel(ref: string): string {
 export interface DockerReportObserved {
   /** the runner user kept docker access (root-equivalent): as verified at setup, not the input */
   retained: boolean;
-  /** the docker input and the access verified after applying it (G4) */
-  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
+  /** the docker input, the access verified after applying it (G4), and the dockerd CA restart (F1) */
+  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running'; caRestart?: boolean };
   /** analyze: the job's use of docker, what the docker policy would break, and the suggestion */
   policy?: DockerPolicyReport;
   /** per-container egress (P2); empty / undefined: no container traffic */
@@ -91,127 +100,174 @@ const DOCKER_ACCESS_TEXT: Record<string, string> = {
   'not-running': 'docker daemon not running'
 };
 
-/**
- * Analyze: what the docker policy would break in enforce, and the docker setting to run the job
- * under enforce (in an alert); '' when there is nothing to say. Report only.
- */
-function dockerAlert(d: DockerPolicyReport): string {
-  const { policy, observed, evaluation: e } = d;
-  const uses = dockerUseText(observed.uses);
-  const caveat = observed.partial ? `${DOCKER_PARTIAL} ${DOCKER_BEST_EFFORT}` : DOCKER_BEST_EFFORT;
-  const blocked = dockerUseCount(e.wouldBlock);
-  let md: string;
-  if (blocked) {
-    md =
-      `> **Enforce would block docker, which this job used after setup** (\`docker: ${policy}\`: ${uses}; ` +
-      'listed under Diagnostics). Move the docker work to a job that does not run under enforce, or keep docker ' +
-      '(review first):\n>\n' +
-      codeBlock('yaml', 'docker: keep')
-        .split('\n')
-        .map(l => `> ${l}`)
-        .join('\n') +
-      `\n>\n> ${DOCKER_KEEP_CAVEAT}`;
-  } else if (e.wouldStop) {
-    md =
-      `> **\`docker: stop\` would stop this job's ${plural(e.wouldStop, 'service container')}.** Leave \`docker\` ` +
-      'unset: `remove-group` keeps them running and still takes docker from the job.';
-  } else if (policy === 'keep' && dockerUseCount(observed.uses)) {
-    md =
-      `> **This job used docker after setup (${uses}), and \`docker: keep\` keeps it**, so enforce would be ` +
-      `ADVISORY. ${DOCKER_KEEP_CAVEAT}`;
-  } else if (policy === 'keep') {
-    md =
-      '> **No use of docker after setup was seen, but `docker: keep` keeps it**, so enforce would be ADVISORY ' +
-      '(docker is root-equivalent). Remove `docker: keep` to make enforce a boundary.';
-  } else if (observed.partial) {
-    // nothing seen is not nothing used: enforce would block a use the recording missed
-    return (
-      `> **No use of docker after setup was seen, but the recording did not cover the whole job**, and enforce ` +
-      `(\`docker: ${policy}\`) would block any use it missed. Check the job under enforce.\n>\n> ${caveat}`
-    );
-  } else {
-    return '';
+function score(o: DockerReportObserved, ctx: ReportContext): ScoreRow[] {
+  const area = 'Docker';
+  const rows: ScoreRow[] = [];
+  const d = o.policy;
+  if (ctx.enforce && o.docker) {
+    const { access, requested } = o.docker;
+    if (access === 'retained') rows.push({ verdict: 'advisory', area, text: 'kept (`docker: keep`)' });
+    else if (access === 'group-removed')
+      rows.push({ verdict: 'allowed', area, text: 'runner user removed from the docker group' });
+    else rows.push({ verdict: 'allowed', area, text: requested === 'stop' ? 'daemon stopped' : 'daemon not running' });
+  } else if (d) {
+    const uses = dockerUseText(d.observed.uses);
+    const e = d.evaluation;
+    if (dockerUseCount(e.wouldBlock)) {
+      rows.push({ verdict: 'would-block', area, text: `used after setup (${uses}): enforce would block it` });
+    } else if (e.wouldStop) {
+      rows.push({
+        verdict: 'would-block',
+        area,
+        text: `\`docker: stop\` would stop ${plural(e.wouldStop, 'service container')}`
+      });
+    } else if (d.policy === 'keep') {
+      rows.push({
+        verdict: 'advisory',
+        area,
+        text: uses
+          ? `used after setup (${uses}); \`docker: keep\` keeps it (ADVISORY)`
+          : '`docker: keep` keeps docker, though no use was seen (ADVISORY)'
+      });
+    } else if (d.observed.partial) {
+      rows.push({ verdict: 'advisory', area, text: 'no use seen, but the recording did not cover the whole job' });
+    } else {
+      const alsoStop = d.evaluation.fits === 'stop' && d.policy !== 'stop' ? ' (`docker: stop` would too)' : '';
+      rows.push({ verdict: 'allowed', area, text: `no use after setup: \`docker: ${d.policy}\` fits${alsoStop}` });
+    }
+  } else if (o.docker) {
+    rows.push({
+      verdict: 'allowed',
+      area,
+      text: o.docker.access === 'not-running' ? 'daemon not running' : 'not evaluated'
+    });
   }
-  return md + `\n>\n> ${caveat}`;
+  const refused = (o.containers ?? []).reduce((a, c) => a + c.denied.length + c.firewall.length, 0);
+  if (refused) {
+    rows.push({
+      verdict: refusedVerdict(ctx),
+      area,
+      text: `container egress: ${plural(refused, 'destination')} ${ctx.enforce ? 'blocked' : 'would be blocked'}`
+    });
+  }
+  return rows;
 }
 
-function chips(o: DockerReportObserved, ctx: ReportContext): string[] {
-  if (ctx.enforce) return o.retained ? ['⚠️ docker retained'] : [];
+function advisory(o: DockerReportObserved, ctx: ReportContext): Advisory[] {
+  if (!ctx.enforce || !o.retained) return [];
+  return [
+    {
+      chip: '⚠️ docker retained',
+      text:
+        '`docker: keep` kept docker (verified on the runner), which is root-equivalent: any step could have removed ' +
+        'the egress controls. Use `docker: remove-group` (the default) or `docker: stop` unless the job needs docker.'
+    }
+  ];
+}
+
+function suggestions(o: DockerReportObserved, ctx: ReportContext): Suggestion[] {
+  const s = o.policy?.evaluation.suggestion;
+  if (ctx.enforce || !s?.change) return [];
+  return [
+    {
+      input: 'docker',
+      value: s.value,
+      ...(s.advisory ? { advisory: 'docker is root-equivalent: enforce is ADVISORY' } : {})
+    }
+  ];
+}
+
+function notes(o: DockerReportObserved, ctx: ReportContext): string[] {
+  const d = o.policy;
+  if (ctx.enforce || !d) return [];
   const out: string[] = [];
-  const wouldBlock = dockerUseCount(o.policy?.evaluation.wouldBlock ?? {});
-  const wouldStop = o.policy?.evaluation.wouldStop ?? 0;
-  if (wouldBlock) out.push(`${plural(wouldBlock, 'docker use')} would be blocked`);
-  if (wouldStop) out.push(`${plural(wouldStop, 'service container')} would be stopped`);
-  // a partial docker recording can have missed a use enforce would block: never "nothing"
-  if (o.policy?.observed.partial === true) out.push('⚠️ docker use partly unseen');
+  if (d.evaluation.wouldStop && !dockerUseCount(d.evaluation.wouldBlock)) {
+    out.push(
+      '`docker: stop` would stop service containers: `remove-group` keeps them running and still takes docker from the job'
+    );
+  }
+  if (d.evaluation.suggestion.value === 'keep' || d.policy === 'keep') out.push(DOCKER_KEEP_CAVEAT);
+  if (d.observed.partial) out.push(DOCKER_PARTIAL);
+  if (dockerUseCount(d.observed.uses) || d.observed.partial) out.push(DOCKER_BEST_EFFORT);
   return out;
 }
 
-function alerts(o: DockerReportObserved, ctx: ReportContext, alert: string): Alert[] {
-  if (ctx.enforce) {
-    if (!o.retained) return [];
-    return [
-      {
-        kind: 'WARNING',
-        text:
-          '**ADVISORY: docker was retained** (`docker: keep`; verified on the runner). Docker access is ' +
-          'root-equivalent, so any step could have used it to remove the egress controls. Use `docker: remove-group` ' +
-          '(what enforce does) or `docker: stop` unless the job needs docker.'
-      }
-    ];
-  }
-  return alert ? [{ kind: 'IMPORTANT', text: alert + '\n', quoted: true }] : [];
-}
-
-function diagnostics(o: DockerReportObserved, ctx: ReportContext): Section['diagnostics'] {
-  if (!o.docker) return [];
-  const { enforce } = ctx;
-  const { requested, access } = o.docker;
-  const summary = enforce
-    ? access === 'retained'
-      ? 'docker retained'
-      : access === 'group-removed'
-        ? 'docker removed ✓'
-        : 'docker stopped ✓'
-    : 'docker unchanged (analyze)';
-  // analyze never changes docker access: the policy is only evaluated
-  const policy = enforce
-    ? `\`docker: ${requested}\``
-    : `policy \`docker: ${requested}\` (analyze: evaluated, not applied)`;
-  let body = `**Docker** — ${policy}; verified at setup: ${DOCKER_ACCESS_TEXT[access] ?? access}\n\n`;
-  const d = enforce ? undefined : o.policy;
+function body(o: DockerReportObserved, ctx: ReportContext): string {
+  let md = '';
+  const d = ctx.enforce ? undefined : o.policy;
   if (d) {
-    const uses = dockerUseText(d.observed.uses);
-    body += uses ? `Used after setup: ${uses}.` : 'No use of docker after setup was seen.';
-    if (d.observed.services)
-      body += ` ${plural(d.observed.services, 'container')} already ran at setup (service containers).`;
-    if (!uses && !d.observed.partial && d.evaluation.fits === 'stop' && d.policy !== 'stop') {
-      body += ' `docker: stop` would also fit.';
+    const blocks = dockerUseCount(d.evaluation.wouldBlock) > 0;
+    const kinds = DOCKER_USES.filter(k => d.observed.uses[k]);
+    if (kinds.length) {
+      md +=
+        table(
+          ['', 'Use after setup', 'Events'],
+          [':-:', ':--', '--:'],
+          kinds.map(k => [
+            VERDICT_ICON[blocks ? 'would-block' : 'advisory'],
+            dockerUseText({ [k]: 1 }).replace(/^1 /, ''),
+            String(d.observed.uses[k])
+          ])
+        ) + '\n\n';
+    } else {
+      md += 'No use of docker after setup was seen.\n\n';
     }
-    body += '\n\n';
+    if (d.observed.services)
+      md += `${plural(d.observed.services, 'container')} already ran at setup (service containers).\n\n`;
     if (d.observed.images.length) {
       const shown = d.observed.images.slice(0, MAX_LIST).map(i => code(imageLabel(i)));
       const more = d.observed.images.length - shown.length;
-      body += `Images: ${shown.join(', ')}${more > 0 ? ` +${more} more` : ''}\n\n`;
+      md += `Images: ${shown.join(', ')}${more > 0 ? ` +${more} more` : ''}\n\n`;
     }
-    if (d.observed.partial) body += `${DOCKER_PARTIAL}\n\n`;
   }
-  return [{ summary, body }];
+  md += containerSection(o.containers ?? [], ctx);
+  return md || 'No container traffic.\n\n';
+}
+
+function runnerSystem(o: DockerReportObserved, ctx: ReportContext): RunnerSystem[] {
+  if (!o.docker) return [];
+  const { requested, access, caRestart } = o.docker;
+  const rows: string[][] = [
+    ctx.enforce
+      ? [
+          VERDICT_ICON[access === 'retained' ? 'advisory' : 'allowed'],
+          code(`docker: ${requested}`),
+          DOCKER_ACCESS_TEXT[access] ?? access
+        ]
+      : [
+          VERDICT_ICON.allowed,
+          code(`docker: ${requested}`),
+          `evaluated, not applied (analyze); ${DOCKER_ACCESS_TEXT[access] ?? access}`
+        ]
+  ];
+  if (caRestart) rows.push([VERDICT_ICON.allowed, 'dockerd restart', 'restarted so it trusts the proxy CA']);
+  const summary =
+    (ctx.enforce
+      ? access === 'retained'
+        ? 'docker kept'
+        : access === 'group-removed'
+          ? 'docker removed from the runner user'
+          : 'docker daemon not running'
+      : 'docker access unchanged (analyze)') + (caRestart ? ' · dockerd restarted to trust the CA' : '');
+  return [{ summary, body: table(['', 'Action', 'Result'], [':-:', ':--', ':--'], rows) + '\n\n' }];
 }
 
 export function report(o: DockerReportObserved, ctx: ReportContext): Section {
-  const alert = ctx.enforce || !o.policy ? '' : dockerAlert(o.policy);
   return {
-    chips: chips(o, ctx),
-    alerts: alerts(o, ctx, alert),
-    score: [],
-    blocking: alert !== '',
-    body: containerSection(o.containers ?? [], ctx.mode),
-    diagnostics: diagnostics(o, ctx),
-    jobLog: DOCKER_USES.flatMap(k => {
-      const n = o.policy?.evaluation.wouldBlock[k];
-      return n ? [`docker WOULD_BLOCK ${k} x${n}`] : [];
-    }),
-    advisory: ctx.enforce && o.retained ? 'docker' : ''
+    score: score(o, ctx),
+    alerts: [],
+    suggestions: suggestions(o, ctx),
+    notes: notes(o, ctx),
+    advisory: advisory(o, ctx),
+    body: body(o, ctx),
+    runnerSystem: runnerSystem(o, ctx)
   };
+}
+
+/** The uses enforce would block, for the job log. */
+export function jobLog(policy: DockerPolicyReport | undefined): string[] {
+  return DOCKER_USES.flatMap(k => {
+    const n = policy?.evaluation.wouldBlock[k];
+    return n ? [`docker WOULD_BLOCK ${k} x${n}`] : [];
+  });
 }

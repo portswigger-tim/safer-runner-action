@@ -8,43 +8,73 @@ import type { Mode } from '../policy';
 export interface ReportContext {
   mode: Mode;
   enforce: boolean;
-  /** the ref the workflow used in `uses:` (GITHUB_ACTION_REF) */
-  actionRef?: string;
 }
 
-/**
- * One item of a top-level alert (alerts don't render inside <details>). `text` is one paragraph,
- * quoted by the composer; `quoted` text already carries its `> ` lines and ends with a newline.
- */
-export interface Alert {
-  kind: 'CAUTION' | 'WARNING' | 'IMPORTANT';
+/** The verdict column: ✅ allowed · 🟠 would be blocked (analyze) · ⛔ blocked (enforce) · ⚠️ advisory. */
+export type Verdict = 'allowed' | 'would-block' | 'blocked' | 'advisory';
+
+export const VERDICT_ICON: Record<Verdict, string> = {
+  allowed: '✅',
+  'would-block': '🟠',
+  blocked: '⛔',
+  advisory: '⚠️'
+};
+
+/** How a refusal shows in this mode. */
+export function refusedVerdict(ctx: ReportContext): Verdict {
+  return ctx.enforce ? 'blocked' : 'would-block';
+}
+
+/** One scorecard row in the Summary. */
+export interface ScoreRow {
+  verdict: Verdict;
+  area: string;
   text: string;
-  quoted?: boolean;
 }
 
-/** A part of the collapsed Diagnostics: its result for the <summary> line, and its body. */
-export interface Diagnostic {
+/** A top-level alert paragraph (alerts don't render inside <details>). */
+export interface Alert {
+  kind: 'CAUTION' | 'IMPORTANT';
+  text: string;
+}
+
+/** One input of the Suggested Enforce Configuration (analyze). Report only, never applied. */
+export interface Suggestion {
+  input: 'allowed-domains' | 'http-filter' | 'sudo-config' | 'docker';
+  /** the input's value, as the input reads it */
+  value: string;
+  /** using it makes enforce ADVISORY: said in a comment on its line */
+  advisory?: string;
+  /** shown under the block as an option, not in it */
+  optional?: boolean;
+  /** what it was built from, for an optional one's summary line */
+  label?: string;
+}
+
+/** Enforce: what made it ADVISORY, as a chip and a sentence. */
+export interface Advisory {
+  chip: string;
+  text: string;
+}
+
+/** What the action did, and the GitHub baseline it trusts: collapsed, its result in the summary line. */
+export interface RunnerSystem {
   summary: string;
   body: string;
 }
 
 export interface Section {
-  /** status chips for the header */
-  chips: string[];
+  score: ScoreRow[];
   alerts: Alert[];
-  /** scorecard rows */
-  score: string[][];
-  /** something here was (or would be) blocked: the summary is not an all-clear */
-  blocking: boolean;
+  suggestions: Suggestion[];
+  /** short notes under the Suggested block (analyze): what was left out, what analyze cannot see */
+  notes: string[];
+  advisory: Advisory[];
   /** what the job did */
   body: string;
-  diagnostics: Diagnostic[];
-  /** full lists for the job log, redacted like the summary */
-  jobLog: string[];
-  /** enforce: what made it ADVISORY ('' when nothing) */
-  advisory: string;
+  runnerSystem: RunnerSystem[];
 }
 
 export function emptySection(): Section {
-  return { chips: [], alerts: [], score: [], blocking: false, body: '', diagnostics: [], jobLog: [], advisory: '' };
+  return { score: [], alerts: [], suggestions: [], notes: [], advisory: [], body: '', runnerSystem: [] };
 }

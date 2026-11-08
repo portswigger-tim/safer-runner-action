@@ -3,6 +3,7 @@ import {
   deduplicateSudoCommands,
   parseSudoLogsFromString,
   classifySudoCommands,
+  sudoLogSeconds,
   type SudoCommand
 } from './log';
 
@@ -255,6 +256,50 @@ Nov  3 16:24:34 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/whoami`);
     it('reports same-named binaries outside system directories', () => {
       const result = classifySudoCommands([cmd('/tmp/cat', '/etc/resolv.conf')], internal);
       expect(result.ran).toHaveLength(1);
+    });
+  });
+
+  describe('classifySudoCommands by step window (the action runs sudo only in setup and the post step)', () => {
+    const at = (timestamp: string, args = '/etc/resolv.conf'): SudoCommand => ({
+      timestamp,
+      user: 'runner',
+      targetUser: 'root',
+      command: '/usr/bin/cat',
+      args
+    });
+    const internal = ['cat /etc/resolv.conf'];
+    const now = new Date('2026-11-03T16:30:00Z');
+    const t = (iso: string) => Date.parse(iso) / 1000;
+    const window = { setupEnd: t('2026-11-03T16:20:00Z'), postStart: t('2026-11-03T16:29:00Z') };
+
+    it("counts the action's command line as the action's only during setup or the post step", () => {
+      const u = classifySudoCommands(
+        [at('Nov  3 16:19:59'), at('Nov  3 16:20:00'), at('Nov  3 16:25:00'), at('Nov  3 16:29:00')],
+        internal,
+        window,
+        now
+      );
+      expect(u.internal.map(c => c.timestamp)).toEqual(['Nov  3 16:19:59', 'Nov  3 16:20:00', 'Nov  3 16:29:00']);
+      // the same line, run by a job step between the two: the job's
+      expect(u.ran.map(c => c.timestamp)).toEqual(['Nov  3 16:25:00']);
+    });
+
+    it("an entry whose time does not parse is the job's", () => {
+      expect(classifySudoCommands([at('garbage')], internal, window, now).ran).toHaveLength(1);
+    });
+
+    it('without a window (an older setup), by the command line alone', () => {
+      expect(classifySudoCommands([at('Nov  3 16:25:00')], internal, undefined, now).internal).toHaveLength(1);
+    });
+  });
+
+  describe('sudoLogSeconds', () => {
+    it('reads the syslog timestamp in UTC, in the year that is not in the future', () => {
+      const now = new Date('2026-01-01T00:00:30Z');
+      expect(sudoLogSeconds('Jan  1 00:00:10', now)).toBe(Date.parse('2026-01-01T00:00:10Z') / 1000);
+      // a line from the last seconds of the old year
+      expect(sudoLogSeconds('Dec 31 23:59:59', now)).toBe(Date.parse('2025-12-31T23:59:59Z') / 1000);
+      expect(sudoLogSeconds('Foo  1 00:00:10', now)).toBeNull();
     });
   });
 

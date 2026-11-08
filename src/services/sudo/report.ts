@@ -8,8 +8,17 @@
 import { stringify } from 'yaml';
 import type { SudoCommand, SudoUsage } from './log';
 import { sudoCommandShown } from '../../report/redact';
-import { codeBlock, plural } from '../../report/markdown';
-import type { Alert, ReportContext, Section } from '../../report/section';
+import { code, plural, table } from '../../report/markdown';
+import {
+  VERDICT_ICON,
+  type Advisory,
+  type ReportContext,
+  type RunnerSystem,
+  type ScoreRow,
+  type Section,
+  type Suggestion,
+  type Verdict
+} from '../../report/section';
 
 export interface SudoConfigSuggestion {
   /** exact command lines, sorted; never a `*` */
@@ -61,134 +70,193 @@ export const SUDO_BEST_EFFORT =
 
 interface Facts {
   o: SudoObserved;
+  ctx: ReportContext;
   enforce: boolean;
-  sudoRan: number;
+  ran: SudoCommand[];
+  refused: SudoCommand[];
   /** analyze: workflow sudo commands the policy would block in enforce */
-  sudoWouldBlock: number;
+  wouldBlock: SudoCommand[];
   /** enforce kept sudo-config lines: ADVISORY */
   sudoAllowlist: number;
+  /** the policy keeps sudo (disable-sudo: false) */
+  kept: boolean;
 }
+
+const key = (c: SudoCommand) => `${c.targetUser} ${c.command} ${c.args}`;
 
 function facts(o: SudoObserved, ctx: ReportContext): Facts {
   const { enforce } = ctx;
+  const ran = o.usage?.ran ?? [];
   return {
     o,
+    ctx,
     enforce,
-    sudoRan: o.usage?.ran.length ?? 0,
+    ran,
+    refused: o.usage?.refused ?? [],
     // without a policy (an older setup marker), every workflow sudo command: enforce removes sudo
-    sudoWouldBlock: o.policy ? o.policy.wouldBlock.length : (o.usage?.ran.length ?? 0),
-    sudoAllowlist: enforce && !o.retained ? (o.policy?.rules.length ?? 0) : 0
+    wouldBlock: enforce ? [] : o.policy ? o.policy.wouldBlock : ran,
+    sudoAllowlist: enforce && !o.retained ? (o.policy?.rules.length ?? 0) : 0,
+    kept: o.retained || o.policy?.kept === true
   };
 }
 
-function chips(f: Facts): string[] {
-  const out: string[] = [];
-  if (f.enforce) {
-    if (f.o.retained) out.push('⚠️ sudo retained');
-    if (f.sudoAllowlist) out.push(`⚠️ sudo allowlist (${f.sudoAllowlist})`);
-  } else if (f.o.policy && f.sudoWouldBlock) {
-    out.push(`${plural(f.sudoWouldBlock, 'sudo command')} would be blocked`);
-  }
-  return out;
-}
-
-/** Analyze: the sudo commands enforce would block, and the suggested sudo-config (in an alert). */
-function sudoAlert(f: Facts): string {
-  const policy = f.o.policy;
-  const quote = (text: string) =>
-    text
-      .split('\n')
-      .map(l => `> ${l}`)
-      .join('\n');
-  let md: string;
-  if (f.sudoWouldBlock) {
-    md =
-      `> **Enforce would block ${plural(f.sudoWouldBlock, 'sudo command')} this job ran** ` +
-      `(enforce removes sudo${policy?.rules.length ? ', except your `sudo-config` lines' : ''}; listed under Diagnostics). ` +
-      'Drop that usage, or allow the exact command lines with `sudo-config`';
-  } else {
-    md =
-      `> **This job ran ${plural(f.sudoRan, 'sudo command')}, and \`disable-sudo: false\` keeps sudo**, so enforce ` +
-      'would be ADVISORY (sudo can remove the controls). To make enforce a boundary, remove `disable-sudo: false`';
-  }
-  const s = policy?.suggestion;
-  if (!s?.rules.length) return md + `.\n>\n> ${SUDO_BEST_EFFORT}\n`;
-  md += ' (review each line):\n>\n';
-  const yaml =
-    'sudo-config: |\n' +
-    sudoConfigYaml(s.rules, policy?.flagged)
-      .replace(/^(?=.)/gm, '  ')
-      .trimEnd();
-  md += quote(codeBlock('yaml', yaml)) + '\n';
-  const left = [
-    s.omitted.secret ? `${s.omitted.secret} with arguments that look like a secret` : '',
-    s.omitted.unrepresentable ? `${s.omitted.unrepresentable} that a sudo-config line cannot express` : '',
-    s.omitted.other_user ? `${s.omitted.other_user} run as another user` : '',
-    s.omitted.over_cap ? `${s.omitted.over_cap} over the limit` : ''
-  ].filter(Boolean);
-  if (left.length) md += `>\n> Not suggested: ${left.join(', ')}.\n`;
-  return md + `>\n> ${SUDO_CONFIG_CAVEAT} ${SUDO_BEST_EFFORT}\n`;
-}
-
-function alerts(f: Facts): Alert[] {
-  const { o, enforce } = f;
-  const out: Alert[] = [];
+function score(f: Facts): ScoreRow[] {
+  const { ran, refused, enforce } = f;
+  const area = 'Sudo';
   if (enforce) {
-    if (f.sudoAllowlist) {
-      out.push({
-        kind: 'WARNING',
+    const rows: ScoreRow[] = [];
+    if (f.o.retained) rows.push({ verdict: 'advisory', area, text: 'kept (`disable-sudo: false`)' });
+    else if (f.sudoAllowlist) {
+      rows.push({
+        verdict: 'advisory',
+        area,
+        text: `\`sudo-config\` keeps ${plural(f.sudoAllowlist, 'command line')}${ran.length ? `; the job ran ${plural(ran.length, 'command')}` : ''}`
+      });
+    }
+    if (refused.length)
+      rows.push({ verdict: 'blocked', area, text: `${plural(refused.length, 'sudo attempt')} refused` });
+    if (!rows.length) rows.push({ verdict: 'allowed', area, text: 'removed from the job' });
+    return rows;
+  }
+  if (f.wouldBlock.length) {
+    return [{ verdict: 'would-block', area, text: `${plural(f.wouldBlock.length, 'command')} would be blocked` }];
+  }
+  if (f.kept) {
+    return [
+      {
+        verdict: 'advisory',
+        area,
+        text: `\`disable-sudo: false\` keeps sudo (ADVISORY)${ran.length ? `; the job ran ${plural(ran.length, 'command')}` : ''}`
+      }
+    ];
+  }
+  if (f.o.policy?.rules.length) {
+    return [
+      { verdict: 'advisory', area, text: `${plural(ran.length, 'command')}, all allowed by \`sudo-config\` (ADVISORY)` }
+    ];
+  }
+  return [
+    {
+      verdict: 'allowed',
+      area,
+      text: ran.length ? `${plural(ran.length, 'command')}, none blocked` : 'the job ran no sudo'
+    }
+  ];
+}
+
+function advisory(f: Facts): Advisory[] {
+  if (!f.enforce) return [];
+  if (f.o.retained) {
+    return [
+      {
+        chip: '⚠️ sudo retained',
         text:
-          `**ADVISORY: sudo was kept for ${plural(f.sudoAllowlist, 'command line')}** (\`sudo-config\`). ` +
+          '`disable-sudo: false` kept sudo, so any step could have removed the egress controls. Remove it to make ' +
+          'enforce a boundary.'
+      }
+    ];
+  }
+  if (f.sudoAllowlist) {
+    return [
+      {
+        chip: `⚠️ sudo allowlist (${f.sudoAllowlist})`,
+        text:
+          `\`sudo-config\` kept sudo for ${plural(f.sudoAllowlist, 'command line')}. ` +
           SUDO_CONFIG_CAVEAT.replace(' Enforce with any `sudo-config` is ADVISORY.', '') +
           ' Remove `sudo-config` to make enforce a boundary.'
-      });
-    }
-    if (o.retained) {
-      out.push({
-        kind: 'WARNING',
-        text:
-          '**ADVISORY: sudo was retained** (`disable-sudo: false`), so any step could have used it to ' +
-          'remove the egress controls. The policy below was applied, but this job did not run inside an enforced ' +
-          'boundary. Remove `disable-sudo: false` to make enforce a boundary.'
-      });
-    }
-    return out;
+      }
+    ];
   }
-  const sudoKeptRan = o.policy?.kept === true && f.sudoRan > 0;
-  if (f.sudoWouldBlock || sudoKeptRan) out.push({ kind: 'IMPORTANT', text: sudoAlert(f) + '\n', quoted: true });
+  return [];
+}
+
+function suggestions(f: Facts): Suggestion[] {
+  const s = f.o.policy?.suggestion;
+  if (f.enforce || !s?.rules.length || !(f.wouldBlock.length || (f.kept && f.ran.length))) return [];
+  return [
+    {
+      input: 'sudo-config',
+      value: sudoConfigYaml(s.rules, f.o.policy?.flagged),
+      advisory: 'any sudo-config makes enforce ADVISORY'
+    }
+  ];
+}
+
+function notes(f: Facts): string[] {
+  if (f.enforce) return [];
+  const out: string[] = [];
+  if (f.kept) out.push('remove `disable-sudo: false`: it keeps sudo, so enforce would be ADVISORY');
+  const s = f.o.policy?.suggestion;
+  if (s && suggestions(f).length) {
+    const left = [
+      s.omitted.secret ? `${s.omitted.secret} with arguments that look like a secret` : '',
+      s.omitted.unrepresentable ? `${s.omitted.unrepresentable} that a sudo-config line cannot express` : '',
+      s.omitted.other_user ? `${s.omitted.other_user} run as another user` : '',
+      s.omitted.over_cap ? `${s.omitted.over_cap} over the limit` : ''
+    ].filter(Boolean);
+    if (left.length) out.push(`sudo lines not suggested: ${left.join(', ')}`);
+    out.push(SUDO_CONFIG_CAVEAT);
+  }
+  if (f.ran.length) out.push(SUDO_BEST_EFFORT);
   return out;
 }
 
-function diagnostics(f: Facts): Section['diagnostics'] {
-  const { o, enforce } = f;
-  if (!o.usage) return [];
-  const { ran, refused, internal } = o.usage;
-  const summary =
-    (ran.length === 0 ? 'no workflow sudo' : `workflow ran ${plural(ran.length, 'sudo command')}`) +
-    (internal.length ? ` (${internal.length} by Safer Runner)` : '') +
-    (refused.length ? ` · ${plural(refused.length, 'sudo attempt')} refused` : '') +
-    (!enforce && f.sudoWouldBlock ? ` · enforce would block ${f.sudoWouldBlock}` : '');
-  // arguments that could be credentials are redacted (redact.ts sudoCommandShown)
-  const lines = (cmds: SudoCommand[]) =>
-    cmds
-      .slice(0, 50)
-      .map(c => `$ sudo ${sudoCommandShown(c)}`)
-      .join('\n') + (cmds.length > 50 ? `\n# ... +${cmds.length - 50} more (job log)` : '');
-  let body = `**Sudo** — the workflow ran ${ran.length ? plural(ran.length, 'command') : 'none'}`;
-  body += internal.length ? `; Safer Runner itself ran ${internal.length} (setup, integrity checks)` : '';
-  body += ran.length ? ':\n\n' + codeBlock('console', lines(ran)) + '\n\n' : '.\n\n';
-  if (refused.length) {
-    body += `Refused by sudo (${refused.length}):\n\n` + codeBlock('console', lines(refused)) + '\n\n';
-  }
-  const wouldBlock = enforce ? [] : (o.policy?.wouldBlock ?? []);
-  if (wouldBlock.length) {
-    body += `Enforce would block (${wouldBlock.length}):\n\n` + codeBlock('console', lines(wouldBlock)) + '\n\n';
-  }
-  return [{ summary, body }];
+const MAX_SUDO_ROWS = 50;
+
+/** One row per command; arguments that could be credentials are redacted (redact.ts sudoCommandShown). */
+function commandTable(rows: [Verdict, SudoCommand, string][], more: string): string {
+  const shown = rows.slice(0, MAX_SUDO_ROWS);
+  const extra = rows.length - shown.length;
+  return (
+    table(
+      ['', 'Command', 'Result'],
+      [':-:', ':--', ':--'],
+      shown.map(([v, c, result]) => [VERDICT_ICON[v], code(`sudo ${sudoCommandShown(c)}`), result])
+    ) +
+    (extra > 0 ? `\n\n+${extra} more ${more} (job log)` : '') +
+    '\n\n'
+  );
+}
+
+function body(f: Facts): string {
+  if (!f.o.usage) return 'No sudo log was found.\n\n';
+  const { ran, refused, enforce } = f;
+  if (!ran.length && !refused.length) return 'The job ran no sudo.\n\n';
+  const blocked = new Set(f.wouldBlock.map(key));
+  const allowedAs: [Verdict, string] = f.kept
+    ? ['advisory', 'allowed: sudo kept']
+    : f.o.policy?.rules.length
+      ? ['advisory', 'allowed by `sudo-config`']
+      : ['allowed', 'allowed'];
+  const rows: [Verdict, SudoCommand, string][] = [
+    ...ran.map((c): [Verdict, SudoCommand, string] =>
+      blocked.has(key(c)) ? ['would-block', c, 'enforce would block it'] : [allowedAs[0], c, allowedAs[1]]
+    ),
+    ...refused.map((c): [Verdict, SudoCommand, string] => ['blocked', c, 'refused by sudo'])
+  ];
+  let md = commandTable(rows, 'commands');
+  if (!enforce && ran.length) md += `<sub>${SUDO_BEST_EFFORT}</sub>\n\n`;
+  return md;
+}
+
+function runnerSystem(f: Facts): RunnerSystem[] {
+  const internal = f.o.usage?.internal ?? [];
+  if (!internal.length) return [];
+  return [
+    {
+      summary: `Safer Runner ran ${plural(internal.length, 'sudo command')}`,
+      body:
+        "**Safer Runner's own sudo** (setup, integrity checks)\n\n" +
+        commandTable(
+          internal.map(c => ['allowed', c, 'the action'] as [Verdict, SudoCommand, string]),
+          'commands'
+        )
+    }
+  ];
 }
 
 /** Full lists in the job log (arguments redacted like the summary: the job log is just as public). */
-function jobLog(o: SudoObserved): string[] {
+export function jobLog(o: Pick<SudoObserved, 'usage' | 'policy'>): string[] {
   return [
     ...(o.usage?.ran ?? []).map(c => `sudo (workflow) ${sudoCommandShown(c)}`),
     ...(o.usage?.refused ?? []).map(c => `sudo REFUSED ${sudoCommandShown(c)}`),
@@ -199,13 +267,12 @@ function jobLog(o: SudoObserved): string[] {
 export function report(o: SudoObserved, ctx: ReportContext): Section {
   const f = facts(o, ctx);
   return {
-    chips: chips(f),
-    alerts: alerts(f),
-    score: [],
-    blocking: f.sudoWouldBlock > 0,
-    body: '',
-    diagnostics: diagnostics(f),
-    jobLog: jobLog(o),
-    advisory: f.enforce ? (o.retained ? 'sudo' : f.sudoAllowlist ? 'sudo (sudo-config allowlist)' : '') : ''
+    score: score(f),
+    alerts: [],
+    suggestions: suggestions(f),
+    notes: notes(f),
+    advisory: advisory(f),
+    body: body(f),
+    runnerSystem: runnerSystem(f)
   };
 }

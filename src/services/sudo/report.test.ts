@@ -1,6 +1,6 @@
 import type { ReportContext } from '../../report/section';
 import type { SudoCommand } from './log';
-import { report } from './report';
+import { jobLog, report } from './report';
 
 const ENFORCE: ReportContext = { mode: 'enforce', enforce: true };
 const ANALYZE: ReportContext = { mode: 'analyze', enforce: false };
@@ -11,58 +11,80 @@ const cmd = (command: string, args: string): SudoCommand => ({
   command,
   args
 });
-const usage = (ran: SudoCommand[]) => ({ ran, refused: [], internal: [] });
+const usage = (ran: SudoCommand[], refused: SudoCommand[] = []) => ({ ran, refused, internal: [] });
 
 describe('sudo report (its Section)', () => {
-  it('enforce with sudo kept: ADVISORY, a chip and a WARNING', () => {
+  it('enforce with sudo kept: ADVISORY row and chip', () => {
     const s = report({ usage: usage([]), policy: { rules: [], kept: true, wouldBlock: [] }, retained: true }, ENFORCE);
-    expect(s.advisory).toBe('sudo');
-    expect(s.chips).toEqual(['⚠️ sudo retained']);
-    expect(s.alerts.map(a => a.kind)).toEqual(['WARNING']);
+    expect(s.score[0].verdict).toBe('advisory');
+    expect(s.advisory.map(a => a.chip)).toEqual(['⚠️ sudo retained']);
   });
 
   it('enforce with a sudo-config: ADVISORY as an allowlist', () => {
     const policy = { rules: ['/usr/bin/nproc'], kept: false, wouldBlock: [] };
     const s = report({ usage: usage([]), policy, retained: false }, ENFORCE);
-    expect(s.advisory).toBe('sudo (sudo-config allowlist)');
-    expect(s.chips).toEqual(['⚠️ sudo allowlist (1)']);
+    expect(s.advisory.map(a => a.chip)).toEqual(['⚠️ sudo allowlist (1)']);
   });
 
-  it('enforce with sudo removed: no advisory, no alert', () => {
-    const s = report(
-      { usage: usage([]), policy: { rules: [], kept: false, wouldBlock: [] }, retained: false },
-      ENFORCE
-    );
-    expect([s.advisory, s.chips, s.alerts]).toEqual(['', [], []]);
-  });
-
-  it('analyze: what enforce would block is a chip, a quoted IMPORTANT part, blocking, and job-log lines', () => {
-    const c = cmd('/usr/bin/apt-get', 'install -y jq');
-    const s = report(
-      { usage: usage([c]), policy: { rules: [], kept: false, wouldBlock: [c] }, retained: false },
-      ANALYZE
-    );
-    expect(s.blocking).toBe(true);
-    expect(s.advisory).toBe('');
-    expect(s.chips).toEqual(['1 sudo command would be blocked']);
-    expect(s.alerts).toEqual([expect.objectContaining({ kind: 'IMPORTANT', quoted: true })]);
-    expect(s.jobLog).toEqual([
-      'sudo (workflow) /usr/bin/apt-get install -y jq',
-      'sudo WOULD_BLOCK /usr/bin/apt-get install -y jq'
+  it('enforce with sudo removed: an allowed row, a blocked one when sudo refused something', () => {
+    const policy = { rules: [], kept: false, wouldBlock: [] };
+    expect(report({ usage: usage([]), policy, retained: false }, ENFORCE).score).toEqual([
+      { verdict: 'allowed', area: 'Sudo', text: 'removed from the job' }
     ]);
-    expect(s.diagnostics[0].summary).toBe('workflow ran 1 sudo command · enforce would block 1');
+    const s = report({ usage: usage([], [cmd('/usr/bin/id', '')]), policy, retained: false }, ENFORCE);
+    expect(s.score.map(r => r.verdict)).toEqual(['blocked']);
+    expect(s.advisory).toEqual([]);
   });
 
-  it('redacts arguments that could be credentials, in the diagnostics and the job log', () => {
+  it('analyze: what enforce would block is a row, and the suggested sudo-config is ADVISORY', () => {
+    const c = cmd('/usr/bin/apt-get', 'install -y jq');
+    const policy = {
+      rules: [],
+      kept: false,
+      wouldBlock: [c],
+      suggestion: {
+        rules: ['/usr/bin/apt-get install -y jq'],
+        omitted: { secret: 1, unrepresentable: 0, other_user: 0, over_cap: 0 }
+      }
+    };
+    const s = report({ usage: usage([c]), policy, retained: false }, ANALYZE);
+    expect(s.score).toEqual([{ verdict: 'would-block', area: 'Sudo', text: '1 command would be blocked' }]);
+    expect(s.suggestions).toEqual([
+      {
+        input: 'sudo-config',
+        value: '- /usr/bin/apt-get install -y jq\n',
+        advisory: 'any sudo-config makes enforce ADVISORY'
+      }
+    ]);
+    expect(s.notes).toContainEqual('sudo lines not suggested: 1 with arguments that look like a secret');
+    expect(s.advisory).toEqual([]);
+  });
+
+  it('redacts arguments that could be credentials, in the detail and the job log', () => {
     const c = cmd('/usr/bin/mysql', '-p hunter2xyz');
     const s = report(
       { usage: usage([c]), policy: { rules: [], kept: false, wouldBlock: [c] }, retained: false },
       ANALYZE
     );
-    expect(s.diagnostics[0].body + s.jobLog.join('\n')).not.toContain('hunter2xyz');
+    expect(
+      s.body + jobLog({ usage: usage([c]), policy: { rules: [], kept: false, wouldBlock: [c] } }).join('\n')
+    ).not.toContain('hunter2xyz');
   });
 
-  it('no sudo log: no diagnostic', () => {
-    expect(report({ retained: false }, ENFORCE).diagnostics).toEqual([]);
+  it("puts the action's own sudo under Runner System", () => {
+    const s = report(
+      { usage: { ran: [], refused: [], internal: [cmd('/usr/bin/cat', '/etc/resolv.conf')] }, retained: false },
+      ENFORCE
+    );
+    expect(s.runnerSystem[0].summary).toBe('Safer Runner ran 1 sudo command');
+    expect(s.body).toBe('The job ran no sudo.\n\n');
+  });
+
+  it('job log: ran, refused and would-block lines', () => {
+    const c = cmd('/usr/bin/apt-get', 'install -y jq');
+    expect(jobLog({ usage: usage([c]), policy: { rules: [], kept: false, wouldBlock: [c] } })).toEqual([
+      'sudo (workflow) /usr/bin/apt-get install -y jq',
+      'sudo WOULD_BLOCK /usr/bin/apt-get install -y jq'
+    ]);
   });
 });

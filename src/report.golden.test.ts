@@ -14,8 +14,11 @@ import type { FlowRecord } from './flowlog';
 import { evaluateDocker, type DockerObserved } from './services/docker/config';
 import type { DockerPolicy } from './config/inputs';
 import type { SudoUsage } from './services/sudo/log';
+import { jobLog as proxyJobLog } from './services/mitmproxy/report';
+import { jobLog as sudoJobLog } from './services/sudo/report';
 import {
   buildReport,
+  emojiOutsideAllowlist,
   parseFirewallLog,
   summarizeContainers,
   summarizeFlows,
@@ -442,6 +445,13 @@ function dockerPolicy(policy: DockerPolicy, o: Partial<DockerObserved>) {
 }
 
 function report(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'hosts'>): string {
+  const md = render(overrides);
+  // every golden and canary summary: functional emoji only
+  expect(emojiOutsideAllowlist(md)).toEqual([]);
+  return md;
+}
+
+function render(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'hosts'>): string {
   return buildReport({
     job: 'build',
     firewall: [],
@@ -454,6 +464,7 @@ function report(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'ho
     },
     sudo: { ran: [], refused: [], internal: SUDO.internal },
     docker: { requested: 'remove-group', access: 'group-removed' },
+    actionRepository: 'portswigger-tim/safer-runner-action',
     actionRef: 'v2.3.0',
     now: NOW,
     ...overrides
@@ -655,6 +666,20 @@ describe('redaction canary (C5)', () => {
         status: 200,
         client: '10.1.0.4:3000'
       } as FlowRecord,
+      // and one under the GitHub baseline (Network › Runner System)
+      {
+        ts: 41,
+        ev: 'https',
+        verdict: 'ALLOW',
+        reason: 'allowed',
+        layer: 'http',
+        host: encoded('results.actions.githubusercontent.com'),
+        sni: encoded('results.actions.githubusercontent.com'),
+        method: 'GET',
+        path: `/${PATH_CANARY}`,
+        status: 200,
+        client: '10.1.0.4:3001'
+      } as FlowRecord,
       ...refusedTraffic(v, encoded),
       ...containerTraffic(v, encoded)
     ];
@@ -679,17 +704,28 @@ describe('redaction canary (C5)', () => {
     });
   }
 
+  function canaryJobLog(mode: 'enforce' | 'analyze'): string {
+    const v = mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK';
+    const records = [...refusedTraffic(v, encoded), ...containerTraffic(v, encoded)];
+    return proxyJobLog({
+      hosts: summarizeFlows(records),
+      httpFilter: summarizeHttpFilter(records, () => SUGGESTION)
+    }).join('\n');
+  }
+
   it.each(['enforce', 'analyze'] as const)('%s: no encoded label, refused path or custom method is printed', mode => {
     const md = canaryReport(mode);
     // the sections are there, so the canary was really exercised
     for (const section of [
-      'Bypass attempts',
+      'Host/SNI mismatch',
+      'Internal address',
       'Not on the allowlist',
-      'Refused by `http-filter`',
+      'by `http-filter`',
       'Did not resolve',
-      'Other',
+      'Refused: ',
       'Container egress',
-      'DNS ',
+      '**GitHub baseline**',
+      `DNS ${mode === 'enforce' ? 'refused' : 'would refuse'} |`,
       ...(mode === 'analyze' ? ['Images: '] : [])
     ]) {
       expect(md).toContain(section);
@@ -697,6 +733,12 @@ describe('redaction canary (C5)', () => {
     expect(md).toContain('‹redacted›');
     expect(md).toContain('‹path hidden›');
     expect(md).not.toContain(CANARY);
+    // the job log's full lists, redacted the same way
+    const log = canaryJobLog(mode);
+    expect(log).toContain('‹redacted›');
+    expect(log).not.toContain(CANARY);
+    expect(log).not.toContain(PATH_CANARY);
+    expect(log).not.toContain(METHOD_CANARY);
     expect(md).not.toContain(PATH_CANARY);
     expect(md).not.toContain(METHOD_CANARY);
     for (const c of TAG_CANARIES) expect(md).not.toContain(c);
@@ -726,12 +768,20 @@ describe('redaction canary (C5)', () => {
       sudo: { ran: cmds, refused: cmds, internal: SUDO.internal },
       sudoPolicy: { rules: [], kept: false, wouldBlock: cmds }
     });
-    expect(md).toContain('$ sudo /usr/bin/mysql -u root -p ‹redacted› appdb');
-    expect(md).toContain('$ sudo /usr/local/bin/deploy --token=‹redacted›');
-    expect(md).toContain('$ sudo /usr/bin/make API_KEY=‹redacted› install');
-    expect(md).toContain('$ sudo /tmp/‹redacted›/run.sh --verbose');
+    expect(md).toContain('`sudo /usr/bin/mysql -u root -p ‹redacted› appdb`');
+    expect(md).toContain('`sudo /usr/local/bin/deploy --token=‹redacted›`');
+    expect(md).toContain('`sudo /usr/bin/make API_KEY=‹redacted› install`');
+    expect(md).toContain('`sudo /tmp/‹redacted›/run.sh --verbose`');
     expect(md).not.toContain(SUDO_CANARY);
     expect(md).not.toContain(CANARY);
+    // the job log is as public as the summary
+    const log = sudoJobLog({
+      usage: { ran: cmds, refused: cmds, internal: [] },
+      policy: { rules: [], kept: false, wouldBlock: cmds }
+    });
+    expect(log).toHaveLength(18);
+    expect(log.join('\n')).not.toContain(SUDO_CANARY);
+    expect(log.join('\n')).not.toContain(CANARY);
   });
 
   // Allowed names are redacted too, as in the host tables: a name under an allowed wildcard

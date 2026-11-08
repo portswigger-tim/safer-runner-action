@@ -3,6 +3,7 @@
  */
 
 import * as fs from 'fs';
+import { sudoLogSeconds } from './log';
 import * as os from 'os';
 import * as path from 'path';
 import type { BaselineCaptured } from '../../integrity/baseline';
@@ -407,6 +408,17 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
         '/usr/sbin/iptables-save'
       ]);
       expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv']);
+    });
+
+    it("the action's line run again by a job step is the job's: attributed before deduplicating", () => {
+      const log = path.join(dir, 'sudo.log');
+      const line = (t: string) =>
+        `Nov  4 ${t} : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner`;
+      fs.writeFileSync(log, [line('19:17:13'), line('19:18:30')].join('\n') + '\n');
+      const setupEnd = sudoLogSeconds('Nov  4 19:17:20', new Date())!;
+      const u = readSudoUsage(log, { setupEnd, postStart: setupEnd + 3600 });
+      expect(u.internal.map(c => c.timestamp)).toEqual(['Nov  4 19:17:13']);
+      expect(u.ran.map(c => c.timestamp)).toEqual(['Nov  4 19:18:30']);
     });
 
     it('is empty for a missing file', () => {

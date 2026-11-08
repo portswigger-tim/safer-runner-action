@@ -2,8 +2,17 @@
  * The job summary, put together from each service's part (services/<svc>/report.ts) and the setup
  * checks (checks.ts). This module only places the parts; every verdict, count and name comes from
  * the part that owns it.
+ *
+ *   banner
+ *   # 📋 Summary                          the verdict, alerts and the scorecard
+ *     ## 🔧 Suggested Enforce Configuration   analyze: one block to paste; enforce: one line
+ *   # 🔎 Detail
+ *     ## 🌐 Network  ## 🔑 Sudo  ## 🐳 Docker   what the job did; what the action did (and the
+ *                                              GitHub baseline it trusts) under a collapsed
+ *                                              🖥️ Runner System
  */
 
+import { Document, Pair, Scalar, YAMLMap, YAMLSeq, stringify } from 'yaml';
 import type { Mode } from '../policy';
 import { report as proxyReport, type ProxySection } from '../services/mitmproxy/report';
 import type { HostSummary } from '../services/mitmproxy/flows';
@@ -13,11 +22,11 @@ import { report as firewallReport } from '../services/iptables/report';
 import type { FirewallEvent } from '../services/iptables/log';
 import { report as sudoReport, type SudoPolicyReport } from '../services/sudo/report';
 import type { SudoUsage } from '../services/sudo/log';
-import { report as dockerReport, type DockerPolicyReport } from '../services/docker/report';
+import { report as dockerReport, type DockerPolicyReport, type DockerReportObserved } from '../services/docker/report';
 import type { ContainerSummary } from '../services/docker/containers';
-import { integrityCheck, selfTestCheck, type Check, type IntegrityDetails, type SelfTest } from './checks';
-import { code, table } from './markdown';
-import type { Alert, ReportContext, Section } from './section';
+import { setupChecks, type Checks, type IntegrityDetails, type SelfTest } from './checks';
+import { code, codeBlock, table } from './markdown';
+import { VERDICT_ICON, type ReportContext, type RunnerSystem, type Section, type Suggestion } from './section';
 
 export interface ReportInput {
   mode: Mode;
@@ -25,8 +34,8 @@ export interface ReportInput {
   sudoRetained?: boolean;
   /** the runner user kept docker access (root-equivalent): as verified at setup, not the input */
   dockerRetained?: boolean;
-  /** the docker input and the access verified after applying it (G4) */
-  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
+  /** the docker input, the access verified after applying it (G4), and the dockerd CA restart (F1) */
+  docker?: DockerReportObserved['docker'];
   /** analyze: the job's use of docker, what the docker policy would break, and the suggestion */
   dockerPolicy?: DockerPolicyReport;
   /** sudo log split by who ran what (analyze: tells the user enforce will remove sudo) */
@@ -40,10 +49,14 @@ export interface ReportInput {
   dnsRefused: string[];
   /**
    * The job's own `allowed-domains` + `passthrough-domains` patterns. Allowed traffic to
-   * anything else matched the GitHub list (allow = GitHub ∪ user), so it is shown as GitHub
-   * platform traffic. Undefined: no split.
+   * anything else matched the GitHub list (allow = GitHub ∪ user), so it is shown as the GitHub
+   * baseline. Undefined: no split.
    */
   userDomains?: string[];
+  /** the job's `allowed-domains` entries alone: the suggested value keeps them */
+  allowedDomains?: string[];
+  /** the job sets `http-filter` */
+  httpFilterSet?: boolean;
   selfTests: SelfTest[];
   integrity?: IntegrityDetails;
   /** requests refused by `http-filter` and the suggested filter (summarizeHttpFilter); undefined: no http-filter section */
@@ -53,7 +66,11 @@ export interface ReportInput {
   /** per-container egress (P2); empty / undefined: no container traffic */
   containers?: ContainerSummary[];
   extraSections?: string[];
-  /** the ref the workflow used in `uses:` (GITHUB_ACTION_REF); echoed in the enforce suggestion so the paste matches the user's pin. v2 has no moving @v2 tag. */
+  /**
+   * The action as the workflow named it in `uses:` (GITHUB_ACTION_REPOSITORY, GITHUB_ACTION_REF):
+   * the banner and the suggested `uses:` line pin the same ref. v2 has no moving @v2 tag.
+   */
+  actionRepository?: string;
   actionRef?: string;
   now?: Date;
 }
@@ -67,39 +84,77 @@ export interface ReportSections {
   dns: Section;
   sudo: Section;
   docker: Section;
-  selfTests: Check;
-  integrity: Check;
+  checks: Checks;
+}
+
+/** Where the action comes from, for the footer's attribution when the workflow's repository is unknown. */
+export const ACTION_REPOSITORY = 'portswigger-tim/safer-runner-action';
+
+/**
+ * Emoji are functional only: one per heading (📋 🔎 🌐 🔑 🐳 🔧, 🖥️ for Runner System) and the
+ * verdicts (VERDICT_ICON). Anything else in a summary is a bug (the tests check every one).
+ */
+export const SUMMARY_EMOJI = ['📋', '🔎', '🌐', '🔑', '🐳', '🔧', '🖥', '✅', '🟠', '⛔', '⚠'];
+
+/** Pictographs in `md` that are not in SUMMARY_EMOJI. */
+export function emojiOutsideAllowlist(md: string): string[] {
+  return [...new Set(md.match(/\p{Extended_Pictographic}/gu) ?? [])].filter(e => !SUMMARY_EMOJI.includes(e));
+}
+/** a ref as `uses:` can name it: a tag, branch or SHA; never `..`, quotes, spaces or markup */
+const REF = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
+
+/** an `owner/name` as GitHub allows it; never `..`, quotes, spaces or markup */
+const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+
+/** The ref, when it is safe to print in a URL and in YAML; '' otherwise. */
+export function safeRef(ref: string | undefined): string {
+  const r = (ref ?? '').trim();
+  return REF.test(r) && !r.includes('..') ? r : '';
+}
+
+/** The repository, when it is safe to print in a URL and in YAML; '' otherwise. */
+export function safeRepository(repository: string | undefined): string {
+  const r = (repository ?? '').trim();
+  return REPOSITORY.test(r) && !r.includes('..') && !/\/\.+$/.test(r) ? r : '';
 }
 
 /**
- * What made enforce advisory: 'sudo', 'sudo (sudo-config allowlist)', 'docker', joined with
- * 'and', or '' (a boundary).
+ * The action as the workflow named it in `uses:` (GITHUB_ACTION_REPOSITORY @ GITHUB_ACTION_REF),
+ * so a fork or an internal mirror is echoed as itself, never swapped for upstream. A placeholder
+ * part for what is unknown or not safe to print (a local `uses: ./`, odd values).
  */
-function retained(sudoRetained: boolean, dockerRetained: boolean, sudoAllowlist = false): string {
-  const sudo = sudoRetained ? 'sudo' : sudoAllowlist ? 'sudo (sudo-config allowlist)' : '';
-  return [sudo, dockerRetained ? 'docker' : ''].filter(Boolean).join(' and ');
+export function usesLine(repository: string | undefined, ref: string | undefined): string {
+  const repo = safeRepository(repository);
+  if (!repo) return '<owner>/<repo>@<pin an exact version or SHA>';
+  return `${repo}@${safeRef(ref) || '<pin an exact version or SHA>'}`;
 }
 
 /**
- * Mode as shown in the summary header. enforce with sudo or docker (root-equivalent) retained,
- * or a sudo-config allowlist, is never shown as plain enforce.
+ * The banner: docs/assets/banner.svg in the repository and at the ref the workflow used (inline
+ * SVG is stripped from summaries), so a fork shows its own. None when either is unknown or not
+ * safe to print (a local `uses: ./`, odd values).
  */
-export function modeLabel(mode: Mode, sudoRetained = false, dockerRetained = false, sudoAllowlist = false): string {
-  if (mode === 'analyze') return '📊 ANALYZE';
-  const what = retained(sudoRetained, dockerRetained, sudoAllowlist);
-  return what ? `⚠️ ENFORCE (ADVISORY — ${what} retained, not an enforced boundary)` : '🔒 ENFORCE';
+export function banner(repository: string | undefined, ref: string | undefined): string {
+  const repo = safeRepository(repository);
+  const r = safeRef(ref);
+  if (!repo || !r) return '';
+  return (
+    `<p align="center"><img src="https://raw.githubusercontent.com/${repo}/${r}/docs/assets/banner.svg" ` +
+    'width="480" alt="Safer Runner Action"></p>\n\n'
+  );
 }
 
 /** Every part, each from its own observations. */
 export function reportSections(input: ReportInput): ReportSections {
   const enforce = input.mode === 'enforce';
-  const ctx: ReportContext = { mode: input.mode, enforce, actionRef: input.actionRef };
+  const ctx: ReportContext = { mode: input.mode, enforce };
   const proxy = proxyReport(
     {
       hosts: input.hosts,
-      dnsRefused: input.dnsRefused,
       userDomains: input.userDomains,
+      allowedDomains: input.allowedDomains,
       httpFilter: input.httpFilter,
+      httpFilterSet: input.httpFilterSet,
       platformEndpoints: input.platformEndpoints
     },
     ctx
@@ -120,92 +175,185 @@ export function reportSections(input: ReportInput): ReportSections {
       },
       ctx
     ),
-    selfTests: selfTestCheck(input.selfTests),
-    integrity: integrityCheck(input.integrity)
+    checks: setupChecks(input.selfTests, input.integrity)
   };
 }
 
-function titleAndChips(s: ReportSections, advisoryWhat: string): string {
-  const { enforce } = s.ctx;
-  const advisory = advisoryWhat !== '';
-  const md = `## 🛡️ Safer Runner — egress${advisory ? ` — enforce (ADVISORY — ${advisoryWhat} retained, not an enforced boundary)` : ''}\n\n`;
-  const chips = [advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
-  const parts = [...s.proxy.chips, ...s.sudo.chips, ...s.docker.chips];
-  chips.push(...parts);
-  if (enforce) {
-    if (!advisory) chips.push('✅ controls applied at setup');
-    chips.push(s.integrity.chip);
-  } else if (!parts.length) {
-    chips.push('nothing would be blocked');
-  }
-  if (s.selfTests.chip) chips.push(s.selfTests.chip);
-  return md + chips.map(c => `<kbd>${c}</kbd>`).join(' ') + '\n\n';
+const services = (s: ReportSections): Section[] => [s.proxy, s.firewall, s.dns, s.sudo, s.docker];
+
+// ---------------------------------------------------------------- summary
+
+const SEVERITY: Record<string, number> = { blocked: 0, 'would-block': 0, advisory: 1, allowed: 2 };
+
+/** Every scorecard row, worst first (stable: each part's own order within a verdict). */
+function scoreRows(s: ReportSections) {
+  return [...s.proxy.score, ...s.firewall.score, ...s.sudo.score, ...s.docker.score, s.checks.score].sort(
+    (a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]
+  );
 }
 
-/** Verdict alerts (top level only: alerts don't render inside <details>), one per kind. */
+/** The services' rows: what enforce would block or make ADVISORY (the setup checks are not a policy). */
+const policyRows = (s: ReportSections) => scoreRows(s).filter(r => r !== s.checks.score);
+
+/** The verdict line: what was (or would be) blocked, by area. */
+function headline(s: ReportSections): string {
+  const rows = policyRows(s);
+  const areas = (v: string) => [...new Set(rows.filter(r => r.verdict === v).map(r => r.area))];
+  if (s.ctx.enforce) {
+    const blocked = areas('blocked');
+    return blocked.length ? `**Blocked: ${blocked.join(', ')}** (see Detail).` : 'Nothing was blocked.';
+  }
+  const would = areas('would-block');
+  if (would.length) {
+    return (
+      `Nothing was blocked: analyze only observes. **Under enforce, this job would be blocked in ${would.join(', ')}.** ` +
+      'Use the configuration below, or change the job.'
+    );
+  }
+  if (areas('advisory').length) {
+    // ADVISORY, or not fully seen (a partial docker recording): never an all-clear
+    return 'Nothing was blocked: analyze only observes. **Under enforce, check the ⚠️ rows below** (ADVISORY, or not fully seen).';
+  }
+  return 'Nothing was blocked: analyze only observes. **Nothing would be blocked under enforce:** this job should run unchanged with `mode: enforce`.';
+}
+
+function chips(s: ReportSections): string {
+  const advisory = services(s).flatMap(x => x.advisory);
+  const mode = s.ctx.enforce ? (advisory.length ? 'ENFORCE · ADVISORY' : 'ENFORCE') : 'ANALYZE';
+  return [mode, ...advisory.map(a => a.chip)].map(c => `<kbd>${c}</kbd>`).join(' ');
+}
+
+/** Alerts at the top level only (they don't render inside <details>), one per kind. */
 function alerts(s: ReportSections): string {
-  const all: Alert[] = [
-    ...s.proxy.alerts,
-    ...s.selfTests.alerts,
-    ...s.integrity.alerts,
-    ...s.sudo.alerts,
-    ...s.docker.alerts
-  ];
-  const quoted = (a: Alert) => (a.quoted ? a.text : `> ${a.text}\n`);
+  const all = [...s.proxy.alerts, ...s.checks.alerts, ...s.sudo.alerts, ...s.docker.alerts];
   let md = '';
-  for (const kind of ['CAUTION', 'WARNING', 'IMPORTANT'] as const) {
-    const items = all.filter(a => a.kind === kind).map(quoted);
-    if (!items.length) continue;
-    if (kind === 'WARNING') items.unshift('> **The boundary was weaker than it looks.**\n');
-    md += `> [!${kind}]\n` + items.join('>\n') + '\n';
+  for (const kind of ['CAUTION', 'IMPORTANT'] as const) {
+    const items = all.filter(a => a.kind === kind);
+    if (items.length) md += `> [!${kind}]\n` + items.map(a => `> ${a.text}`).join('\n>\n') + '\n\n';
   }
   return md;
 }
 
-/** The scorecard, or the one-line clean verdict. */
 function scorecard(s: ReportSections): string {
-  const { proxy, firewall } = s;
-  if (!proxy.blocking && !firewall.blocking) {
-    if (s.ctx.enforce) return `**✅ Nothing blocked.** ${proxy.allowedLine} through the proxy.\n\n`;
-    // sudo or docker would be blocked (or could not be checked): the all-clear is for egress only
-    if (s.sudo.blocking || s.docker.blocking)
-      return `**No host would be blocked.** ${proxy.allowedLine} through the proxy.\n\n`;
-    return `**✅ Nothing would be blocked.** ${proxy.allowedLine} through the proxy. This job should run unchanged with \`mode: enforce\`.\n\n`;
-  }
-  return table(['', ''], [':--', ':--'], [...proxy.score, ...firewall.score]) + '\n\n';
+  return (
+    table(
+      ['', 'Area', 'Result'],
+      [':-:', ':--', ':--'],
+      scoreRows(s).map(r => [VERDICT_ICON[r.verdict], r.area, r.text])
+    ) + '\n\n'
+  );
 }
 
-/** Diagnostics: one collapsed section, every part states its result. */
-function diagnostics(s: ReportSections): string {
-  const parts = [
-    s.selfTests.diagnostic,
-    ...s.firewall.diagnostics,
-    ...s.proxy.diagnostics,
-    ...s.dns.diagnostics,
-    ...s.sudo.diagnostics,
-    ...s.docker.diagnostics,
-    s.integrity.diagnostic
-  ].filter(d => d !== undefined);
-  let body = parts.map(d => d.body).join('');
-  for (const x of s.input.extraSections ?? []) if (x) body += x + '\n\n';
-  return `<details>\n<summary>🔧 <b>Diagnostics</b> — ${parts.map(d => d.summary).join(' · ')}</summary>\n\n${body}</details>\n\n`;
+const INPUT_ORDER: Suggestion['input'][] = ['allowed-domains', 'http-filter', 'sudo-config', 'docker'];
+
+/**
+ * The suggested inputs as one `uses:` step, written by the `yaml` library that reads the inputs
+ * back (so a pasted block reads as printed). An ADVISORY input carries a comment on its line.
+ */
+export function suggestedBlock(uses: string, suggestions: Suggestion[]): string {
+  const scalar = (value: string, comment?: string) => {
+    const x = new Scalar(value);
+    if (value.includes('\n')) x.type = Scalar.BLOCK_LITERAL;
+    if (comment) x.comment = ` ⚠️ ${comment}`;
+    return x;
+  };
+  const w = new YAMLMap();
+  w.add(new Pair(new Scalar('mode'), new Scalar('enforce')));
+  for (const input of INPUT_ORDER) {
+    const s = suggestions.find(x => x.input === input);
+    if (s) w.add(new Pair(new Scalar(s.input), scalar(s.value, s.advisory)));
+  }
+  const action = new Scalar(uses);
+  action.comment = ' pin an exact version or commit SHA';
+  const step = new YAMLMap();
+  step.add(new Pair(new Scalar('uses'), action));
+  step.add(new Pair(new Scalar('with'), w));
+  const doc = new Document();
+  doc.contents = new YAMLSeq();
+  (doc.contents as YAMLSeq).items.push(step);
+  return doc.toString({ lineWidth: 0 }).trimEnd();
+}
+
+/** A sentence for the notes paragraph: capitalised, with a full stop. */
+const sentence = (n: string) => n[0].toUpperCase() + n.slice(1) + (/[.!?]$/.test(n) ? '' : '.');
+
+function suggested(s: ReportSections): string {
+  let md = '## 🔧 Suggested Enforce Configuration\n\n';
+  const parts = services(s);
+  if (s.ctx.enforce) {
+    const advisory = parts.flatMap(x => x.advisory);
+    return (
+      md +
+      (advisory.length
+        ? `Running under enforce. ⚠️ **ADVISORY:** ${advisory.map(a => a.text).join(' ')}\n\n`
+        : 'Running under enforce: the controls were applied at setup.\n\n')
+    );
+  }
+  const all = parts.flatMap(x => x.suggestions);
+  const inBlock = all.filter(x => !x.optional);
+  const optional = all.filter(x => x.optional);
+  const notes = parts.flatMap(x => x.notes);
+  if (inBlock.length) {
+    md +=
+      'Review every line before you use it; inputs not listed stay as they are. A ⚠️ line makes enforce ADVISORY.\n\n';
+    md += codeBlock('yaml', suggestedBlock(usesLine(s.input.actionRepository, s.input.actionRef), inBlock)) + '\n\n';
+  } else {
+    const advisory = policyRows(s).some(r => r.verdict === 'advisory');
+    md += advisory
+      ? 'No input to change, but enforce would be ADVISORY (⚠️ above).\n\n'
+      : 'Nothing to change: this job should run under `mode: enforce` as it is configured.\n\n';
+  }
+  if (notes.length) md += `<sub>${notes.map(sentence).join(' ')}</sub>\n\n`;
+  for (const o of optional) {
+    md +=
+      `<details>\n<summary>Optional: narrow the allowed hosts further with <code>${o.input}</code>${o.label ? ` (${o.label})` : ''}</summary>\n\n` +
+      'Built from this job\'s allowed requests: reads collapse to one `"*"` line per host, write paths keep their ' +
+      'structure. A filter only narrows: each host must still be allowed. Add it under `with:`.\n\n' +
+      codeBlock('yaml', stringify({ [o.input]: o.value }, { blockQuote: 'literal', lineWidth: 0 }).trimEnd()) +
+      '\n\n</details>\n\n';
+  }
+  return md;
+}
+
+// ---------------------------------------------------------------- detail
+
+/** A collapsed Runner System part: what the action did, its result in the summary line. */
+function runnerSystem(parts: RunnerSystem[]): string {
+  if (!parts.length) return '';
+  return (
+    `<details>\n<summary>🖥️ <b>Runner System</b>: ${parts.map(p => p.summary).join(' · ')}</summary>\n\n` +
+    parts.map(p => p.body).join('') +
+    '</details>\n\n'
+  );
+}
+
+function detail(s: ReportSections): string {
+  let md = '# 🔎 Detail\n\n';
+  md += '## 🌐 Network\n\n' + s.proxy.body;
+  md += runnerSystem([...s.proxy.runnerSystem, ...s.dns.runnerSystem, ...s.firewall.runnerSystem]);
+  md += '## 🔑 Sudo\n\n' + s.sudo.body + runnerSystem(s.sudo.runnerSystem);
+  md += '## 🐳 Docker\n\n' + s.docker.body + runnerSystem(s.docker.runnerSystem);
+  md += runnerSystem([s.checks.runnerSystem]);
+  for (const x of s.input.extraSections ?? []) if (x) md += x + '\n\n';
+  return md;
 }
 
 function footer(s: ReportSections): string {
   const now = (s.input.now ?? new Date()).toISOString().replace('T', ' ').slice(0, 16);
-  return `<sub>${s.ctx.mode} · job ${code(s.input.job)} · ${now} UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>\n`;
+  const repo = safeRepository(s.input.actionRepository) || ACTION_REPOSITORY;
+  return `<sub>${s.ctx.mode} · job ${code(s.input.job)} · ${now} UTC · [Safer Runner Action](https://github.com/${repo}) v2</sub>\n`;
 }
 
 /** The summary from its parts. */
 export function compose(s: ReportSections): string {
-  const advisoryWhat = [s.sudo.advisory, s.docker.advisory].filter(Boolean).join(' and ');
   return [
-    titleAndChips(s, advisoryWhat),
+    banner(s.input.actionRepository, s.input.actionRef),
+    '# 📋 Summary\n\n',
+    `${chips(s)}\n\n${headline(s)}\n\n`,
     alerts(s),
     scorecard(s),
-    s.proxy.body,
-    s.docker.body,
-    diagnostics(s),
+    suggested(s),
+    detail(s),
     footer(s)
   ].join('');
 }
@@ -214,7 +362,11 @@ export function buildReport(input: ReportInput): string {
   return compose(reportSections(input));
 }
 
-/** Every part's full lists, for the job log (redacted like the summary). */
-export function jobLog(s: ReportSections): string[] {
-  return [...s.proxy.jobLog, ...s.sudo.jobLog, ...s.docker.jobLog];
+/** The suggested block, for the job log (the same text the summary shows); '' when none. */
+export function suggestedForLog(s: ReportSections): string {
+  if (s.ctx.enforce) return '';
+  const inBlock = services(s)
+    .flatMap(x => x.suggestions)
+    .filter(x => !x.optional);
+  return inBlock.length ? suggestedBlock(usesLine(s.input.actionRepository, s.input.actionRef), inBlock) : '';
 }

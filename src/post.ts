@@ -1,8 +1,12 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import { SELFTEST_FILE, SUDO_LOG } from './constants';
-import { SETUP_MARKER } from './setup/run';
-import { compose, jobLog, reportSections } from './report/compose';
+import { SETUP_END_STATE, SETUP_MARKER } from './setup/run';
+import { compose, reportSections, suggestedForLog } from './report/compose';
+import { jobLog as proxyJobLog } from './services/mitmproxy/report';
+import { jobLog as sudoJobLog } from './services/sudo/report';
+import { jobLog as dockerJobLog } from './services/docker/report';
+import type { ActionSudoWindow } from './services/sudo/log';
 import { observeProxy } from './services/mitmproxy/observe';
 import { observeFirewall } from './services/iptables/observe';
 import { observeDns } from './services/coredns/observe';
@@ -22,6 +26,17 @@ interface SetupMarker extends SudoMarker, DockerMarker {
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
   dnsSelfTestName?: string;
+}
+
+const log = (lines: string[]) => lines.forEach(l => core.info(l));
+
+/**
+ * When the action ran sudo itself: until setup ended (pre, or main when it set up) and from the
+ * start of this step. Undefined (attribution by command line only) when setup recorded no end.
+ */
+function actionSudoWindow(postStart: number): ActionSudoWindow | undefined {
+  const ends = [SETUP_END_STATE.pre, SETUP_END_STATE.main].map(k => Number(core.getState(k))).filter(n => n > 0);
+  return ends.length ? { setupEnd: Math.max(...ends), postStart } : undefined;
 }
 
 function readSelfTests(): { name: string; ok: boolean; detail: string }[] {
@@ -46,6 +61,7 @@ function readSetupMarker(): SetupMarker | null {
  * tmpfs, with it).
  */
 async function run(): Promise<void> {
+  const postStart = Math.floor(Date.now() / 1000);
   const marker = readSetupMarker();
   const mode = marker?.mode;
   if (!marker || !mode) {
@@ -65,15 +81,20 @@ async function run(): Promise<void> {
 
   try {
     await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
-    // each service's observations (its own log, and its policy where it has one)
+    // Each service's observations (its own log, and its policy where it has one). Its full lists
+    // go to the job log as soon as it has them, so a later failure never loses them (names and
+    // sudo arguments redacted like the summary: the job log is just as public).
     const proxy = observeProxy(marker.selfTestWindow);
+    log(proxyJobLog(proxy.observed));
     const firewall = observeFirewall();
     const containers = await observeContainers(proxy.records, firewall);
     const dnsRefused = observeDns(marker.dnsSelfTestName);
     const selfTests = readSelfTests();
-    const sudo = readSudoUsage(SUDO_LOG);
+    const sudo = readSudoUsage(SUDO_LOG, actionSudoWindow(postStart));
     const sudoPolicy = observeSudoPolicy(mode, marker, sudo.ran);
+    log(sudoJobLog({ usage: sudo, policy: sudoPolicy }));
     const dockerPolicy = await observeDockerPolicy(marker);
+    log(dockerJobLog(dockerPolicy));
 
     // each service's part, then the summary from the parts
     const sections = reportSections({
@@ -85,6 +106,7 @@ async function run(): Promise<void> {
       sudo,
       sudoPolicy,
       job: process.env.GITHUB_JOB || 'unknown',
+      actionRepository: process.env.GITHUB_ACTION_REPOSITORY,
       actionRef: process.env.GITHUB_ACTION_REF,
       ...proxy.observed,
       firewall,
@@ -93,9 +115,12 @@ async function run(): Promise<void> {
       integrity: integrity?.details,
       containers
     });
-    // Full lists in the job log, so nothing is ever silently dropped from the summary (names
-    // and sudo arguments redacted like the summary: the job log is just as public).
-    for (const line of jobLog(sections)) core.info(line);
+    const block = suggestedForLog(sections);
+    if (block) {
+      core.startGroup('Suggested enforce configuration');
+      log(block.split('\n'));
+      core.endGroup();
+    }
     await core.summary.addRaw(compose(sections)).write();
   } catch (error) {
     core.warning(`Failed to generate the safer-runner report: ${error}`);

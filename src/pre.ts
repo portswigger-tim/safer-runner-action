@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import { parseMode, readInputs } from './config/inputs';
-import { runSetup, setupCompleted } from './setup/run';
+import { SETUP_END_STATE, runSetup, setupCompleted } from './setup/run';
 
 /**
  * Pre step: apply the full policy (not just monitoring) before any other step - including
@@ -31,6 +31,9 @@ async function run(): Promise<void> {
     } else {
       core.warning(`safer-runner setup failed in analyze mode: ${error}. The main step will retry.`);
     }
+  } finally {
+    // the post step tells the action's own sudo from the job's by when it ran (SETUP_END_STATE)
+    core.saveState(SETUP_END_STATE.pre, Math.ceil(Date.now() / 1000));
   }
 }
 

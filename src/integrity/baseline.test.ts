@@ -127,7 +127,7 @@ describe('checkIntegrity (one pass)', () => {
     const result = await checkIntegrity(r.host);
     expect(result.intact).toBe(false);
     expect(result.details.body).toContain(
-      `| ${FILES[0]} | 🚨 DELETED | ${sha('corefile\n').slice(0, 16)} -> MISSING |`
+      `| ${FILES[0]} | ⚠️ DELETED | ${sha('corefile\n').slice(0, 16)} -> MISSING |`
     );
   });
 
@@ -180,7 +180,7 @@ describe('checkIntegrity (one pass)', () => {
     };
     const result = await checkIntegrity(r.host);
     expect(result.intact).toBe(false);
-    expect(result.details.body).toContain(`| ${FILES[0]} | 🚨 UNREADABLE |`);
+    expect(result.details.body).toContain(`| ${FILES[0]} | ⚠️ UNREADABLE |`);
   });
 });
 
@@ -212,10 +212,10 @@ describe('compare + renderDetails (pure)', () => {
         '**Baseline:** T0\n**Verified:** T1\n\n' +
         '**Configuration Files**\n\n| File | Status | Checksum Comparison |\n|------|--------|--------------------|\n' +
         `| /a | VERIFIED | ${'a'.repeat(16)} (unchanged) |\n` +
-        `| /b | 🚨 DELETED | ${'b'.repeat(16)} -> MISSING |\n` +
+        `| /b | ⚠️ DELETED | ${'b'.repeat(16)} -> MISSING |\n` +
         '\n**Firewall Rules**\n\n| Chain | Status | Checksum Comparison |\n|-------|--------|--------------|\n' +
         `| INPUT | ⚠️ TAMPERED | ${'c'.repeat(16)} -> ${'e'.repeat(16)} |\n` +
-        `| DOCKER-USER | 🚨 MISSING | ${'d'.repeat(16)} -> MISSING |\n` +
+        `| DOCKER-USER | ⚠️ MISSING | ${'d'.repeat(16)} -> MISSING |\n` +
         '\n'
     });
   });

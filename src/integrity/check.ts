@@ -75,8 +75,8 @@ export function renderDetails(state: ValidationState, rows: Row[], verifiedAt: s
     const b = r.baseline.substring(0, 16);
     let status: string;
     let shown: string;
-    if (r.error !== undefined) [status, shown] = ['🚨 UNREADABLE', `${b} -> ERROR`];
-    else if (r.current === null) [status, shown] = [r.kind === 'file' ? '🚨 DELETED' : '🚨 MISSING', `${b} -> MISSING`];
+    if (r.error !== undefined) [status, shown] = ['⚠️ UNREADABLE', `${b} -> ERROR`];
+    else if (r.current === null) [status, shown] = [r.kind === 'file' ? '⚠️ DELETED' : '⚠️ MISSING', `${b} -> MISSING`];
     else if (r.current === r.baseline) [status, shown] = ['VERIFIED', `${b} (unchanged)`];
     else [status, shown] = ['⚠️ TAMPERED', `${b} -> ${r.current.substring(0, 16)}`];
     return `| ${r.name} | ${status} | ${shown} |\n`;

@@ -1586,6 +1586,10 @@ async function run() {
             core.warning(`safer-runner setup failed in analyze mode: ${error}. The main step will retry.`);
         }
     }
+    finally {
+        // the post step tells the action's own sudo from the job's by when it ran (SETUP_END_STATE)
+        core.saveState(run_1.SETUP_END_STATE.pre, Math.ceil(Date.now() / 1000));
+    }
 }
 run();
 
@@ -2447,7 +2451,8 @@ async function waitForDocker(h, timeoutMs) {
  * containers alive across the restart. Must run after the CA is in the system store and
  * before the firewall (Docker rebuilds its own chains on restart).
  *
- * Returns true when daemon.json was written (it then belongs in the integrity baseline).
+ * Says whether daemon.json was written (it then belongs in the integrity baseline) and whether
+ * dockerd was restarted.
  */
 async function restartForCaTrust(h) {
     const before = await runningContainers(h);
@@ -2459,7 +2464,7 @@ async function restartForCaTrust(h) {
     if (merged === null) {
         core.warning(`${constants_1.DOCKER_DAEMON_JSON} is not a JSON object: dockerd not restarted, so a dockerd that pulled images ` +
             'before this action may not trust the proxy CA (docker pull: x509 errors)');
-        return false;
+        return { configWritten: false, restarted: false };
     }
     if (merged.changed) {
         await (0, host_1.sudo)(['install', '-d', '-m', '0755', '/etc/docker'], {}, h);
@@ -2480,7 +2485,7 @@ async function restartForCaTrust(h) {
     if (lost.length > 0) {
         core.warning(`${lost.length} container(s) stopped across the dockerd restart: ${lost.map(i => i.slice(0, 12)).join(', ')}`);
     }
-    return true;
+    return { configWritten: true, restarted: true };
 }
 /**
  * Get dockerd ready for the firewall, once the CA is trusted: when docker runs (and is not about
@@ -2491,13 +2496,14 @@ async function restartForCaTrust(h) {
 async function prepare(h, policy, _trust) {
     const active = policy !== 'stop' && (await isDockerActive(h));
     let configWritten = false;
+    let restarted = false;
     if (active) {
         const services = await runningContainers(h);
         if (policy === 'keep' || services.length > 0) {
-            configWritten = await (0, host_1.timed)('Restart dockerd (CA trust)', () => restartForCaTrust(h));
+            ({ configWritten, restarted } = await (0, host_1.timed)('Restart dockerd (CA trust)', () => restartForCaTrust(h)));
         }
     }
-    return { active, configWritten, prepared: Object.freeze({}) };
+    return { active, configWritten, restarted, prepared: Object.freeze({}) };
 }
 /**
  * analyze: start the docker events recorder (eventRecorderUnit), once dockerd has settled (it
@@ -4147,10 +4153,14 @@ async function restrictSudo(h, r, _baseline) {
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
  * action's own commands (so the report never counts the action's sudo as the workflow's).
  */
-function readSudoUsage(logFile) {
+function readSudoUsage(logFile, window) {
     try {
         if (fs.existsSync(logFile)) {
-            return (0, log_1.classifySudoCommands)((0, log_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS);
+            // attributed entry by entry, before deduplication: the same line can be the action's at
+            // setup and the job's later
+            const u = (0, log_1.classifySudoCommands)((0, log_1.parseSudoLogEntries)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS, window);
+            const dedup = (c) => (0, log_1.deduplicateSudoCommands)(c).slice(0, 1000);
+            return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
         }
     }
     catch (error) {
@@ -4174,7 +4184,9 @@ function readSudoUsage(logFile) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSudoLogLine = parseSudoLogLine;
 exports.deduplicateSudoCommands = deduplicateSudoCommands;
+exports.parseSudoLogEntries = parseSudoLogEntries;
 exports.parseSudoLogsFromString = parseSudoLogsFromString;
+exports.sudoLogSeconds = sudoLogSeconds;
 exports.classifySudoCommands = classifySudoCommands;
 /**
  * Classic sudo prefixes refused commands with a reason, e.g.
@@ -4241,11 +4253,8 @@ function joinContinuationLines(content) {
     }
     return joined;
 }
-/**
- * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
- * entry is matched as one line.
- */
-function parseSudoLogsFromString(content) {
+/** Every sudo log entry, in order (wrapped and multi-line entries joined first). */
+function parseSudoLogEntries(content) {
     const commands = [];
     for (const line of joinContinuationLines(content)) {
         const cmd = parseSudoLogLine(line);
@@ -4253,8 +4262,26 @@ function parseSudoLogsFromString(content) {
             commands.push(cmd);
         }
     }
-    // Deduplicate and limit to 1000 commands
-    return deduplicateSudoCommands(commands).slice(0, 1000);
+    return commands;
+}
+/** The sudo log's entries, deduplicated and limited to 1000. */
+function parseSudoLogsFromString(content) {
+    return deduplicateSudoCommands(parseSudoLogEntries(content)).slice(0, 1000);
+}
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/**
+ * A sudo log timestamp (`Nov  7 12:00:01`, no year, the runner's clock in UTC) as epoch seconds,
+ * in the year that puts it at or before `now` (a log line is never from the future); null if it
+ * does not parse.
+ */
+function sudoLogSeconds(timestamp, now) {
+    const m = timestamp.match(/^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+    const month = m ? MONTHS.indexOf(m[1]) : -1;
+    if (!m || month < 0)
+        return null;
+    const at = (year) => Date.UTC(year, month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
+    const year = now.getUTCFullYear();
+    return at(year) > now.getTime() / 1000 + 86400 ? at(year - 1) : at(year);
 }
 /**
  * Whether a (successful) command is one of the action's own. System binaries match by
@@ -4269,14 +4296,25 @@ function isInternal(cmd, internal) {
     }
     return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
 }
-/** Split parsed sudo log entries by who ran them and whether they were allowed. */
-function classifySudoCommands(commands, internalCommands) {
+/**
+ * Split parsed sudo log entries by who ran them and whether they were allowed. With `window`, a
+ * command is the action's own only if it matches one of its command lines AND ran while the
+ * action was running (setup, or the post step); the same line run by a job step is the job's.
+ * Without it (an older setup), by the command line alone.
+ */
+function classifySudoCommands(commands, internalCommands, window, now = new Date()) {
     const internal = new Set(internalCommands);
     const usage = { ran: [], refused: [], internal: [] };
+    const byAction = (cmd) => {
+        if (!window)
+            return true;
+        const at = sudoLogSeconds(cmd.timestamp, now);
+        return at !== null && (at <= window.setupEnd || at >= window.postStart);
+    };
     for (const cmd of commands) {
         if (cmd.denied)
             usage.refused.push(cmd);
-        else if (isInternal(cmd, internal))
+        else if (isInternal(cmd, internal) && byAction(cmd))
             usage.internal.push(cmd);
         else
             usage.ran.push(cmd);
@@ -4340,7 +4378,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
+exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = exports.SETUP_END_STATE = void 0;
 exports.setupCompleted = setupCompleted;
 exports.installPackages = installPackages;
 exports.inJobContainer = inJobContainer;
@@ -4362,6 +4400,12 @@ const github_domains_1 = __nccwpck_require__(2268);
 const sudo = __importStar(__nccwpck_require__(3275));
 const docker = __importStar(__nccwpck_require__(6362));
 const baseline_1 = __nccwpck_require__(1333);
+/**
+ * Action state (core.saveState) holding when setup ended, in epoch seconds, from pre and from
+ * main (when main set up). The post step counts a sudo command as the action's own only if it
+ * ran before then or during the post step.
+ */
+exports.SETUP_END_STATE = { pre: 'setup-end-pre', main: 'setup-end-main' };
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
 /**
@@ -4554,7 +4598,8 @@ async function runSetup(inputs, h = host_1.realHost) {
             ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
             ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
             dockerRetained: dockerAccess.access === 'retained',
-            docker: dockerAccess,
+            // the summary shows the dockerd restart for CA trust (F1) as the action's own docker change
+            docker: { ...dockerAccess, caRestart: dockerd.restarted },
             ...(dockerEvents ? { dockerEvents } : {}),
             failOnTampering: inputs.failOnTampering,
             containerTls: policy_1.CONTAINER_TLS,

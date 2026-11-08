@@ -1,9 +1,9 @@
 /** Per-container egress (P2): the container listener's flow records and the container firewall chain. */
 
 import { ipOf, type FlowRecord } from '../../flowlog';
-import type { Mode } from '../../policy';
 import { CONTAINER_PREFIXES, type FirewallEvent } from '../iptables/log';
-import { capped, code, plural, table } from '../../report/markdown';
+import { capped, code, table } from '../../report/markdown';
+import { VERDICT_ICON, refusedVerdict, type ReportContext } from '../../report/section';
 import { DECISIONS, DENIED, MAX_LIST, addUnique, blockedName, nameOf } from '../mitmproxy/flows';
 
 export interface ContainerSummary {
@@ -75,40 +75,39 @@ function listCell(names: string[]): string {
   return names.length > MAX_LIST ? `${shown} +${names.length - MAX_LIST} more` : shown;
 }
 
-export function containerSection(containers: ContainerSummary[], mode: Mode): string {
+/** The containers' egress: one row per container. '' when no container sent anything. */
+export function containerSection(containers: ContainerSummary[], ctx: ReportContext): string {
   if (!containers.length) return '';
-  const enforce = mode === 'enforce';
+  const { enforce } = ctx;
   const untrusted = containers.filter(c => c.untrusted.length);
-  const outside = containers.reduce((a, c) => a + c.firewall.length, 0);
-  const summary = [plural(containers.length, 'container')];
-  if (untrusted.length) summary.push(`⚠️ ${plural(untrusted.length, 'container')} did not trust the CA`);
-  if (outside) summary.push(`${outside} outside the proxy ${enforce ? 'rejected' : 'allowed'}`);
-  let md = `<details${untrusted.length ? ' open' : ''}>\n<summary>🐳 <b>Container egress</b> — ${summary.join(' · ')}</summary>\n\n`;
-  md +=
-    '<sub>Traffic from Docker containers (service containers, `docker run`, `docker build`) goes through the same ' +
-    'proxy and DNS filter. 🔀 = checked by TLS name only, no CA needed in the container.</sub>\n\n';
   const { shown, note } = capped(containers);
+  let md =
+    '**Container egress** <sub>(through the same proxy and DNS filter; SNI only = checked by TLS name, no CA needed)</sub>\n\n';
   md += table(
-    ['Container', 'Allowed', enforce ? 'Blocked' : 'Would be blocked', 'Outside the proxy'],
-    [':--', ':--', ':--', ':--'],
+    ['', 'Container', 'Allowed', enforce ? 'Blocked' : 'Would be blocked', 'Outside the proxy'],
+    [':-:', ':--', ':--', ':--', ':--'],
     shown.map(c => [
+      VERDICT_ICON[c.denied.length || c.firewall.length ? refusedVerdict(ctx) : 'allowed'],
       c.name ? `${code(c.name)}<br><sub>${c.ip}</sub>` : code(c.ip),
-      c.allowed.map(n => `${c.sniOnly.includes(n) ? '🔀 ' : ''}${code(blockedName(n))}`).join(', ') || '—',
+      c.allowed.map(n => `${code(blockedName(n))}${c.sniOnly.includes(n) ? ' <sub>SNI only</sub>' : ''}`).join(', ') ||
+        '—',
       listCell(c.denied) || '—',
       c.firewall
         .slice(0, MAX_LIST)
-        .map(f => `${f.rejected ? '❌' : '⚠️'} ${code(f.dst)} ${f.proto}${f.n > 1 ? ` ×${f.n}` : ''}`)
+        .map(
+          f => `${code(f.dst)} ${f.proto}${f.n > 1 ? ` ×${f.n}` : ''} ${f.rejected ? 'rejected' : 'allowed (analyze)'}`
+        )
         .join('<br>') || '—'
     ])
   );
   md += note + '\n\n';
   if (untrusted.length) {
     md +=
-      '**TLS failed because the container did not trust the runtime CA:** ' +
+      '⚠️ **TLS failed because the container did not trust the runtime CA:** ' +
       untrusted.map(c => `${code(c.name ?? c.ip)} → ${listCell(c.untrusted)}`).join('; ') +
       '. Containers need no CA, except for multi-tenant front doors (Azure ' +
       'Storage): those stay intercepted so the Host check still stops fronting to another tenant. Reach them ' +
       'from a step on the runner, or give the container the CA (`/etc/safer-runner/ca.pem`).\n\n';
   }
-  return md + '</details>\n\n';
+  return md;
 }

@@ -32,6 +32,13 @@ import * as sudo from '../services/sudo';
 import * as docker from '../services/docker';
 import { CRITICAL_FILES, captureBaseline } from '../integrity/baseline';
 
+/**
+ * Action state (core.saveState) holding when setup ended, in epoch seconds, from pre and from
+ * main (when main set up). The post step counts a sudo command as the action's own only if it
+ * ran before then or during the post step.
+ */
+export const SETUP_END_STATE = { pre: 'setup-end-pre', main: 'setup-end-main' } as const;
+
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 export const SETUP_MARKER = '/etc/safer-runner/setup-complete';
 
@@ -272,7 +279,8 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
         ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
         ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
         dockerRetained: dockerAccess.access === 'retained',
-        docker: dockerAccess,
+        // the summary shows the dockerd restart for CA trust (F1) as the action's own docker change
+        docker: { ...dockerAccess, caRestart: dockerd.restarted },
         ...(dockerEvents ? { dockerEvents } : {}),
         failOnTampering: inputs.failOnTampering,
         containerTls: CONTAINER_TLS,

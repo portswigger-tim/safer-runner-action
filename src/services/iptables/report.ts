@@ -5,8 +5,16 @@
  */
 
 import { CONTAINER_PREFIXES, firewallSummary, type FirewallEvent, type FirewallSummary } from './log';
-import { capped, code, table } from '../../report/markdown';
-import type { ReportContext, Section } from '../../report/section';
+import { capped, code, plural, table } from '../../report/markdown';
+import {
+  VERDICT_ICON,
+  emptySection,
+  refusedVerdict,
+  type ReportContext,
+  type RunnerSystem,
+  type ScoreRow,
+  type Section
+} from '../../report/section';
 
 export interface FirewallObserved {
   events: FirewallEvent[];
@@ -30,50 +38,41 @@ function destinationText(e: FirewallEvent): string {
   return `${likely ? `${likely} to ` : ''}${code(`${e.dst}:${e.dport}`)}`;
 }
 
-function score(fw: FirewallSummary): string[][] {
+function score(fw: FirewallSummary, ctx: ReportContext): ScoreRow[] {
   if (!fw.rows.length) return [];
-  const parts = [];
-  if (fw.rejected) parts.push(`${fw.rejected} rejected`);
-  if (fw.logged) parts.push(`${fw.logged} allowed, not proxied`);
   const one = fw.rows.length === 1 ? ` (${destinationText(fw.rows[0].e)})` : '';
-  return [['🧱 **Outside the proxy**', parts.join(' · ') + one]];
+  return [
+    {
+      verdict: refusedVerdict(ctx),
+      area: 'Network',
+      text: `${plural(fw.rows.length, 'connection')} outside the proxy ${ctx.enforce ? 'rejected' : 'would be rejected'}${one}`
+    }
+  ];
 }
 
-function diagnostics(fw: FirewallSummary): Section['diagnostics'] {
-  if (!fw.rows.length) return [{ summary: 'nothing bypassed the proxy', body: '' }];
-  const p = [];
-  if (fw.rejected) p.push(`${fw.rejected} non-proxy ${fw.rejected === 1 ? 'destination' : 'destinations'} rejected`);
-  if (fw.logged) p.push(`${fw.logged} allowed outside the proxy`);
+function runnerSystem(fw: FirewallSummary, ctx: ReportContext): RunnerSystem[] {
+  if (!fw.rows.length) return [{ summary: 'nothing outside the proxy', body: '' }];
   const { shown, note } = capped(fw.rows);
   let body =
     '**Outside the proxy** <sub>(only TCP 80/443 is proxied; new connections only; logging rate-limited to 60/min)</sub>\n\n';
   body += table(
-    ['Destination', 'Proto', 'Likely', 'UID', 'Packets', 'Result'],
-    [':--', ':--', ':--', '--:', '--:', ':--'],
+    ['', 'Destination', 'Proto', 'Likely', 'UID', 'Packets'],
+    [':-:', ':--', ':--', ':--', '--:', '--:'],
     shown.map(({ e, n }) => [
+      VERDICT_ICON[e.prefix === 'SaferRunner-Drop' ? 'blocked' : refusedVerdict(ctx)],
       code(`${e.dst}:${e.dport}`),
       e.proto,
       PORT_NAMES[e.dport] ?? '',
       e.uid,
-      String(n),
-      e.prefix === 'SaferRunner-Drop' ? '❌ rejected' : '⚠️ allowed (not proxied)'
+      String(n)
     ])
   );
   body += note + '\n\n';
-  return [{ summary: p.join(' · '), body }];
+  return [{ summary: `${plural(fw.rows.length, 'connection')} outside the proxy`, body }];
 }
 
-export function report(o: FirewallObserved, _ctx: ReportContext): Section {
-  // container firewall events are reported in the container section, with their source
+export function report(o: FirewallObserved, ctx: ReportContext): Section {
+  // container firewall events are reported in the container part, with their source
   const fw = firewallSummary(o.events.filter(e => !CONTAINER_PREFIXES.has(e.prefix)));
-  return {
-    chips: [],
-    alerts: [],
-    score: score(fw),
-    blocking: fw.rows.length > 0,
-    body: '',
-    diagnostics: diagnostics(fw),
-    jobLog: [],
-    advisory: ''
-  };
+  return { ...emptySection(), score: score(fw, ctx), runnerSystem: runnerSystem(fw, ctx) };
 }
