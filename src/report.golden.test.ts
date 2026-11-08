@@ -458,6 +458,7 @@ function render(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'ho
     dnsRefused: [],
     selfTests: SELF_TESTS,
     userDomains: ['registry.npmjs.org', 'archive.ubuntu.com', 'uploads.example.com', '.example.org'],
+    allowedDomains: ['registry.npmjs.org', 'archive.ubuntu.com', 'uploads.example.com', '.example.org'],
     integrity: {
       status: 'verified',
       body: '**Configuration Files**\n\n| File | Status |\n|--|--|\n| /etc/resolv.conf | VERIFIED |\n'

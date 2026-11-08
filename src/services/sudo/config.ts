@@ -109,6 +109,15 @@ export const INTERNAL_SUDO_COMMANDS: string[] = [
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
 
 /**
+ * Setup's last sudo command, as INTERNAL_SUDO_COMMANDS writes it: moving the restricted sudoers
+ * into place when sudo is restricted (enforce, disable-sudo), else writing the integrity baseline.
+ */
+export const SETUP_FINAL_SUDO = {
+  restricted: `mv ${SUDOERS_TEMP_FILE} ${RUNNER_SUDOERS_FILE}`,
+  unrestricted: BASELINE_WRITE_COMMANDS[BASELINE_WRITE_COMMANDS.length - 1].join(' ')
+};
+
+/**
  * Generate the sudoers rules the action always needs for post-action validation
  *
  * Only exact read-only commands are allowed: no wildcards (embedded wildcards are

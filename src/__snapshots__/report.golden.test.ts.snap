@@ -212,9 +212,9 @@ Nothing was blocked: analyze only observes. **Under enforce, this job would be b
 |  | Area | Result |
 |:-:|:--|:--|
 | 🟠 | Sudo | 1 command would be blocked |
+| ⚠️ | Docker | not evaluated: the job's use of docker was not seen |
 | ⚠️ | Setup | self-tests 3/3 · config not verified |
 | ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
-| ✅ | Docker | not evaluated |
 
 ## 🔧 Suggested Enforce Configuration
 
@@ -326,9 +326,9 @@ Nothing was blocked: analyze only observes. **Under enforce, this job would be b
 | 🟠 | HTTP filter | 2 requests would be blocked: \`uploads.example.com\` |
 | 🟠 | Network | 1 connection outside the proxy would be rejected (SSH to \`198.51.100.7:22\`) |
 | 🟠 | Sudo | 1 command would be blocked |
+| ⚠️ | Docker | not evaluated: the job's use of docker was not seen |
 | ⚠️ | Setup | self-tests 3/3 · config not verified |
 | ✅ | Network | 3 hosts beyond GitHub · 3 requests · 3.3 MiB |
-| ✅ | Docker | not evaluated |
 
 ## 🔧 Suggested Enforce Configuration
 
@@ -339,6 +339,10 @@ Review every line before you use it; inputs not listed stay as they are. A ⚠�
   with:
     mode: enforce
     allowed-domains: |
+      registry.npmjs.org
+      archive.ubuntu.com
+      uploads.example.com
+      .example.org
       exfil.example.net
       pypi.example.com
 \`\`\`
@@ -384,7 +388,7 @@ http-filter: |
 | 🟠 | \`uploads.example.com\` | \`PUT\` ‹path hidden› | path not allowed | 1 |
 | 🟠 | \`uploads.example.com\` | \`INVALID\` ‹path hidden› | method not allowed on this path | 1 |
 
-<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data.</sub>
+<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. If the job needs one of these requests, run it in analyze mode without that host's \`http-filter\` entry: the suggested \`http-filter\` then covers it. Review the rule before you add it: a write is how data leaves.</sub>
 
 **Allowed: this job's hosts**
 
@@ -719,7 +723,12 @@ exports[`job summary golden snapshots enforce ADVISORY: a sudo-config allowlist 
 
 <kbd>ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo allowlist (2)</kbd>
 
-Nothing was blocked.
+**ADVISORY: not an enforced boundary** (sudo allowlist (2)). Nothing was blocked.
+
+> [!WARNING]
+> **The boundary was weaker than it looks.**
+>
+> \`sudo-config\` kept sudo for 2 command lines. A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Remove \`sudo-config\` to make enforce a boundary.
 
 |  | Area | Result |
 |:-:|:--|:--|
@@ -730,7 +739,7 @@ Nothing was blocked.
 
 ## 🔧 Suggested Enforce Configuration
 
-Running under enforce. ⚠️ **ADVISORY:** \`sudo-config\` kept sudo for 2 command lines. A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Remove \`sudo-config\` to make enforce a boundary.
+Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).
 
 # 🔎 Detail
 
@@ -820,7 +829,14 @@ exports[`job summary golden snapshots enforce ADVISORY: sudo and docker retained
 
 <kbd>ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo retained</kbd> <kbd>⚠️ docker retained</kbd>
 
-**Blocked: Network** (see Detail).
+**ADVISORY: not an enforced boundary** (sudo retained, docker retained). **Blocked: Network** (see Detail).
+
+> [!WARNING]
+> **The boundary was weaker than it looks.**
+>
+> \`disable-sudo: false\` kept sudo, so any step could have removed the egress controls. Remove it to make enforce a boundary.
+>
+> \`docker: keep\` kept docker (verified on the runner), which is root-equivalent: any step could have removed the egress controls. Use \`docker: remove-group\` (the default) or \`docker: stop\` unless the job needs docker.
 
 > [!IMPORTANT]
 > **3 hosts not on the allowlist were blocked.** If this job failed, this is probably why: see Network.
@@ -835,7 +851,7 @@ exports[`job summary golden snapshots enforce ADVISORY: sudo and docker retained
 
 ## 🔧 Suggested Enforce Configuration
 
-Running under enforce. ⚠️ **ADVISORY:** \`disable-sudo: false\` kept sudo, so any step could have removed the egress controls. Remove it to make enforce a boundary. \`docker: keep\` kept docker (verified on the runner), which is root-equivalent: any step could have removed the egress controls. Use \`docker: remove-group\` (the default) or \`docker: stop\` unless the job needs docker.
+Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).
 
 # 🔎 Detail
 
@@ -1086,7 +1102,7 @@ Running under enforce: the controls were applied at setup.
 | ⛔ | \`uploads.example.com\` | \`PUT\` ‹path hidden› | path not allowed | 1 |
 | ⛔ | \`uploads.example.com\` | \`INVALID\` ‹path hidden› | method not allowed on this path | 1 |
 
-<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data.</sub>
+<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. If the job needs one of these requests, run it in analyze mode without that host's \`http-filter\` entry: the suggested \`http-filter\` then covers it. Review the rule before you add it: a write is how data leaves.</sub>
 
 If the job needs them, add them (review first):
 

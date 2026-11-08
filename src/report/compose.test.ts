@@ -171,7 +171,15 @@ describe('Suggested Enforce Configuration: the block pastes back as printed', ()
   });
 
   it('nothing to change: no block, and it says so', () => {
-    const md = buildReport({ mode: 'analyze', job: 'j', hosts: [], firewall: [], dnsRefused: [], selfTests: [] });
+    const md = buildReport({
+      mode: 'analyze',
+      job: 'j',
+      hosts: [],
+      firewall: [],
+      dnsRefused: [],
+      selfTests: [],
+      sudo: { ran: [], refused: [], internal: [] }
+    });
     expect(md).toContain('Nothing to change: this job should run under `mode: enforce` as it is configured.');
     expect(md).not.toContain('```');
   });

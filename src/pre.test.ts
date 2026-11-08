@@ -2,11 +2,7 @@ import * as core from '@actions/core';
 import { runSetup } from './setup/run';
 
 jest.mock('@actions/core');
-jest.mock('./setup/run', () => ({
-  SETUP_END_STATE: { pre: 'setup-end-pre', main: 'setup-end-main' },
-  runSetup: jest.fn(),
-  setupCompleted: jest.fn(() => false)
-}));
+jest.mock('./setup/run', () => ({ runSetup: jest.fn(), setupCompleted: jest.fn(() => false) }));
 
 /** Load pre.ts (it runs on import) with these inputs and wait for it to finish. */
 async function runPre(values: Record<string, string>): Promise<void> {
@@ -46,14 +42,6 @@ describe('pre step', () => {
     await runPre({ mode: 'analyze', 'http-filter': 'github.com: { "*": [' });
     expect(core.setFailed).not.toHaveBeenCalled();
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('main step will retry'));
-  });
-
-  it('records when setup ended (the post step attributes sudo by it), also when setup throws', async () => {
-    (runSetup as jest.Mock).mockRejectedValue(new Error('boom'));
-    const before = Math.floor(Date.now() / 1000);
-    await runPre({ mode: 'analyze' });
-    expect(core.saveState).toHaveBeenCalledWith('setup-end-pre', expect.any(Number));
-    expect((core.saveState as jest.Mock).mock.calls[0][1]).toBeGreaterThanOrEqual(before);
   });
 
   it('fails on an invalid mode rather than guessing', async () => {

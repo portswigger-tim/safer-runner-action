@@ -338,9 +338,12 @@ the GitHub baseline it trusts, and the DNS and firewall layers; the setup checks
 functional only (`SUMMARY_EMOJI`, checked on every golden). The `uses:` line echoes the
 workflow's own repository and ref (a fork or mirror stays itself), else a placeholder.
 
-The action's own sudo is told from the job's by command line AND step window: pre/main save when
-setup ended (`SETUP_END_STATE`, `core.saveState`) and the post step its start
-(`classifySudoCommands`), so the same line run by a job step counts as the job's.
+The action's own sudo is told from the job's by command line AND place in the sudo log
+(`readSudoUsage`, `classifySudoCommands`): up to setup's own last sudo command (`SETUP_FINAL_SUDO`,
+its first entry, near the marker's time) and from the log's size when the post step started. The
+same line run by a job step counts as the job's. The post step suggests from what setup recorded in
+the root-owned setup marker (the applied `allowed-domains` / `passthrough-domains` entries and
+whether `http-filter` is set), never from inputs read again at post time.
 
 - Names go through `src/report/redact.ts`: labels that look encoded are shown as `‹redacted›`; refused
   request paths are shown as `‹path hidden›`. This is best effort, not a guarantee.

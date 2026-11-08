@@ -1679,10 +1679,8 @@ function buildPolicyConfig(opts) {
         }
     }
     const user = cleanUserPatterns(opts.allowedDomains, 'allowed-domains', warnings);
-    const passthrough = uniq([
-        ...exports.MANDATORY_PASSTHROUGH,
-        ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
-    ]);
+    const userPassthrough = cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings);
+    const passthrough = uniq([...exports.MANDATORY_PASSTHROUGH, ...userPassthrough]);
     const deny = opts.blockRiskySubdomains ? [...github_domains_1.RISKY_GITHUB_SUBDOMAINS] : [];
     const allow = uniq([...github, ...user]);
     const httpFilter = buildHttpFilter(opts.httpFilter ?? [], opts.allowGithubPlatform ?? true, [...allow, ...passthrough], passthrough, warnings);
@@ -1699,7 +1697,8 @@ function buildPolicyConfig(opts) {
             container_port: opts.containerPort,
             http_filter: httpFilter
         },
-        warnings
+        warnings,
+        user: { allowed: user, passthrough: userPassthrough }
     };
 }
 
@@ -1763,13 +1762,14 @@ const check_1 = __nccwpck_require__(2132);
 const host_1 = __nccwpck_require__(7020);
 const inputs_1 = __nccwpck_require__(9058);
 const log = (lines) => lines.forEach(l => core.info(l));
-/**
- * When the action ran sudo itself: until setup ended (pre, or main when it set up) and from the
- * start of this step. Undefined (attribution by command line only) when setup recorded no end.
- */
-function actionSudoWindow(postStart) {
-    const ends = [run_1.SETUP_END_STATE.pre, run_1.SETUP_END_STATE.main].map(k => Number(core.getState(k))).filter(n => n > 0);
-    return ends.length ? { setupEnd: Math.max(...ends), postStart } : undefined;
+/** A file's size in bytes, read without stat (undefined when it cannot be read). */
+function fileSize(file) {
+    try {
+        return fs.readFileSync(file).length;
+    }
+    catch {
+        return undefined;
+    }
 }
 function readSelfTests() {
     try {
@@ -1793,7 +1793,8 @@ function readSetupMarker() {
  * tmpfs, with it).
  */
 async function run() {
-    const postStart = Math.floor(Date.now() / 1000);
+    // the sudo log as this step found it: anything after is this step's own sudo
+    const sudoLogBytes = fileSize(constants_1.SUDO_LOG);
     const marker = readSetupMarker();
     const mode = marker?.mode;
     if (!marker || !mode) {
@@ -1815,14 +1816,23 @@ async function run() {
         // Each service's observations (its own log, and its policy where it has one). Its full lists
         // go to the job log as soon as it has them, so a later failure never loses them (names and
         // sudo arguments redacted like the summary: the job log is just as public).
-        const proxy = (0, observe_1.observeProxy)(marker.selfTestWindow);
+        const proxy = (0, observe_1.observeProxy)(marker.selfTestWindow, {
+            allowed: marker.allowedDomains,
+            passthrough: marker.passthroughDomains,
+            httpFilterSet: marker.httpFilterSet
+        });
         log((0, report_1.jobLog)(proxy.observed));
         const firewall = (0, observe_2.observeFirewall)();
         const containers = await (0, observe_5.observeContainers)(proxy.records, firewall);
         const dnsRefused = (0, observe_3.observeDns)(marker.dnsSelfTestName);
         const selfTests = readSelfTests();
-        const sudo = (0, sudo_1.readSudoUsage)(constants_1.SUDO_LOG, actionSudoWindow(postStart));
-        const sudoPolicy = (0, observe_4.observeSudoPolicy)(mode, marker, sudo.ran);
+        const restricted = mode === 'enforce' && marker.sudoRetained !== true;
+        const sudo = (0, sudo_1.readSudoUsage)(constants_1.SUDO_LOG, {
+            postStartBytes: sudoLogBytes,
+            setupFinal: restricted ? sudo_1.SETUP_FINAL_SUDO.restricted : sudo_1.SETUP_FINAL_SUDO.unrestricted,
+            markerAt: marker.at ? new Date(marker.at) : undefined
+        });
+        const sudoPolicy = (0, observe_4.observeSudoPolicy)(mode, marker, sudo?.ran ?? []);
         log((0, report_2.jobLog)({ usage: sudo, policy: sudoPolicy }));
         const dockerPolicy = await (0, observe_5.observeDockerPolicy)(marker);
         log((0, report_3.jobLog)(dockerPolicy));
@@ -2064,7 +2074,12 @@ function headline(s) {
     const areas = (v) => [...new Set(rows.filter(r => r.verdict === v).map(r => r.area))];
     if (s.ctx.enforce) {
         const blocked = areas('blocked');
-        return blocked.length ? `**Blocked: ${blocked.join(', ')}** (see Detail).` : 'Nothing was blocked.';
+        const advisory = services(s).flatMap(x => x.advisory);
+        // a weakened boundary is never skimmable as clean
+        const weak = advisory.length
+            ? `**ADVISORY: not an enforced boundary** (${advisory.map(a => a.chip.replace(/^⚠️ /, '')).join(', ')}). `
+            : '';
+        return weak + (blocked.length ? `**Blocked: ${blocked.join(', ')}** (see Detail).` : 'Nothing was blocked.');
     }
     const would = areas('would-block');
     if (would.length) {
@@ -2085,8 +2100,16 @@ function chips(s) {
 /** Alerts at the top level only (they don't render inside <details>), one per kind. */
 function alerts(s) {
     const all = [...s.proxy.alerts, ...s.checks.alerts, ...s.sudo.alerts, ...s.docker.alerts];
+    // enforce with a weakened boundary: one warning, with every reason
+    if (s.ctx.enforce) {
+        const advisory = services(s).flatMap(x => x.advisory);
+        if (advisory.length) {
+            all.push({ kind: 'WARNING', text: '**The boundary was weaker than it looks.**' });
+            all.push(...advisory.map(a => ({ kind: 'WARNING', text: a.text })));
+        }
+    }
     let md = '';
-    for (const kind of ['CAUTION', 'IMPORTANT']) {
+    for (const kind of ['CAUTION', 'WARNING', 'IMPORTANT']) {
         const items = all.filter(a => a.kind === kind);
         if (items.length)
             md += `> [!${kind}]\n` + items.map(a => `> ${a.text}`).join('\n>\n') + '\n\n';
@@ -2102,12 +2125,13 @@ const INPUT_ORDER = ['allowed-domains', 'http-filter', 'sudo-config', 'docker'];
  * back (so a pasted block reads as printed). An ADVISORY input carries a comment on its line.
  */
 function suggestedBlock(uses, suggestions) {
-    const scalar = (value, comment) => {
-        const x = new yaml_1.Scalar(value);
-        if (value.includes('\n'))
+    const scalar = (s) => {
+        const x = new yaml_1.Scalar(s.value);
+        if (s.value.includes('\n'))
             x.type = yaml_1.Scalar.BLOCK_LITERAL;
+        const comment = [s.advisory ? `⚠️ ${s.advisory}` : '', s.comment ?? ''].filter(Boolean).join('; ');
         if (comment)
-            x.comment = ` ⚠️ ${comment}`;
+            x.comment = ` ${comment}`;
         return x;
     };
     const w = new yaml_1.YAMLMap();
@@ -2115,7 +2139,7 @@ function suggestedBlock(uses, suggestions) {
     for (const input of INPUT_ORDER) {
         const s = suggestions.find(x => x.input === input);
         if (s)
-            w.add(new yaml_1.Pair(new yaml_1.Scalar(s.input), scalar(s.value, s.advisory)));
+            w.add(new yaml_1.Pair(new yaml_1.Scalar(s.input), scalar(s)));
     }
     const action = new yaml_1.Scalar(uses);
     action.comment = ' pin an exact version or commit SHA';
@@ -2136,7 +2160,7 @@ function suggested(s) {
         const advisory = parts.flatMap(x => x.advisory);
         return (md +
             (advisory.length
-                ? `Running under enforce. ⚠️ **ADVISORY:** ${advisory.map(a => a.text).join(' ')}\n\n`
+                ? 'Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).\n\n'
                 : 'Running under enforce: the controls were applied at setup.\n\n'));
     }
     const all = parts.flatMap(x => x.suggestions);
@@ -4169,11 +4193,10 @@ function score(o, ctx) {
         }
     }
     else if (o.docker) {
-        rows.push({
-            verdict: 'allowed',
-            area,
-            text: o.docker.access === 'not-running' ? 'daemon not running' : 'not evaluated'
-        });
+        // analyze with dockerd running and no evaluation (it failed): unknown, never an all-clear
+        rows.push(o.docker.access === 'not-running'
+            ? { verdict: 'allowed', area, text: 'daemon not running' }
+            : { verdict: 'advisory', area, text: "not evaluated: the job's use of docker was not seen" });
     }
     const refused = (o.containers ?? []).reduce((a, c) => a + c.denied.length + c.firewall.length, 0);
     if (refused) {
@@ -5633,7 +5656,6 @@ const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const constants_1 = __nccwpck_require__(8729);
 const flowlog_1 = __nccwpck_require__(5422);
-const policy_1 = __nccwpck_require__(2224);
 const suggest_1 = __nccwpck_require__(9829);
 const selftest_1 = __nccwpck_require__(42);
 const flows_1 = __nccwpck_require__(2508);
@@ -5663,10 +5685,10 @@ function suggestion(requests) {
     }
 }
 /**
- * The flow log less the setup self-tests' records, and the proxy's observations from it (all but
- * the DNS refusals, which are the resolver's). The records also feed the container part.
+ * The flow log less the setup self-tests' records, and the proxy's observations from it. The
+ * records also feed the container part.
  */
-function observeProxy(selfTestWindow) {
+function observeProxy(selfTestWindow, applied) {
     const flows = fs.existsSync(constants_1.FLOW_LOG)
         ? (0, flowlog_1.parseFlowLogWithOffsets)(fs.readFileSync(constants_1.FLOW_LOG, 'utf8'))
         : { records: [], offsets: [] };
@@ -5676,13 +5698,12 @@ function observeProxy(selfTestWindow) {
         observed: {
             hosts: (0, flows_1.summarizeFlows)(records),
             httpFilter: (0, http_filter_1.summarizeHttpFilter)(records, suggestion),
-            // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
-            userDomains: [
-                ...(0, policy_1.parseAllowedDomains)(core.getInput('allowed-domains')),
-                ...(0, policy_1.parseAllowedDomains)(core.getInput('passthrough-domains'))
-            ],
-            allowedDomains: (0, policy_1.parseAllowedDomains)(core.getInput('allowed-domains')),
-            httpFilterSet: core.getInput('http-filter').trim() !== '',
+            // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own. Never
+            // read again from the inputs here: post-time inputs can differ from what setup applied
+            ...(applied.allowed && applied.passthrough
+                ? { userDomains: [...applied.allowed, ...applied.passthrough], allowedDomains: applied.allowed }
+                : {}),
+            httpFilterSet: applied.httpFilterSet === true,
             platformEndpoints: readPlatformAutoAllowed()
         }
     };
@@ -5953,29 +5974,42 @@ function alerts(f) {
     }
     return out;
 }
-/** The job's own entries that still parse (invalid ones were dropped, with a warning, at setup). */
-function validEntries(entries) {
-    const out = [];
+const KEEP_ENTRIES = 'keep your existing allowed-domains entries too';
+/**
+ * The job's own entries to repeat in the suggestion: only valid patterns, never one that looks
+ * like data (an entry from an unmasked variable can be an internal name, and a masked secret
+ * shows as ***). `held` is true when any was held back: the block then says to keep them.
+ */
+function keptEntries(entries) {
+    const kept = [];
+    let held = false;
     for (const e of entries) {
         try {
-            (0, policy_1.validatePattern)(e);
-            if (!out.includes(e))
-                out.push(e);
+            if (e.includes('***') || (0, policy_1.expandPattern)(e).some(p => (0, redact_1.needsRedaction)((0, policy_1.validatePattern)(p)))) {
+                throw new Error('not repeated');
+            }
+            if (!kept.includes(e))
+                kept.push(e);
         }
         catch {
-            // not repeated in a suggestion
+            held = true;
         }
     }
-    return out;
+    return { kept, held };
 }
 function suggestions(f) {
     if (f.enforce)
         return [];
     const out = [];
     if (f.suggest.length) {
-        const keep = validEntries(f.o.allowedDomains ?? []);
-        const add = f.suggest.filter(n => !keep.includes(n));
-        out.push({ input: 'allowed-domains', value: [...keep, ...add].join('\n') + '\n' });
+        // the job's entries as setup recorded them; when that record is missing, say to keep them
+        const { kept, held } = f.o.allowedDomains ? keptEntries(f.o.allowedDomains) : { kept: [], held: true };
+        const add = f.suggest.filter(n => !kept.includes(n));
+        out.push({
+            input: 'allowed-domains',
+            value: [...kept, ...add].join('\n') + '\n',
+            ...(held ? { comment: KEEP_ENTRIES } : {})
+        });
     }
     const sug = f.o.httpFilter?.suggestion;
     if (sug?.hosts.length) {
@@ -6079,7 +6113,10 @@ function filterTable(f) {
             String(b.tries)
         ])) +
         note +
-        '\n\n<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data.</sub>\n\n');
+        '\n\n<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. ' +
+        "If the job needs one of these requests, run it in analyze mode without that host's `http-filter` entry: " +
+        'the suggested `http-filter` then covers it. Review the rule before you add it: a write is how data ' +
+        'leaves.</sub>\n\n');
 }
 /** Enforce: what to add if the job needs it (the likely reason it failed). Review first. */
 function enforceFixes(f) {
@@ -6327,7 +6364,7 @@ async function distributeTrust(h, _proxy) {
  * (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no `log_allowed`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.RUNNER_WRITABLE = exports.SUDO_CONFIG_MAX_RULES = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
+exports.RUNNER_WRITABLE = exports.SUDO_CONFIG_MAX_RULES = exports.SETUP_FINAL_SUDO = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
 exports.parseSudoFlavour = parseSudoFlavour;
 exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
 exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
@@ -6426,6 +6463,14 @@ exports.INTERNAL_SUDO_COMMANDS = [
     // captureBaseline() (integrity/baseline.ts)
     ...baseline_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' '))
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
+/**
+ * Setup's last sudo command, as INTERNAL_SUDO_COMMANDS writes it: moving the restricted sudoers
+ * into place when sudo is restricted (enforce, disable-sudo), else writing the integrity baseline.
+ */
+exports.SETUP_FINAL_SUDO = {
+    restricted: `mv ${exports.SUDOERS_TEMP_FILE} ${exports.RUNNER_SUDOERS_FILE}`,
+    unrestricted: baseline_1.BASELINE_WRITE_COMMANDS[baseline_1.BASELINE_WRITE_COMMANDS.length - 1].join(' ')
+};
 /**
  * Generate the sudoers rules the action always needs for post-action validation
  *
@@ -6778,20 +6823,31 @@ async function restrictSudo(h, r, _baseline) {
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
  * action's own commands (so the report never counts the action's sudo as the workflow's).
  */
-function readSudoUsage(logFile, window) {
+function readSudoUsage(logFile, attribution) {
     try {
-        if (fs.existsSync(logFile)) {
-            // attributed entry by entry, before deduplication: the same line can be the action's at
-            // setup and the job's later
-            const u = (0, log_1.classifySudoCommands)((0, log_1.parseSudoLogEntries)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS, window);
-            const dedup = (c) => (0, log_1.deduplicateSudoCommands)(c).slice(0, 1000);
-            return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
+        if (!fs.existsSync(logFile))
+            return undefined;
+        const content = fs.readFileSync(logFile);
+        const entries = (0, log_1.parseSudoLogEntries)(content.toString('utf-8'));
+        let bounds;
+        if (attribution) {
+            // what the post step wrote: everything after the log's size when it started
+            const before = attribution.postStartBytes === undefined
+                ? entries.length
+                : (0, log_1.parseSudoLogEntries)(content.subarray(0, attribution.postStartBytes).toString('utf-8')).length;
+            const setupEnd = (0, log_1.setupEndIndex)(entries.slice(0, before), attribution.setupFinal, attribution.markerAt);
+            bounds = { setupEnd, postStart: before };
         }
+        // attributed entry by entry, before deduplication: the same line can be the action's at
+        // setup and the job's later
+        const u = (0, log_1.classifySudoCommands)(entries, config_1.INTERNAL_SUDO_COMMANDS, bounds);
+        const dedup = (c) => (0, log_1.deduplicateSudoCommands)(c).slice(0, 1000);
+        return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
     }
     catch (error) {
         core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+        return undefined;
     }
-    return { ran: [], refused: [], internal: [] };
 }
 
 
@@ -6812,7 +6868,9 @@ exports.deduplicateSudoCommands = deduplicateSudoCommands;
 exports.parseSudoLogEntries = parseSudoLogEntries;
 exports.parseSudoLogsFromString = parseSudoLogsFromString;
 exports.sudoLogSeconds = sudoLogSeconds;
+exports.isInternal = isInternal;
 exports.classifySudoCommands = classifySudoCommands;
+exports.setupEndIndex = setupEndIndex;
 /**
  * Classic sudo prefixes refused commands with a reason, e.g.
  * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
@@ -6922,29 +6980,39 @@ function isInternal(cmd, internal) {
     return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
 }
 /**
- * Split parsed sudo log entries by who ran them and whether they were allowed. With `window`, a
- * command is the action's own only if it matches one of its command lines AND ran while the
- * action was running (setup, or the post step); the same line run by a job step is the job's.
- * Without it (an older setup), by the command line alone.
+ * Split parsed sudo log entries (in log order) by who ran them and whether they were allowed.
+ * With `bounds`, a command is the action's own only if it matches one of its command lines AND
+ * sits where the action ran sudo (setup, or the post step); the same line run by a job step is the
+ * job's. Without them (an older setup), by the command line alone.
  */
-function classifySudoCommands(commands, internalCommands, window, now = new Date()) {
+function classifySudoCommands(commands, internalCommands, bounds) {
     const internal = new Set(internalCommands);
     const usage = { ran: [], refused: [], internal: [] };
-    const byAction = (cmd) => {
-        if (!window)
-            return true;
-        const at = sudoLogSeconds(cmd.timestamp, now);
-        return at !== null && (at <= window.setupEnd || at >= window.postStart);
-    };
-    for (const cmd of commands) {
+    const byAction = (i) => !bounds || i <= bounds.setupEnd || i >= bounds.postStart;
+    commands.forEach((cmd, i) => {
         if (cmd.denied)
             usage.refused.push(cmd);
-        else if (isInternal(cmd, internal) && byAction(cmd))
+        else if (isInternal(cmd, internal) && byAction(i))
             usage.internal.push(cmd);
         else
             usage.ran.push(cmd);
-    }
+    });
     return usage;
+}
+/**
+ * Setup's last sudo command in the log: the first allowed entry of `line` (setup runs before any
+ * job step, so its own is the first), at most `slack` seconds after `notBefore` when both times
+ * are known. -1 when it is not there (then nothing before the post step is the action's).
+ */
+function setupEndIndex(commands, line, notBefore, slack = 300, now = new Date()) {
+    const set = new Set([line]);
+    const latest = notBefore ? notBefore.getTime() / 1000 + slack : Infinity;
+    return commands.findIndex(c => {
+        if (c.denied || !isInternal(c, set))
+            return false;
+        const at = sudoLogSeconds(c.timestamp, now);
+        return at === null || at <= latest;
+    });
 }
 
 
@@ -7108,6 +7176,9 @@ function score(f) {
     if (f.wouldBlock.length) {
         return [{ verdict: 'would-block', area, text: `${(0, markdown_1.plural)(f.wouldBlock.length, 'command')} would be blocked` }];
     }
+    // no sudo log: what enforce would block is unknown, never an all-clear
+    if (!f.o.usage)
+        return [{ verdict: 'advisory', area, text: "no sudo log: the job's use of sudo was not seen" }];
     if (f.kept) {
         return [
             {
@@ -7307,7 +7378,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = exports.SETUP_END_STATE = void 0;
+exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
 exports.setupCompleted = setupCompleted;
 exports.installPackages = installPackages;
 exports.inJobContainer = inJobContainer;
@@ -7329,12 +7400,6 @@ const github_domains_1 = __nccwpck_require__(2268);
 const sudo = __importStar(__nccwpck_require__(3275));
 const docker = __importStar(__nccwpck_require__(6362));
 const baseline_1 = __nccwpck_require__(1333);
-/**
- * Action state (core.saveState) holding when setup ended, in epoch seconds, from pre and from
- * main (when main set up). The post step counts a sudo command as the action's own only if it
- * ran before then or during the post step.
- */
-exports.SETUP_END_STATE = { pre: 'setup-end-pre', main: 'setup-end-main' };
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
 /**
@@ -7439,7 +7504,7 @@ async function runSetup(inputs, h = host_1.realHost) {
     // 1. Allowlist - fetched while normal DNS and direct egress still work
     const { domains: githubDomains, source } = await (0, github_domains_1.resolveGitHubDomains)();
     core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
-    const { config: policy, warnings } = (0, policy_1.buildPolicyConfig)({
+    const { config: policy, warnings, user } = (0, policy_1.buildPolicyConfig)({
         mode,
         githubDomains,
         allowedDomains: inputs.allowedDomains,
@@ -7526,6 +7591,11 @@ async function runSetup(inputs, h = host_1.realHost) {
             // the sudo policy the post step evaluates (analyze) or reports (enforce)
             ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
             ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
+            // the job's own allowlist and http-filter as applied: the post step suggests from these,
+            // never from inputs read again at post time
+            allowedDomains: user.allowed,
+            passthroughDomains: user.passthrough,
+            httpFilterSet: inputs.httpFilter.length > 0,
             dockerRetained: dockerAccess.access === 'retained',
             // the summary shows the dockerd restart for CA trust (F1) as the action's own docker change
             docker: { ...dockerAccess, caRestart: dockerd.restarted },

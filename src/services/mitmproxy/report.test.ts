@@ -67,12 +67,37 @@ describe('proxy report (its Section)', () => {
     const s = report(
       {
         hosts: summarizeFlows([allowed, notListed('WOULD_BLOCK')]),
-        allowedDomains: parseAllowedDomains('registry.npmjs.org, not a pattern')
+        allowedDomains: parseAllowedDomains('registry.npmjs.org')
       },
       ANALYZE
     );
     expect(s.score[0].verdict).toBe('would-block');
     expect(s.suggestions).toEqual([{ input: 'allowed-domains', value: 'registry.npmjs.org\npypi.example.com\n' }]);
+  });
+
+  it('never repeats an entry that looks like data or a masked secret: says to keep it instead', () => {
+    const s = report(
+      {
+        hosts: summarizeFlows([notListed('WOULD_BLOCK')]),
+        allowedDomains: ['registry.npmjs.org', '5ec7e7c0ffee1234.internal.example', '***']
+      },
+      ANALYZE
+    );
+    expect(s.suggestions).toEqual([
+      {
+        input: 'allowed-domains',
+        value: 'registry.npmjs.org\npypi.example.com\n',
+        comment: 'keep your existing allowed-domains entries too'
+      }
+    ]);
+  });
+
+  it('without a record of the job’s entries: only the new names, and a comment to keep the rest', () => {
+    const s = report({ hosts: summarizeFlows([notListed('WOULD_BLOCK')]) }, ANALYZE);
+    expect(s.suggestions[0]).toMatchObject({
+      value: 'pypi.example.com\n',
+      comment: 'keep your existing allowed-domains entries too'
+    });
   });
 
   it('never suggests a name that looks like data', () => {

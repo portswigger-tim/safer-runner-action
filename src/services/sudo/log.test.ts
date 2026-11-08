@@ -3,6 +3,7 @@ import {
   deduplicateSudoCommands,
   parseSudoLogsFromString,
   classifySudoCommands,
+  setupEndIndex,
   sudoLogSeconds,
   type SudoCommand
 } from './log';
@@ -259,37 +260,54 @@ Nov  3 16:24:34 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/whoami`);
     });
   });
 
-  describe('classifySudoCommands by step window (the action runs sudo only in setup and the post step)', () => {
-    const at = (timestamp: string, args = '/etc/resolv.conf'): SudoCommand => ({
-      timestamp,
+  describe('classifySudoCommands by position (the action runs sudo only in setup and the post step)', () => {
+    const at = (args = '/etc/resolv.conf'): SudoCommand => ({
+      timestamp: 'Nov  3 16:20:00',
       user: 'runner',
       targetUser: 'root',
       command: '/usr/bin/cat',
       args
     });
     const internal = ['cat /etc/resolv.conf'];
-    const now = new Date('2026-11-03T16:30:00Z');
-    const t = (iso: string) => Date.parse(iso) / 1000;
-    const window = { setupEnd: t('2026-11-03T16:20:00Z'), postStart: t('2026-11-03T16:29:00Z') };
 
-    it("counts the action's command line as the action's only during setup or the post step", () => {
-      const u = classifySudoCommands(
-        [at('Nov  3 16:19:59'), at('Nov  3 16:20:00'), at('Nov  3 16:25:00'), at('Nov  3 16:29:00')],
-        internal,
-        window,
-        now
-      );
-      expect(u.internal.map(c => c.timestamp)).toEqual(['Nov  3 16:19:59', 'Nov  3 16:20:00', 'Nov  3 16:29:00']);
-      // the same line, run by a job step between the two: the job's
-      expect(u.ran.map(c => c.timestamp)).toEqual(['Nov  3 16:25:00']);
+    it("counts the action's command line as the action's only up to setup's end or from the post step's start", () => {
+      // 0, 1: setup · 2: a job step · 3: the post step
+      const u = classifySudoCommands([at(), at(), at(), at()], internal, { setupEnd: 1, postStart: 3 });
+      expect(u.internal).toHaveLength(3);
+      // the same line, run by a job step between the two (even in the same second): the job's
+      expect(u.ran).toHaveLength(1);
     });
 
-    it("an entry whose time does not parse is the job's", () => {
-      expect(classifySudoCommands([at('garbage')], internal, window, now).ran).toHaveLength(1);
+    it("setup's end not found: nothing before the post step is the action's (over-report the job, never hide)", () => {
+      const u = classifySudoCommands([at(), at()], internal, { setupEnd: -1, postStart: 1 });
+      expect([u.ran.length, u.internal.length]).toEqual([1, 1]);
     });
 
-    it('without a window (an older setup), by the command line alone', () => {
-      expect(classifySudoCommands([at('Nov  3 16:25:00')], internal, undefined, now).internal).toHaveLength(1);
+    it('without bounds (an older setup), by the command line alone', () => {
+      expect(classifySudoCommands([at()], internal).internal).toHaveLength(1);
+    });
+  });
+
+  describe('setupEndIndex', () => {
+    const line = 'tee /etc/safer-runner/validation-state.json';
+    const tee = (timestamp: string, denied = false): SudoCommand => ({
+      timestamp,
+      user: 'runner',
+      targetUser: 'root',
+      command: '/usr/bin/tee',
+      args: '/etc/safer-runner/validation-state.json',
+      ...(denied ? { denied: true } : {})
+    });
+    const now = new Date('2026-11-03T17:00:00Z');
+    const marker = new Date('2026-11-03T16:20:00Z');
+
+    it("is setup's own: the first allowed entry of its last command", () => {
+      expect(setupEndIndex([tee('Nov  3 16:20:01'), tee('Nov  3 16:30:00')], line, marker, 300, now)).toBe(0);
+    });
+
+    it('never a refused entry, nor one long after setup wrote its marker', () => {
+      expect(setupEndIndex([tee('Nov  3 16:20:01', true)], line, marker, 300, now)).toBe(-1);
+      expect(setupEndIndex([tee('Nov  3 16:40:00')], line, marker, 300, now)).toBe(-1);
     });
   });
 

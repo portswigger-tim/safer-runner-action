@@ -201,7 +201,12 @@ function headline(s: ReportSections): string {
   const areas = (v: string) => [...new Set(rows.filter(r => r.verdict === v).map(r => r.area))];
   if (s.ctx.enforce) {
     const blocked = areas('blocked');
-    return blocked.length ? `**Blocked: ${blocked.join(', ')}** (see Detail).` : 'Nothing was blocked.';
+    const advisory = services(s).flatMap(x => x.advisory);
+    // a weakened boundary is never skimmable as clean
+    const weak = advisory.length
+      ? `**ADVISORY: not an enforced boundary** (${advisory.map(a => a.chip.replace(/^⚠️ /, '')).join(', ')}). `
+      : '';
+    return weak + (blocked.length ? `**Blocked: ${blocked.join(', ')}** (see Detail).` : 'Nothing was blocked.');
   }
   const would = areas('would-block');
   if (would.length) {
@@ -226,8 +231,16 @@ function chips(s: ReportSections): string {
 /** Alerts at the top level only (they don't render inside <details>), one per kind. */
 function alerts(s: ReportSections): string {
   const all = [...s.proxy.alerts, ...s.checks.alerts, ...s.sudo.alerts, ...s.docker.alerts];
+  // enforce with a weakened boundary: one warning, with every reason
+  if (s.ctx.enforce) {
+    const advisory = services(s).flatMap(x => x.advisory);
+    if (advisory.length) {
+      all.push({ kind: 'WARNING', text: '**The boundary was weaker than it looks.**' });
+      all.push(...advisory.map(a => ({ kind: 'WARNING' as const, text: a.text })));
+    }
+  }
   let md = '';
-  for (const kind of ['CAUTION', 'IMPORTANT'] as const) {
+  for (const kind of ['CAUTION', 'WARNING', 'IMPORTANT'] as const) {
     const items = all.filter(a => a.kind === kind);
     if (items.length) md += `> [!${kind}]\n` + items.map(a => `> ${a.text}`).join('\n>\n') + '\n\n';
   }
@@ -251,17 +264,18 @@ const INPUT_ORDER: Suggestion['input'][] = ['allowed-domains', 'http-filter', 's
  * back (so a pasted block reads as printed). An ADVISORY input carries a comment on its line.
  */
 export function suggestedBlock(uses: string, suggestions: Suggestion[]): string {
-  const scalar = (value: string, comment?: string) => {
-    const x = new Scalar(value);
-    if (value.includes('\n')) x.type = Scalar.BLOCK_LITERAL;
-    if (comment) x.comment = ` ⚠️ ${comment}`;
+  const scalar = (s: Suggestion) => {
+    const x = new Scalar(s.value);
+    if (s.value.includes('\n')) x.type = Scalar.BLOCK_LITERAL;
+    const comment = [s.advisory ? `⚠️ ${s.advisory}` : '', s.comment ?? ''].filter(Boolean).join('; ');
+    if (comment) x.comment = ` ${comment}`;
     return x;
   };
   const w = new YAMLMap();
   w.add(new Pair(new Scalar('mode'), new Scalar('enforce')));
   for (const input of INPUT_ORDER) {
     const s = suggestions.find(x => x.input === input);
-    if (s) w.add(new Pair(new Scalar(s.input), scalar(s.value, s.advisory)));
+    if (s) w.add(new Pair(new Scalar(s.input), scalar(s)));
   }
   const action = new Scalar(uses);
   action.comment = ' pin an exact version or commit SHA';
@@ -285,7 +299,7 @@ function suggested(s: ReportSections): string {
     return (
       md +
       (advisory.length
-        ? `Running under enforce. ⚠️ **ADVISORY:** ${advisory.map(a => a.text).join(' ')}\n\n`
+        ? 'Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).\n\n'
         : 'Running under enforce: the controls were applied at setup.\n\n')
     );
   }

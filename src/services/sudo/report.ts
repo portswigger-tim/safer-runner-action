@@ -121,6 +121,8 @@ function score(f: Facts): ScoreRow[] {
   if (f.wouldBlock.length) {
     return [{ verdict: 'would-block', area, text: `${plural(f.wouldBlock.length, 'command')} would be blocked` }];
   }
+  // no sudo log: what enforce would block is unknown, never an all-clear
+  if (!f.o.usage) return [{ verdict: 'advisory', area, text: "no sudo log: the job's use of sudo was not seen" }];
   if (f.kept) {
     return [
       {

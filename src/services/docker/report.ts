@@ -136,11 +136,12 @@ function score(o: DockerReportObserved, ctx: ReportContext): ScoreRow[] {
       rows.push({ verdict: 'allowed', area, text: `no use after setup: \`docker: ${d.policy}\` fits${alsoStop}` });
     }
   } else if (o.docker) {
-    rows.push({
-      verdict: 'allowed',
-      area,
-      text: o.docker.access === 'not-running' ? 'daemon not running' : 'not evaluated'
-    });
+    // analyze with dockerd running and no evaluation (it failed): unknown, never an all-clear
+    rows.push(
+      o.docker.access === 'not-running'
+        ? { verdict: 'allowed', area, text: 'daemon not running' }
+        : { verdict: 'advisory', area, text: "not evaluated: the job's use of docker was not seen" }
+    );
   }
   const refused = (o.containers ?? []).reduce((a, c) => a + c.denied.length + c.firewall.length, 0);
   if (refused) {

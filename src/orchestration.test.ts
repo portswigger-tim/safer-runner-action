@@ -1478,6 +1478,49 @@ describe('post step transcript', () => {
     expect(h.log).toContain('info: sudo WOULD_BLOCK /usr/bin/apt-get remove -y jq');
   });
 
+  it('analyze: the suggestion comes from the allowlist setup applied, never from inputs read again at post time', async () => {
+    const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze (defaults)')!.s);
+    h.append(
+      FLOW_LOG,
+      JSON.stringify({
+        ev: 'tls',
+        verdict: 'WOULD_BLOCK',
+        reason: 'sni-not-allowed',
+        layer: 'sni',
+        sni: 'pypi.org',
+        client: '10.1.0.4:51000'
+      }) + '\n'
+    );
+    // the post stage re-evaluates `with:`: an input sourced from the job's env can differ by then
+    h.inputs['allowed-domains'] = '*.com evil.example';
+    h.inputs['http-filter'] = 'pypi.org: { "*": GET }';
+    await post(h);
+    const block = h.summaryText.match(/```yaml\n([\s\S]*?)\n```/)![1];
+    expect(block).toContain('    allowed-domains: |\n      registry.npmjs.org\n      pypi.org');
+    expect(block).not.toMatch(/\*\.com|evil\.example|http-filter/);
+  });
+
+  it("a forged action state cannot hide the job's sudo: the action's own is found by its place in the log", async () => {
+    const h = await setup(SCENARIOS.find(c => c.s.name === 'analyze (defaults)')!.s);
+    // the job runs one of the action's own command lines
+    expect(await h.exec('sudo', ['cat', '/etc/resolv.conf'], {})).toBe(0);
+    process.env['STATE_setup-end-main'] = '99999999999';
+    process.env['STATE_setup-end-pre'] = '99999999999';
+    try {
+      await post(h);
+    } finally {
+      delete process.env['STATE_setup-end-main'];
+      delete process.env['STATE_setup-end-pre'];
+    }
+    expect(h.summaryText).toContain('`sudo /usr/bin/cat /etc/resolv.conf` | enforce would block it |');
+    // only that one: setup's own lines (before its last command) and this step's stay the action's
+    expect(h.log.filter(l => l.startsWith('info: sudo (workflow)'))).toEqual([
+      'info: sudo (workflow) /usr/bin/cat /etc/resolv.conf'
+    ]);
+    // the action's own sudo (setup, and this step's checks) stays under Runner System
+    expect(h.summaryText).toMatch(/Safer Runner ran \d+ sudo commands<\/summary>/);
+  });
+
   // the job log is as public as the summary: a credential passed as a sudo argument is in neither
   it.each(['analyze, disable-sudo: true, sudo-config', 'enforce, sudo-config'])(
     '%s: sudo arguments that could be credentials are redacted in the summary and the job log',

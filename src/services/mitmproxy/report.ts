@@ -18,7 +18,7 @@ import {
   type HostSummary
 } from './flows';
 import { httpFilterValue, httpFilterYaml, type HttpFilterReport } from './http-filter';
-import { PATH_HIDDEN } from '../../report/redact';
+import { PATH_HIDDEN, needsRedaction } from '../../report/redact';
 import { capped, code, codeBlock, humanBytes, plural, table } from '../../report/markdown';
 import {
   VERDICT_ICON,
@@ -326,27 +326,41 @@ function alerts(f: Facts): Alert[] {
   return out;
 }
 
-/** The job's own entries that still parse (invalid ones were dropped, with a warning, at setup). */
-function validEntries(entries: string[]): string[] {
-  const out: string[] = [];
+const KEEP_ENTRIES = 'keep your existing allowed-domains entries too';
+
+/**
+ * The job's own entries to repeat in the suggestion: only valid patterns, never one that looks
+ * like data (an entry from an unmasked variable can be an internal name, and a masked secret
+ * shows as ***). `held` is true when any was held back: the block then says to keep them.
+ */
+function keptEntries(entries: string[]): { kept: string[]; held: boolean } {
+  const kept: string[] = [];
+  let held = false;
   for (const e of entries) {
     try {
-      validatePattern(e);
-      if (!out.includes(e)) out.push(e);
+      if (e.includes('***') || expandPattern(e).some(p => needsRedaction(validatePattern(p)))) {
+        throw new Error('not repeated');
+      }
+      if (!kept.includes(e)) kept.push(e);
     } catch {
-      // not repeated in a suggestion
+      held = true;
     }
   }
-  return out;
+  return { kept, held };
 }
 
 function suggestions(f: Facts): Suggestion[] {
   if (f.enforce) return [];
   const out: Suggestion[] = [];
   if (f.suggest.length) {
-    const keep = validEntries(f.o.allowedDomains ?? []);
-    const add = f.suggest.filter(n => !keep.includes(n));
-    out.push({ input: 'allowed-domains', value: [...keep, ...add].join('\n') + '\n' });
+    // the job's entries as setup recorded them; when that record is missing, say to keep them
+    const { kept, held } = f.o.allowedDomains ? keptEntries(f.o.allowedDomains) : { kept: [], held: true };
+    const add = f.suggest.filter(n => !kept.includes(n));
+    out.push({
+      input: 'allowed-domains',
+      value: [...kept, ...add].join('\n') + '\n',
+      ...(held ? { comment: KEEP_ENTRIES } : {})
+    });
   }
   const sug = f.o.httpFilter?.suggestion;
   if (sug?.hosts.length) {
@@ -460,7 +474,10 @@ function filterTable(f: Facts): string {
       ])
     ) +
     note +
-    '\n\n<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data.</sub>\n\n'
+    '\n\n<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. ' +
+    "If the job needs one of these requests, run it in analyze mode without that host's `http-filter` entry: " +
+    'the suggested `http-filter` then covers it. Review the rule before you add it: a write is how data ' +
+    'leaves.</sub>\n\n'
   );
 }
 

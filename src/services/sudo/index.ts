@@ -12,7 +12,8 @@ import {
   classifySudoCommands,
   deduplicateSudoCommands,
   parseSudoLogEntries,
-  type ActionSudoWindow,
+  setupEndIndex,
+  type ActionSudoBounds,
   type SudoCommand,
   type SudoUsage
 } from './log';
@@ -119,21 +120,38 @@ export async function restrictSudo(h: Host, r: RestrictingSudo, _baseline: Basel
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
  * action's own commands (so the report never counts the action's sudo as the workflow's).
  */
-export function readSudoUsage(logFile: string, window?: ActionSudoWindow): SudoUsage {
+export function readSudoUsage(logFile: string, attribution?: SudoAttribution): SudoUsage | undefined {
   try {
-    if (fs.existsSync(logFile)) {
-      // attributed entry by entry, before deduplication: the same line can be the action's at
-      // setup and the job's later
-      const u = classifySudoCommands(
-        parseSudoLogEntries(fs.readFileSync(logFile, 'utf-8')),
-        INTERNAL_SUDO_COMMANDS,
-        window
-      );
-      const dedup = (c: SudoCommand[]) => deduplicateSudoCommands(c).slice(0, 1000);
-      return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
+    if (!fs.existsSync(logFile)) return undefined;
+    const content = fs.readFileSync(logFile);
+    const entries = parseSudoLogEntries(content.toString('utf-8'));
+    let bounds: ActionSudoBounds | undefined;
+    if (attribution) {
+      // what the post step wrote: everything after the log's size when it started
+      const before =
+        attribution.postStartBytes === undefined
+          ? entries.length
+          : parseSudoLogEntries(content.subarray(0, attribution.postStartBytes).toString('utf-8')).length;
+      const setupEnd = setupEndIndex(entries.slice(0, before), attribution.setupFinal, attribution.markerAt);
+      bounds = { setupEnd, postStart: before };
     }
+    // attributed entry by entry, before deduplication: the same line can be the action's at
+    // setup and the job's later
+    const u = classifySudoCommands(entries, INTERNAL_SUDO_COMMANDS, bounds);
+    const dedup = (c: SudoCommand[]) => deduplicateSudoCommands(c).slice(0, 1000);
+    return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
   } catch (error) {
     core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+    return undefined;
   }
-  return { ran: [], refused: [], internal: [] };
+}
+
+/** Where the action ran sudo, from records the job cannot change. */
+export interface SudoAttribution {
+  /** the sudo log's size when the post step started (undefined: not known) */
+  postStartBytes?: number;
+  /** setup's last sudo command line (SETUP_FINAL_SUDO) */
+  setupFinal: string;
+  /** when setup wrote the setup marker: its last command comes soon after */
+  markerAt?: Date;
 }

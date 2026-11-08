@@ -1485,10 +1485,8 @@ function buildPolicyConfig(opts) {
         }
     }
     const user = cleanUserPatterns(opts.allowedDomains, 'allowed-domains', warnings);
-    const passthrough = uniq([
-        ...exports.MANDATORY_PASSTHROUGH,
-        ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
-    ]);
+    const userPassthrough = cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings);
+    const passthrough = uniq([...exports.MANDATORY_PASSTHROUGH, ...userPassthrough]);
     const deny = opts.blockRiskySubdomains ? [...github_domains_1.RISKY_GITHUB_SUBDOMAINS] : [];
     const allow = uniq([...github, ...user]);
     const httpFilter = buildHttpFilter(opts.httpFilter ?? [], opts.allowGithubPlatform ?? true, [...allow, ...passthrough], passthrough, warnings);
@@ -1505,7 +1503,8 @@ function buildPolicyConfig(opts) {
             container_port: opts.containerPort,
             http_filter: httpFilter
         },
-        warnings
+        warnings,
+        user: { allowed: user, passthrough: userPassthrough }
     };
 }
 
@@ -1585,10 +1584,6 @@ async function run() {
         else {
             core.warning(`safer-runner setup failed in analyze mode: ${error}. The main step will retry.`);
         }
-    }
-    finally {
-        // the post step tells the action's own sudo from the job's by when it ran (SETUP_END_STATE)
-        core.saveState(run_1.SETUP_END_STATE.pre, Math.ceil(Date.now() / 1000));
     }
 }
 run();
@@ -3702,7 +3697,7 @@ async function distributeTrust(h, _proxy) {
  * (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no `log_allowed`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.RUNNER_WRITABLE = exports.SUDO_CONFIG_MAX_RULES = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
+exports.RUNNER_WRITABLE = exports.SUDO_CONFIG_MAX_RULES = exports.SETUP_FINAL_SUDO = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
 exports.parseSudoFlavour = parseSudoFlavour;
 exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
 exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
@@ -3801,6 +3796,14 @@ exports.INTERNAL_SUDO_COMMANDS = [
     // captureBaseline() (integrity/baseline.ts)
     ...baseline_1.BASELINE_WRITE_COMMANDS.map(args => args.join(' '))
 ].map(cmd => cmd.replace(/^\/usr\/s?bin\//, ''));
+/**
+ * Setup's last sudo command, as INTERNAL_SUDO_COMMANDS writes it: moving the restricted sudoers
+ * into place when sudo is restricted (enforce, disable-sudo), else writing the integrity baseline.
+ */
+exports.SETUP_FINAL_SUDO = {
+    restricted: `mv ${exports.SUDOERS_TEMP_FILE} ${exports.RUNNER_SUDOERS_FILE}`,
+    unrestricted: baseline_1.BASELINE_WRITE_COMMANDS[baseline_1.BASELINE_WRITE_COMMANDS.length - 1].join(' ')
+};
 /**
  * Generate the sudoers rules the action always needs for post-action validation
  *
@@ -4153,20 +4156,31 @@ async function restrictSudo(h, r, _baseline) {
  * Read the sudo log and split it into the workflow's own commands, refused attempts and the
  * action's own commands (so the report never counts the action's sudo as the workflow's).
  */
-function readSudoUsage(logFile, window) {
+function readSudoUsage(logFile, attribution) {
     try {
-        if (fs.existsSync(logFile)) {
-            // attributed entry by entry, before deduplication: the same line can be the action's at
-            // setup and the job's later
-            const u = (0, log_1.classifySudoCommands)((0, log_1.parseSudoLogEntries)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS, window);
-            const dedup = (c) => (0, log_1.deduplicateSudoCommands)(c).slice(0, 1000);
-            return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
+        if (!fs.existsSync(logFile))
+            return undefined;
+        const content = fs.readFileSync(logFile);
+        const entries = (0, log_1.parseSudoLogEntries)(content.toString('utf-8'));
+        let bounds;
+        if (attribution) {
+            // what the post step wrote: everything after the log's size when it started
+            const before = attribution.postStartBytes === undefined
+                ? entries.length
+                : (0, log_1.parseSudoLogEntries)(content.subarray(0, attribution.postStartBytes).toString('utf-8')).length;
+            const setupEnd = (0, log_1.setupEndIndex)(entries.slice(0, before), attribution.setupFinal, attribution.markerAt);
+            bounds = { setupEnd, postStart: before };
         }
+        // attributed entry by entry, before deduplication: the same line can be the action's at
+        // setup and the job's later
+        const u = (0, log_1.classifySudoCommands)(entries, config_1.INTERNAL_SUDO_COMMANDS, bounds);
+        const dedup = (c) => (0, log_1.deduplicateSudoCommands)(c).slice(0, 1000);
+        return { ran: dedup(u.ran), refused: dedup(u.refused), internal: dedup(u.internal) };
     }
     catch (error) {
         core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
+        return undefined;
     }
-    return { ran: [], refused: [], internal: [] };
 }
 
 
@@ -4187,7 +4201,9 @@ exports.deduplicateSudoCommands = deduplicateSudoCommands;
 exports.parseSudoLogEntries = parseSudoLogEntries;
 exports.parseSudoLogsFromString = parseSudoLogsFromString;
 exports.sudoLogSeconds = sudoLogSeconds;
+exports.isInternal = isInternal;
 exports.classifySudoCommands = classifySudoCommands;
+exports.setupEndIndex = setupEndIndex;
 /**
  * Classic sudo prefixes refused commands with a reason, e.g.
  * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
@@ -4297,29 +4313,39 @@ function isInternal(cmd, internal) {
     return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
 }
 /**
- * Split parsed sudo log entries by who ran them and whether they were allowed. With `window`, a
- * command is the action's own only if it matches one of its command lines AND ran while the
- * action was running (setup, or the post step); the same line run by a job step is the job's.
- * Without it (an older setup), by the command line alone.
+ * Split parsed sudo log entries (in log order) by who ran them and whether they were allowed.
+ * With `bounds`, a command is the action's own only if it matches one of its command lines AND
+ * sits where the action ran sudo (setup, or the post step); the same line run by a job step is the
+ * job's. Without them (an older setup), by the command line alone.
  */
-function classifySudoCommands(commands, internalCommands, window, now = new Date()) {
+function classifySudoCommands(commands, internalCommands, bounds) {
     const internal = new Set(internalCommands);
     const usage = { ran: [], refused: [], internal: [] };
-    const byAction = (cmd) => {
-        if (!window)
-            return true;
-        const at = sudoLogSeconds(cmd.timestamp, now);
-        return at !== null && (at <= window.setupEnd || at >= window.postStart);
-    };
-    for (const cmd of commands) {
+    const byAction = (i) => !bounds || i <= bounds.setupEnd || i >= bounds.postStart;
+    commands.forEach((cmd, i) => {
         if (cmd.denied)
             usage.refused.push(cmd);
-        else if (isInternal(cmd, internal) && byAction(cmd))
+        else if (isInternal(cmd, internal) && byAction(i))
             usage.internal.push(cmd);
         else
             usage.ran.push(cmd);
-    }
+    });
     return usage;
+}
+/**
+ * Setup's last sudo command in the log: the first allowed entry of `line` (setup runs before any
+ * job step, so its own is the first), at most `slack` seconds after `notBefore` when both times
+ * are known. -1 when it is not there (then nothing before the post step is the action's).
+ */
+function setupEndIndex(commands, line, notBefore, slack = 300, now = new Date()) {
+    const set = new Set([line]);
+    const latest = notBefore ? notBefore.getTime() / 1000 + slack : Infinity;
+    return commands.findIndex(c => {
+        if (c.denied || !isInternal(c, set))
+            return false;
+        const at = sudoLogSeconds(c.timestamp, now);
+        return at === null || at <= latest;
+    });
 }
 
 
@@ -4378,7 +4404,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = exports.SETUP_END_STATE = void 0;
+exports.JOB_CONTAINER_MESSAGE = exports.SETUP_MARKER = void 0;
 exports.setupCompleted = setupCompleted;
 exports.installPackages = installPackages;
 exports.inJobContainer = inJobContainer;
@@ -4400,12 +4426,6 @@ const github_domains_1 = __nccwpck_require__(2268);
 const sudo = __importStar(__nccwpck_require__(3275));
 const docker = __importStar(__nccwpck_require__(6362));
 const baseline_1 = __nccwpck_require__(1333);
-/**
- * Action state (core.saveState) holding when setup ended, in epoch seconds, from pre and from
- * main (when main set up). The post step counts a sudo command as the action's own only if it
- * ran before then or during the post step.
- */
-exports.SETUP_END_STATE = { pre: 'setup-end-pre', main: 'setup-end-main' };
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 exports.SETUP_MARKER = '/etc/safer-runner/setup-complete';
 /**
@@ -4510,7 +4530,7 @@ async function runSetup(inputs, h = host_1.realHost) {
     // 1. Allowlist - fetched while normal DNS and direct egress still work
     const { domains: githubDomains, source } = await (0, github_domains_1.resolveGitHubDomains)();
     core.info(`GitHub allowlist: ${githubDomains.length} domains (source: ${source})`);
-    const { config: policy, warnings } = (0, policy_1.buildPolicyConfig)({
+    const { config: policy, warnings, user } = (0, policy_1.buildPolicyConfig)({
         mode,
         githubDomains,
         allowedDomains: inputs.allowedDomains,
@@ -4597,6 +4617,11 @@ async function runSetup(inputs, h = host_1.realHost) {
             // the sudo policy the post step evaluates (analyze) or reports (enforce)
             ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
             ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
+            // the job's own allowlist and http-filter as applied: the post step suggests from these,
+            // never from inputs read again at post time
+            allowedDomains: user.allowed,
+            passthroughDomains: user.passthrough,
+            httpFilterSet: inputs.httpFilter.length > 0,
             dockerRetained: dockerAccess.access === 'retained',
             // the summary shows the dockerd restart for CA trust (F1) as the action's own docker change
             docker: { ...dockerAccess, caRestart: dockerd.restarted },

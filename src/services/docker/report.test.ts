@@ -76,6 +76,19 @@ describe('docker report (its Section)', () => {
     expect(s.runnerSystem[0].summary).toBe('docker removed from the runner user · dockerd restarted to trust the CA');
   });
 
+  it('analyze, dockerd running but not evaluated (the evaluation failed): unknown, never an all-clear', () => {
+    const s = report({ retained: true, docker: { requested: 'remove-group', access: 'retained' } }, ANALYZE);
+    expect(s.score[0]).toMatchObject({
+      verdict: 'advisory',
+      text: "not evaluated: the job's use of docker was not seen"
+    });
+    const notRunning = report(
+      { retained: false, docker: { requested: 'remove-group', access: 'not-running' } },
+      ANALYZE
+    );
+    expect(notRunning.score[0]).toMatchObject({ verdict: 'allowed', text: 'daemon not running' });
+  });
+
   it('job log: the uses enforce would block', () => {
     expect(jobLog(used)).toEqual(['docker WOULD_BLOCK container x2']);
   });

@@ -1,17 +1,16 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import { SELFTEST_FILE, SUDO_LOG } from './constants';
-import { SETUP_END_STATE, SETUP_MARKER } from './setup/run';
+import { SETUP_MARKER } from './setup/run';
 import { compose, reportSections, suggestedForLog } from './report/compose';
 import { jobLog as proxyJobLog } from './services/mitmproxy/report';
 import { jobLog as sudoJobLog } from './services/sudo/report';
 import { jobLog as dockerJobLog } from './services/docker/report';
-import type { ActionSudoWindow } from './services/sudo/log';
 import { observeProxy } from './services/mitmproxy/observe';
 import { observeFirewall } from './services/iptables/observe';
 import { observeDns } from './services/coredns/observe';
 import { observeSudoPolicy, type SudoMarker } from './services/sudo/observe';
-import { readSudoUsage } from './services/sudo';
+import { SETUP_FINAL_SUDO, readSudoUsage } from './services/sudo';
 import { observeContainers, observeDockerPolicy, type DockerMarker } from './services/docker/observe';
 import { type SelfTestWindow } from './setup/selftest';
 import { checkIntegrity, type IntegrityResult } from './integrity/check';
@@ -20,6 +19,11 @@ import { effectiveFailOnTampering } from './config/inputs';
 
 interface SetupMarker extends SudoMarker, DockerMarker {
   dockerRetained?: boolean;
+  /** the job's own allowed-domains and passthrough-domains entries, as setup applied them */
+  allowedDomains?: string[];
+  passthroughDomains?: string[];
+  /** the job sets http-filter */
+  httpFilterSet?: boolean;
   /** resolved fail-on-tampering (mode-aware); kept in the root-owned marker, not re-read from inputs */
   failOnTampering?: boolean;
   /** flow-log byte range the setup self-tests wrote */
@@ -30,13 +34,13 @@ interface SetupMarker extends SudoMarker, DockerMarker {
 
 const log = (lines: string[]) => lines.forEach(l => core.info(l));
 
-/**
- * When the action ran sudo itself: until setup ended (pre, or main when it set up) and from the
- * start of this step. Undefined (attribution by command line only) when setup recorded no end.
- */
-function actionSudoWindow(postStart: number): ActionSudoWindow | undefined {
-  const ends = [SETUP_END_STATE.pre, SETUP_END_STATE.main].map(k => Number(core.getState(k))).filter(n => n > 0);
-  return ends.length ? { setupEnd: Math.max(...ends), postStart } : undefined;
+/** A file's size in bytes, read without stat (undefined when it cannot be read). */
+function fileSize(file: string): number | undefined {
+  try {
+    return fs.readFileSync(file).length;
+  } catch {
+    return undefined;
+  }
 }
 
 function readSelfTests(): { name: string; ok: boolean; detail: string }[] {
@@ -61,7 +65,8 @@ function readSetupMarker(): SetupMarker | null {
  * tmpfs, with it).
  */
 async function run(): Promise<void> {
-  const postStart = Math.floor(Date.now() / 1000);
+  // the sudo log as this step found it: anything after is this step's own sudo
+  const sudoLogBytes = fileSize(SUDO_LOG);
   const marker = readSetupMarker();
   const mode = marker?.mode;
   if (!marker || !mode) {
@@ -84,14 +89,23 @@ async function run(): Promise<void> {
     // Each service's observations (its own log, and its policy where it has one). Its full lists
     // go to the job log as soon as it has them, so a later failure never loses them (names and
     // sudo arguments redacted like the summary: the job log is just as public).
-    const proxy = observeProxy(marker.selfTestWindow);
+    const proxy = observeProxy(marker.selfTestWindow, {
+      allowed: marker.allowedDomains,
+      passthrough: marker.passthroughDomains,
+      httpFilterSet: marker.httpFilterSet
+    });
     log(proxyJobLog(proxy.observed));
     const firewall = observeFirewall();
     const containers = await observeContainers(proxy.records, firewall);
     const dnsRefused = observeDns(marker.dnsSelfTestName);
     const selfTests = readSelfTests();
-    const sudo = readSudoUsage(SUDO_LOG, actionSudoWindow(postStart));
-    const sudoPolicy = observeSudoPolicy(mode, marker, sudo.ran);
+    const restricted = mode === 'enforce' && marker.sudoRetained !== true;
+    const sudo = readSudoUsage(SUDO_LOG, {
+      postStartBytes: sudoLogBytes,
+      setupFinal: restricted ? SETUP_FINAL_SUDO.restricted : SETUP_FINAL_SUDO.unrestricted,
+      markerAt: marker.at ? new Date(marker.at) : undefined
+    });
+    const sudoPolicy = observeSudoPolicy(mode, marker, sudo?.ran ?? []);
     log(sudoJobLog({ usage: sudo, policy: sudoPolicy }));
     const dockerPolicy = await observeDockerPolicy(marker);
     log(dockerJobLog(dockerPolicy));

@@ -256,6 +256,8 @@ export interface PolicyBuildResult {
   config: PolicyConfig;
   /** Problems with user input (entries dropped); the caller surfaces them. */
   warnings: string[];
+  /** the job's own allowed-domains and passthrough-domains entries, as applied (invalid ones dropped) */
+  user: { allowed: string[]; passthrough: string[] };
 }
 
 function uniq(xs: string[]): string[] {
@@ -336,10 +338,8 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
     }
   }
   const user = cleanUserPatterns(opts.allowedDomains, 'allowed-domains', warnings);
-  const passthrough = uniq([
-    ...MANDATORY_PASSTHROUGH,
-    ...cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings)
-  ]);
+  const userPassthrough = cleanUserPatterns(opts.passthroughDomains, 'passthrough-domains', warnings);
+  const passthrough = uniq([...MANDATORY_PASSTHROUGH, ...userPassthrough]);
   const deny = opts.blockRiskySubdomains ? [...RISKY_GITHUB_SUBDOMAINS] : [];
   const allow = uniq([...github, ...user]);
   const httpFilter = buildHttpFilter(
@@ -363,6 +363,7 @@ export function buildPolicyConfig(opts: PolicyBuildOptions): PolicyBuildResult {
       container_port: opts.containerPort,
       http_filter: httpFilter
     },
-    warnings
+    warnings,
+    user: { allowed: user, passthrough: userPassthrough }
   };
 }

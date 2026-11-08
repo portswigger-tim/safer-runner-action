@@ -5,7 +5,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FLOW_LOG, POLICY_FILE } from '../../constants';
 import { parseFlowLogWithOffsets, type FlowRecord } from '../../flowlog';
-import { parseAllowedDomains } from '../../policy';
 import { suggestHttpFilter } from '../../report/suggest';
 import { type SelfTestWindow, withoutSelfTests } from '../../setup/selftest';
 import { summarizeFlows, type AllowedRequest } from './flows';
@@ -36,14 +35,21 @@ function suggestion(requests: AllowedRequest[]): HttpFilterSuggestion | undefine
   }
 }
 
+/** The job's allowlist and http-filter as setup applied them (the setup marker); undefined: not recorded. */
+export interface AppliedInputs {
+  allowed?: string[];
+  passthrough?: string[];
+  httpFilterSet?: boolean;
+}
+
 /**
- * The flow log less the setup self-tests' records, and the proxy's observations from it (all but
- * the DNS refusals, which are the resolver's). The records also feed the container part.
+ * The flow log less the setup self-tests' records, and the proxy's observations from it. The
+ * records also feed the container part.
  */
-export function observeProxy(selfTestWindow: SelfTestWindow | undefined): {
-  records: FlowRecord[];
-  observed: Omit<ProxyObserved, 'dnsRefused'>;
-} {
+export function observeProxy(
+  selfTestWindow: SelfTestWindow | undefined,
+  applied: AppliedInputs
+): { records: FlowRecord[]; observed: ProxyObserved } {
   const flows = fs.existsSync(FLOW_LOG)
     ? parseFlowLogWithOffsets(fs.readFileSync(FLOW_LOG, 'utf8'))
     : { records: [], offsets: [] };
@@ -53,13 +59,12 @@ export function observeProxy(selfTestWindow: SelfTestWindow | undefined): {
     observed: {
       hosts: summarizeFlows(records),
       httpFilter: summarizeHttpFilter(records, suggestion),
-      // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
-      userDomains: [
-        ...parseAllowedDomains(core.getInput('allowed-domains')),
-        ...parseAllowedDomains(core.getInput('passthrough-domains'))
-      ],
-      allowedDomains: parseAllowedDomains(core.getInput('allowed-domains')),
-      httpFilterSet: core.getInput('http-filter').trim() !== '',
+      // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own. Never
+      // read again from the inputs here: post-time inputs can differ from what setup applied
+      ...(applied.allowed && applied.passthrough
+        ? { userDomains: [...applied.allowed, ...applied.passthrough], allowedDomains: applied.allowed }
+        : {}),
+      httpFilterSet: applied.httpFilterSet === true,
       platformEndpoints: readPlatformAutoAllowed()
     }
   };

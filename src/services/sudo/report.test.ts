@@ -71,6 +71,13 @@ describe('sudo report (its Section)', () => {
     ).not.toContain('hunter2xyz');
   });
 
+  it('analyze without a sudo log: unknown, never an all-clear', () => {
+    expect(report({ retained: false }, ANALYZE).score).toEqual([
+      { verdict: 'advisory', area: 'Sudo', text: "no sudo log: the job's use of sudo was not seen" }
+    ]);
+    expect(report({ retained: false }, ANALYZE).body).toBe('No sudo log was found.\n\n');
+  });
+
   it("puts the action's own sudo under Runner System", () => {
     const s = report(
       { usage: { ran: [], refused: [], internal: [cmd('/usr/bin/cat', '/etc/resolv.conf')] }, retained: false },

@@ -34,7 +34,7 @@ export interface ScoreRow {
 
 /** A top-level alert paragraph (alerts don't render inside <details>). */
 export interface Alert {
-  kind: 'CAUTION' | 'IMPORTANT';
+  kind: 'CAUTION' | 'WARNING' | 'IMPORTANT';
   text: string;
 }
 
@@ -45,6 +45,8 @@ export interface Suggestion {
   value: string;
   /** using it makes enforce ADVISORY: said in a comment on its line */
   advisory?: string;
+  /** anything else to say on its line (a YAML comment, which the input ignores) */
+  comment?: string;
   /** shown under the block as an option, not in it */
   optional?: boolean;
   /** what it was built from, for an optional one's summary line */

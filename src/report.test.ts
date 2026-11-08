@@ -181,7 +181,10 @@ describe('buildReport', () => {
     );
     expect(suggestedAllowlist(wb)).toEqual(['registry.npmjs.org']);
     const md = buildReport({ ...base, mode: 'analyze', hosts: wb });
-    expect(md).toContain('    allowed-domains: |\n      registry.npmjs.org\n```');
+    // the job's own entries were not recorded here: the block says to keep them
+    expect(md).toContain(
+      '    allowed-domains: | # keep your existing allowed-domains entries too\n      registry.npmjs.org\n```'
+    );
     expect(md).toContain('**2 bypass attempts would be blocked**');
     expect(md).toContain('> [!CAUTION]\n> **Bypass attempts to 2 hosts were seen**');
   });
@@ -282,13 +285,16 @@ describe('Summary + Detail layout', () => {
     expect(lines[0]).toBe('# 📋 Summary');
     // docker: keep under enforce is ADVISORY, like retained sudo (G4)
     expect(lines[2]).toBe('<kbd>ENFORCE · ADVISORY</kbd> <kbd>⚠️ docker retained</kbd>');
-    expect(lines[4]).toBe('**Blocked: Network** (see Detail).');
+    // a weakened boundary is never skimmable as clean: the verdict line says so first
+    expect(lines[4]).toBe(
+      '**ADVISORY: not an enforced boundary** (docker retained). **Blocked: Network** (see Detail).'
+    );
     expect(md).toContain(
       '> [!CAUTION]\n> **Bypass attempts to 4 hosts were blocked** (2 Host/SNI spoofs, 2 names that point at internal addresses).'
     );
-    // the ADVISORY reason is in the Suggested section, not a second alert
-    expect(md).toContain('Running under enforce. ⚠️ **ADVISORY:** `docker: keep` kept docker');
-    expect(md).not.toContain('[!WARNING]');
+    // and one top-level warning carries the reasons
+    expect(md).toContain('> [!WARNING]\n> **The boundary was weaker than it looks.**\n>\n> `docker: keep` kept docker');
+    expect(md).toContain('Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).');
   });
 
   it('puts the sections in order: Summary, Suggested, Detail (Network, Sudo, Docker), footer', () => {
@@ -709,7 +715,10 @@ describe('enforce labelling (review H2)', () => {
   it('labels enforce with sudo retained as ADVISORY in the mode chip, with the reason', () => {
     const md = buildReport({ ...base, mode: 'enforce', sudoRetained: true });
     expect(md).toContain('<kbd>ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo retained</kbd>');
-    expect(md).toContain('⚠️ **ADVISORY:** `disable-sudo: false` kept sudo');
+    expect(md).toContain('**ADVISORY: not an enforced boundary** (sudo retained).');
+    expect(md).toContain(
+      '> [!WARNING]\n> **The boundary was weaker than it looks.**\n>\n> `disable-sudo: false` kept sudo'
+    );
     expect(md).not.toContain('controls were applied at setup');
   });
 
@@ -1242,6 +1251,7 @@ describe('http-filter', () => {
         expect(httpFilter.blocks).toHaveLength(1);
         const md = buildReport({ ...base, mode: 'analyze', hosts: summarizeFlows(recs), httpFilter });
         expect(md).toContain('**Would be refused by `http-filter`**');
+        expect(md).toContain("run it in analyze mode without that host's `http-filter` entry");
         expect(md).not.toContain('<code>http-filter</code>');
       }
     });
@@ -1293,6 +1303,8 @@ describe('http-filter', () => {
       expect(md).toContain('| ⛔ | `github.com` | `POST` ‹path hidden› | path not allowed | 2 |');
       expect(md).toContain('| ⛔ | `registry.npmjs.org` | `PUT` ‹path hidden› | method not allowed on this path | 1 |');
       expect(md).toContain('The path of a refused request is never shown');
+      // how to allow a request the job needs
+      expect(md).toContain("run it in analyze mode without that host's `http-filter` entry");
       expect(md).not.toContain('add these rules');
       expect(md).toContain(
         "<summary>A <code>http-filter</code> built from this job's allowed requests (2 rules; review first)</summary>"
@@ -1438,7 +1450,13 @@ describe('http-filter', () => {
     const recs = [req('registry.npmjs.org', 'GET', '/lodash'), req('pypi.org', 'GET', '/simple/requests/')];
     const httpFilter = summarize(recs);
     const hosts = summarizeFlows(recs);
-    const analyze = buildReport({ ...base, mode: 'analyze', hosts, httpFilter });
+    const analyze = buildReport({
+      ...base,
+      mode: 'analyze',
+      hosts,
+      httpFilter,
+      sudo: { ran: [], refused: [], internal: [] }
+    });
     expect(analyze).toContain(
       '<details>\n<summary>Optional: narrow the allowed hosts further with <code>http-filter</code> (2 requests → 2 rules)</summary>'
     );
