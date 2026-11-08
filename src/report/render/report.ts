@@ -736,7 +736,7 @@ function diagnostics(f: Facts): string {
         )
         .join('\n') + (cmds.length > 50 ? `\n# ... +${cmds.length - 50} more (job log)` : '');
     body += `**Sudo** — the workflow ran ${ran.length ? plural(ran.length, 'command') : 'none'}`;
-    body += internal.length ? `; Safer Runner itself ran ${internal.length} (setup, integrity checks, teardown)` : '';
+    body += internal.length ? `; Safer Runner itself ran ${internal.length} (setup, integrity checks)` : '';
     body += ran.length ? ':\n\n' + codeBlock('console', lines(ran)) + '\n\n' : '.\n\n';
     if (refused.length) {
       body += `Refused by sudo (${refused.length}):\n\n` + codeBlock('console', lines(refused)) + '\n\n';

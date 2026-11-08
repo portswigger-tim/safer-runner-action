@@ -795,12 +795,12 @@ describe('enforce labelling (review H2)', () => {
     );
   });
 
-  // beta.2 said "Workflow executed 4 sudo commands": its own teardown plus three refused attempts
+  // beta.2 said "Workflow executed 4 sudo commands": one of its own plus three refused attempts
   it("the action's own and refused sudo never count as the workflow's usage", () => {
     const sudo = {
       ran: [],
       refused: [cmd('/usr/bin/true'), cmd('/usr/sbin/iptables-save')],
-      internal: [cmd('/opt/safer-runner/bin/teardown')]
+      internal: [cmd('/usr/bin/cat')]
     };
     const analyze = buildReport({ ...base, mode: 'analyze', sudo });
     expect(analyze).not.toContain('This job ran');

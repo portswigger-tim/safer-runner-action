@@ -1,6 +1,6 @@
 /**
  * CoreDNS query log parser. Each server block's `log` format labels its own lines
- * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
+ * (src/services/coredns/config.ts), so a policy refusal is never confused with an upstream
  * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
  *
  *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s

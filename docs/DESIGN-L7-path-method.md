@@ -3,7 +3,7 @@
 **Status:** shipped in v2.2.0 (RFC [#17](https://github.com/portswigger-tim/safer-runner-action/issues/17)), hardened in v2.2.1 ([release notes](RELEASE-NOTES.md)).
 The inputs are `http-filter` and `allow-github-platform` (default `true`). The matcher is `HttpFilter`
 in `proxy/policy_core.py`; the built-in platform list is `GITHUB_PLATFORM_ENDPOINTS` in
-`src/parsers/github-parser.ts`. Where this note and the code differ, the code wins; the sections
+`src/config/github-domains.ts`. Where this note and the code differ, the code wins; the sections
 below record the shipped behaviour and the reasoning.
 
 ## Why
@@ -236,7 +236,7 @@ Decided: default-on when filtering a GitHub host (ergonomic) and visible in the 
 
 The report proposes an `http-filter` from observed traffic, the way it already suggests
 `allowed-domains`. `proxy/suggest.py` builds the rules (run by the post step through
-`src/suggest.ts`); `src/report.ts` prints them as YAML. The goal is a short, reviewable suggestion that encodes *intent* — "reads
+`src/report/suggest.ts`); the report prints them as YAML (`src/report/aggregate/http-filter.ts`). The goal is a short, reviewable suggestion that encodes *intent* — "reads
 open, writes only here" — not a dump of every URL seen. The method is observe → compress →
 suggest, per host:
 
@@ -316,20 +316,20 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
   tests. Reuse the `allowed-domains` matcher so `*` behaves identically.
 - `src/policy.ts` / `policy.json`: `buildHttpFilter` compiles the rules, adds the platform
   endpoints in force, emits the guardrail warnings, and carries the result in `policy.json`.
-- `src/inputs.ts`: `parseHttpFilter` reads the input with the `yaml` library (`parseDocument`,
+- `src/config/inputs.ts`: `parseHttpFilter` reads the input with the `yaml` library (`parseDocument`,
   core schema, YAML 1.2, strict; JSON is read the same way) and checks that it is exactly
   host → { path → methods }. A duplicate host or path, an anchor, alias, tag, document marker,
   deeper nesting, or methods that are not a string or a list of strings fails the step (never
   last-wins, never ignored). In an inline `{ }` rule, a word after a comma with no `:`
   continues the methods (`{ "*": GET, HEAD }`). No value means `NONE`.
-- `src/report.ts`: the blocked-request rows, and the "if the job needs it" suggestion. It
+- `src/report/` (`aggregate/http-filter.ts`, `render/report.ts`): the blocked-request rows, and the "if the job needs it" suggestion. It
   writes the suggestion's rules (from `proxy/suggest.py`) as YAML with the same `yaml` library
   that parses the input, so a pasted suggestion reads back as printed.
 - `proxy/suggest.py`: builds the suggestion next to the matcher (it reuses `path_forms`,
   `PathGlob` and specificity from `policy_core.py`, so there is no second copy of the matching
   to drift). It holds the path-segment redaction and the sensitive-endpoint `endsWith` list
   (seeded with the git pack URLs, expandable) used to keep writes path-specific. The post step
-  runs it (`src/suggest.ts`); if it fails, the report renders without a suggestion.
+  runs it (`src/report/suggest.ts`); if it fails, the report renders without a suggestion.
   `proxy/test-vectors.json` "suggest" pins its output and the round trip (suggestion →
   `http-filter` input → `policy.json` → matcher allows every request it came from).
 

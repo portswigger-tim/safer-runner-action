@@ -14,6 +14,11 @@
 >   see [DESIGN-v2-P2-containers.md](DESIGN-v2-P2-containers.md).
 > - **Docker:** the docker group is now removed by default in enforce (the `docker` input);
 >   "still kept by default" in decision 16 no longer holds.
+> - **CA key:** the post step no longer deletes the key (decision 6). It only ever lives on
+>   tmpfs and dies with the VM; ephemeral runners are the only supported model, so the
+>   teardown helper and its sudoers entry were removed.
+> - **Source layout:** the modules moved (one per service under `src/services/`); the Layout
+>   table below uses the current paths. See the module map in [CLAUDE.md](../CLAUDE.md).
 
 Decisions taken while building P1 where [DESIGN-v2.md](DESIGN-v2.md) was silent or left a
 choice open. Each one is a default, not a final answer; revisit in P2/P3.
@@ -25,13 +30,13 @@ choice open. Each one is a default, not a final answer; revisit in P2/P3.
 | `proxy/policy_core.py` | Pure hostname policy (no mitmproxy import): pattern matching, TLS and HTTP decisions, startup self-test. Unit-tested with plain Python. |
 | `proxy/policy.py` | mitmproxy addon wiring the core in. Pinned to mitmproxy 12.3.1. |
 | `proxy/test-vectors.json` | Matching vectors checked by **both** the Python and the jest tests. |
-| `src/egress.ts` | Setup orchestration (runs in `pre`; `main` only if `pre` didn't complete). |
+| `src/setup/run.ts` | Setup orchestration (runs in `pre`; `main` only if `pre` didn't complete). |
 | `src/policy.ts` | Builds `policy.json`; TS mirror of the matcher for the report and the resolver config. |
-| `src/proxy.ts` | mitmdump install (sha256-pinned), proxy user, ephemeral CA, systemd unit. |
-| `src/trust.ts` | System store, `GITHUB_ENV` CA variables, Java keystores. |
-| `src/firewall.ts` | iptables / ip6tables rulesets (pure generators + atomic apply). |
-| `src/selftest.ts` | Live self-tests on every job (SNI-layer block fired; repoint). |
-| `src/report.ts`, `src/post.ts` | L7 job summary; CA key teardown. |
+| `src/services/mitmproxy/` | mitmdump install (sha256-pinned), proxy user, ephemeral CA (`ca.ts`), systemd unit. |
+| `src/services/mitmproxy/trust.ts` | System store, `GITHUB_ENV` CA variables, Java keystores. |
+| `src/services/iptables/` | iptables / ip6tables rulesets (pure generators + atomic apply). |
+| `src/setup/selftest.ts` | Live self-tests on every job (SNI-layer block fired; repoint). |
+| `src/report/`, `src/post.ts` | L7 job summary; integrity check. |
 
 ## Decisions
 
@@ -55,11 +60,11 @@ choice open. Each one is a default, not a final answer; revisit in P2/P3.
 5. **Own CA instead of mitmproxy's default:** RSA-2048, 3-day validity, `CN=safer-runner
    ephemeral CA <run id>`, generated as the proxy user with umask 077 on tmpfs
    (`/run/safer-runner/proxy`).
-6. **CA teardown keeps the proxy running.** `post` deletes the key from disk through a
-   root-owned helper (`/opt/safer-runner/bin/teardown`, the only extra sudoers entry with
-   `disable-sudo`). The proxy keeps the CA in memory: the runner's own "Complete job" traffic
-   still has to go through it, and the VM is destroyed afterwards. Consequence: a proxy crash
-   *after* post would come back with a new CA (fail closed, not open).
+6. **The proxy keeps running after post.** The runner's own "Complete job" traffic still has to
+   go through it, and the VM is destroyed afterwards. The CA key lives only on tmpfs and dies
+   with the VM. (P1 also deleted the key file in post through a root-owned helper; that was
+   removed later as redundant on ephemeral runners.) A proxy crash would come back with a new
+   CA (fail closed, not open).
 7. **The addon is copied to a root-owned directory** (`/opt/safer-runner/proxy`) because the
    action checkout is writable by the runner user, and `Restart=always` re-reads the script.
 8. **Only TCP 80/443 is proxied.** In enforce every other port (incl. SSH git, DoT, custom
@@ -93,8 +98,8 @@ choice open. Each one is a default, not a final answer; revisit in P2/P3.
     "enforce (ADVISORY — sudo retained, not an enforced boundary)" with a WARNING callout. In
     analyze mode, the summary says if the job used sudo. **Behaviour change:** a
     default-enforce job that runs `sudo` after the action now fails. It must set
-    `disable-sudo: false` (advisory) or drop the sudo use. The action's own post step (CA
-    teardown and validation reads) uses only exact sudoers entries and works either way.
+    `disable-sudo: false` (advisory) or drop the sudo use. The action's own post step
+    (validation reads) uses only exact sudoers entries and works either way.
     Docker group access is still kept by default and is also root-equivalent. Enforce warns
     about it in the log and the summary (CAUTION), but it is not flipped.
     *Proxy unit:* the proxy is a transient `systemd-run` unit with `Restart=always`. `Restart=`

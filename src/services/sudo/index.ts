@@ -8,7 +8,7 @@
 
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import { parseSudoLogsFromString, classifySudoCommands, type SudoUsage } from '../../parsers/sudo-parser';
+import { parseSudoLogsFromString, classifySudoCommands, type SudoUsage } from '../../report/logs/sudo-log';
 import type { BaselineCaptured } from '../../integrity/baseline';
 import { sudo, type Host } from '../../system/host';
 import {
@@ -24,7 +24,7 @@ import {
 
 export * from './config';
 // Re-export SudoCommand type for convenience
-export type { SudoCommand, SudoUsage } from '../../parsers/sudo-parser';
+export type { SudoCommand, SudoUsage } from '../../report/logs/sudo-log';
 
 declare const sudoLogging: unique symbol;
 /**

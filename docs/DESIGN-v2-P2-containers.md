@@ -14,6 +14,9 @@
 > - The `disable-docker` input of the spike is now `docker: remove-group` (`docker` input).
 > - `.github/workflows/p2.yml` and the `p2/` harness named below are in the test repo
 >   `portswigger-tim/safer-runner-action-test`, not here.
+> - Source paths below are the pre-refactor ones (`egress.ts`, `firewall.ts`, `report.ts`,
+>   `setupIptablesLogging`); the code now lives in `src/setup/run.ts`, `src/services/iptables/`,
+>   `src/services/docker/` and `src/report/` (see the module map in [CLAUDE.md](../CLAUDE.md)).
 >
 > **Build outcome (deviations from the plan, all measured on runners):**
 > - **Source classification = second listener, proven.** mitmproxy runs
@@ -451,7 +454,7 @@ P2, and whether Java injection is on by default under B.
 5. **Inputs.**
    - `container-tls: sni-only|intercept`, default `sni-only`.
    - Under `intercept`, install the runtime shim. The shim becomes a root-owned file shipped in
-     the action, like the teardown helper, installed via `daemon.json` + SIGHUP and verified
+     the action, installed via `daemon.json` + SIGHUP and verified
      with `docker info --format '{{.DefaultRuntime}}'`.
 6. **F3.** Detect a job container at the start of `pre`/`main`; enforce → fail with an
    explanatory message, analyze → warning.

@@ -3,22 +3,23 @@
 > **v2 is `main`** (released as v2.0.0; v1 lives on the `@v1` / `v1.*` tags). The egress control
 > is an L7 proxy (mitmproxy) - see [docs/DESIGN-v2.md](docs/DESIGN-v2.md) and
 > [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
-> v2 module map: `src/egress.ts` (setup orchestration, runs in `pre`), `src/proxy.ts`,
-> `src/dns.ts` + `src/config/corefile-builder.ts` (CoreDNS resolver, replaced dnsmasq - see
-> [docs/DNS-COREDNS.md](docs/DNS-COREDNS.md); allowlist entries are EXACT by default),
-> `src/trust.ts`, `src/firewall.ts`, `src/policy.ts`, `src/selftest.ts`, `src/report.ts`;
-> the GitHub list is `src/parsers/github-domains.generated.ts` (`npm run gen:domains`);
+> v2 module map: `src/setup/run.ts` (setup orchestration, runs in `pre`); one module per
+> service in `src/services/` - `mitmproxy/` (proxy, CA, trust), `coredns/` (CoreDNS resolver,
+> replaced dnsmasq - see [docs/DNS-COREDNS.md](docs/DNS-COREDNS.md); allowlist entries are EXACT
+> by default), `iptables/`, `docker/`, `sudo/` - each a pure `config.ts` and an `index.ts` of
+> effects; `src/policy.ts`, `src/setup/selftest.ts`, `src/integrity/`, `src/report/`;
+> the GitHub list is `src/config/github-domains.generated.ts` (`npm run gen:domains`);
 > the addon is `proxy/policy.py` + `proxy/policy_core.py` (`npm test` runs jest + the Python
 > tests). The suggested `http-filter` is built by `proxy/suggest.py` (run by the post step via
-> `src/suggest.ts`; `report.ts` only renders it, as YAML written by the `yaml` library that
-> `src/inputs.ts` parses the input with). `policy_core.Policy.load` checks `policy.json`
+> `src/report/suggest.ts`; the report only renders it, as YAML written by the `yaml` library
+> that `src/config/inputs.ts` parses the input with). `policy_core.Policy.load` checks `policy.json`
 > against the `src/policy.ts` contract (`version: 1`) and fails closed. Real-runner tests run
 > from throwaway branches of the test repo `portswigger-tim/safer-runner-action-test`.
 > **v2 inputs:** `mode`, `allowed-domains`, `passthrough-domains`,
 > `block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `docker` (keep | remove-group |
 > stop), `fail-on-tampering`, `http-filter` + `allow-github-platform` (L7 method/path filter -
 > [docs/DESIGN-L7-path-method.md](docs/DESIGN-L7-path-method.md); matcher `HttpFilter` in
-> `proxy/policy_core.py`, platform list `GITHUB_PLATFORM_ENDPOINTS`) - parsed in `src/inputs.ts`.
+> `proxy/policy_core.py`, platform list `GITHUB_PLATFORM_ENDPOINTS`) - parsed in `src/config/inputs.ts`.
 > `disable-sudo`, `docker` and `fail-on-tampering` are mode-aware (no action.yaml default;
 > unset = the enforce-safe value in enforce). Removed (v1 or early beta only - do not document
 > as current): `sudo-config`, `disable-docker`, `stop-docker`, `primary-dns-server`,
@@ -52,31 +53,35 @@ any other step runs:
 src/
 ├── pre.ts           # pre step: runs the full setup (runSetup) before any other step
 ├── main.ts          # main step: no-op if pre completed; otherwise runs setup
-├── post.ts          # post step: destroys the CA key, checks integrity, writes the job summary
-├── egress.ts        # setup orchestration (runSetup), setup marker, job-container guard
-├── inputs.ts        # reads and validates all inputs; mode-aware defaults; http-filter parsing
+├── post.ts          # post step: checks integrity, writes the job summary, fail-on-tampering
 ├── policy.ts        # builds policy.json; TS mirror of the addon's pattern matching
-├── proxy.ts         # installs pinned mitmdump, proxy user, ephemeral CA, systemd unit, ports
-├── dns.ts           # installs and starts CoreDNS (systemd unit), readiness probe
-├── firewall.ts      # iptables / ip6tables rule generators and atomic apply
-├── trust.ts         # CA trust: system store, GITHUB_ENV variables, Java keystores
-├── docker.ts        # docker access removal and verification; dockerd restart for CA trust
-├── sudo.ts          # sudo logging (classic sudo and sudo-rs), sudo removal, sudo-usage report
-├── setup.ts         # shared plumbing: log dir, random DNS user, resolv.conf, rsyslog for firewall log
-├── validation.ts    # integrity baseline (SHA256 of files and iptables chains) and verification
-├── selftest.ts      # live self-tests run on every job (sni-block, repoint, dns-exact)
 ├── flowlog.ts       # parser for the proxy's JSON-lines flow log
-├── redact.ts        # redaction of encoded-looking names and hidden paths in the summary
-├── report.ts        # builds the job summary (Markdown) from flow, DNS, firewall and sudo logs
-├── suggest.ts       # runs proxy/suggest.py (python3 -I) for the suggested http-filter
 ├── constants.ts     # paths, user names, chain names, pinned versions and sha256 sums
 ├── config/
-│   └── corefile-builder.ts    # pure function: patterns -> Corefile
-└── parsers/
-    ├── github-parser.ts           # GitHub allowlist (meta API + static), platform endpoints
-    ├── github-domains.generated.ts # snapshot of api.github.com/meta (npm run gen:domains)
-    ├── dns-parser.ts              # CoreDNS log lines -> refused names
-    └── sudo-parser.ts             # sudo log lines -> commands, classification
+│   ├── inputs.ts                   # reads and validates all inputs; mode-aware defaults; http-filter
+│   ├── github-domains.ts           # GitHub allowlist (meta API + static), platform endpoints
+│   └── github-domains.generated.ts # snapshot of api.github.com/meta (npm run gen:domains)
+├── setup/
+│   ├── run.ts       # setup orchestration (runSetup), setup marker, job-container guard, log dir
+│   └── selftest.ts  # live self-tests run on every job (sni-block, repoint, dns-exact)
+├── services/        # one per service: config.ts (pure render) + index.ts (effects, via the Host)
+│   ├── mitmproxy/   # pinned mitmdump, proxy user, policy.json, unit, ports;
+│   │                #   ca.ts (per-run CA), trust.ts (system store, GITHUB_ENV, Java keystores)
+│   ├── coredns/     # pinned CoreDNS, random DNS user, Corefile (buildCorefile), unit, resolv.conf
+│   ├── iptables/    # iptables / ip6tables rule generators, atomic apply, rsyslog firewall log
+│   ├── docker/      # dockerd restart for CA trust; docker access removal and verification
+│   └── sudo/        # sudo logging (classic sudo and sudo-rs), the restricted sudoers, sudo removal
+├── integrity/
+│   ├── baseline.ts  # integrity baseline: SHA256 of files and iptables chains, stored root-only
+│   └── check.ts     # post step: one read, one comparison -> verdict + summary details
+├── system/          # the Host port (host.ts), writeFiles, transient units, pinned installs,
+│                    #   shared types and readiness tokens (tokens.test.ts)
+└── report/          # the job summary
+    ├── logs/        # DNS / firewall / sudo log parsers (the flow log's is src/flowlog.ts)
+    ├── aggregate/   # flows, containers, http-filter (and its suggestion as YAML)
+    ├── render/      # Markdown
+    ├── redact.ts    # redaction of encoded-looking names and hidden paths in the summary
+    └── suggest.ts   # runs proxy/suggest.py (python3 -I) for the suggested http-filter
 proxy/
 ├── policy.py            # mitmproxy addon: wiring, layer selection, repoint, flow log
 ├── policy_core.py       # pure policy logic (no mitmproxy import): patterns, decisions, HttpFilter
@@ -94,7 +99,7 @@ npm run build:pre    # ncc: lib/pre.js  -> dist/pre/index.js
 npm run build:post   # ncc: lib/post.js -> dist/post/index.js
 npm run package      # clean + prettier --write + test + build all three (recommended)
 npm test             # jest + the Python tests (npm run test:py)
-npm run gen:domains  # regenerate src/parsers/github-domains.generated.ts
+npm run gen:domains  # regenerate src/config/github-domains.generated.ts
 ```
 
 **Critical**: Always run `npm run package` and commit `dist/*/index.js` - GitHub Actions
@@ -116,17 +121,22 @@ The action is a `node24` JavaScript action with `pre`, `main` and `post` entry p
    step. That includes the `pre` steps of actions that appear later in the job.
    - A bad `mode` value fails the step at once.
    - If setup fails in enforce, `pre` fails the job (fail closed). In analyze it warns, and
-     `main` retries.
+     `main` retries - unless the setup marker was already written (the sudo steps come after
+     it), when `main` will not retry: then `pre` fails the step if `disable-sudo` is on.
 2. **main** (`main.ts`) - if the root-owned setup marker `/etc/safer-runner/setup-complete`
    exists, it does nothing. Otherwise (for example a local `uses: ./` action) it runs setup.
-3. **post** (`post.ts`) - destroys the CA private key (through the root-owned teardown helper),
-   verifies integrity against the baseline, builds the job summary, and applies
-   `fail-on-tampering`. The proxy and firewall stay up: the runner's own "Complete job"
-   traffic still goes through them, and the VM is destroyed afterwards.
+3. **post** (`post.ts`) - verifies integrity against the baseline, builds the job summary, and
+   applies `fail-on-tampering`. The proxy and firewall stay up: the runner's own "Complete job"
+   traffic still goes through them, and the VM is destroyed afterwards. The CA private key is
+   never deleted by the action: it lives only on tmpfs and dies with the VM (ephemeral runners
+   are the only supported model).
 
-### Setup order (`egress.ts: runSetup`)
+### Setup order (`src/setup/run.ts: runSetup`)
 
-Each step depends on the one before it:
+Each step depends on the one before it. Where a step needs an earlier one, it takes that
+step's readiness token (a branded type only the owning module can mint, listed in
+`src/system/tokens.test.ts`), so the wrong order does not compile; `src/orchestration.test.ts`
+checks the same order (L1-L25) on a recording fake runner.
 
 1. Job-container guard: a job `container:` is unsupported (enforce fails, analyze warns).
 2. Allowlist: GitHub domains from `api.github.com/meta` (before DNS changes), plus user entries.
@@ -138,7 +148,7 @@ Each step depends on the one before it:
 7. DNS: write the Corefile, start CoreDNS, then point `resolv.conf` at it.
 8. If docker runs, restart dockerd so it trusts the CA (F1).
 9. Firewall: nat REDIRECT and filter chains, plus the container rules when docker runs.
-10. Live self-tests (`selftest.ts`).
+10. Live self-tests (`src/setup/selftest.ts`).
 11. Docker policy (`docker` input), then verify real docker access. In enforce, a removal that
     did not take fails setup.
 12. Write the setup marker, set up sudo logging, capture the integrity baseline, and
@@ -148,7 +158,7 @@ Each step depends on the one before it:
 
 ### Layers
 
-1. **L7 proxy (primary)** - `src/proxy.ts`, `proxy/policy.py`, `proxy/policy_core.py`
+1. **L7 proxy (primary)** - `src/services/mitmproxy/`, `proxy/policy.py`, `proxy/policy_core.py`
    - mitmdump runs transparent, as the dedicated user `safer-runner-proxy`, in a transient
      systemd unit (`Restart=always`) outside the runner's process tree.
    - Two transparent listeners on a free port pair (20000-32766): one for the host, one for
@@ -168,7 +178,7 @@ Each step depends on the one before it:
      to start on any other version.
    - Every hook fails closed.
 
-2. **DNS (CoreDNS)** - `src/dns.ts`, `src/config/corefile-builder.ts`
+2. **DNS (CoreDNS)** - `src/services/coredns/` (the Corefile: `buildCorefile` in `config.ts`)
    - Default-deny. Allowlist entries are **exact FQDNs** by default: `x` is exactly `x`,
      `*.x` is subdomains, `.x` is both, `a*.x` is a one-label glob.
    - enforce: allowed names are forwarded to `dns-servers`; everything else gets NXDOMAIN
@@ -178,9 +188,9 @@ Each step depends on the one before it:
    - The proxy and DNS use the same pattern set, so they cannot disagree.
    - Details: [docs/DNS-COREDNS.md](docs/DNS-COREDNS.md).
 
-3. **Firewall (iptables)** - `src/firewall.ts`
-   - Rulesets are generated as `iptables-restore` text (pure functions, snapshot-tested in
-     `src/__snapshots__/firewall.test.ts.snap`) and applied atomically with
+3. **Firewall (iptables)** - `src/services/iptables/`
+   - Rulesets are generated as `iptables-restore` text (pure functions in `config.ts`,
+     snapshot-tested in `src/services/iptables/__snapshots__/`) and applied atomically with
      `iptables-restore --noflush` into chains the action owns. The image's own rules are
      left alone.
    - nat: `SAFER_RUNNER_NAT` redirects 80/443 to the proxy and all port 53 to CoreDNS. The
@@ -193,40 +203,44 @@ Each step depends on the one before it:
    - Containers: `SAFER_RUNNER_CNAT` (nat PREROUTING DNAT from the Docker bridges) and
      `SAFER_RUNNER_CFWD`, hooked from Docker's `DOCKER-USER` chain. In enforce, a missing
      `DOCKER-USER` chain fails setup.
-   - Firewall events reach `firewall.log` through an rsyslog rule (`setup.ts:setupIptablesLogging`).
+   - Firewall events reach `firewall.log` through an rsyslog rule (`loggingRule` in `config.ts`).
 
-4. **Privilege (sudo, docker)** - `src/sudo.ts`, `src/docker.ts`
+4. **Privilege (sudo, docker)** - `src/services/sudo/`, `src/services/docker/`
    - **sudo**: two implementations, classic sudo (Ubuntu ≤24.04) and sudo-rs (default on 26.04),
-     found by `detectSudoFlavour()` (`sudo --version`).
+     found by `detectSudoFlavour` (`sudo --version`).
      - Logging goes to `/var/log/safer-runner/sudo.log`. Classic sudo: `Defaults logfile=` drop-in
        `/etc/sudoers.d/00-sudo-logging`. sudo-rs has no logfile support, so an rsyslog rule
        `/etc/rsyslog.d/10-sudo-safer-runner.conf` copies its syslog messages to the same file.
-     - `disable-sudo` rewrites `/etc/sudoers.d/runner` to allow only exact, read-only validation
-       commands (`getValidationSudoCommands()`) plus the CA teardown helper. It is validated
-       with the active `visudo` before it is moved into place.
+     - `disable-sudo` (`restrictSudo`) rewrites `/etc/sudoers.d/runner` to allow only exact,
+       read-only validation commands (`getValidationSudoCommands()`). It is validated with the
+       active `visudo` before it is moved into place; a rejected file fails setup.
      - Sudoers text must be valid for BOTH implementations: no wildcards among command
        arguments (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no
        `log_allowed`.
-     - Sudo logging is set up **before** the restriction. The action's own sudo commands are
-       filtered from reports through `INTERNAL_SUDO_COMMANDS`.
+     - Order: sudo logging, then the integrity baseline, then the restriction **last** (each
+       takes the previous step's token). The action's own sudo commands are filtered from
+       reports through `INTERNAL_SUDO_COMMANDS`.
    - **docker**: `docker: remove-group` removes the runner user from the `docker` group and
      locks the socket to `root:root 0600`; `stop` stops and disables the daemon; `keep` leaves it.
      Setup then verifies the real access (`readDockerState`).
-   - **Mode-aware defaults** (`inputs.ts`): unset `disable-sudo`, `docker` and
+   - **Mode-aware defaults** (`src/config/inputs.ts`): unset `disable-sudo`, `docker` and
      `fail-on-tampering` take the enforce-safe value in enforce and the permissive value in
      analyze. An explicit value always wins. Enforce with sudo or docker kept is **ADVISORY**:
      the controls are applied, but they are not an enforced boundary.
 
-### Validation System - `validation.ts`
+### Integrity check - `src/integrity/`
 
 **Purpose**: a tripwire that detects changes to the security configuration during the job.
 It is advisory, not tamper-proof: the post step runs as the runner user from files the job can
 modify. See [docs/DESIGN-post-run-integrity.md](docs/DESIGN-post-run-integrity.md).
 
 **Flow**:
-1. **Baseline** - setup captures SHA256 checksums when it is done (`capturePostSetupBaseline`).
+1. **Baseline** - setup captures SHA256 checksums when it is done (`captureBaseline` in
+   `baseline.ts`), after sudo logging is on and before sudo is restricted.
 2. **Job runs** - potentially hostile code executes.
-3. **Verify** - the post step compares the current state to the baseline.
+3. **Verify** - the post step (`checkIntegrity` in `check.ts`) reads the baseline and the current
+   state once and compares them once; the `fail-on-tampering` verdict and the summary's
+   integrity details both come from that one comparison.
 
 **Baseline file**: `/etc/safer-runner/validation-state.json`, `root:root 0600` (constant
 `VALIDATION_STATE_FILE`). The runner user cannot read or rewrite it. The post step reads it
@@ -240,7 +254,7 @@ missing or unreadable baseline counts as "not intact".
   logging config for the active sudo flavour, and `/etc/docker/daemon.json` when setup wrote it.
 - iptables chains (`IPTABLES_CHAINS`): `INPUT`, `OUTPUT`, `FORWARD`, `SAFER_RUNNER_OUT`,
   `nat:OUTPUT`, `nat:SAFER_RUNNER_NAT`, `DOCKER-USER`, `SAFER_RUNNER_CFWD`,
-  `nat:SAFER_RUNNER_CNAT` (missing container chains are skipped when docker did not run).
+  `nat:SAFER_RUNNER_CNAT` (a container chain that does not exist lists as empty).
 
 Every file read and chain listing the post step needs is added to the sudoers allowlist
 automatically (`getValidationSudoCommands()`).
@@ -261,11 +275,11 @@ All logs are in `/var/log/safer-runner/` and are readable without sudo:
 
 Config and state are root-owned in `/etc/safer-runner/` (`policy.json`, `Corefile`, `ca.pem`,
 `setup-complete`, `validation-state.json`). Binaries and the addon are in `/opt/safer-runner/`.
-The CA private key is on tmpfs in `/run/safer-runner/proxy` and is destroyed in the post step.
+The CA private key is only on tmpfs, in `/run/safer-runner/proxy`, and dies with the VM.
 
 The raw logs are **not redacted**. Never upload them from a public repository.
 
-### Job summary (`report.ts`, called from `post.ts`)
+### Job summary (`src/report/`, called from `post.ts`)
 
 `post.ts` reads the flow log, firewall log, DNS log and sudo log, drops the setup self-test
 traffic, and calls `buildReport`. The summary shows the verdict first (mode, ADVISORY label,
@@ -273,15 +287,16 @@ post-run status chip), then traffic grouped by cause: blocked or would-block hos
 hosts, container egress, the `http-filter` section, sudo usage, and diagnostics (self-tests,
 DNS refused, integrity). In analyze it suggests an `allowed-domains` block.
 
-- Names go through `redact.ts`: labels that look encoded are shown as `‹redacted›`; refused
+- Names go through `src/report/redact.ts`: labels that look encoded are shown as `‹redacted›`; refused
   request paths are shown as `‹path hidden›`. This is best effort, not a guarantee.
 - Full lists also go to the job log, redacted the same way.
 - The `http-filter` section lists requests the filter refused and suggests a filter built from
   observed traffic (it splits reads from writes, templates variable path segments, and keeps
   sensitive write endpoints path-specific). The suggestion is advisory and never applied
   automatically. Python owns the content: `proxy/suggest.py` (next to the matcher it must agree
-  with) produces structured rules (host to a list of path and methods), and `src/suggest.ts`
-  runs it with `python3 -I`. TypeScript owns the YAML: `httpFilterYaml` in `report.ts` writes
+  with) produces structured rules (host to a list of path and methods), and `src/report/suggest.ts`
+  runs it with `python3 -I`. TypeScript owns the YAML: `httpFilterYaml`
+  (`src/report/aggregate/http-filter.ts`) writes
   the rules with the same `yaml` library that parses the input (double-quoted path keys, block
   literal), so a pasted suggestion reads back as printed. If the Python run fails, the report
   shows no suggestion.
@@ -303,7 +318,7 @@ DNS refused, integrity). In analyze it suggests an `allowed-domains` block.
 ### Keep the three pattern matchers in step
 
 The allowlist pattern semantics exist in three places: `compilePattern` (`src/policy.ts`),
-`compile_pattern` (`proxy/policy_core.py`) and `buildCorefile` (`src/config/corefile-builder.ts`).
+`compile_pattern` (`proxy/policy_core.py`) and `buildCorefile` (`src/services/coredns/config.ts`).
 `proxy/test-vectors.json` drives all of them. When you change semantics, change the vectors
 first and make all three suites pass. The `http-filter` path glob and the self-test probe are
 covered the same way.
@@ -313,15 +328,23 @@ covered the same way.
 1. **Proxy / L7 policy** - `proxy/policy_core.py` (pure logic, unit-tested) and `proxy/policy.py`
    (wiring). Carry new settings through `PolicyConfig` in `src/policy.ts` and `policy.json`.
    The addon must refuse to start, not run open, if it cannot load its config.
-2. **DNS** - `config/corefile-builder.ts` (the Corefile) and `dns.ts` (service).
-3. **Firewall** - add a pure generator in `firewall.ts` with a snapshot test, apply it in
-   `applyFirewall()`, and add any new chain to `IPTABLES_CHAINS` in `validation.ts`.
-4. **Integrity** - add files to `CRITICAL_FILES` in `validation.ts`. The sudoers allowlist
-   follows automatically.
-5. **Privilege** - `sudo.ts` and `docker.ts`. Keep sudoers text valid for both sudo flavours.
-6. **Reporting** - `report.ts`. Anything shown from a blocked name or path must go through
-   `redact.ts`.
-7. **Inputs** - declare in `action.yaml`, parse in `inputs.ts`, document in `README.md`.
+2. **DNS** - `src/services/coredns/config.ts` (the Corefile) and `index.ts` (the service).
+3. **Firewall** - add a pure generator in `src/services/iptables/config.ts` with a snapshot test,
+   apply it in `configure()` (`index.ts`), and add any new chain to `IPTABLES_CHAINS` in
+   `src/integrity/baseline.ts`.
+4. **Integrity** - add files to `CRITICAL_FILES` in `src/integrity/baseline.ts`. The sudoers
+   allowlist follows automatically.
+5. **Privilege** - `src/services/sudo/` and `src/services/docker/`. Keep sudoers text valid for
+   both sudo flavours.
+6. **Reporting** - `src/report/`. Anything shown from a blocked name or path must go through
+   `src/report/redact.ts`.
+7. **Inputs** - declare in `action.yaml`, parse in `src/config/inputs.ts`, document in `README.md`.
+8. **A new setup step** - put pure rendering in the service's `config.ts` and effects in its
+   `index.ts`, running every command through the `Host` (`src/system/host.ts`). If its order
+   matters, take the earlier step's readiness token (declared and minted only in the owning
+   module), register any new token in `src/system/tokens.test.ts`, and add the ordering
+   invariant to `src/orchestration.test.ts` with a mutation check. Restricted files (0600,
+   sudoers) and writes that change behaviour are named steps, never `writeFiles`.
    Mode-aware inputs have no `action.yaml` default, so "unset" differs from an explicit value.
 
 ### Debugging on a runner
@@ -349,14 +372,25 @@ sudo iptables -L DOCKER-USER -n --line-numbers
 
 ## 🧪 Testing Strategy
 
-**Run tests**: `npm test` (jest, then the Python tests). One suite: `npm test -- firewall.test.ts`.
+**Run tests**: `npm test` (jest, then the Python tests). One suite: `npm test -- src/services/iptables`.
 Python only: `npm run test:py`.
 
-**Jest suites** (next to the code in `src/`): `egress`, `firewall` (+ snapshot), `inputs`,
-`policy`, `proxy`, `pre`, `docker`, `sudo`, `redact`, `report` (+ fixture
-`__fixtures__/beta2-enforce-flows.jsonl`), `selftest`, `setup`, `suggest`, `validation`,
-`config/corefile-builder` (+ snapshot), `parsers/*` (dns, github, sudo; fixture `coredns.log`),
-and `scripts/gen-github-domains`.
+**Jest suites** (next to the code in `src/`):
+- `orchestration.test.ts` - `runSetup` and the post step on a recording fake runner that fakes
+  only external boundaries (`@actions/*`, `fs`, `os`, `dns`, `net`, randomness, timers).
+  Snapshots the command transcript and the files setup writes, checks the ordering invariants
+  L1-L25, and proves each one bites with a mutation check. Also pre then main around the setup
+  marker.
+- `system/tokens.test.ts` - every readiness token is minted only by its owning module and has an
+  ordering invariant; `system/system.test.ts` - `writeFiles` and transient units.
+- `services/*` - per service: `coredns` (config + snapshot, index), `mitmproxy` (index, trust),
+  `iptables` (+ snapshot), `docker`, `sudo`; effects run against `recordingHost`
+  (`src/system/testing.ts`).
+- `setup/run`, `setup/selftest`, `pre`, `integrity/baseline` (capture and the one-pass check),
+  `config/inputs`, `config/github-domains`, `policy`, `scripts/gen-github-domains`.
+- Report: `report.test.ts` (+ fixture `__fixtures__/beta2-enforce-flows.jsonl`),
+  `report.golden.test.ts` (golden summaries + the redaction canary), `report/redact`,
+  `report/suggest`, `report/logs/*` (dns, sudo; fixture `coredns.log`).
 
 **Python**: `proxy/policy_core_test.py` and `proxy/suggest_test.py`, plus the shared `proxy/test-vectors.json` (which also pins the suggester's output).
 
@@ -366,7 +400,7 @@ IP-literal and no-SNI TLS, a hole in the REDIRECT, IPv6, Azure DNS); container e
 agent-survival checks (checkout, artifacts, cache). Run each on `ubuntu-latest`, `24.04` and
 `26.04`.
 
-**Self-tests** run on every job during setup (`selftest.ts`) and fail setup in enforce:
+**Self-tests** run on every job during setup (`src/setup/selftest.ts`) and fail setup in enforce:
 `sni-block` (an SNI-level block fired), `repoint` (the proxy ignores the client's IP), and
 `dns-exact` (a random subdomain of an exact entry is refused).
 
@@ -401,7 +435,7 @@ actions by SHA, dependency scanning, runtime monitoring. See
 ### Update the GitHub allowlist
 
 At runtime the list comes from `api.github.com/meta` (`.domains.actions`), with the generated
-snapshot as fallback (`resolveGitHubDomains()` in `src/parsers/github-parser.ts`). To refresh the
+snapshot as fallback (`resolveGitHubDomains()` in `src/config/github-domains.ts`). To refresh the
 snapshot run `npm run gen:domains`; the scheduled workflow `update-github-domains.yml` does this
 weekly. Names the meta list lacks go in `GITHUB_EXTRAS` (each needs a justification).
 Over-broad shared suffixes are refused through `DANGEROUS_BROAD_DOMAINS`. The deny list for
@@ -409,7 +443,7 @@ Over-broad shared suffixes are refused through `DANGEROUS_BROAD_DOMAINS`. The de
 
 ### Update the GitHub platform endpoints (`http-filter`)
 
-Edit `GITHUB_PLATFORM_ENDPOINTS` in `src/parsers/github-parser.ts`. Each entry is an explicit
+Edit `GITHUB_PLATFORM_ENDPOINTS` in `src/config/github-domains.ts`. Each entry is an explicit
 `(host, path, methods)` - never a blanket read rule. `essential: true` entries (the job's control
 plane) always apply on a filtered host; the rest apply only where none of the job's rules matches.
 Grow the list from observed real-runner traffic (the flow log).
@@ -422,18 +456,19 @@ internals and refuses any other version.
 
 ### Add a domain-purpose or report change
 
-Edit `src/report.ts` and its tests. Run `npm test -- report.test.ts`; update the snapshot only
-when the change is intended.
+Edit `src/report/` (rendering in `render/report.ts`) and its tests. Run
+`npm test -- src/report src/report.test.ts src/report.golden.test.ts`; update the golden
+snapshot only when the change is intended.
 
 ### Add an input
 
 1. Add it to `action.yaml` (mode-aware inputs: no `default`).
-2. Parse it in `src/inputs.ts` (`readInputs`, the `Inputs` interface) and add tests.
-3. Thread it through `egress.ts` / `policy.ts` to where it takes effect.
+2. Parse it in `src/config/inputs.ts` (`readInputs`, the `Inputs` interface) and add tests.
+3. Thread it through `src/setup/run.ts` / `policy.ts` to where it takes effect.
 4. Document it in `README.md`, and add a line to `docs/RELEASE-NOTES.md` at release time.
 
 `http-filter` is the one structured input: a YAML map of host to path pattern to methods (JSON
-works too, as it is a subset of YAML). `parseHttpFilter` in `inputs.ts` reads it with the `yaml`
+works too, as it is a subset of YAML). `parseHttpFilter` in `src/config/inputs.ts` reads it with the `yaml`
 library (`parseDocument`, core schema, YAML 1.2, strict) and then checks one shape. It fails the
 step, never last-wins or ignores, on a duplicate host or path, an anchor, alias, tag, document
 marker, deeper nesting, or methods that are not a string or a list of strings. YAML escapes in
@@ -465,7 +500,7 @@ version. Release notes describe security fixes as "hardening" and carry no explo
 - `typescript`, `@vercel/ncc` (bundles each entry point), `jest` + `ts-jest`, `prettier`
 - Python 3 (unittest) for the addon tests
 
-**Node.js built-ins**: `crypto` (SHA256 for validation and downloads), `fs`, `dns`, `net`.
+**Node.js built-ins**: `crypto` (SHA256 for the integrity check and downloads), `fs`, `dns`, `net`.
 
 ## 🐛 Troubleshooting
 
@@ -480,7 +515,7 @@ version. Release notes describe security fixes as "hardening" and carry no explo
 - The proxy may be down. Check `systemctl status safer-runner-proxy` and `proxy-flows.jsonl`.
   The REDIRECT then hits a closed port, which is the fail-closed behaviour.
 - A client that does not trust the CA fails with a TLS error on an allowlisted host. Check the
-  exported variables (`trust.ts`), or add a single-tenant host to `passthrough-domains`.
+  exported variables (`src/services/mitmproxy/trust.ts`), or add a single-tenant host to `passthrough-domains`.
 
 **DNS not working**:
 - `/etc/resolv.conf` should say `nameserver 127.0.0.1`.
@@ -540,9 +575,9 @@ in root-owned `/opt/safer-runner` and `/etc/safer-runner`.
 
 ### Why does the post step keep the proxy running?
 
-The runner's "Complete job" request still goes through it. Post only destroys the CA key on
-disk (the proxy keeps it in memory). A proxy crash after post would restart with a new CA,
-which fails closed.
+The runner's "Complete job" request still goes through it. The CA key is never written to
+persistent disk: it is on tmpfs and dies with the VM, so the post step leaves it alone. A proxy
+crash would restart with a new CA, which fails closed.
 
 ---
 

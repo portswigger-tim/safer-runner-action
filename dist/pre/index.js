@@ -1172,58 +1172,6 @@ async function captureBaseline(h, files, _logging) {
 
 /***/ }),
 
-/***/ 1106:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __exportStar = (this && this.__exportStar) || function(m, exports) {
-    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-/** Moved to src/report/logs/dns-log.ts; kept so existing importers (selftest.ts) still resolve. */
-__exportStar(__nccwpck_require__(7039), exports);
-
-
-/***/ }),
-
-/***/ 7516:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __exportStar = (this && this.__exportStar) || function(m, exports) {
-    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-/** Moved to src/report/logs/sudo-log.ts; kept so existing importers (sudo.ts) still resolve. */
-__exportStar(__nccwpck_require__(8305), exports);
-
-
-/***/ }),
-
 /***/ 2224:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -1602,7 +1550,7 @@ run();
 
 /**
  * CoreDNS query log parser. Each server block's `log` format labels its own lines
- * (src/config/corefile-builder.ts), so a policy refusal is never confused with an upstream
+ * (src/services/coredns/config.ts), so a policy refusal is never confused with an upstream
  * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
  *
  *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
@@ -1827,7 +1775,7 @@ function classifySudoCommands(commands, internalCommands) {
  * the deny block).
  *
  * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
- * format, so the report parser never has to infer a verdict (src/parsers/dns-parser.ts).
+ * format, so the report parser never has to infer a verdict (src/report/logs/dns-log.ts).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -3718,7 +3666,7 @@ exports.restrictSudo = restrictSudo;
 exports.readSudoUsage = readSudoUsage;
 const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
-const sudo_parser_1 = __nccwpck_require__(7516);
+const sudo_log_1 = __nccwpck_require__(8305);
 const host_1 = __nccwpck_require__(7020);
 const config_1 = __nccwpck_require__(5665);
 __exportStar(__nccwpck_require__(5665), exports);
@@ -3795,7 +3743,7 @@ async function restrictSudo(h, r, _baseline) {
 function readSudoUsage(logFile) {
     try {
         if (fs.existsSync(logFile)) {
-            return (0, sudo_parser_1.classifySudoCommands)((0, sudo_parser_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS);
+            return (0, sudo_log_1.classifySudoCommands)((0, sudo_log_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS);
         }
     }
     catch (error) {
@@ -4137,7 +4085,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const flowlog_1 = __nccwpck_require__(5422);
 const coredns_1 = __nccwpck_require__(5212);
-const dns_parser_1 = __nccwpck_require__(1106);
+const dns_log_1 = __nccwpck_require__(7039);
 const policy_1 = __nccwpck_require__(2224);
 /**
  * The repoint probe: a bodiless GET of this fixed public file. The addon recognises exactly this
@@ -4221,7 +4169,7 @@ async function dnsExactSelfTest(mode, name) {
     let logged = false;
     for (let i = 0; i < 15 && !logged; i++) {
         const log = fs.existsSync(constants_1.DNS_LOG) ? fs.readFileSync(constants_1.DNS_LOG, 'utf8') : '';
-        logged = (0, dns_parser_1.parseDnsLog)(log).some(q => q.name === name && q.verdict === want);
+        logged = (0, dns_log_1.parseDnsLog)(log).some(q => q.name === name && q.verdict === want);
         if (!logged)
             await new Promise(r => setTimeout(r, 200));
     }
