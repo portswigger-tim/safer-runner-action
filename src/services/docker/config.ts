@@ -7,7 +7,7 @@
 import type { DockerPolicy } from '../../config/inputs';
 import { DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT, LOG_DIR } from '../../constants';
 import type { Mode } from '../../policy';
-import type { DockerEvent } from '../../report/logs/docker-events';
+import type { DockerEvent } from './log';
 import type { UnitSpec } from '../../system/types';
 import { HARDENING } from '../../system/unit';
 

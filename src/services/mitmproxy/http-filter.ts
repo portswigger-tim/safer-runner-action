@@ -2,7 +2,7 @@
 
 import { Document, Pair, Scalar, YAMLMap, stringify } from 'yaml';
 import type { FlowRecord } from '../../flowlog';
-import { methodLabel } from '../redact';
+import { methodLabel } from '../../report/redact';
 import { DENIED, FILTER_REASONS, allowedRequests, blockedName, type AllowedRequest } from './flows';
 
 export interface FilterBlock {

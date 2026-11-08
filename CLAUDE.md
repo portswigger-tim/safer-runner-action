@@ -67,7 +67,9 @@ src/
 ├── setup/
 │   ├── run.ts       # setup orchestration (runSetup), setup marker, job-container guard, log dir
 │   └── selftest.ts  # live self-tests run on every job (sni-block, repoint, dns-exact)
-├── services/        # one per service: config.ts (pure render) + index.ts (effects, via the Host)
+├── services/        # one per service: config.ts (pure render) + index.ts (effects, via the Host);
+│                    #   for the job summary also log.ts (its log parser), report.ts (its part of
+│                    #   the summary, pure: report(observed, ctx) -> Section) and observe.ts (post step I/O)
 │   ├── mitmproxy/   # pinned mitmdump, proxy user, policy.json, unit, ports;
 │   │                #   ca.ts (per-run CA), trust.ts (system store, GITHUB_ENV, Java keystores)
 │   ├── coredns/     # pinned CoreDNS, random DNS user, Corefile (buildCorefile), unit, resolv.conf
@@ -79,12 +81,13 @@ src/
 │   └── check.ts     # post step: one read, one comparison -> verdict + summary details
 ├── system/          # the Host port (host.ts), writeFiles, transient units, pinned installs,
 │                    #   shared types and readiness tokens (tokens.test.ts)
-└── report/          # the job summary
-    ├── logs/        # DNS / firewall / sudo log and docker events parsers (the flow log's is src/flowlog.ts)
-    ├── aggregate/   # flows, containers, http-filter (and its suggestion as YAML), sudo-config, docker
-    ├── render/      # Markdown
+└── report/          # the job summary: each service renders its own part (below), this composes them
+    ├── section.ts   # Section: what each service's report() returns (chips, alerts, score, body, ...)
+    ├── compose.ts   # ReportInput, reportSections (each service's part), compose (the layout), buildReport
+    ├── checks.ts    # the setup checks' part: self-tests and the tamper check
+    ├── markdown.ts  # Markdown helpers (code spans and fences for untrusted text)
     ├── redact.ts    # redaction of encoded-looking names, hidden paths and sudo arguments in the summary
-    └── suggest.ts   # runs proxy/suggest.py (python3 -I) for the suggested http-filter
+    └── suggest.ts   # runs proxy/suggest.py and proxy/sudo_suggest.py (python3 -I)
 proxy/
 ├── policy.py            # mitmproxy addon: wiring, layer selection, repoint, flow log
 ├── policy_core.py       # pure policy logic (no mitmproxy import): patterns, decisions, HttpFilter
@@ -253,7 +256,7 @@ checks the same order (L1-L29) on a recording fake runner.
      (`{ input: 'docker', value, advisory, change }`, report only): any use needs `keep`
      (ADVISORY); `stop` that would stop service containers gets `remove-group`; `stop` is never
      suggested over the policy. The summary shows kinds, counts and image names
-     (`report/aggregate/docker.ts`, `imageLabel`), never an exec command, container name or
+     (`services/docker/report.ts`, `imageLabel`), never an exec command, container name or
      label.
    - **Defaults** (`src/config/inputs.ts`): unset `disable-sudo` is `true` and unset `docker` is
      `remove-group`, in both modes (analyze only evaluates them). Unset `fail-on-tampering` is
@@ -315,8 +318,11 @@ The raw logs are **not redacted**. Never upload them from a public repository.
 
 ### Job summary (`src/report/`, called from `post.ts`)
 
-`post.ts` reads the flow log, firewall log, DNS log and sudo log, drops the setup self-test
-traffic, and calls `buildReport`. The summary shows the verdict first (mode, ADVISORY label,
+`post.ts` runs each service's `observe.ts` (its own log, and its policy where it has one; the
+setup self-test traffic dropped), then `reportSections` (each service's pure `report()`, returning
+a `Section`) and `compose`. Each service owns its part: the proxy (blocked and allowed hosts,
+`http-filter`), the firewall and the resolver (diagnostics), sudo and docker (with containers).
+The only join is the DNS diagnostics leaving out names the proxy part already shows. The summary shows the verdict first (mode, ADVISORY label,
 post-run status chip), then traffic grouped by cause: blocked or would-block hosts, allowed
 hosts, container egress, the `http-filter` section, sudo usage, and diagnostics (self-tests,
 DNS refused, integrity). In analyze it suggests an `allowed-domains` block.
@@ -334,7 +340,7 @@ DNS refused, integrity). In analyze it suggests an `allowed-domains` block.
   automatically. Python owns the content: `proxy/suggest.py` (next to the matcher it must agree
   with) produces structured rules (host to a list of path and methods), and `src/report/suggest.ts`
   runs it with `python3 -I`. TypeScript owns the YAML: `httpFilterYaml`
-  (`src/report/aggregate/http-filter.ts`) writes
+  (`src/services/mitmproxy/http-filter.ts`) writes
   the rules with the same `yaml` library that parses the input (double-quoted path keys, block
   literal), so a pasted suggestion reads back as printed. If the Python run fails, the report
   shows no suggestion.
@@ -428,7 +434,8 @@ Python only: `npm run test:py`.
   `config/inputs`, `config/github-domains`, `policy`, `scripts/gen-github-domains`.
 - Report: `report.test.ts` (+ fixture `__fixtures__/beta2-enforce-flows.jsonl`),
   `report.golden.test.ts` (golden summaries + the redaction canary), `report/redact`,
-  `report/suggest`, `report/logs/*` (dns, sudo; fixture `coredns.log`), `report/aggregate/docker`.
+  `report/suggest`, `report/checks`; each service's `log` and `report` tests (`coredns/log` with
+  fixture `coredns.log`, `sudo/log`, and a `report.test.ts` per service for its Section).
 
 **Python**: `proxy/policy_core_test.py` and `proxy/suggest_test.py`, plus the shared `proxy/test-vectors.json` (which also pins the suggester's output).
 
@@ -500,9 +507,9 @@ round tries every source in order, backoff between rounds).
 
 ### Add a domain-purpose or report change
 
-Edit `src/report/` (rendering in `render/report.ts`) and its tests. Run
-`npm test -- src/report src/report.test.ts src/report.golden.test.ts`; update the golden
-snapshot only when the change is intended.
+Edit the owning service's `report.ts` (or `src/report/compose.ts` for the layout) and its tests.
+Run `npm test -- src/report src/services src/report.test.ts src/report.golden.test.ts`; update the
+golden snapshot only when the change is intended.
 
 ### Add an input
 

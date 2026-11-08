@@ -11,7 +11,7 @@ import { IPTABLES_CHAINS, chainListing, fileChecksum, sha256, type ValidationSta
 
 export type IntegrityStatus = 'verified' | 'tampered' | 'unavailable';
 
-/** What the report shows (report/render). */
+/** What the report shows (report/checks.ts). */
 export interface IntegrityDetails {
   status: IntegrityStatus;
   body: string;

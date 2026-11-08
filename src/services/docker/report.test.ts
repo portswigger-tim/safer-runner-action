@@ -1,5 +1,6 @@
-import { REDACTED } from '../redact';
-import { dockerUseCount, dockerUseText, imageLabel } from './docker';
+import { REDACTED } from '../../report/redact';
+import { evaluateDocker } from './config';
+import { dockerUseCount, dockerUseText, imageLabel, report } from './report';
 
 describe('imageLabel (an image name in the summary)', () => {
   it('shows ordinary names whole', () => {
@@ -40,5 +41,39 @@ describe('dockerUseText', () => {
     );
     expect(dockerUseText({})).toBe('');
     expect(dockerUseCount({ image: 2, container: 1 })).toBe(3);
+  });
+});
+
+describe('docker report (its Section)', () => {
+  const ENFORCE = { mode: 'enforce', enforce: true } as const;
+  const ANALYZE = { mode: 'analyze', enforce: false } as const;
+  const used = {
+    policy: 'remove-group',
+    observed: { uses: { container: 2 }, images: [], services: 0, partial: false },
+    evaluation: evaluateDocker('remove-group', { uses: { container: 2 }, images: [], services: 0, partial: false })
+  };
+
+  it('enforce with docker kept: ADVISORY, a chip and a WARNING', () => {
+    const s = report({ retained: true, docker: { requested: 'keep', access: 'retained' } }, ENFORCE);
+    expect(s.advisory).toBe('docker');
+    expect(s.chips).toEqual(['⚠️ docker retained']);
+    expect(s.alerts.map(a => a.kind)).toEqual(['WARNING']);
+    expect(s.diagnostics[0].summary).toBe('docker retained');
+  });
+
+  it('analyze: a use enforce would block is a chip, a quoted IMPORTANT part, blocking, and a job-log line', () => {
+    const s = report(
+      { retained: true, docker: { requested: 'remove-group', access: 'retained' }, policy: used },
+      ANALYZE
+    );
+    expect(s.advisory).toBe('');
+    expect(s.blocking).toBe(true);
+    expect(s.chips).toEqual(['2 docker uses would be blocked']);
+    expect(s.alerts).toEqual([expect.objectContaining({ kind: 'IMPORTANT', quoted: true })]);
+    expect(s.jobLog).toEqual(['docker WOULD_BLOCK container x2']);
+  });
+
+  it('no container traffic: no body', () => {
+    expect(report({ retained: false }, ENFORCE).body).toBe('');
   });
 });

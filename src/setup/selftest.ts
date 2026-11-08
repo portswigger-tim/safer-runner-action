@@ -15,7 +15,7 @@ import { DNS_LOG, FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from '../constant
 import { FlowRecord, flowLogSize, ipOf, readFlowLog } from '../flowlog';
 import { probe } from '../services/coredns';
 import type { FirewallOn } from '../services/iptables';
-import { parseDnsLog } from '../report/logs/dns-log';
+import { parseDnsLog } from '../services/coredns/log';
 import { compilePattern, matchesAny, type Mode } from '../policy';
 
 export interface SelfTestResult {

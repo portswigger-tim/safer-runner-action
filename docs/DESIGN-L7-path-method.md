@@ -236,7 +236,7 @@ Decided: default-on when filtering a GitHub host (ergonomic) and visible in the 
 
 The report proposes an `http-filter` from observed traffic, the way it already suggests
 `allowed-domains`. `proxy/suggest.py` builds the rules (run by the post step through
-`src/report/suggest.ts`); the report prints them as YAML (`src/report/aggregate/http-filter.ts`). The goal is a short, reviewable suggestion that encodes *intent* — "reads
+`src/report/suggest.ts`); the report prints them as YAML (`src/services/mitmproxy/http-filter.ts`). The goal is a short, reviewable suggestion that encodes *intent* — "reads
 open, writes only here" — not a dump of every URL seen. The method is observe → compress →
 suggest, per host:
 
@@ -322,7 +322,7 @@ coarse — review"* when it had to generalize heavily. It is advisory — never 
   deeper nesting, or methods that are not a string or a list of strings fails the step (never
   last-wins, never ignored). In an inline `{ }` rule, a word after a comma with no `:`
   continues the methods (`{ "*": GET, HEAD }`). No value means `NONE`.
-- `src/report/` (`aggregate/http-filter.ts`, `render/report.ts`): the blocked-request rows, and the "if the job needs it" suggestion. It
+- `src/services/mitmproxy/` (`http-filter.ts`, `report.ts`): the blocked-request rows, and the "if the job needs it" suggestion. It
   writes the suggestion's rules (from `proxy/suggest.py`) as YAML with the same `yaml` library
   that parses the input, so a pasted suggestion reads back as printed.
 - `proxy/suggest.py`: builds the suggestion next to the matcher (it reuses `path_forms`,

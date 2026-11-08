@@ -1,7 +1,7 @@
 /** The docker policy evaluation (analyze): pure, no runner. */
 
 import type { DockerPolicy } from '../../config/inputs';
-import { parseDockerEvents } from '../../report/logs/docker-events';
+import { parseDockerEvents } from './log';
 import { classifyDockerEvents, evaluateDocker, healthcheckCommands, planDocker, type DockerObserved } from './config';
 
 /** one line as `docker events --format '{{json .}}'` writes it */

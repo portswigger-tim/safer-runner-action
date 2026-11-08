@@ -29,7 +29,7 @@ import {
 } from './constants';
 import { runSetup, SETUP_MARKER } from './setup/run';
 import { readInputs } from './config/inputs';
-import { classifySudoCommands, type SudoCommand } from './report/logs/sudo-log';
+import { classifySudoCommands, type SudoCommand } from './services/sudo/log';
 import {
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_RSYSLOG_FILE,
