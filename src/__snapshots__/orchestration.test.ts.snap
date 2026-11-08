@@ -1323,6 +1323,459 @@ $ sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner"
 
 exports[`setup transcript (runSetup on a recording fake runner) enforce on sudo-rs, docker not running: warnings 1`] = `[]`;
 
+exports[`setup transcript (runSetup on a recording fake runner) enforce on sudo-rs, sudo-config: files 1`] = `
+{
+  "/etc/resolv.conf": "nameserver 127.0.0.1
+",
+  "/etc/rsyslog.d/10-iptables-safer-runner-v2.conf": "if $programname == 'kernel' and $msg contains ['SaferRunner-Drop:', 'SaferRunner-Egress:', 'SaferRunner-CDrop:', 'SaferRunner-CEgress:'] then /var/log/safer-runner/firewall.log
+",
+  "/etc/rsyslog.d/10-sudo-safer-runner.conf": "template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")
+if $programname == 'sudo' and $msg contains 'COMMAND=' then {
+  action(type="omfile" file="/var/log/safer-runner/sudo.log" template="SaferRunnerSudo")
+}
+",
+  "/etc/safer-runner/Corefile": "# safer-runner CoreDNS resolver (enforce). Generated - do not edit.
+# Blocks are tried in order: the first whose view matches answers the query.
+.:53 {
+  bind 127.0.0.1
+  view allow {
+    expr ((name() in ['github.com.', 'objects.githubusercontent.com.', 'productionresultssa1.blob.core.windows.net.', 'fulcio.githubapp.com.', 'pkg-containers.githubusercontent.com.', 'registry.npmjs.org.', 'example.org.'] || name() endsWith '.github.com.' || name() endsWith '.actions.githubusercontent.com.' || name() endsWith '.example.org.' || name() matches '^hosted-compute-[a-z0-9_-]*[.]githubapp[.]com[.]$') && !(name() in ['gist.github.com.', 'gist.githubusercontent.com.', 'raw.githubusercontent.com.'])) || name() in ['localhost.', 'ip6-localhost.', 'ip6-loopback.', 'fv-az123-456.']
+  }
+  metadata
+  log . "{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}"
+  errors
+  hosts /etc/hosts {
+    10.1.0.4 fv-az123-456
+    fallthrough
+  }
+  cache 3600 {
+    serve_stale 1h
+  }
+  forward . 9.9.9.9 149.112.112.112 {
+    policy sequential
+  }
+}
+.:53 {
+  bind 127.0.0.1
+  log . "{remote} BLOCK {type} {name} {rcode}"
+  errors
+  template ANY ANY {
+    rcode NXDOMAIN
+  }
+}
+",
+  "/etc/safer-runner/ca.pem": "-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/etc/safer-runner/policy.json": "{
+  "version": 1,
+  "mode": "enforce",
+  "allow": [
+    "github.com",
+    "*.github.com",
+    "*.actions.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "productionresultssa1.blob.core.windows.net",
+    "fulcio.githubapp.com",
+    "pkg-containers.githubusercontent.com",
+    "registry.npmjs.org",
+    "example.org",
+    "*.example.org"
+  ],
+  "passthrough": [
+    "hosted-compute-*.githubapp.com"
+  ],
+  "deny": [
+    "gist.github.com",
+    "gist.githubusercontent.com",
+    "raw.githubusercontent.com"
+  ],
+  "flow_log": "/var/log/safer-runner/proxy-flows.jsonl",
+  "container_tls": "sni-only",
+  "container_port": 26384,
+  "http_filter": {
+    "hosts": [
+      {
+        "host": "api.github.com",
+        "rules": [
+          {
+            "path": "*",
+            "methods": [
+              "GET",
+              "HEAD"
+            ]
+          }
+        ]
+      }
+    ],
+    "allow_github_platform": true,
+    "platform": [],
+    "platform_auto_allowed": 0,
+    "platform_optional": 0
+  }
+}
+",
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"dockerRetained":false,"docker":{"requested":"remove-group","access":"not-running","state":{"daemonActive":false,"socketUnitActive":false,"runnerInGroup":false,"socketAccessible":false}},"failOnTampering":true,"containerTls":"sni-only","containerRules":false,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+",
+  "/etc/safer-runner/validation-state.json": "{
+  "files": [
+    {
+      "path": "/etc/safer-runner/Corefile",
+      "checksum": "bbef07cc3604340b7bb50ec9008913c4fc7af769c29ba6e8887afc9466670013",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/resolv.conf",
+      "checksum": "388b5f50173389e3c7648e1c2180883dd1c27ae7739f7b9f9de82b293f3a3b6f",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/systemd/resolved.conf.d/no-stub.conf",
+      "checksum": "c45ac64198f05387ef83cd69032308c4efaf2640ef7bec21bf224dbdb3093ed3",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/safer-runner/policy.json",
+      "checksum": "093ac77c142e246f737a56d550b546de49905997a59e50167d6b1fb166e8140a",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/opt/safer-runner/proxy/policy.py",
+      "checksum": "a8f4b1d65253bfacf2d570b9409647257a482084a6af7082a1c700c0ab1570c6",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/opt/safer-runner/proxy/policy_core.py",
+      "checksum": "e4ad8062ea6baf0be5acaf2ca43dd3f2d54da733a616edb370a33c9c297274a5",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/rsyslog.d/10-sudo-safer-runner.conf",
+      "checksum": "6690a706780639d1263ecd7fe9c4b23f3ee4d928841c4cf9c57a34209222f2a3",
+      "timestamp": "<ts>"
+    }
+  ],
+  "iptablesRules": [
+    {
+      "chain": "INPUT",
+      "rules": "Chain INPUT (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "7e6e5cbecc1dc7eeb726abe2992b1a9b41099ccbbf6b1abaddc169b177f316a0",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "OUTPUT",
+      "rules": "Chain OUTPUT (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "d0c6c750358d056d0beff2dfd887435a12ac9dbe92d9b9675000b13d9e37d4d3",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "FORWARD",
+      "rules": "Chain FORWARD (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "8c67503b6cd013225c7f51274e8ec854effd50f37679cd1e99c75a84f101d3a3",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "SAFER_RUNNER_OUT",
+      "rules": "Chain SAFER_RUNNER_OUT (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "a72fa3974935ebd7743fa9a1e8c4867a51d20cf8bf6c0826c7ca5dc6190a7ec2",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "nat:OUTPUT",
+      "rules": "Chain OUTPUT (nat, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "860ea4c3a21a05ec34ff43ada05f8906d8468615d3eafac813aa25e238e4e12f",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "nat:SAFER_RUNNER_NAT",
+      "rules": "Chain SAFER_RUNNER_NAT (nat, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "8b9b6fafaa7fa35075cc21022e0bdeadfd763c6fd8babde0de8d327af12a586a",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "DOCKER-USER",
+      "rules": "",
+      "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "SAFER_RUNNER_CFWD",
+      "rules": "",
+      "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "nat:SAFER_RUNNER_CNAT",
+      "rules": "",
+      "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timestamp": "<ts>"
+    }
+  ],
+  "timestamp": "<ts>"
+}",
+  "/etc/ssl/certs/ca-certificates.crt": "SYSTEM ROOTS
+-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/etc/sudoers.d/runner": "# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation.
+# All other sudo commands will be denied.
+
+# Required commands for post-action validation
+# These are automatically added by safer-runner-action
+Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/safer-runner/Corefile, \\
+    /usr/bin/cat /etc/resolv.conf, \\
+    /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
+    /usr/bin/cat /etc/safer-runner/policy.json, \\
+    /usr/bin/cat /opt/safer-runner/proxy/policy.py, \\
+    /usr/bin/cat /opt/safer-runner/proxy/policy_core.py, \\
+    /usr/bin/cat /etc/docker/daemon.json, \\
+    /usr/bin/cat /etc/sudoers.d/00-sudo-logging, \\
+    /usr/bin/cat /etc/rsyslog.d/10-sudo-safer-runner.conf, \\
+    /usr/bin/cat /etc/safer-runner/validation-state.json, \\
+    /usr/sbin/iptables -L INPUT -n --line-numbers, \\
+    /usr/sbin/iptables -L OUTPUT -n --line-numbers, \\
+    /usr/sbin/iptables -L FORWARD -n --line-numbers, \\
+    /usr/sbin/iptables -L SAFER_RUNNER_OUT -n --line-numbers, \\
+    /usr/sbin/iptables -t nat -L OUTPUT -n --line-numbers, \\
+    /usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers, \\
+    /usr/sbin/iptables -L DOCKER-USER -n --line-numbers, \\
+    /usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers, \\
+    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+
+runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
+
+# The job's own command lines (sudo-config), as root only
+Cmnd_Alias SAFER_RUNNER_JOB = /usr/bin/apt-get update, \\
+    /usr/bin/apt-get install *, \\
+    /usr/bin/nproc ""
+
+runner ALL=(root) NOPASSWD: SAFER_RUNNER_JOB
+
+",
+  "/etc/systemd/resolved.conf.d/no-stub.conf": "[Resolve]
+DNS=127.0.0.1
+DNSSEC=yes
+DNSStubListener=no",
+  "/opt/safer-runner/proxy/policy.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py>
+",
+  "/opt/safer-runner/proxy/policy_core.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py>
+",
+  "/run/safer-runner/proxy/ca-cert.pem": "-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/run/safer-runner/proxy/mitmproxy-ca.pem": "FAKE PRIVATE KEY
+-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/usr/local/share/ca-certificates/safer-runner-ca.crt": "-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/var/log/safer-runner/dns.log": "[INFO] 127.0.0.1:41452 BLOCK A srst-abababababab.objects.githubusercontent.com. NXDOMAIN
+",
+  "/var/log/safer-runner/firewall.log": "",
+  "/var/log/safer-runner/proxy-flows.jsonl": "{"ev": "start", "ok": true, "pid": 4242, "mode": "enforce"}
+{"ev":"tls","verdict":"BLOCK","reason":"sni-not-allowed","layer":"sni","sni":"selftest.safer-runner.invalid","client":"10.1.0.4:50000","dst":"192.0.2.1:443"}
+{"ev":"tls","verdict":"INTERCEPT","reason":"allowed","layer":"sni","sni":"github.com","client":"10.1.0.4:50001","dst":"192.0.2.1:443","repointed":true}
+{"ev":"https","verdict":"ALLOW","reason":"allowed","layer":"http","host":"github.com","sni":"github.com","method":"GET","path":"/robots.txt","status":200,"client":"10.1.0.4:50001","dst":"192.0.2.1:443","upstream":"140.82.112.3:443"}
+",
+  "/var/log/safer-runner/selftest.json": "[{"name":"sni-block","ok":true,"detail":"SNI selftest.safer-runner.invalid -> BLOCK (sni-not-allowed); curl exit 35"},{"name":"repoint","ok":true,"detail":"client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)"},{"name":"dns-exact","ok":true,"detail":"srst-abababababab.objects.githubusercontent.com -> NXDOMAIN; DNS log labels it BLOCK"}]",
+  "/var/log/safer-runner/sudo.log": "Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/safer-runner/Corefile
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/resolv.conf
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/safer-runner/policy.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /opt/safer-runner/proxy/policy.py
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /opt/safer-runner/proxy/policy_core.py
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/rsyslog.d/10-sudo-safer-runner.conf
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L INPUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L OUTPUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L FORWARD -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L SAFER_RUNNER_OUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -t nat -L OUTPUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L DOCKER-USER -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/touch /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chown root:root /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chmod 0600 /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/tee /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/tee /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/visudo -c -f /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chmod 0440 /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chown root:root /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner
+",
+}
+`;
+
+exports[`setup transcript (runSetup on a recording fake runner) enforce on sudo-rs, sudo-config: transcript 1`] = `
+"$ sudo --version [ignore-rc] [silent]
+$ <net.listen> 26383
+$ <net.listen> 26384
+$ <fetch> https://api.github.com/meta
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
+$ sudo mkdir -p /var/log/safer-runner
+$ sudo chown syslog:adm /var/log/safer-runner
+$ sudo chmod 755 /var/log/safer-runner
+$ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
+$ id -u safer-runner-proxy [ignore-rc] [silent]
+$ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
+$ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
+$ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
+$ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
+$ sudo install -d -m 0755 -o root -g root /etc/safer-runner
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 1010 bytes, sha256:093ac77c142e
+$ sudo chown root:root /etc/safer-runner/policy.json
+$ sudo chmod 0644 /etc/safer-runner/policy.json
+$ sudo touch /var/log/safer-runner/proxy-flows.jsonl
+$ sudo chown safer-runner-proxy:safer-runner-proxy /var/log/safer-runner/proxy-flows.jsonl
+$ sudo chmod 0644 /var/log/safer-runner/proxy-flows.jsonl
+$ sudo install -d -m 0755 -o root -g root /run/safer-runner
+$ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
+$ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
+$ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
+$ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
+$ sudo update-ca-certificates [silent]
+$ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
+$ <export> NODE_USE_SYSTEM_CA=1
+$ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+$ <export> PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+$ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+$ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+$ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+$ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
+$ <dns.lookup> fv-az123-456
+$ sudo install -d -m 0755 -o root -g root /etc/safer-runner
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1187 bytes, sha256:bbef07cc3604
+$ sudo chown root:root /etc/safer-runner/Corefile
+$ sudo chmod 0644 /etc/safer-runner/Corefile
+$ sudo touch /var/log/safer-runner/dns.log
+$ sudo chown root:root /var/log/safer-runner/dns.log
+$ sudo chmod 0644 /var/log/safer-runner/dns.log
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
+$ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
+$ <dns.query> github.com
+$ sudo mkdir -p /etc/systemd/resolved.conf.d
+$ sudo tee /etc/systemd/resolved.conf.d/no-stub.conf  <<< 53 bytes, sha256:c45ac64198f0
+$ sudo unlink /etc/resolv.conf
+$ sudo tee /etc/resolv.conf  <<< 21 bytes, sha256:388b5f501733
+$ sudo systemctl restart systemd-resolved
+$ systemctl is-active --quiet docker [ignore-rc] [silent]
+$ sudo tee /etc/rsyslog.d/10-iptables-safer-runner-v2.conf  <<< 177 bytes, sha256:5c63d7dab6a6
+$ sudo touch /var/log/safer-runner/firewall.log
+$ sudo chown syslog:adm /var/log/safer-runner/firewall.log
+$ sudo chmod 644 /var/log/safer-runner/firewall.log
+$ sudo systemctl restart rsyslog
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo sysctl -q -w net.ipv4.conf.all.route_localnet=1
+$ sudo iptables-restore --noflush  <<< 1810 bytes, sha256:0a7f801c8232
+$ sudo ip6tables-restore --noflush [ignore-rc]  <<< 595 bytes, sha256:5efd88f74ba7
+$ sudo ss -K state established ( dport = :443 or dport = :80 ) [ignore-rc] [silent]
+$ sudo iptables -t nat -S SAFER_RUNNER_NAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo ip6tables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo iptables -t nat -S SAFER_RUNNER_CNAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_CFWD [ignore-rc]
+$ sudo iptables -S DOCKER-USER [ignore-rc]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/ [ignore-rc] [silent]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt [ignore-rc] [silent]
+$ <dns.query> srst-abababababab.objects.githubusercontent.com
+$ sudo tee /var/log/safer-runner/selftest.json [silent]  <<< 358 bytes, sha256:3029ee7d9376
+$ sudo chmod 0644 /var/log/safer-runner/selftest.json
+$ id -nG runner [ignore-rc] [silent]
+$ sudo gpasswd -d runner docker [ignore-rc]
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
+$ id -nG runner [ignore-rc] [silent]
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 452 bytes, sha256:e83a10108392
+$ sudo touch /var/log/safer-runner/sudo.log
+$ sudo chmod 0644 /var/log/safer-runner/sudo.log
+$ sudo chown syslog:adm /var/log/safer-runner/sudo.log
+$ sudo tee /etc/rsyslog.d/10-sudo-safer-runner.conf [silent]  <<< 248 bytes, sha256:6690a7067806
+$ sudo systemctl restart rsyslog
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/rsyslog.d/10-sudo-safer-runner.conf [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
+$ sudo touch /etc/safer-runner/validation-state.json
+$ sudo chown root:root /etc/safer-runner/validation-state.json
+$ sudo chmod 0600 /etc/safer-runner/validation-state.json
+$ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3687 bytes, sha256:4330be89fb8c
+$ sudo tee /tmp/runner-sudoers.tmp  <<< 1668 bytes, sha256:a39bdd4294b3
+$ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
+$ sudo chmod 0440 /tmp/runner-sudoers.tmp
+$ sudo chown root:root /tmp/runner-sudoers.tmp
+$ sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner"
+`;
+
+exports[`setup transcript (runSetup on a recording fake runner) enforce on sudo-rs, sudo-config: warnings 1`] = `
+[
+  "warning: sudo-config: '/usr/bin/apt-get update' gives the job root (apt-get can run or write anything), so sudo can remove the egress controls",
+  "warning: sudo-config: '/usr/bin/apt-get install *' gives the job root (apt-get can run or write anything), so sudo can remove the egress controls",
+  "warning: enforce is ADVISORY in this job: sudo-config keeps 3 sudo command line(s), and a command that can run code or write files gives the job root, which can remove the egress controls. Remove sudo-config to make enforce a boundary.",
+]
+`;
+
 exports[`setup transcript (runSetup on a recording fake runner) enforce, docker: keep with running service containers: files 1`] = `
 {
   "/etc/docker/daemon.json": "{
@@ -2192,6 +2645,467 @@ $ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3932 bytes, sha
 exports[`setup transcript (runSetup on a recording fake runner) enforce, docker: stop, disable-sudo: false: warnings 1`] = `
 [
   "warning: enforce is ADVISORY in this job: sudo is retained (disable-sudo: false), so any step can use it to remove the egress controls. This is not an enforced boundary. Remove disable-sudo: false to make enforce a boundary.",
+]
+`;
+
+exports[`setup transcript (runSetup on a recording fake runner) enforce, sudo-config: files 1`] = `
+{
+  "/etc/resolv.conf": "nameserver 127.0.0.1
+",
+  "/etc/rsyslog.d/10-iptables-safer-runner-v2.conf": "if $programname == 'kernel' and $msg contains ['SaferRunner-Drop:', 'SaferRunner-Egress:', 'SaferRunner-CDrop:', 'SaferRunner-CEgress:'] then /var/log/safer-runner/firewall.log
+",
+  "/etc/safer-runner/Corefile": "# safer-runner CoreDNS resolver (enforce). Generated - do not edit.
+# Blocks are tried in order: the first whose view matches answers the query.
+.:53 {
+  bind 127.0.0.1
+  view allow {
+    expr ((name() in ['github.com.', 'objects.githubusercontent.com.', 'productionresultssa1.blob.core.windows.net.', 'fulcio.githubapp.com.', 'pkg-containers.githubusercontent.com.', 'registry.npmjs.org.', 'example.org.'] || name() endsWith '.github.com.' || name() endsWith '.actions.githubusercontent.com.' || name() endsWith '.example.org.' || name() matches '^hosted-compute-[a-z0-9_-]*[.]githubapp[.]com[.]$') && !(name() in ['gist.github.com.', 'gist.githubusercontent.com.', 'raw.githubusercontent.com.'])) || name() in ['localhost.', 'ip6-localhost.', 'ip6-loopback.', 'fv-az123-456.']
+  }
+  metadata
+  log . "{remote} ALLOW {type} {name} {rcode} upstream={/forward/upstream} {duration}"
+  errors
+  hosts /etc/hosts {
+    10.1.0.4 fv-az123-456
+    fallthrough
+  }
+  cache 3600 {
+    serve_stale 1h
+  }
+  forward . 9.9.9.9 149.112.112.112 {
+    policy sequential
+  }
+}
+.:53 {
+  bind 127.0.0.1
+  log . "{remote} BLOCK {type} {name} {rcode}"
+  errors
+  template ANY ANY {
+    rcode NXDOMAIN
+  }
+}
+",
+  "/etc/safer-runner/ca.pem": "-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/etc/safer-runner/policy.json": "{
+  "version": 1,
+  "mode": "enforce",
+  "allow": [
+    "github.com",
+    "*.github.com",
+    "*.actions.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "productionresultssa1.blob.core.windows.net",
+    "fulcio.githubapp.com",
+    "pkg-containers.githubusercontent.com",
+    "registry.npmjs.org",
+    "example.org",
+    "*.example.org"
+  ],
+  "passthrough": [
+    "hosted-compute-*.githubapp.com"
+  ],
+  "deny": [
+    "gist.github.com",
+    "gist.githubusercontent.com",
+    "raw.githubusercontent.com"
+  ],
+  "flow_log": "/var/log/safer-runner/proxy-flows.jsonl",
+  "container_tls": "sni-only",
+  "container_port": 26384,
+  "http_filter": {
+    "hosts": [
+      {
+        "host": "api.github.com",
+        "rules": [
+          {
+            "path": "*",
+            "methods": [
+              "GET",
+              "HEAD"
+            ]
+          }
+        ]
+      }
+    ],
+    "allow_github_platform": true,
+    "platform": [],
+    "platform_auto_allowed": 0,
+    "platform_optional": 0
+  }
+}
+",
+  "/etc/safer-runner/setup-complete": "{"mode":"enforce","sudoRetained":false,"dockerRetained":false,"docker":{"requested":"remove-group","access":"group-removed","state":{"daemonActive":true,"socketUnitActive":true,"runnerInGroup":false,"socketAccessible":false}},"failOnTampering":true,"containerTls":"sni-only","containerRules":true,"proxyPorts":[26383,26384],"selfTestWindow":[60,603],"dnsSelfTestName":"srst-abababababab.objects.githubusercontent.com","at":"<ts>"}
+",
+  "/etc/safer-runner/validation-state.json": "{
+  "files": [
+    {
+      "path": "/etc/safer-runner/Corefile",
+      "checksum": "bbef07cc3604340b7bb50ec9008913c4fc7af769c29ba6e8887afc9466670013",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/resolv.conf",
+      "checksum": "388b5f50173389e3c7648e1c2180883dd1c27ae7739f7b9f9de82b293f3a3b6f",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/systemd/resolved.conf.d/no-stub.conf",
+      "checksum": "c45ac64198f05387ef83cd69032308c4efaf2640ef7bec21bf224dbdb3093ed3",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/safer-runner/policy.json",
+      "checksum": "093ac77c142e246f737a56d550b546de49905997a59e50167d6b1fb166e8140a",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/opt/safer-runner/proxy/policy.py",
+      "checksum": "a8f4b1d65253bfacf2d570b9409647257a482084a6af7082a1c700c0ab1570c6",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/opt/safer-runner/proxy/policy_core.py",
+      "checksum": "e4ad8062ea6baf0be5acaf2ca43dd3f2d54da733a616edb370a33c9c297274a5",
+      "timestamp": "<ts>"
+    },
+    {
+      "path": "/etc/sudoers.d/00-sudo-logging",
+      "checksum": "fa273c0b1629f06fa6d3145662b12efd8422f28a1c5c24af7af252970143bbfa",
+      "timestamp": "<ts>"
+    }
+  ],
+  "iptablesRules": [
+    {
+      "chain": "INPUT",
+      "rules": "Chain INPUT (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "7e6e5cbecc1dc7eeb726abe2992b1a9b41099ccbbf6b1abaddc169b177f316a0",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "OUTPUT",
+      "rules": "Chain OUTPUT (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "d0c6c750358d056d0beff2dfd887435a12ac9dbe92d9b9675000b13d9e37d4d3",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "FORWARD",
+      "rules": "Chain FORWARD (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "8c67503b6cd013225c7f51274e8ec854effd50f37679cd1e99c75a84f101d3a3",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "SAFER_RUNNER_OUT",
+      "rules": "Chain SAFER_RUNNER_OUT (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "a72fa3974935ebd7743fa9a1e8c4867a51d20cf8bf6c0826c7ca5dc6190a7ec2",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "nat:OUTPUT",
+      "rules": "Chain OUTPUT (nat, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "860ea4c3a21a05ec34ff43ada05f8906d8468615d3eafac813aa25e238e4e12f",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "nat:SAFER_RUNNER_NAT",
+      "rules": "Chain SAFER_RUNNER_NAT (nat, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "8b9b6fafaa7fa35075cc21022e0bdeadfd763c6fd8babde0de8d327af12a586a",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "DOCKER-USER",
+      "rules": "Chain DOCKER-USER (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "6269f37ee79f8e7ec63465f8f132afab017f96af9dfa0948f3b54a1f1a76de14",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "SAFER_RUNNER_CFWD",
+      "rules": "Chain SAFER_RUNNER_CFWD (filter, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "1cafa30ffc61e66c5e59fb35572066e752890905ad316b61d95c09dd7eeed3c3",
+      "timestamp": "<ts>"
+    },
+    {
+      "chain": "nat:SAFER_RUNNER_CNAT",
+      "rules": "Chain SAFER_RUNNER_CNAT (nat, ruleset 2)\\nnum  target  prot opt source  destination\\n",
+      "checksum": "1ad044b9a9d961b9e6491a9fcb7c05157dfa896914d02a4d049a4bce0293d16b",
+      "timestamp": "<ts>"
+    }
+  ],
+  "timestamp": "<ts>"
+}",
+  "/etc/ssl/certs/ca-certificates.crt": "SYSTEM ROOTS
+-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/etc/sudoers.d/00-sudo-logging": "Defaults logfile=/var/log/safer-runner/sudo.log
+Defaults loglinelen=0
+",
+  "/etc/sudoers.d/runner": "# Safer Runner Action - Validation-only sudo access
+# This configuration allows only the commands needed for post-action integrity validation.
+# All other sudo commands will be denied.
+
+# Required commands for post-action validation
+# These are automatically added by safer-runner-action
+Cmnd_Alias SAFER_RUNNER_VALIDATION = /usr/bin/cat /etc/safer-runner/Corefile, \\
+    /usr/bin/cat /etc/resolv.conf, \\
+    /usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf, \\
+    /usr/bin/cat /etc/safer-runner/policy.json, \\
+    /usr/bin/cat /opt/safer-runner/proxy/policy.py, \\
+    /usr/bin/cat /opt/safer-runner/proxy/policy_core.py, \\
+    /usr/bin/cat /etc/docker/daemon.json, \\
+    /usr/bin/cat /etc/sudoers.d/00-sudo-logging, \\
+    /usr/bin/cat /etc/rsyslog.d/10-sudo-safer-runner.conf, \\
+    /usr/bin/cat /etc/safer-runner/validation-state.json, \\
+    /usr/sbin/iptables -L INPUT -n --line-numbers, \\
+    /usr/sbin/iptables -L OUTPUT -n --line-numbers, \\
+    /usr/sbin/iptables -L FORWARD -n --line-numbers, \\
+    /usr/sbin/iptables -L SAFER_RUNNER_OUT -n --line-numbers, \\
+    /usr/sbin/iptables -t nat -L OUTPUT -n --line-numbers, \\
+    /usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers, \\
+    /usr/sbin/iptables -L DOCKER-USER -n --line-numbers, \\
+    /usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers, \\
+    /usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+
+runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
+
+# The job's own command lines (sudo-config), as root only
+Cmnd_Alias SAFER_RUNNER_JOB = /usr/bin/apt-get update, \\
+    /usr/bin/apt-get install *, \\
+    /usr/bin/nproc ""
+
+runner ALL=(root) NOPASSWD: SAFER_RUNNER_JOB
+
+",
+  "/etc/systemd/resolved.conf.d/no-stub.conf": "[Resolve]
+DNS=127.0.0.1
+DNSSEC=yes
+DNSStubListener=no",
+  "/opt/safer-runner/proxy/policy.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py>
+",
+  "/opt/safer-runner/proxy/policy_core.py": "<copy of /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py>
+",
+  "/run/safer-runner/proxy/ca-cert.pem": "-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/run/safer-runner/proxy/mitmproxy-ca.pem": "FAKE PRIVATE KEY
+-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/usr/local/share/ca-certificates/safer-runner-ca.crt": "-----BEGIN CERTIFICATE-----
+MIIBfake1
+MIIBfake2
+MIIBfake3
+-----END CERTIFICATE-----
+",
+  "/var/log/safer-runner/dns.log": "[INFO] 127.0.0.1:41452 BLOCK A srst-abababababab.objects.githubusercontent.com. NXDOMAIN
+",
+  "/var/log/safer-runner/firewall.log": "",
+  "/var/log/safer-runner/proxy-flows.jsonl": "{"ev": "start", "ok": true, "pid": 4242, "mode": "enforce"}
+{"ev":"tls","verdict":"BLOCK","reason":"sni-not-allowed","layer":"sni","sni":"selftest.safer-runner.invalid","client":"10.1.0.4:50000","dst":"192.0.2.1:443"}
+{"ev":"tls","verdict":"INTERCEPT","reason":"allowed","layer":"sni","sni":"github.com","client":"10.1.0.4:50001","dst":"192.0.2.1:443","repointed":true}
+{"ev":"https","verdict":"ALLOW","reason":"allowed","layer":"http","host":"github.com","sni":"github.com","method":"GET","path":"/robots.txt","status":200,"client":"10.1.0.4:50001","dst":"192.0.2.1:443","upstream":"140.82.112.3:443"}
+",
+  "/var/log/safer-runner/selftest.json": "[{"name":"sni-block","ok":true,"detail":"SNI selftest.safer-runner.invalid -> BLOCK (sni-not-allowed); curl exit 35"},{"name":"repoint","ok":true,"detail":"client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)"},{"name":"dns-exact","ok":true,"detail":"srst-abababababab.objects.githubusercontent.com -> NXDOMAIN; DNS log labels it BLOCK"}]",
+  "/var/log/safer-runner/sudo.log": "Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/safer-runner/Corefile
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/resolv.conf
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/systemd/resolved.conf.d/no-stub.conf
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/safer-runner/policy.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /opt/safer-runner/proxy/policy.py
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /opt/safer-runner/proxy/policy_core.py
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/cat /etc/sudoers.d/00-sudo-logging
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L INPUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L OUTPUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L FORWARD -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L SAFER_RUNNER_OUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -t nat -L OUTPUT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L DOCKER-USER -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/touch /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chown root:root /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chmod 0600 /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/tee /etc/safer-runner/validation-state.json
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/tee /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/visudo -c -f /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chmod 0440 /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/chown root:root /tmp/runner-sudoers.tmp
+Nov  7 12:00:00 : runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner
+",
+}
+`;
+
+exports[`setup transcript (runSetup on a recording fake runner) enforce, sudo-config: transcript 1`] = `
+"$ sudo --version [ignore-rc] [silent]
+$ <net.listen> 26383
+$ <net.listen> 26384
+$ <fetch> https://api.github.com/meta
+$ sudo -E apt-get install -y -qq --no-install-recommends conntrack [ignore-rc]
+$ sudo mkdir -p /var/log/safer-runner
+$ sudo chown syslog:adm /var/log/safer-runner
+$ sudo chmod 755 /var/log/safer-runner
+$ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --uid 62500 dns-abababababababab
+$ id -u safer-runner-proxy [ignore-rc] [silent]
+$ sudo useradd --system --no-create-home --shell /usr/sbin/nologin safer-runner-proxy
+$ id -u safer-runner-proxy [silent]
+$ sudo install -d -m 0755 -o root -g root /opt/safer-runner/proxy
+$ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy.py /opt/safer-runner/proxy/policy.py
+$ sudo install -m 0644 -o root -g root /home/runner/work/_actions/portswigger-tim/safer-runner-action/v2.3.0/proxy/policy_core.py /opt/safer-runner/proxy/policy_core.py
+$ sudo install -d -m 0755 -o root -g root /etc/safer-runner
+$ sudo tee /etc/safer-runner/policy.json [silent]  <<< 1010 bytes, sha256:093ac77c142e
+$ sudo chown root:root /etc/safer-runner/policy.json
+$ sudo chmod 0644 /etc/safer-runner/policy.json
+$ sudo touch /var/log/safer-runner/proxy-flows.jsonl
+$ sudo chown safer-runner-proxy:safer-runner-proxy /var/log/safer-runner/proxy-flows.jsonl
+$ sudo chmod 0644 /var/log/safer-runner/proxy-flows.jsonl
+$ sudo install -d -m 0755 -o root -g root /run/safer-runner
+$ sudo install -d -m 0700 -o safer-runner-proxy -g safer-runner-proxy /run/safer-runner/proxy
+$ sudo -u safer-runner-proxy sh -c umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -keyout "$1" -out "$2" -subj "$3" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign && cat "$1" "$2" > "$4" && rm -f "$1" sh /run/safer-runner/proxy/ca-key.pem /run/safer-runner/proxy/ca-cert.pem /O=safer-runner/CN=safer-runner ephemeral CA 1234567890 /run/safer-runner/proxy/mitmproxy-ca.pem
+$ sudo install -m 0644 -o root -g root /run/safer-runner/proxy/ca-cert.pem /etc/safer-runner/ca.pem
+$ sudo systemctl stop safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-proxy [ignore-rc] [silent]
+$ sudo systemd-run --unit=safer-runner-proxy --description=safer-runner egress proxy --uid=safer-runner-proxy --gid=safer-runner-proxy -p Restart=always -p RestartSec=1 -p UMask=0077 -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p ReadWritePaths=/run/safer-runner/proxy /var/log/safer-runner/proxy-flows.jsonl -p LimitNOFILE=65536 --setenv=HOME=/run/safer-runner/proxy --setenv=SAFER_RUNNER_POLICY=/etc/safer-runner/policy.json /opt/safer-runner/bin/mitmdump --mode transparent@127.0.0.1:26383 --mode transparent@127.0.0.1:26384 --set confdir=/run/safer-runner/proxy --set connection_strategy=lazy --set stream_large_bodies=1m --set block_global=false --set flow_detail=0 --set termlog_verbosity=warn -s /opt/safer-runner/proxy/policy.py
+$ ss -Hltn sport = :26383 [ignore-rc] [silent]
+$ ss -Hltn sport = :26384 [ignore-rc] [silent]
+$ sudo install -m 0644 -o root -g root /etc/safer-runner/ca.pem /usr/local/share/ca-certificates/safer-runner-ca.crt
+$ sudo update-ca-certificates [silent]
+$ <export> NODE_EXTRA_CA_CERTS=/etc/safer-runner/ca.pem
+$ <export> NODE_USE_SYSTEM_CA=1
+$ <export> REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+$ <export> PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+$ <export> SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+$ <export> GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+$ <export> AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+$ <export> CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -delete -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]
+$ sudo /usr/lib/jvm/temurin-17-jdk-amd64/bin/keytool -importcert -noprompt -keystore /usr/lib/jvm/temurin-17-jdk-amd64/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file /etc/safer-runner/ca.pem [ignore-rc] [silent]
+$ <dns.lookup> fv-az123-456
+$ sudo install -d -m 0755 -o root -g root /etc/safer-runner
+$ sudo tee /etc/safer-runner/Corefile [silent]  <<< 1187 bytes, sha256:bbef07cc3604
+$ sudo chown root:root /etc/safer-runner/Corefile
+$ sudo chmod 0644 /etc/safer-runner/Corefile
+$ sudo touch /var/log/safer-runner/dns.log
+$ sudo chown root:root /var/log/safer-runner/dns.log
+$ sudo chmod 0644 /var/log/safer-runner/dns.log
+$ sudo systemctl stop safer-runner-dns [ignore-rc] [silent]
+$ sudo systemctl reset-failed safer-runner-dns [ignore-rc] [silent]
+$ sudo systemd-run --unit=safer-runner-dns --description=safer-runner DNS resolver (CoreDNS) --uid=dns-abababababababab --gid=dns-abababababababab -p Restart=always -p RestartSec=1 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict -p StandardOutput=append:/var/log/safer-runner/dns.log -p StandardError=append:/var/log/safer-runner/dns.log /opt/safer-runner/bin/coredns -conf /etc/safer-runner/Corefile
+$ <dns.query> github.com
+$ sudo mkdir -p /etc/systemd/resolved.conf.d
+$ sudo tee /etc/systemd/resolved.conf.d/no-stub.conf  <<< 53 bytes, sha256:c45ac64198f0
+$ sudo unlink /etc/resolv.conf
+$ sudo tee /etc/resolv.conf  <<< 21 bytes, sha256:388b5f501733
+$ sudo systemctl restart systemd-resolved
+$ systemctl is-active --quiet docker [ignore-rc] [silent]
+$ sudo docker ps -q --no-trunc [ignore-rc] [silent]
+$ sudo tee /etc/rsyslog.d/10-iptables-safer-runner-v2.conf  <<< 177 bytes, sha256:5c63d7dab6a6
+$ sudo touch /var/log/safer-runner/firewall.log
+$ sudo chown syslog:adm /var/log/safer-runner/firewall.log
+$ sudo chmod 644 /var/log/safer-runner/firewall.log
+$ sudo systemctl restart rsyslog
+$ ip -4 route show default [ignore-rc] [silent]
+$ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
+$ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D OUTPUT -j SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_OUT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i docker0 -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -D PREROUTING -i br-+ -j SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D DOCKER-USER -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i docker0 -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -D FORWARD -i br-+ -j SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t nat -F SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t nat -X SAFER_RUNNER_CNAT [ignore-rc] [silent]
+$ sudo iptables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo iptables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -F SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo ip6tables -t filter -X SAFER_RUNNER_CFWD [ignore-rc] [silent]
+$ sudo sysctl -q -w net.ipv4.conf.all.route_localnet=1
+$ sudo iptables-restore --noflush  <<< 2880 bytes, sha256:7cc0401b0714
+$ sudo ip6tables-restore --noflush [ignore-rc]  <<< 1148 bytes, sha256:3604c6569b46
+$ sudo ss -K state established ( dport = :443 or dport = :80 ) [ignore-rc] [silent]
+$ sudo docker network ls -q --filter driver=bridge [ignore-rc] [silent]
+$ sudo docker network inspect f00dbabe0001 [ignore-rc] [silent]
+$ sh -c command -v conntrack [ignore-rc] [silent]
+$ sudo conntrack -D -f ipv4 -s 172.17.0.0/16 [ignore-rc] [silent]
+$ sudo iptables -t nat -S SAFER_RUNNER_NAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo ip6tables -S SAFER_RUNNER_OUT [ignore-rc]
+$ sudo iptables -t nat -S SAFER_RUNNER_CNAT [ignore-rc]
+$ sudo iptables -S SAFER_RUNNER_CFWD [ignore-rc]
+$ sudo iptables -S DOCKER-USER [ignore-rc]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve selftest.safer-runner.invalid:443:192.0.2.1 https://selftest.safer-runner.invalid/ [ignore-rc] [silent]
+$ curl -sS -m 20 -o /dev/null -w %{http_code} --resolve github.com:443:192.0.2.1 https://github.com/robots.txt [ignore-rc] [silent]
+$ <dns.query> srst-abababababab.objects.githubusercontent.com
+$ sudo tee /var/log/safer-runner/selftest.json [silent]  <<< 358 bytes, sha256:3029ee7d9376
+$ sudo chmod 0644 /var/log/safer-runner/selftest.json
+$ id -nG runner [ignore-rc] [silent]
+$ sudo gpasswd -d runner docker [ignore-rc]
+$ sudo chown root:root /var/run/docker.sock [ignore-rc]
+$ sudo chmod 600 /var/run/docker.sock [ignore-rc]
+$ systemctl is-active --quiet docker.service [ignore-rc] [silent]
+$ systemctl is-active --quiet docker.socket [ignore-rc] [silent]
+$ id -nG runner [ignore-rc] [silent]
+$ sudo tee /etc/safer-runner/setup-complete [silent]  <<< 451 bytes, sha256:15b15d3fa474
+$ sudo touch /var/log/safer-runner/sudo.log
+$ sudo chmod 0644 /var/log/safer-runner/sudo.log
+$ sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]  <<< 70 bytes, sha256:fa273c0b1629
+$ sudo chmod 0440 /tmp/safer-runner-sudo-logging.tmp
+$ sudo chown root:root /tmp/safer-runner-sudo-logging.tmp
+$ sudo mv /tmp/safer-runner-sudo-logging.tmp /etc/sudoers.d/00-sudo-logging
+$ sudo cat /etc/safer-runner/Corefile [ignore-rc] [silent]
+$ sudo cat /etc/resolv.conf [ignore-rc] [silent]
+$ sudo cat /etc/systemd/resolved.conf.d/no-stub.conf [ignore-rc] [silent]
+$ sudo cat /etc/safer-runner/policy.json [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy.py [ignore-rc] [silent]
+$ sudo cat /opt/safer-runner/proxy/policy_core.py [ignore-rc] [silent]
+$ sudo cat /etc/sudoers.d/00-sudo-logging [ignore-rc] [silent]
+$ sudo iptables -L INPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L FORWARD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_OUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L OUTPUT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L DOCKER-USER -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -L SAFER_RUNNER_CFWD -n --line-numbers [ignore-rc] [silent]
+$ sudo iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers [ignore-rc] [silent]
+$ sudo touch /etc/safer-runner/validation-state.json
+$ sudo chown root:root /etc/safer-runner/validation-state.json
+$ sudo chmod 0600 /etc/safer-runner/validation-state.json
+$ sudo tee /etc/safer-runner/validation-state.json [silent]  <<< 3932 bytes, sha256:3ca9d500c331
+$ sudo tee /tmp/runner-sudoers.tmp  <<< 1668 bytes, sha256:a39bdd4294b3
+$ sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]
+$ sudo chmod 0440 /tmp/runner-sudoers.tmp
+$ sudo chown root:root /tmp/runner-sudoers.tmp
+$ sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner"
+`;
+
+exports[`setup transcript (runSetup on a recording fake runner) enforce, sudo-config: warnings 1`] = `
+[
+  "warning: sudo-config: '/usr/bin/apt-get update' gives the job root (apt-get can run or write anything), so sudo can remove the egress controls",
+  "warning: sudo-config: '/usr/bin/apt-get install *' gives the job root (apt-get can run or write anything), so sudo can remove the egress controls",
+  "warning: enforce is ADVISORY in this job: sudo-config keeps 3 sudo command line(s), and a command that can run code or write files gives the job root, which can remove the egress controls. Remove sudo-config to make enforce a boundary.",
 ]
 `;
 

@@ -3499,6 +3499,7 @@ exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
 exports.buildSudoLoggingDropIn = buildSudoLoggingDropIn;
 exports.getValidationSudoCommands = getValidationSudoCommands;
 exports.getRequiredSudoCommands = getRequiredSudoCommands;
+exports.sudoersCommand = sudoersCommand;
 exports.buildRestrictedSudoers = buildRestrictedSudoers;
 exports.render = render;
 exports.ruleText = ruleText;
@@ -3608,11 +3609,35 @@ ${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 `;
 }
 /** The restricted sudoers file that replaces RUNNER_SUDOERS_FILE (disable-sudo). */
-function buildRestrictedSudoers() {
+/**
+ * One sudo-config rule as a sudoers command. A command with no arguments gets `""`: in sudoers
+ * a bare command allows ANY arguments, `""` allows none. Every word is checked again here.
+ */
+function sudoersCommand(r) {
+    for (const w of [r.path, ...r.args]) {
+        if (!WORD.test(w))
+            throw new Error(`sudo-config: refusing to write '${w}' into sudoers`);
+    }
+    return r.args.length === 0 && !r.anyRest ? `${r.path} ""` : ruleText(r);
+}
+/**
+ * The restricted sudoers file (disable-sudo): the action's own validation commands, plus the
+ * job's sudo-config command lines, run as root only. Without sudo-config it is exactly the
+ * validation-only file.
+ */
+function buildRestrictedSudoers(rules = []) {
+    const job = rules.length
+        ? `
+# The job's own command lines (sudo-config), as root only
+Cmnd_Alias SAFER_RUNNER_JOB = ${rules.map(sudoersCommand).join(', \\\n    ')}
+
+${exports.RUNNER_USERNAME} ALL=(root) NOPASSWD: SAFER_RUNNER_JOB
+`
+        : '';
     return `# Safer Runner Action - Validation-only sudo access
 # This configuration allows only the commands needed for post-action integrity validation.
 # All other sudo commands will be denied.
-${getRequiredSudoCommands(exports.RUNNER_USERNAME)}
+${getRequiredSudoCommands(exports.RUNNER_USERNAME)}${job}
 `;
 }
 function render(f) {
@@ -3623,7 +3648,7 @@ function render(f) {
             path: getSudoLoggingConfigFile(f.flavour),
             content: f.flavour === 'sudo-rs' ? buildSudoRsyslogConfig(f.logFile) : buildSudoLoggingDropIn(f.logFile)
         },
-        sudoers: buildRestrictedSudoers()
+        restrict: f.restrict ? { sudoers: buildRestrictedSudoers(f.rules) } : null
     };
 }
 /**
@@ -3863,7 +3888,7 @@ async function setupSudoLogging(h, r) {
  */
 async function restrictSudo(h, r, _baseline) {
     core.info('Restricting sudo access to validation commands only');
-    await (0, host_1.sudo)(['tee', config_1.SUDOERS_TEMP_FILE], { input: Buffer.from(r.sudoers) }, h);
+    await (0, host_1.sudo)(['tee', config_1.SUDOERS_TEMP_FILE], { input: Buffer.from(r.restrict.sudoers) }, h);
     // the exit code is checked here, not ignored: a rejected file is never installed
     const visudo = await h.output('sudo', ['visudo', '-c', '-f', config_1.SUDOERS_TEMP_FILE], { ignoreReturnCode: true });
     if (visudo.exitCode !== 0) {
@@ -4046,6 +4071,14 @@ async function runSetup(inputs, h = host_1.realHost) {
     else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
         core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
     }
+    for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig))
+        core.warning(w);
+    if (mode === 'enforce' && inputs.disableSudo && inputs.sudoConfig.length) {
+        // D1: never a boundary - no allowlist can be proven free of a command that gives root
+        core.warning(`enforce is ADVISORY in this job: sudo-config keeps ${inputs.sudoConfig.length} sudo command ` +
+            'line(s), and a command that can run code or write files gives the job root, which can remove ' +
+            'the egress controls. Remove sudo-config to make enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo allowlist)' });
+    }
     if (mode === 'enforce' && inputs.dockerDefaulted) {
         core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
     }
@@ -4151,10 +4184,15 @@ async function runSetup(inputs, h = host_1.realHost) {
         silent: true
     });
     // 11. Sudo: logging on, then the integrity baseline, then sudo restricted - the last step
-    const sudoRendered = sudo.render({ flavour: sudoFlavour, logFile: constants_1.SUDO_LOG });
+    const sudoRendered = sudo.render({
+        flavour: sudoFlavour,
+        logFile: constants_1.SUDO_LOG,
+        restrict: inputs.disableSudo,
+        rules: inputs.sudoConfig
+    });
     const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);
     const baseline = await (0, baseline_1.captureBaseline)(h, [...baseline_1.CRITICAL_FILES, sudoRendered.logging.path, ...(dockerd.configWritten ? [constants_1.DOCKER_DAEMON_JSON] : [])], sudoLogging);
-    if (inputs.disableSudo) {
+    if (sudoRendered.restrict) {
         await sudo.restrictSudo(h, sudoRendered, baseline);
     }
     core.info(`✅ safer-runner v2 active in ${mode} mode`);

@@ -14,13 +14,16 @@ import {
   getValidationSudoCommands,
   getSudoLoggingConfigFile,
   buildSudoRsyslogConfig,
+  parseSudoConfig,
   render,
   setupSudoLogging,
   restrictSudo,
   readSudoUsage,
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_SUDOERS_FILE,
-  SUDO_LOGGING_RSYSLOG_FILE
+  SUDO_LOGGING_RSYSLOG_FILE,
+  type RestrictingSudo,
+  type SudoFlavour
 } from '.';
 
 jest.mock('@actions/core');
@@ -28,6 +31,14 @@ jest.mock('@actions/core');
 /** the baseline's token (a test stands in for captureBaseline) */
 const BASELINE = Object.freeze({}) as BaselineCaptured;
 const LOG = '/var/log/safer-runner/sudo.log';
+
+/** A render that restricts sudo (disable-sudo in enforce), with these sudo-config lines. */
+function restricting(flavour: SudoFlavour, sudoConfig = ''): RestrictingSudo {
+  const r = render({ flavour, logFile: LOG, restrict: true, rules: parseSudoConfig(sudoConfig) });
+  if (!r.restrict) throw new Error('expected a restricting render');
+  return r;
+}
+const logging = (flavour: SudoFlavour) => render({ flavour, logFile: LOG, restrict: false, rules: [] });
 
 describe('sudo module', () => {
   describe('parseSudoFlavour', () => {
@@ -143,9 +154,9 @@ describe('sudo module', () => {
       ['sudo', SUDO_LOGGING_SUDOERS_FILE, `Defaults logfile=${LOG}\nDefaults loglinelen=0\n`],
       ['sudo-rs', SUDO_LOGGING_RSYSLOG_FILE, buildSudoRsyslogConfig(LOG)]
     ] as const)('%s: the logging config and the restricted sudoers', (flavour, file, content) => {
-      const r = render({ flavour, logFile: LOG });
-      expect(r.logging).toEqual({ path: file, content });
-      expect(r.sudoers).toBe(
+      expect(logging(flavour).logging).toEqual({ path: file, content });
+      expect(logging(flavour).restrict).toBeNull();
+      expect(restricting(flavour).restrict.sudoers).toBe(
         '# Safer Runner Action - Validation-only sudo access\n' +
           '# This configuration allows only the commands needed for post-action integrity validation.\n' +
           '# All other sudo commands will be denied.\n' +
@@ -153,12 +164,35 @@ describe('sudo module', () => {
           '\n'
       );
     });
+
+    it('keeps the sudo-config lines as root-only rules; a command with no arguments gets ""', () => {
+      const sudoers = restricting('sudo', '- /usr/bin/apt-get update\n- /usr/bin/apt-get install *\n- /usr/bin/nproc')
+        .restrict.sudoers;
+      expect(sudoers.startsWith(restricting('sudo').restrict.sudoers.trimEnd())).toBe(true);
+      expect(sudoers.slice(restricting('sudo').restrict.sudoers.trimEnd().length)).toBe(
+        '\n\n' +
+          "# The job's own command lines (sudo-config), as root only\n" +
+          'Cmnd_Alias SAFER_RUNNER_JOB = /usr/bin/apt-get update, \\\n' +
+          '    /usr/bin/apt-get install *, \\\n' +
+          '    /usr/bin/nproc ""\n' +
+          '\n' +
+          'runner ALL=(root) NOPASSWD: SAFER_RUNNER_JOB\n' +
+          '\n'
+      );
+    });
+
+    it('a render that does not restrict cannot be passed to restrictSudo (a compile-time check)', () => {
+      const { host } = recordingHost();
+      // @ts-expect-error - analyze (or disable-sudo: false) never restricts
+      const wrong = () => restrictSudo(host, logging('sudo'), BASELINE);
+      expect(wrong).toBeInstanceOf(Function);
+    });
   });
 
   describe('setupSudoLogging', () => {
     it('classic sudo: installs a logfile drop-in, moved into place last', async () => {
       const { host, calls, stdin } = recordingHost();
-      await setupSudoLogging(host, render({ flavour: 'sudo', logFile: LOG }));
+      await setupSudoLogging(host, logging('sudo'));
       expect(calls).toEqual([
         `sudo touch ${LOG}`,
         `sudo chmod 0644 ${LOG}`,
@@ -174,7 +208,7 @@ describe('sudo module', () => {
 
     it('sudo-rs: installs an rsyslog rule and restarts rsyslog', async () => {
       const { host, calls, stdin } = recordingHost();
-      await setupSudoLogging(host, render({ flavour: 'sudo-rs', logFile: LOG }));
+      await setupSudoLogging(host, logging('sudo-rs'));
       expect(calls).toEqual([
         `sudo touch ${LOG}`,
         `sudo chmod 0644 ${LOG}`,
@@ -187,7 +221,7 @@ describe('sudo module', () => {
 
     it('fails when a logging step fails (no exit code is ignored)', async () => {
       const { host } = recordingHost(l => (l.startsWith('sudo mv ') ? 1 : 0));
-      await expect(setupSudoLogging(host, render({ flavour: 'sudo', logFile: LOG }))).rejects.toThrow(/exit code 1/);
+      await expect(setupSudoLogging(host, logging('sudo'))).rejects.toThrow(/exit code 1/);
     });
   });
 
@@ -208,7 +242,7 @@ describe('sudo module', () => {
       '%s: validates, then installs a validation-only sudoers file',
       async flavour => {
         const { host, calls, stdin } = recordingHost();
-        await restrictSudo(host, render({ flavour, logFile: LOG }), BASELINE);
+        await restrictSudo(host, restricting(flavour), BASELINE);
 
         const written = stdin['sudo tee /tmp/runner-sudoers.tmp'];
         expect(written).toContain(getRequiredSudoCommands('runner'));
@@ -230,7 +264,7 @@ describe('sudo module', () => {
         l => (l.startsWith('sudo visudo') ? 1 : 0),
         l => (l.startsWith('sudo visudo') ? 'syntax error' : '')
       );
-      await expect(restrictSudo(host, render({ flavour: 'sudo-rs', logFile: LOG }), BASELINE)).rejects.toThrow(
+      await expect(restrictSudo(host, restricting('sudo-rs'), BASELINE)).rejects.toThrow(
         /rejected by visudo \(sudo-rs\): syntax error/
       );
       expect(calls.slice(-1)).toEqual(['sudo rm -f /tmp/runner-sudoers.tmp [ignore-rc]']);
@@ -239,15 +273,13 @@ describe('sudo module', () => {
 
     it.each(['tee', 'chmod 0440', 'chown root:root', 'mv'])('fails when `%s` of the sudoers file fails', async step => {
       const { host, calls } = recordingHost(l => (l.startsWith(`sudo ${step} /tmp/runner-sudoers.tmp`) ? 1 : 0));
-      await expect(restrictSudo(host, render({ flavour: 'sudo', logFile: LOG }), BASELINE)).rejects.toThrow(
-        /exit code 1/
-      );
+      await expect(restrictSudo(host, restricting('sudo'), BASELINE)).rejects.toThrow(/exit code 1/);
       expect(calls[calls.length - 1]).toMatch(new RegExp(`^sudo ${step} `));
     });
 
     it('needs the integrity baseline first (a compile-time order check)', () => {
       const { host } = recordingHost();
-      const r = render({ flavour: 'sudo', logFile: LOG });
+      const r = restricting('sudo');
       // @ts-expect-error - restricting sudo before the baseline is stored does not compile
       const early = () => restrictSudo(host, r, {});
       expect(early).toBeInstanceOf(Function);

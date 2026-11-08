@@ -120,6 +120,16 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   } else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
     core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
   }
+  for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig)) core.warning(w);
+  if (mode === 'enforce' && inputs.disableSudo && inputs.sudoConfig.length) {
+    // D1: never a boundary - no allowlist can be proven free of a command that gives root
+    core.warning(
+      `enforce is ADVISORY in this job: sudo-config keeps ${inputs.sudoConfig.length} sudo command ` +
+        'line(s), and a command that can run code or write files gives the job root, which can remove ' +
+        'the egress controls. Remove sudo-config to make enforce a boundary.',
+      { title: 'safer-runner: enforce (ADVISORY - sudo allowlist)' }
+    );
+  }
   if (mode === 'enforce' && inputs.dockerDefaulted) {
     core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
   }
@@ -253,14 +263,19 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
     silent: true
   });
   // 11. Sudo: logging on, then the integrity baseline, then sudo restricted - the last step
-  const sudoRendered = sudo.render({ flavour: sudoFlavour, logFile: SUDO_LOG });
+  const sudoRendered = sudo.render({
+    flavour: sudoFlavour,
+    logFile: SUDO_LOG,
+    restrict: inputs.disableSudo,
+    rules: inputs.sudoConfig
+  });
   const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);
   const baseline = await captureBaseline(
     h,
     [...CRITICAL_FILES, sudoRendered.logging.path, ...(dockerd.configWritten ? [DOCKER_DAEMON_JSON] : [])],
     sudoLogging
   );
-  if (inputs.disableSudo) {
+  if (sudoRendered.restrict) {
     await sudo.restrictSudo(h, sudoRendered, baseline);
   }
 

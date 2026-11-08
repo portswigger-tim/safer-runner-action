@@ -34,7 +34,8 @@ import {
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_RSYSLOG_FILE,
   SUDO_LOGGING_SUDOERS_FILE,
-  getValidationSudoCommands
+  getValidationSudoCommands,
+  ruleAllows
 } from './services/sudo';
 
 // ------------------------------------------------------------------ external boundaries
@@ -286,7 +287,8 @@ class FakeHost {
       r = { code: 0, stdout: this.flavour === 'sudo-rs' ? 'sudo-rs 0.2.13-0ubuntu1.2\n' : 'Sudo version 1.9.15p5\n' };
     } else if (cmd === 'sudo') {
       const a = sudoArgv(args);
-      const denied = this.sudoRestricted && !sudoersAllows(args);
+      const denied =
+        this.sudoRestricted && !installedSudoersAllows(this.files.get('/etc/sudoers.d/runner') ?? '', args);
       if (this.sudoLogging) this.logSudo(a, denied);
       r = denied ? { code: 1, stderr: 'sudo: a password is required' } : this.handle(a, input, true);
     } else {
@@ -340,6 +342,7 @@ class FakeHost {
       case 'mkdir':
       case 'sysctl':
       case 'apt-get':
+      case 'nproc':
       case 'visudo':
         return ok();
       case 'useradd':
@@ -525,6 +528,32 @@ function sudoersAllows(args: string[]): boolean {
   return allowed.has(sudoArgv(args).join(' '));
 }
 
+/** The command rules of a sudoers file as sudo reads them (a bare command would allow any arguments). */
+function sudoersRules(text: string): { path: string; args: string[]; anyRest: boolean }[] {
+  return text
+    .replace(/\\\n\s*/g, '')
+    .split('\n')
+    .filter(l => l.startsWith('Cmnd_Alias '))
+    .flatMap(l => l.replace(/^Cmnd_Alias \w+ = /, '').split(', '))
+    .map(e => {
+      const w = e.trim().split(' ');
+      const lastWord = w[w.length - 1];
+      if (w.length === 1) return { path: w[0], args: [], anyRest: true }; // bare: any arguments
+      if (lastWord === '""') return { path: w[0], args: [], anyRest: false };
+      return lastWord === '*'
+        ? { path: w[0], args: w.slice(1, -1), anyRest: true }
+        : { path: w[0], args: w.slice(1), anyRest: false };
+    });
+}
+
+/** Does the installed sudoers allow `sudo <args>`? */
+function installedSudoersAllows(text: string, args: string[]): boolean {
+  const [cmd, ...rest] = absCommand(sudoArgv(args)).split(' ');
+  return sudoersRules(text).some(r =>
+    r.anyRest && !r.args.length ? r.path === cmd : ruleAllows(r, cmd, rest.join(' '))
+  );
+}
+
 // ------------------------------------------------------------------ driving
 
 const NOW = new Date('2026-11-07T12:00:00Z');
@@ -685,6 +714,8 @@ interface Expect {
   flavour: 'sudo' | 'sudo-rs';
   dockerRestart: boolean;
   containerRules: boolean;
+  /** the scenario's sudo-config, one normalised line each, as the restricted sudoers must hold them */
+  sudoConfig?: string[];
 }
 
 /** Index where sudo logging is on: every later sudo command lands in the sudo log. */
@@ -805,6 +836,30 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
     v.push('L21: sudo restricted although disable-sudo is off');
   }
 
+  // L27: the restricted sudoers is exactly the validation commands plus the job's sudo-config
+  // lines, as root only; a command with no arguments carries "" (bare, it would allow any)
+  const sudoersTee = t.find(e => line(e) === 'sudo tee /tmp/runner-sudoers.tmp');
+  if (sudoersTee) {
+    const job = x.sudoConfig ?? [];
+    const rules = (sudoersTee.input ?? '')
+      .replace(/\\\n\s*/g, '')
+      .split('\n')
+      .filter(l => l.trim() && !l.startsWith('#'));
+    const expected = [
+      `Cmnd_Alias SAFER_RUNNER_VALIDATION = ${getValidationSudoCommands().join(', ')}`,
+      'runner ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION',
+      ...(job.length
+        ? [
+            `Cmnd_Alias SAFER_RUNNER_JOB = ${job.map(l => (l.includes(' ') ? l : `${l} ""`)).join(', ')}`,
+            'runner ALL=(root) NOPASSWD: SAFER_RUNNER_JOB'
+          ]
+        : [])
+    ];
+    if (JSON.stringify(rules) !== JSON.stringify(expected)) {
+      v.push(`L27: the restricted sudoers is not the validation commands plus sudo-config: ${JSON.stringify(rules)}`);
+    }
+  }
+
   // L23: each unit is stopped and reset before systemd-run (a re-run in main must not collide)
   for (const unit of [constants.PROXY_UNIT, constants.DNS_UNIT]) {
     before('L23', re(`sudo systemctl stop ${unit}`), re(`sudo systemd-run --unit=${unit}`));
@@ -854,6 +909,10 @@ const ENFORCE: Scenario = {
   docker: { active: true, dockerUser: true, containers: [] }
 };
 
+/** A sudo-config as a workflow writes it, and its lines as the restricted sudoers must hold them. */
+const SUDO_CONFIG = '- /usr/bin/apt-get update\n- "/usr/bin/apt-get   install *"\n- /usr/bin/nproc\n';
+const SUDO_CONFIG_LINES = ['/usr/bin/apt-get update', '/usr/bin/apt-get install *', '/usr/bin/nproc'];
+
 const SCENARIOS: { s: Scenario; x: Omit<Expect, 'mode' | 'flavour'> }[] = [
   { s: ENFORCE, x: { disableSudo: true, dockerRestart: false, containerRules: true } },
   {
@@ -885,6 +944,20 @@ const SCENARIOS: { s: Scenario; x: Omit<Expect, 'mode' | 'flavour'> }[] = [
       inputs: { ...ENFORCE.inputs, docker: 'stop', 'disable-sudo': 'false' }
     },
     x: { disableSudo: false, dockerRestart: false, containerRules: false }
+  },
+  {
+    s: { ...ENFORCE, name: 'enforce, sudo-config', inputs: { ...ENFORCE.inputs, 'sudo-config': SUDO_CONFIG } },
+    x: { disableSudo: true, dockerRestart: false, containerRules: true, sudoConfig: SUDO_CONFIG_LINES }
+  },
+  {
+    s: {
+      ...ENFORCE,
+      name: 'enforce on sudo-rs, sudo-config',
+      flavour: 'sudo-rs',
+      docker: { active: false, dockerUser: false, containers: [] },
+      inputs: { ...ENFORCE.inputs, 'sudo-config': SUDO_CONFIG }
+    },
+    x: { disableSudo: true, dockerRestart: false, containerRules: false, sudoConfig: SUDO_CONFIG_LINES }
   }
 ];
 
@@ -984,6 +1057,74 @@ describe('setup transcript (runSetup on a recording fake runner)', () => {
       ].map(k => expect.stringMatching(new RegExp(`^<export> ${k}=`)))
     );
     expect(h.files.get(CA_BUNDLE)).toContain(FAKE_CERT);
+  });
+});
+
+describe('sudo-config in enforce', () => {
+  const WITH_CONFIG = SCENARIOS.find(c => c.s.name === 'enforce, sudo-config')!;
+
+  it('the job can run exactly its sudo-config lines as root, and nothing else', async () => {
+    const h = await setup(WITH_CONFIG.s);
+    const sudo = (cmd: string) => h.exec('sudo', cmd.split(' '), { ignoreReturnCode: true });
+    expect(await sudo('apt-get update')).toBe(0);
+    expect(await sudo('apt-get install -y jq')).toBe(0);
+    expect(await sudo('nproc')).toBe(0);
+    // `*` takes one or more further arguments; exact lines take exactly theirs; "" takes none
+    expect(await sudo('apt-get install')).toBe(1);
+    expect(await sudo('apt-get update -o APT::x=y')).toBe(1);
+    expect(await sudo('nproc --all')).toBe(1);
+    expect(await sudo('apt-get remove jq')).toBe(1);
+    expect(await sudo('cat /etc/shadow')).toBe(1);
+    // the action's own read-only checks still work
+    expect(await sudo(`-n cat ${VALIDATION_STATE_FILE}`)).toBe(0);
+  });
+
+  it('an allowlist visudo rejects fails setup and is never installed (L24)', async () => {
+    const h = newHost(WITH_CONFIG.s);
+    h.failing = P.visudo;
+    await expect(settle(runSetup(readInputs()))).rejects.toThrow(/rejected by visudo/);
+    expect(h.sudoRestricted).toBe(false);
+    expect(h.files.has('/etc/sudoers.d/runner')).toBe(false);
+  });
+
+  it('warns that enforce is ADVISORY, and which entries give root', async () => {
+    const h = await setup(WITH_CONFIG.s);
+    const warnings = h.log.filter(l => l.startsWith('warning: '));
+    expect(warnings).toContainEqual(expect.stringContaining('enforce is ADVISORY in this job: sudo-config keeps 3'));
+    expect(warnings).toContainEqual(expect.stringContaining("'/usr/bin/apt-get update' gives the job root"));
+  });
+
+  describe('L27 has teeth (mutation check)', () => {
+    let base: Entry[];
+    const x: Expect = {
+      mode: 'enforce',
+      flavour: 'sudo',
+      disableSudo: true,
+      dockerRestart: false,
+      containerRules: true,
+      sudoConfig: SUDO_CONFIG_LINES
+    };
+    beforeAll(async () => {
+      base = (await setup(WITH_CONFIG.s)).transcript;
+      expect(setupInvariants(base, x)).toEqual([]);
+    });
+
+    const editSudoers = (t: Entry[], f: (text: string) => string): Entry[] =>
+      t.map(e => (line(e) === 'sudo tee /tmp/runner-sudoers.tmp' ? { ...e, input: f(e.input ?? '') } : e));
+    const ids = (v: string[]) => Array.from(new Set(v.map(m => m.split(':')[0])));
+
+    it.each([
+      [
+        'a command with no arguments written bare (any arguments)',
+        (s: string) => s.replace('/usr/bin/nproc ""', '/usr/bin/nproc')
+      ],
+      ['ALL added to the job rules', (s: string) => s.replace('/usr/bin/nproc ""', '/usr/bin/nproc "", ALL')],
+      ['the job rules run as any user', (s: string) => s.replace('ALL=(root)', 'ALL=(ALL)')],
+      ['a sudo-config line dropped', (s: string) => s.replace('/usr/bin/apt-get update, \\\n    ', '')],
+      ['a Defaults line added', (s: string) => `${s}Defaults !requiretty\n`]
+    ])('%s', (_what, mutate) => {
+      expect(ids(setupInvariants(editSudoers(base, mutate), x))).toContain('L27');
+    });
   });
 });
 

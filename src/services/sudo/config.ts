@@ -129,11 +129,35 @@ ${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 }
 
 /** The restricted sudoers file that replaces RUNNER_SUDOERS_FILE (disable-sudo). */
-export function buildRestrictedSudoers(): string {
+/**
+ * One sudo-config rule as a sudoers command. A command with no arguments gets `""`: in sudoers
+ * a bare command allows ANY arguments, `""` allows none. Every word is checked again here.
+ */
+export function sudoersCommand(r: SudoRule): string {
+  for (const w of [r.path, ...r.args]) {
+    if (!WORD.test(w)) throw new Error(`sudo-config: refusing to write '${w}' into sudoers`);
+  }
+  return r.args.length === 0 && !r.anyRest ? `${r.path} ""` : ruleText(r);
+}
+
+/**
+ * The restricted sudoers file (disable-sudo): the action's own validation commands, plus the
+ * job's sudo-config command lines, run as root only. Without sudo-config it is exactly the
+ * validation-only file.
+ */
+export function buildRestrictedSudoers(rules: readonly SudoRule[] = []): string {
+  const job = rules.length
+    ? `
+# The job's own command lines (sudo-config), as root only
+Cmnd_Alias SAFER_RUNNER_JOB = ${rules.map(sudoersCommand).join(', \\\n    ')}
+
+${RUNNER_USERNAME} ALL=(root) NOPASSWD: SAFER_RUNNER_JOB
+`
+    : '';
   return `# Safer Runner Action - Validation-only sudo access
 # This configuration allows only the commands needed for post-action integrity validation.
 # All other sudo commands will be denied.
-${getRequiredSudoCommands(RUNNER_USERNAME)}
+${getRequiredSudoCommands(RUNNER_USERNAME)}${job}
 `;
 }
 
@@ -141,17 +165,22 @@ export interface SudoFacts {
   flavour: SudoFlavour;
   /** where sudo usage is logged (SUDO_LOG) */
   logFile: string;
+  /** restrict sudo (disable-sudo in enforce) */
+  restrict: boolean;
+  /** sudo-config: kept in the restricted sudoers */
+  rules: readonly SudoRule[];
 }
 
 /** What the sudo steps write. None of it is inert: each write is a named step in ./index.ts. */
-export interface SudoRendered {
+export type SudoRendered = {
   flavour: SudoFlavour;
   logFile: string;
   /** the sudo-logging config: a sudoers drop-in (classic) or an rsyslog rule (sudo-rs) */
   logging: { path: string; content: string };
-  /** the restricted sudoers file (disable-sudo) */
-  sudoers: string;
-}
+} & ({ restrict: { sudoers: string } } | { restrict: null });
+
+/** A render that restricts sudo: the only kind restrictSudo() takes. */
+export type RestrictingSudo = Extract<SudoRendered, { restrict: { sudoers: string } }>;
 
 export function render(f: SudoFacts): SudoRendered {
   return {
@@ -161,7 +190,7 @@ export function render(f: SudoFacts): SudoRendered {
       path: getSudoLoggingConfigFile(f.flavour),
       content: f.flavour === 'sudo-rs' ? buildSudoRsyslogConfig(f.logFile) : buildSudoLoggingDropIn(f.logFile)
     },
-    sudoers: buildRestrictedSudoers()
+    restrict: f.restrict ? { sudoers: buildRestrictedSudoers(f.rules) } : null
   };
 }
 
