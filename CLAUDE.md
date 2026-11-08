@@ -83,7 +83,7 @@ src/
     ├── logs/        # DNS / firewall / sudo log and docker events parsers (the flow log's is src/flowlog.ts)
     ├── aggregate/   # flows, containers, http-filter (and its suggestion as YAML), sudo-config, docker
     ├── render/      # Markdown
-    ├── redact.ts    # redaction of encoded-looking names and hidden paths in the summary
+    ├── redact.ts    # redaction of encoded-looking names, hidden paths and sudo arguments in the summary
     └── suggest.ts   # runs proxy/suggest.py (python3 -I) for the suggested http-filter
 proxy/
 ├── policy.py            # mitmproxy addon: wiring, layer selection, repoint, flow log
@@ -323,6 +323,10 @@ DNS refused, integrity). In analyze it suggests an `allowed-domains` block.
 
 - Names go through `src/report/redact.ts`: labels that look encoded are shown as `‹redacted›`; refused
   request paths are shown as `‹path hidden›`. This is best effort, not a guarantee.
+- Sudo command lines go through `sudoCommandShown` (`redact.ts`): an argument that could be a
+  credential prints as `‹redacted›`, keeping the path and the argument count. The same check
+  (`secret_mask` / `path_secret` in `proxy/sudo_suggest.py`, shared vectors `"sudo_secret"`)
+  keeps such lines out of the suggested `sudo-config`.
 - Full lists also go to the job log, redacted the same way.
 - The `http-filter` section lists requests the filter refused and suggests a filter built from
   observed traffic (it splits reads from writes, templates variable path segments, and keeps

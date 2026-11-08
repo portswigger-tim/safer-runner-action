@@ -15,6 +15,7 @@ import {
   summarizeContainers,
   summarizeFlows,
   summarizeHttpFilter,
+  sudoCommandShown,
   type AllowedRequest,
   type DockerPolicyReport,
   type HttpFilterSuggestion,
@@ -191,7 +192,7 @@ async function run(): Promise<void> {
     }
 
     // Full lists in the job log, so nothing is ever silently dropped from the summary (names
-    // redacted like the summary: the job log is just as public).
+    // and sudo arguments redacted like the summary: the job log is just as public).
     for (const h of hosts) {
       core.info(
         `${h.verdict.padEnd(11)} ${blockedName(h.name)} conns=${h.connections} reqs=${h.requests} tries=${h.tries} ${h.reasons.join(',')}`
@@ -204,10 +205,10 @@ async function run(): Promise<void> {
     }
 
     const sudo = readSudoUsage(SUDO_LOG);
-    for (const c of sudo.ran) core.info(`sudo (workflow) ${c.command} ${c.args}`);
-    for (const c of sudo.refused) core.info(`sudo REFUSED ${c.command} ${c.args}`);
+    for (const c of sudo.ran) core.info(`sudo (workflow) ${sudoCommandShown(c)}`);
+    for (const c of sudo.refused) core.info(`sudo REFUSED ${sudoCommandShown(c)}`);
     const sudoPolicyReport = sudoPolicy(mode, marker, sudo.ran);
-    for (const c of sudoPolicyReport.wouldBlock) core.info(`sudo WOULD_BLOCK ${c.command} ${c.args}`);
+    for (const c of sudoPolicyReport.wouldBlock) core.info(`sudo WOULD_BLOCK ${sudoCommandShown(c)}`);
     const dockerPolicyReport = await dockerPolicy(marker);
     for (const k of DOCKER_USES) {
       const n = dockerPolicyReport?.evaluation.wouldBlock[k];

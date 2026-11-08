@@ -11,9 +11,9 @@ import sudo_suggest
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def vectors():
+def vectors(key="sudo"):
     with open(os.path.join(HERE, "test-vectors.json")) as f:
-        return json.load(f)["sudo"]
+        return json.load(f)[key]
 
 
 class SuggestVectors(unittest.TestCase):
@@ -52,6 +52,26 @@ class SameLinesAsTheParser(unittest.TestCase):
                 words = line.split(" ")
                 words = [w for w in words if w]
                 self.assertFalse(words and sudo_suggest.representable(words[0], words[1:]))
+
+
+class SecretVectors(unittest.TestCase):
+    """secret_mask / path_secret agree with src/report/redact.ts secretMask / sudoPathShown."""
+
+    def test_args(self):
+        for v in vectors("sudo_secret")["args"]:
+            with self.subTest(v["args"]):
+                self.assertEqual(sudo_suggest.secret_mask(v["args"]), v["mask"])
+                self.assertEqual(sudo_suggest.has_secret(v["args"]), any(v["mask"]))
+
+    def test_paths(self):
+        for v in vectors("sudo_secret")["paths"]:
+            with self.subTest(v["path"]):
+                self.assertEqual(sudo_suggest.path_secret(v["path"]), v["secret"])
+
+    def test_a_secret_path_is_never_suggested(self):
+        out = sudo_suggest.suggest([{"command": "/tmp/4f9c2e7a1b3d5f60a8e2c4b6d8f0a1c3/run.sh", "args": ""}])
+        self.assertEqual(out["rules"], [])
+        self.assertEqual(out["omitted"]["secret"], 1)
 
 
 class Main(unittest.TestCase):
