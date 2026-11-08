@@ -48,6 +48,21 @@ describe('Sudo Parser', () => {
       });
     });
 
+    it('parses a command given environment variables (classic sudo ENV=), without keeping their values', () => {
+      const c = parseSudoLogLine(
+        'Nov  7 12:00:00 : runner : PWD=/ ; USER=root ; ENV=TOKEN=s3cr3t DEBIAN_FRONTEND=noninteractive ; COMMAND=/usr/bin/apt-get update'
+      );
+      expect(c).toEqual({
+        timestamp: 'Nov  7 12:00:00',
+        user: 'runner',
+        targetUser: 'root',
+        command: '/usr/bin/apt-get',
+        args: 'update',
+        env: true
+      });
+      expect(JSON.stringify(c)).not.toContain('s3cr3t');
+    });
+
     it('should return null for invalid log lines', () => {
       expect(parseSudoLogLine('invalid log line')).toBeNull();
       expect(parseSudoLogLine('')).toBeNull();

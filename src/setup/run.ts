@@ -120,6 +120,23 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   } else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
     core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
   }
+  for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig, sudo.runnerWritableDirs())) core.warning(w);
+  if (mode === 'analyze' && inputs.disableSudo && !inputs.disableSudoDefaulted) {
+    core.warning(
+      'disable-sudo: true is not applied in analyze mode: analyze never changes sudo. The summary lists the ' +
+        'sudo commands enforce would block. Use mode: enforce to remove sudo.',
+      { title: 'safer-runner: analyze does not remove sudo' }
+    );
+  }
+  if (mode === 'enforce' && inputs.disableSudo && inputs.sudoConfig.length) {
+    // D1: never a boundary - no allowlist can be proven free of a command that gives root
+    core.warning(
+      `enforce is ADVISORY in this job: sudo-config keeps ${inputs.sudoConfig.length} sudo command ` +
+        'line(s), and a command that can run code or write files gives the job root, which can remove ' +
+        'the egress controls. Remove sudo-config to make enforce a boundary.',
+      { title: 'safer-runner: enforce (ADVISORY - sudo allowlist)' }
+    );
+  }
   if (mode === 'enforce' && inputs.dockerDefaulted) {
     core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
   }
@@ -239,6 +256,9 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
       JSON.stringify({
         mode,
         sudoRetained,
+        // the sudo policy the post step evaluates (analyze) or reports (enforce)
+        ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
+        ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
         dockerRetained: dockerAccess.access === 'retained',
         docker: dockerAccess,
         failOnTampering: inputs.failOnTampering,
@@ -253,14 +273,20 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
     silent: true
   });
   // 11. Sudo: logging on, then the integrity baseline, then sudo restricted - the last step
-  const sudoRendered = sudo.render({ flavour: sudoFlavour, logFile: SUDO_LOG });
+  const sudoRendered = sudo.render({
+    flavour: sudoFlavour,
+    logFile: SUDO_LOG,
+    // analyze never changes sudo: it evaluates the policy in the post step
+    restrict: mode === 'enforce' && inputs.disableSudo,
+    rules: inputs.sudoConfig
+  });
   const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);
   const baseline = await captureBaseline(
     h,
     [...CRITICAL_FILES, sudoRendered.logging.path, ...(dockerd.configWritten ? [DOCKER_DAEMON_JSON] : [])],
     sudoLogging
   );
-  if (inputs.disableSudo) {
+  if (sudoRendered.restrict) {
     await sudo.restrictSudo(h, sudoRendered, baseline);
   }
 

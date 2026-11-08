@@ -6,7 +6,8 @@ import { parseHttpFilter } from './config/inputs';
 import { parse as parseYaml } from 'yaml';
 import { buildPolicyConfig, type PolicyConfig } from './policy';
 import { withoutSelfTests } from './setup/selftest';
-import { suggestHttpFilter } from './report';
+import { SUDO_BEST_EFFORT, SUDO_CONFIG_CAVEAT, suggestHttpFilter, suggestSudoConfig } from './report';
+import { evaluateSudo, parseSudoConfig, ruleText } from './services/sudo/config';
 import {
   ADVISORY_REPORT_NOTE,
   addressClass,
@@ -784,15 +785,81 @@ describe('enforce labelling (review H2)', () => {
 
   const cmd = (command: string) => ({ timestamp: '', user: 'runner', targetUser: 'root', command, args: '' });
 
-  it('analyze: tells a sudo-using job that enforce removes sudo by default', () => {
+  it('analyze: tells a sudo-using job what enforce would block', () => {
     const sudo = { ran: [cmd('/usr/bin/apt-get'), cmd('/usr/bin/id'), cmd('/usr/bin/tee')], refused: [], internal: [] };
     const md = buildReport({ ...base, mode: 'analyze', sudo });
-    expect(md).toContain('**This job ran 3 sudo commands.**');
-    expect(md).toContain('disable-sudo: false');
+    expect(md).toContain('**Enforce would block 3 sudo commands this job ran**');
+    expect(md).toContain('`sudo-config`');
     expect(md).not.toContain('should run unchanged');
     expect(buildReport({ ...base, mode: 'analyze', sudo: { ran: [], refused: [], internal: [] } })).toContain(
       'should run unchanged'
     );
+  });
+
+  it('analyze: the policy decides what would be blocked (sudo-config, disable-sudo: false)', () => {
+    const sudo = { ran: [cmd('/usr/bin/apt-get'), cmd('/usr/bin/id')], refused: [], internal: [] };
+    const covered = buildReport({
+      ...base,
+      mode: 'analyze',
+      sudo,
+      sudoPolicy: { rules: ['/usr/bin/apt-get', '/usr/bin/id'], kept: false, wouldBlock: [] }
+    });
+    expect(covered).not.toContain('Enforce would block');
+    expect(covered).toContain('should run unchanged');
+    const kept = buildReport({ ...base, mode: 'analyze', sudo, sudoPolicy: { rules: [], kept: true, wouldBlock: [] } });
+    expect(kept).toContain('**This job ran 2 sudo commands, and `disable-sudo: false` keeps sudo**');
+    expect(kept).toContain('ADVISORY');
+  });
+
+  it('analyze: the suggested sudo-config pastes back as printed, never with a *, with the caveat', () => {
+    const ran = [
+      { ...cmd('/usr/bin/apt-get'), args: 'install -y jq' },
+      { ...cmd('/usr/bin/apt-get'), args: 'update' },
+      // a secret-looking argument (the C5 canary) is never suggested
+      { ...cmd('/usr/bin/tool'), args: '--id 5ec7e7c0ffee1234' },
+      { ...cmd('/usr/bin/psql'), targetUser: 'postgres', args: '-c select' }
+    ];
+    const suggestion = suggestSudoConfig(ran, PROXY_DIR);
+    expect(suggestion).toEqual({
+      rules: ['/usr/bin/apt-get install -y jq', '/usr/bin/apt-get update'],
+      omitted: { secret: 1, unrepresentable: 0, other_user: 1, over_cap: 0 }
+    });
+    const md = buildReport({
+      ...base,
+      mode: 'analyze',
+      sudo: { ran, refused: [], internal: [] },
+      sudoPolicy: {
+        rules: [],
+        kept: false,
+        wouldBlock: ran,
+        suggestion,
+        flagged: { '/usr/bin/apt-get update': 'gives the job root (apt-get can run or write anything)' }
+      }
+    });
+    expect(md).toContain(SUDO_CONFIG_CAVEAT);
+    expect(md).toContain(SUDO_BEST_EFFORT);
+    expect(md).toContain('Not suggested: 1 with arguments that look like a secret, 1 run as another user.');
+    // the snippet, read back the way the action reads the input
+    const block = md.match(/> ```yaml\n((?:> .*\n)+?)> ```/)![1].replace(/^> /gm, '');
+    expect(block).not.toContain('5ec7e7c0ffee1234');
+    expect(block).toContain('- /usr/bin/apt-get update # ⚠️ gives the job root');
+    // the warning is a YAML comment: the snippet still reads back as the same lines
+    const rules = parseSudoConfig(parseYaml(block)['sudo-config']);
+    expect(rules.map(ruleText)).toEqual(suggestion.rules);
+    expect(evaluateSudo(rules, false, ran.slice(0, 2)).wouldBlock).toEqual([]);
+  });
+
+  it('enforce with a sudo-config allowlist is ADVISORY', () => {
+    const md = buildReport({
+      ...base,
+      mode: 'enforce',
+      sudo: { ran: [], refused: [], internal: [] },
+      sudoPolicy: { rules: ['/usr/bin/apt-get update'], kept: false, wouldBlock: [] }
+    });
+    expect(md).toContain('enforce (ADVISORY — sudo (sudo-config allowlist) retained');
+    expect(md).toContain('⚠️ sudo allowlist (1)');
+    expect(md).toContain('**ADVISORY: sudo was kept for 1 command line** (`sudo-config`)');
+    expect(md).not.toContain('controls applied at setup');
   });
 
   // beta.2 said "Workflow executed 4 sudo commands": one of its own plus three refused attempts

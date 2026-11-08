@@ -511,6 +511,8 @@ const core = __importStar(__nccwpck_require__(7484));
 const net = __importStar(__nccwpck_require__(9278));
 const policy_1 = __nccwpck_require__(2224);
 const yaml_1 = __nccwpck_require__(8815);
+const yaml_2 = __nccwpck_require__(2040);
+const config_1 = __nccwpck_require__(5665);
 exports.DOCKER_POLICIES = ['keep', 'remove-group', 'stop'];
 /** Quad9 (filtering, no logging of client IPs): primary + secondary. */
 exports.DEFAULT_DNS_SERVERS = ['9.9.9.9', '149.112.112.112'];
@@ -533,12 +535,14 @@ function triState(raw, name) {
     throw new Error(`${name} must be true or false, got "${raw}"`);
 }
 /**
- * disable-sudo (review H2). Unset means ON in enforce mode: with sudo any step can switch the
- * egress controls off, so enforce is only a boundary without it. Off in analyze.
+ * disable-sudo (review H2): the sudo policy. Unset means remove sudo, in either mode: with sudo
+ * any step can switch the egress controls off, so enforce is only a boundary without it. The
+ * mode decides whether the policy is applied (enforce) or only evaluated (analyze never
+ * changes sudo; it reports what enforce would block and suggests a sudo-config).
  */
-function resolveDisableSudo(raw, mode) {
+function resolveDisableSudo(raw) {
     const v = triState(raw, 'disable-sudo');
-    return v === null ? [mode === 'enforce', true] : [v, false];
+    return v === null ? [true, true] : [v, false];
 }
 /**
  * docker. Unset means remove-group in enforce (docker is root-equivalent, mirroring
@@ -587,14 +591,6 @@ function unquote(s) {
         return t.slice(1, -1);
     return t;
 }
-/** Plain words for the YAML errors a user is most likely to hit; any other uses the library's text. */
-const YAML_HINTS = {
-    TAB_AS_INDENT: 'indent with spaces, not tabs',
-    BAD_INDENT: 'inconsistent indentation',
-    BLOCK_AS_IMPLICIT_KEY: 'inconsistent indentation (a line is indented more than the line above it)',
-    MULTILINE_IMPLICIT_KEY: 'inconsistent indentation (a key must be on one line)',
-    BAD_ALIAS: 'put a key or a value that starts with * in quotes, e.g. "*": GET'
-};
 /** A key as written: a host name or a path pattern, never a number or other YAML type. */
 function keyText(pair, where) {
     const k = pair.key;
@@ -641,38 +637,15 @@ function parseRules(map, src, at) {
 }
 /**
  * http-filter as YAML (JSON is YAML too), checked against its one shape: host -> { path ->
- * methods }. Anything else fails: duplicate keys, anchors, aliases, tags, document markers,
- * directives and deeper nesting are never resolved or ignored.
+ * methods }. Anything else fails: duplicate keys and deeper nesting are refused (strictYaml
+ * refuses the rest).
  */
 function parseFilterYaml(raw) {
-    const lines = new yaml_1.LineCounter();
-    const doc = (0, yaml_1.parseDocument)(raw, {
-        lineCounter: lines,
-        prettyErrors: false,
-        schema: 'core',
-        strict: true,
-        // duplicates are refused below, once `{ "*": GET, HEAD, "x": PUT, HEAD }` continuations are merged
-        uniqueKeys: false,
-        version: '1.2'
-    });
-    const line = (offset) => `http-filter line ${lines.linePos(offset).line}`;
-    const at = (n) => line(n?.range?.[0] ?? 0);
-    const problems = [...doc.errors, ...doc.warnings];
-    if (problems.length) {
-        const p = problems.find(e => e.code === 'BAD_ALIAS') ?? problems[0];
-        const text = YAML_HINTS[p.code] ??
-            `${p.message.split('\n')[0]} (check the indentation; write methods as GET, HEAD or [GET, HEAD], not "GET", HEAD)`;
-        throw new Error(`${line(p.pos[0])}: ${text}`);
-    }
-    if (doc.directives?.docStart || doc.directives?.docEnd) {
-        throw new Error('http-filter: remove the YAML document markers (--- and ...) and any % directives');
-    }
-    (0, yaml_1.visit)(doc, {
-        Node(_, n) {
-            if ((0, yaml_1.isAlias)(n) || n.anchor || n.tag) {
-                throw new Error(`${at(n)}: YAML anchors (&), aliases (*name) and tags (!) are not allowed`);
-            }
-        }
+    // duplicates are refused below, once `{ "*": GET, HEAD, "x": PUT, HEAD }` continuations are merged
+    const { doc, at } = (0, yaml_2.strictYaml)(raw, 'http-filter', {
+        fallback: 'check the indentation; write methods as GET, HEAD or [GET, HEAD], not "GET", HEAD',
+        hints: { BAD_ALIAS: 'put a key or a value that starts with * in quotes, e.g. "*": GET' },
+        uniqueKeys: false
     });
     if (doc.contents === null)
         return [];
@@ -785,7 +758,11 @@ function bool(name) {
 function readInputs() {
     const mode = parseMode(core.getInput('mode'));
     // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
-    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+    const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'));
+    const sudoConfig = (0, config_1.parseSudoConfig)(core.getInput('sudo-config', { trimWhitespace: false }));
+    if (sudoConfig.length && !disableSudo) {
+        throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
+    }
     const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
     const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
     const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
@@ -797,12 +774,71 @@ function readInputs() {
         dnsServers: parseDnsServers(core.getInput('dns-servers')),
         disableSudo,
         disableSudoDefaulted,
+        sudoConfig,
         docker,
         dockerDefaulted,
         failOnTampering,
         httpFilter: parseHttpFilter(core.getInput('http-filter', { trimWhitespace: false })),
         allowGithubPlatform: allowGithubPlatform ?? true
     };
+}
+
+
+/***/ }),
+
+/***/ 2040:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * Strict reading of the structured YAML inputs (http-filter, sudo-config).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.strictYaml = strictYaml;
+const yaml_1 = __nccwpck_require__(8815);
+/** Plain words for the YAML errors a user is most likely to hit; any other uses the library's text. */
+const YAML_HINTS = {
+    TAB_AS_INDENT: 'indent with spaces, not tabs',
+    BAD_INDENT: 'inconsistent indentation',
+    BLOCK_AS_IMPLICIT_KEY: 'inconsistent indentation (a line is indented more than the line above it)',
+    MULTILINE_IMPLICIT_KEY: 'inconsistent indentation (a key must be on one line)',
+    BAD_ALIAS: 'put a value that starts with * in quotes'
+};
+/**
+ * A YAML input, read strictly: core schema, YAML 1.2, no anchors, aliases, tags, document
+ * markers or directives (never resolved or ignored). Errors name the input and the line.
+ */
+function strictYaml(raw, name, o) {
+    const lines = new yaml_1.LineCounter();
+    const doc = (0, yaml_1.parseDocument)(raw, {
+        lineCounter: lines,
+        prettyErrors: false,
+        schema: 'core',
+        strict: true,
+        uniqueKeys: o.uniqueKeys ?? true,
+        version: '1.2'
+    });
+    const line = (offset) => `${name} line ${lines.linePos(offset).line}`;
+    const at = (n) => line(n?.range?.[0] ?? 0);
+    const hints = { ...YAML_HINTS, ...o.hints };
+    const problems = [...doc.errors, ...doc.warnings];
+    if (problems.length) {
+        const p = problems.find(e => e.code === 'BAD_ALIAS') ?? problems[0];
+        const text = hints[p.code] ?? `${p.message.split('\n')[0]} (${o.fallback})`;
+        throw new Error(`${line(p.pos[0])}: ${text}`);
+    }
+    if (doc.directives?.docStart || doc.directives?.docEnd) {
+        throw new Error(`${name}: remove the YAML document markers (--- and ...) and any % directives`);
+    }
+    (0, yaml_1.visit)(doc, {
+        Node(_, n) {
+            if ((0, yaml_1.isAlias)(n) || n.anchor || n.tag) {
+                throw new Error(`${at(n)}: YAML anchors (&), aliases (*name) and tags (!) are not allowed`);
+            }
+        }
+    });
+    return { doc, at };
 }
 
 
@@ -1632,11 +1668,12 @@ const DENIED_PATTERN = /command not allowed|password is required|incorrect passw
  */
 function parseSudoLogLine(line) {
     // Match sudo log format with timestamp
-    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*COMMAND=(.+)$/);
+    // classic sudo logs variables set on the command line as `ENV=A=1 B=2 ;` before COMMAND
+    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*(ENV=[^;]*;\s*)?COMMAND=(.+)$/);
     if (!match) {
         return null;
     }
-    const [, timestamp, user, targetUser, fullCommand] = match;
+    const [, timestamp, user, targetUser, env, fullCommand] = match;
     // Split command and args
     const commandParts = fullCommand.trim().split(/\s+/);
     const command = commandParts[0];
@@ -1647,7 +1684,8 @@ function parseSudoLogLine(line) {
         targetUser,
         command,
         args,
-        ...(DENIED_PATTERN.test(line) && { denied: true })
+        ...(DENIED_PATTERN.test(line) && { denied: true }),
+        ...(env && { env: true })
     };
 }
 /**
@@ -3458,15 +3496,26 @@ async function distributeTrust(h, _proxy) {
  * (sudo-rs accepts only a lone trailing `*`), no `Defaults!<alias>`, no `log_allowed`.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
+exports.RUNNER_WRITABLE = exports.SUDO_CONFIG_MAX_RULES = exports.INTERNAL_SUDO_COMMANDS = exports.SUDO_LOGGING_TEMP_FILE = exports.SUDOERS_TEMP_FILE = exports.RUNNER_SUDOERS_FILE = exports.SUDO_LOGGING_RSYSLOG_FILE = exports.SUDO_LOGGING_SUDOERS_FILE = exports.RUNNER_USERNAME = void 0;
 exports.parseSudoFlavour = parseSudoFlavour;
 exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
 exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
 exports.buildSudoLoggingDropIn = buildSudoLoggingDropIn;
 exports.getValidationSudoCommands = getValidationSudoCommands;
 exports.getRequiredSudoCommands = getRequiredSudoCommands;
+exports.sudoersCommand = sudoersCommand;
 exports.buildRestrictedSudoers = buildRestrictedSudoers;
 exports.render = render;
+exports.ruleText = ruleText;
+exports.parseSudoLine = parseSudoLine;
+exports.parseSudoConfig = parseSudoConfig;
+exports.runnerWritableDirs = runnerWritableDirs;
+exports.sudoRuleWarning = sudoRuleWarning;
+exports.sudoConfigWarnings = sudoConfigWarnings;
+exports.ruleAllows = ruleAllows;
+exports.evaluateSudo = evaluateSudo;
+const yaml_1 = __nccwpck_require__(8815);
+const yaml_2 = __nccwpck_require__(2040);
 const baseline_1 = __nccwpck_require__(1333);
 const constants_1 = __nccwpck_require__(8729);
 exports.RUNNER_USERNAME = 'runner';
@@ -3566,12 +3615,35 @@ Cmnd_Alias SAFER_RUNNER_VALIDATION = ${commands.join(', \\\n    ')}
 ${username} ALL=(ALL) NOPASSWD: SAFER_RUNNER_VALIDATION
 `;
 }
-/** The restricted sudoers file that replaces RUNNER_SUDOERS_FILE (disable-sudo). */
-function buildRestrictedSudoers() {
+/**
+ * One sudo-config rule as a sudoers command. A command with no arguments gets `""`: in sudoers
+ * a bare command allows ANY arguments, `""` allows none. Every word is checked again here.
+ */
+function sudoersCommand(r) {
+    for (const w of [r.path, ...r.args]) {
+        if (!WORD.test(w))
+            throw new Error(`sudo-config: refusing to write '${w}' into sudoers`);
+    }
+    return r.args.length === 0 && !r.anyRest ? `${r.path} ""` : ruleText(r);
+}
+/**
+ * The restricted sudoers file (disable-sudo): the action's own validation commands, plus the
+ * job's sudo-config command lines, run as root only. Without sudo-config it is exactly the
+ * validation-only file.
+ */
+function buildRestrictedSudoers(rules = []) {
+    const job = rules.length
+        ? `
+# The job's own command lines (sudo-config), as root only
+Cmnd_Alias SAFER_RUNNER_JOB = ${rules.map(sudoersCommand).join(', \\\n    ')}
+
+${exports.RUNNER_USERNAME} ALL=(root) NOPASSWD: SAFER_RUNNER_JOB
+`
+        : '';
     return `# Safer Runner Action - Validation-only sudo access
 # This configuration allows only the commands needed for post-action integrity validation.
 # All other sudo commands will be denied.
-${getRequiredSudoCommands(exports.RUNNER_USERNAME)}
+${getRequiredSudoCommands(exports.RUNNER_USERNAME)}${job}
 `;
 }
 function render(f) {
@@ -3582,8 +3654,165 @@ function render(f) {
             path: getSudoLoggingConfigFile(f.flavour),
             content: f.flavour === 'sudo-rs' ? buildSudoRsyslogConfig(f.logFile) : buildSudoLoggingDropIn(f.logFile)
         },
-        sudoers: buildRestrictedSudoers()
+        restrict: f.restrict ? { sudoers: buildRestrictedSudoers(f.rules) } : null
     };
+}
+/**
+ * What an entry may contain: nothing sudoers would need escaped (`, : = \ # ! %` quotes,
+ * whitespace inside an argument) and no glob other than the lone trailing `*`.
+ */
+const WORD = /^[A-Za-z0-9_./@+-]+$/;
+const PATH = /^(\/[A-Za-z0-9_.@+-]+)+$/;
+exports.SUDO_CONFIG_MAX_RULES = 100;
+const MAX_LINE = 512;
+/** The sudoers text of one rule (also its identity): `path args...`, `*` last. */
+function ruleText(r) {
+    return [r.path, ...r.args, ...(r.anyRest ? ['*'] : [])].join(' ');
+}
+/** One command line, or the reason it is not one. */
+function parseSudoLine(line) {
+    if (line.length > MAX_LINE)
+        throw new Error(`is longer than ${MAX_LINE} characters`);
+    const words = line.trim().split(/ +/).filter(Boolean);
+    if (!words.length)
+        throw new Error('is empty');
+    const [path, ...rest] = words;
+    if (/^(ALL|sudoedit|Defaults|Cmnd_Alias|Runas_Alias|User_Alias|Host_Alias)\b/.test(path) || /^[!%+]/.test(path)) {
+        throw new Error(`is not a command line ('${path}' is sudoers syntax)`);
+    }
+    if (path.includes('*'))
+        throw new Error('has a * in the command path (only a lone trailing * argument is allowed)');
+    if (!path.startsWith('/'))
+        throw new Error(`'${path}' is not an absolute path`);
+    if (!PATH.test(path) || path.split('/').some(seg => seg === '.' || seg === '..')) {
+        throw new Error(`'${path}' is not a plain absolute path (no //, ., .., trailing / or special characters)`);
+    }
+    if (/\/sudoedit$/.test(path))
+        throw new Error('sudoedit is not allowed');
+    const anyRest = rest[rest.length - 1] === '*';
+    const args = anyRest ? rest.slice(0, -1) : rest;
+    for (const a of args) {
+        if (a.includes('*'))
+            throw new Error(`'${a}': only a lone trailing * is allowed (sudo-rs)`);
+        if (!WORD.test(a)) {
+            throw new Error(`'${a}' has an unsupported character (allowed: letters, digits and _ . / @ + -)`);
+        }
+    }
+    if (anyRest && !args.length) {
+        throw new Error(`'${path} *' would allow every argument: name at least the first argument before *`);
+    }
+    return Object.freeze({ path, args: Object.freeze([...args]), anyRest });
+}
+/**
+ * sudo-config: a YAML list of command lines the job may run as root under disable-sudo in
+ * enforce (on top of the action's own read-only checks). Read with the same strict YAML as
+ * http-filter; anything invalid fails the step, never skipped or last-wins.
+ */
+function parseSudoConfig(raw) {
+    if (!(raw || '').trim())
+        return [];
+    const { doc, at } = (0, yaml_2.strictYaml)(raw, 'sudo-config', {
+        fallback: 'write one command line per "- " list item',
+        hints: { BAD_ALIAS: 'a command line must start with its absolute path, not *' }
+    });
+    if (doc.contents === null || ((0, yaml_1.isScalar)(doc.contents) && doc.contents.value === null))
+        return [];
+    if (!(0, yaml_1.isSeq)(doc.contents)) {
+        throw new Error(`${at(doc.contents)}: expected a list of command lines, e.g. "- /usr/bin/apt-get update" ` +
+            '(the v1 sudo-config format is not accepted)');
+    }
+    const items = doc.contents.items;
+    if (items.length > exports.SUDO_CONFIG_MAX_RULES) {
+        throw new Error(`sudo-config: at most ${exports.SUDO_CONFIG_MAX_RULES} command lines, got ${items.length}`);
+    }
+    const seen = new Set();
+    return items.map(item => {
+        const where = at(item);
+        if (!(0, yaml_1.isScalar)(item) || typeof item.value !== 'string') {
+            throw new Error(`${where}: each entry must be one command line (a string)`);
+        }
+        let rule;
+        try {
+            rule = parseSudoLine(item.value);
+        }
+        catch (e) {
+            throw new Error(`${where}: '${item.value}' ${e.message}`);
+        }
+        const text = ruleText(rule);
+        if (seen.has(text))
+            throw new Error(`${where}: '${text}' is listed more than once`);
+        seen.add(text);
+        return rule;
+    });
+}
+/**
+ * Commands that give whoever can run them as root a way to run anything else, or to write any
+ * file: shells and interpreters, command wrappers, file writers, package and service managers.
+ * Not exhaustive: a warning nudges towards tight entries, never a guarantee.
+ */
+const ROOT_EQUIVALENT = /^(sh|bash|dash|zsh|ksh|fish|python[0-9.]*|perl|ruby|node|nodejs|php|lua|env|su|sudo|visudo|runuser|tee|cp|mv|dd|install|chmod|chown|chgrp|ln|rm|truncate|curl|wget|systemctl|journalctl|docker|podman|iptables.*|ip6tables.*|nft|ip|mount|umount|kill|pkill|killall|apt|apt-get|aptitude|dpkg|snap|pip[0-9.]*|npm|npx|yarn|gem|cargo|vi|vim|nvim|nano|ed|emacs|less|more|man|find|xargs|awk|gawk|sed|tar|zip|unzip|rsync|scp|ssh|git|make|crontab|at|useradd|usermod|passwd|chroot|nsenter|unshare|setcap|insmod|modprobe|sysctl|timeout|nice|ionice|nohup|stdbuf|setsid|flock|chrt|taskset|busybox|script|strace|ltrace|gdb|socat)$/;
+/**
+ * Directories the runner user can write: a command under one can be replaced by the job and then
+ * run as root. Plus the runner's own RUNNER_TEMP, RUNNER_TOOL_CACHE and GITHUB_WORKSPACE.
+ */
+exports.RUNNER_WRITABLE = ['/home/', '/tmp/', '/var/tmp/', '/opt/hostedtoolcache/', '/__w/', '/github/'];
+/** Directories from the runner environment that the job can write. */
+function runnerWritableDirs(env = process.env) {
+    const dirs = [env.RUNNER_TEMP, env.RUNNER_TOOL_CACHE, env.GITHUB_WORKSPACE]
+        .filter((d) => !!d && d.startsWith('/'))
+        .map(d => (d.endsWith('/') ? d : `${d}/`));
+    return Array.from(new Set([...exports.RUNNER_WRITABLE, ...dirs]));
+}
+/** Why one rule is risky, or null. Root-equivalent first, then a writable path, then `*`. */
+function sudoRuleWarning(r, writable = exports.RUNNER_WRITABLE) {
+    const base = r.path.slice(r.path.lastIndexOf('/') + 1);
+    if (ROOT_EQUIVALENT.test(base)) {
+        return `gives the job root (${base} can run or write anything), so sudo can remove the egress controls`;
+    }
+    const dir = writable.find(d => r.path.startsWith(d));
+    if (dir)
+        return `is under a runner-writable path (${dir}): the job can overwrite it and run it as root`;
+    if (r.anyRest)
+        return 'allows any further arguments, including options';
+    return null;
+}
+/** Guardrail warnings for the job log. Every sudo-config makes enforce ADVISORY. */
+function sudoConfigWarnings(rules, writable = exports.RUNNER_WRITABLE) {
+    return rules.flatMap(r => {
+        const why = sudoRuleWarning(r, writable);
+        return why ? [`sudo-config: '${ruleText(r)}' ${why}`] : [];
+    });
+}
+/**
+ * Does a rule allow this command (as the sudo log records it: absolute path, arguments joined
+ * by single spaces, run as root)? Exact path and exact arguments; a trailing `*` takes one or
+ * more further arguments. That is what BOTH sudo implementations allow: classic sudo's `*` needs
+ * the space before it (so not zero further arguments), sudo-rs takes zero or more.
+ */
+function ruleAllows(r, command, args) {
+    if (command !== r.path)
+        return false;
+    const got = args.split(/ +/).filter(Boolean);
+    if (!r.anyRest)
+        return got.length === r.args.length && r.args.every((a, i) => got[i] === a);
+    return got.length > r.args.length && r.args.every((a, i) => got[i] === a);
+}
+/**
+ * Analyze: the workflow's own sudo commands the declared policy would block in enforce. With sudo
+ * kept (disable-sudo: false) nothing would be; otherwise everything the sudo-config rules don't
+ * allow (they run as root only, and allow no environment variables: no SETENV).
+ *
+ * Best effort: the sudo log shows neither `sudo -E` nor argument boundaries (arguments are joined
+ * with spaces), so a command this allows can still be refused in enforce.
+ */
+function evaluateSudo(rules, kept, ran) {
+    const allowed = [];
+    const wouldBlock = [];
+    for (const c of ran) {
+        const ok = kept || ((c.targetUser || 'root') === 'root' && !c.env && rules.some(r => ruleAllows(r, c.command, c.args)));
+        (ok ? allowed : wouldBlock).push(c);
+    }
+    return { allowed, wouldBlock };
 }
 
 
@@ -3701,7 +3930,7 @@ async function setupSudoLogging(h, r) {
  */
 async function restrictSudo(h, r, _baseline) {
     core.info('Restricting sudo access to validation commands only');
-    await (0, host_1.sudo)(['tee', config_1.SUDOERS_TEMP_FILE], { input: Buffer.from(r.sudoers) }, h);
+    await (0, host_1.sudo)(['tee', config_1.SUDOERS_TEMP_FILE], { input: Buffer.from(r.restrict.sudoers) }, h);
     // the exit code is checked here, not ignored: a rejected file is never installed
     const visudo = await h.output('sudo', ['visudo', '-c', '-f', config_1.SUDOERS_TEMP_FILE], { ignoreReturnCode: true });
     if (visudo.exitCode !== 0) {
@@ -3884,6 +4113,18 @@ async function runSetup(inputs, h = host_1.realHost) {
     else if (mode === 'enforce' && inputs.disableSudoDefaulted) {
         core.info('disable-sudo not set: enforce mode removes sudo by default (set disable-sudo: false to keep it)');
     }
+    for (const w of sudo.sudoConfigWarnings(inputs.sudoConfig, sudo.runnerWritableDirs()))
+        core.warning(w);
+    if (mode === 'analyze' && inputs.disableSudo && !inputs.disableSudoDefaulted) {
+        core.warning('disable-sudo: true is not applied in analyze mode: analyze never changes sudo. The summary lists the ' +
+            'sudo commands enforce would block. Use mode: enforce to remove sudo.', { title: 'safer-runner: analyze does not remove sudo' });
+    }
+    if (mode === 'enforce' && inputs.disableSudo && inputs.sudoConfig.length) {
+        // D1: never a boundary - no allowlist can be proven free of a command that gives root
+        core.warning(`enforce is ADVISORY in this job: sudo-config keeps ${inputs.sudoConfig.length} sudo command ` +
+            'line(s), and a command that can run code or write files gives the job root, which can remove ' +
+            'the egress controls. Remove sudo-config to make enforce a boundary.', { title: 'safer-runner: enforce (ADVISORY - sudo allowlist)' });
+    }
     if (mode === 'enforce' && inputs.dockerDefaulted) {
         core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
     }
@@ -3976,6 +4217,9 @@ async function runSetup(inputs, h = host_1.realHost) {
         input: Buffer.from(JSON.stringify({
             mode,
             sudoRetained,
+            // the sudo policy the post step evaluates (analyze) or reports (enforce)
+            ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
+            ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
             dockerRetained: dockerAccess.access === 'retained',
             docker: dockerAccess,
             failOnTampering: inputs.failOnTampering,
@@ -3989,10 +4233,16 @@ async function runSetup(inputs, h = host_1.realHost) {
         silent: true
     });
     // 11. Sudo: logging on, then the integrity baseline, then sudo restricted - the last step
-    const sudoRendered = sudo.render({ flavour: sudoFlavour, logFile: constants_1.SUDO_LOG });
+    const sudoRendered = sudo.render({
+        flavour: sudoFlavour,
+        logFile: constants_1.SUDO_LOG,
+        // analyze never changes sudo: it evaluates the policy in the post step
+        restrict: mode === 'enforce' && inputs.disableSudo,
+        rules: inputs.sudoConfig
+    });
     const sudoLogging = await sudo.setupSudoLogging(h, sudoRendered);
     const baseline = await (0, baseline_1.captureBaseline)(h, [...baseline_1.CRITICAL_FILES, sudoRendered.logging.path, ...(dockerd.configWritten ? [constants_1.DOCKER_DAEMON_JSON] : [])], sudoLogging);
-    if (inputs.disableSudo) {
+    if (sudoRendered.restrict) {
         await sudo.restrictSudo(h, sudoRendered, baseline);
     }
     core.info(`✅ safer-runner v2 active in ${mode} mode`);

@@ -11,8 +11,10 @@ import * as core from '@actions/core';
 import * as net from 'net';
 import { GIT_HOSTS, expandPattern, gitPatternKey, validatePathPattern, validatePattern } from '../policy';
 import type { HttpFilterHost, Mode } from '../policy';
-import { LineCounter, isAlias, isMap, isScalar, isSeq, parseDocument, visit } from 'yaml';
+import { isMap, isScalar, isSeq } from 'yaml';
 import type { Node, Pair, Scalar, YAMLMap } from 'yaml';
+import { strictYaml } from './yaml';
+import { parseSudoConfig, type SudoRule } from '../services/sudo/config';
 
 /**
  * What happens to docker access. Docker group membership is root-equivalent (a step can use
@@ -36,8 +38,10 @@ export interface Inputs {
   dnsServers: string[];
   /** effective value: see resolveDisableSudo() */
   disableSudo: boolean;
-  /** true when disable-sudo was not set and the mode decided it */
+  /** true when disable-sudo was not set (the policy then removes sudo) */
   disableSudoDefaulted: boolean;
+  /** sudo-config (parseSudoConfig): command lines the job may run as root; [] = none */
+  sudoConfig: SudoRule[];
   /** effective value: see resolveDocker() */
   docker: DockerPolicy;
   /** true when docker was not set and the mode decided it */
@@ -68,12 +72,14 @@ function triState(raw: string, name: string): boolean | null {
 }
 
 /**
- * disable-sudo (review H2). Unset means ON in enforce mode: with sudo any step can switch the
- * egress controls off, so enforce is only a boundary without it. Off in analyze.
+ * disable-sudo (review H2): the sudo policy. Unset means remove sudo, in either mode: with sudo
+ * any step can switch the egress controls off, so enforce is only a boundary without it. The
+ * mode decides whether the policy is applied (enforce) or only evaluated (analyze never
+ * changes sudo; it reports what enforce would block and suggests a sudo-config).
  */
-export function resolveDisableSudo(raw: string, mode: Mode): [boolean, boolean] {
+export function resolveDisableSudo(raw: string): [boolean, boolean] {
   const v = triState(raw, 'disable-sudo');
-  return v === null ? [mode === 'enforce', true] : [v, false];
+  return v === null ? [true, true] : [v, false];
 }
 
 /**
@@ -129,15 +135,6 @@ function unquote(s: string): string {
   return t;
 }
 
-/** Plain words for the YAML errors a user is most likely to hit; any other uses the library's text. */
-const YAML_HINTS: Record<string, string> = {
-  TAB_AS_INDENT: 'indent with spaces, not tabs',
-  BAD_INDENT: 'inconsistent indentation',
-  BLOCK_AS_IMPLICIT_KEY: 'inconsistent indentation (a line is indented more than the line above it)',
-  MULTILINE_IMPLICIT_KEY: 'inconsistent indentation (a key must be on one line)',
-  BAD_ALIAS: 'put a key or a value that starts with * in quotes, e.g. "*": GET'
-};
-
 /** A key as written: a host name or a path pattern, never a number or other YAML type. */
 function keyText(pair: Pair, where: string): string {
   const k = pair.key;
@@ -184,39 +181,15 @@ function parseRules(map: YAMLMap, src: string, at: (n: Node | null | undefined) 
 
 /**
  * http-filter as YAML (JSON is YAML too), checked against its one shape: host -> { path ->
- * methods }. Anything else fails: duplicate keys, anchors, aliases, tags, document markers,
- * directives and deeper nesting are never resolved or ignored.
+ * methods }. Anything else fails: duplicate keys and deeper nesting are refused (strictYaml
+ * refuses the rest).
  */
 function parseFilterYaml(raw: string): RawHost[] {
-  const lines = new LineCounter();
-  const doc = parseDocument(raw, {
-    lineCounter: lines,
-    prettyErrors: false,
-    schema: 'core',
-    strict: true,
-    // duplicates are refused below, once `{ "*": GET, HEAD, "x": PUT, HEAD }` continuations are merged
-    uniqueKeys: false,
-    version: '1.2'
-  });
-  const line = (offset: number) => `http-filter line ${lines.linePos(offset).line}`;
-  const at = (n: Node | null | undefined) => line(n?.range?.[0] ?? 0);
-  const problems = [...doc.errors, ...doc.warnings];
-  if (problems.length) {
-    const p = problems.find(e => e.code === 'BAD_ALIAS') ?? problems[0];
-    const text =
-      YAML_HINTS[p.code] ??
-      `${p.message.split('\n')[0]} (check the indentation; write methods as GET, HEAD or [GET, HEAD], not "GET", HEAD)`;
-    throw new Error(`${line(p.pos[0])}: ${text}`);
-  }
-  if (doc.directives?.docStart || doc.directives?.docEnd) {
-    throw new Error('http-filter: remove the YAML document markers (--- and ...) and any % directives');
-  }
-  visit(doc, {
-    Node(_, n) {
-      if (isAlias(n) || n.anchor || n.tag) {
-        throw new Error(`${at(n)}: YAML anchors (&), aliases (*name) and tags (!) are not allowed`);
-      }
-    }
+  // duplicates are refused below, once `{ "*": GET, HEAD, "x": PUT, HEAD }` continuations are merged
+  const { doc, at } = strictYaml(raw, 'http-filter', {
+    fallback: 'check the indentation; write methods as GET, HEAD or [GET, HEAD], not "GET", HEAD',
+    hints: { BAD_ALIAS: 'put a key or a value that starts with * in quotes, e.g. "*": GET' },
+    uniqueKeys: false
   });
   if (doc.contents === null) return [];
   if (!isMap(doc.contents)) {
@@ -323,7 +296,11 @@ function bool(name: string): boolean {
 export function readInputs(): Inputs {
   const mode = parseMode(core.getInput('mode'));
   // core.getInput reads the raw INPUT_<NAME> variable ('' when unset - no action.yaml default)
-  const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'), mode);
+  const [disableSudo, disableSudoDefaulted] = resolveDisableSudo(core.getInput('disable-sudo'));
+  const sudoConfig = parseSudoConfig(core.getInput('sudo-config', { trimWhitespace: false }));
+  if (sudoConfig.length && !disableSudo) {
+    throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
+  }
   const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
   const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
   const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
@@ -336,6 +313,7 @@ export function readInputs(): Inputs {
     dnsServers: parseDnsServers(core.getInput('dns-servers')),
     disableSudo,
     disableSudoDefaulted,
+    sudoConfig,
     docker,
     dockerDefaulted,
     failOnTampering,

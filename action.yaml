@@ -70,11 +70,20 @@ inputs:
     default: 'true'
   disable-sudo:
     description: >-
-      Override whether sudo is removed from the runner user after setup. `enforce` removes it
-      (with sudo any step could remove the egress controls); `analyze` keeps it. Set `true` to
-      force removal or `false` to keep sudo; keeping sudo in `enforce` makes the job
-      "enforce (ADVISORY)" - the controls are applied but are not an enforced boundary. Leave
-      unset to follow the mode (unset and `false` are not the same).
+      Whether the runner user's sudo is removed after setup (with sudo any step could remove the
+      egress controls). Unset or `true`: `enforce` removes it; `analyze` never changes sudo, it
+      reports the sudo commands enforce would block and suggests a `sudo-config`. `false` keeps
+      sudo, which makes `enforce` "enforce (ADVISORY)" - the controls are applied but are not an
+      enforced boundary.
+    required: false
+  sudo-config:
+    description: >-
+      With sudo removed (`disable-sudo`), the exact sudo command lines the job may still run as
+      root, as a YAML list: `- /usr/bin/apt-get update`. Each is an absolute path and its exact
+      arguments; a lone trailing `*` allows one or more further arguments (including options).
+      Only letters, digits and `_ . / @ + -`. Any entry makes `enforce` ADVISORY: a command that
+      can run code or write files gives the job root. `analyze` lists what this would block and
+      suggests a sudo-config from the job's sudo use. Not valid with `disable-sudo: false`.
     required: false
   docker:
     description: >-

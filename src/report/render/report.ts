@@ -19,6 +19,7 @@ import {
 import { httpFilterYaml, type HttpFilterReport, type HttpFilterSuggestion } from '../aggregate/http-filter';
 import { CONTAINER_PREFIXES, firewallSummary, type FirewallEvent, type FirewallSummary } from '../logs/firewall-log';
 import type { SudoCommand, SudoUsage } from '../logs/sudo-log';
+import { sudoConfigYaml, type SudoConfigSuggestion } from '../aggregate/sudo-config';
 import { PATH_HIDDEN } from '../redact';
 import { capped, code, codeBlock, humanBytes, plural, table } from './markdown';
 
@@ -32,6 +33,8 @@ export interface ReportInput {
   docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
   /** sudo log split by who ran what (analyze: tells the user enforce will remove sudo) */
   sudo?: SudoUsage;
+  /** the sudo policy (disable-sudo, sudo-config) and, in analyze, what it would block */
+  sudoPolicy?: SudoPolicyReport;
   job: string;
   hosts: HostSummary[];
   firewall: FirewallEvent[];
@@ -56,6 +59,29 @@ export interface ReportInput {
   actionRef?: string;
   now?: Date;
 }
+
+export interface SudoPolicyReport {
+  /** sudo-config lines: kept in the restricted sudoers (enforce) or evaluated (analyze) */
+  rules: string[];
+  /** disable-sudo: false - sudo is kept as it is */
+  kept: boolean;
+  /** analyze: the workflow's sudo commands the policy would block in enforce */
+  wouldBlock: SudoCommand[];
+  /** analyze: the suggested sudo-config; undefined when it could not be built */
+  suggestion?: SudoConfigSuggestion;
+  /** suggested lines that give the job root, sit under a runner-writable path, ...: line -> why */
+  flagged?: Record<string, string>;
+}
+
+/** Fixed caveat for every sudo-config: never shown as safe. */
+export const SUDO_CONFIG_CAVEAT =
+  'A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, ' +
+  'and root can remove the egress controls. Enforce with any `sudo-config` is ADVISORY.';
+
+/** What analyze cannot see in the sudo log. */
+export const SUDO_BEST_EFFORT =
+  'Best effort: the sudo log does not show `sudo -E` or where one argument ends and the next begins, ' +
+  'so a command shown as allowed can still be refused in enforce.';
 
 /**
  * The post step (this report, the tamper check, fail-on-tampering) runs as the runner user from
@@ -142,18 +168,22 @@ function integrityChip(status: 'verified' | 'tampered' | 'unavailable' | undefin
   return '❔ config unverified';
 }
 
-/** What made enforce advisory: 'sudo', 'docker', 'sudo and docker', or '' (a boundary). */
-function retained(sudoRetained: boolean, dockerRetained: boolean): string {
-  return [sudoRetained ? 'sudo' : '', dockerRetained ? 'docker' : ''].filter(Boolean).join(' and ');
+/**
+ * What made enforce advisory: 'sudo', 'sudo (sudo-config allowlist)', 'docker', joined with
+ * 'and', or '' (a boundary).
+ */
+function retained(sudoRetained: boolean, dockerRetained: boolean, sudoAllowlist = false): string {
+  const sudo = sudoRetained ? 'sudo' : sudoAllowlist ? 'sudo (sudo-config allowlist)' : '';
+  return [sudo, dockerRetained ? 'docker' : ''].filter(Boolean).join(' and ');
 }
 
 /**
- * Mode as shown in the summary header. enforce with sudo or docker (root-equivalent) retained
- * is never shown as plain enforce.
+ * Mode as shown in the summary header. enforce with sudo or docker (root-equivalent) retained,
+ * or a sudo-config allowlist, is never shown as plain enforce.
  */
-export function modeLabel(mode: Mode, sudoRetained = false, dockerRetained = false): string {
+export function modeLabel(mode: Mode, sudoRetained = false, dockerRetained = false, sudoAllowlist = false): string {
   if (mode === 'analyze') return '📊 ANALYZE';
-  const what = retained(sudoRetained, dockerRetained);
+  const what = retained(sudoRetained, dockerRetained, sudoAllowlist);
   return what ? `⚠️ ENFORCE (ADVISORY — ${what} retained, not an enforced boundary)` : '🔒 ENFORCE';
 }
 
@@ -306,6 +336,10 @@ interface Facts {
   /** host firewall events (container ones are in the container section) */
   fw: FirewallSummary;
   sudoRan: number;
+  /** analyze: workflow sudo commands the policy would block in enforce */
+  sudoWouldBlock: number;
+  /** enforce kept sudo-config lines: ADVISORY */
+  sudoAllowlist: number;
   /** names to suggest for `allowed-domains` */
   suggest: string[];
   filterBlocks: HttpFilterReport['blocks'];
@@ -318,7 +352,10 @@ interface Facts {
 function facts(input: ReportInput): Facts {
   const { mode } = input;
   const enforce = mode === 'enforce';
-  const advisoryWhat = enforce ? retained(input.sudoRetained === true, input.dockerRetained === true) : '';
+  const sudoAllowlist = enforce && !input.sudoRetained ? (input.sudoPolicy?.rules.length ?? 0) : 0;
+  const advisoryWhat = enforce
+    ? retained(input.sudoRetained === true, input.dockerRetained === true, sudoAllowlist > 0)
+    : '';
 
   const denied = input.hosts.filter(h => DENIED.has(h.verdict));
   const allowed = input.hosts.filter(h => !DENIED.has(h.verdict));
@@ -366,6 +403,9 @@ function facts(input: ReportInput): Facts {
     // container firewall events are reported in the container section, with their source
     fw: firewallSummary(input.firewall.filter(e => !CONTAINER_PREFIXES.has(e.prefix))),
     sudoRan: input.sudo?.ran.length ?? 0,
+    // without a policy (an older setup marker), every workflow sudo command: enforce removes sudo
+    sudoWouldBlock: input.sudoPolicy ? input.sudoPolicy.wouldBlock.length : (input.sudo?.ran.length ?? 0),
+    sudoAllowlist,
     suggest: suggestedAllowlist(denied),
     filterBlocks,
     filtered: filterBlocks.reduce((a, b) => a + b.tries, 0),
@@ -379,13 +419,17 @@ function titleAndChips(f: Facts): string {
   const chips = [f.advisory ? '⚠️ ENFORCE · ADVISORY' : enforce ? '🔒 ENFORCE' : '📊 ANALYZE'];
   if (enforce) {
     if (input.sudoRetained) chips.push('⚠️ sudo retained');
+    if (f.sudoAllowlist) chips.push(`⚠️ sudo allowlist (${f.sudoAllowlist})`);
     if (input.dockerRetained) chips.push('⚠️ docker retained');
-    if (!input.sudoRetained && !input.dockerRetained) chips.push('✅ controls applied at setup');
+    if (!f.advisory) chips.push('✅ controls applied at setup');
     chips.push(integrityChip(input.integrity?.status));
   } else {
     if (f.hostsDenied) chips.push(`${plural(f.hostsDenied, 'host')} would be blocked`);
     if (f.filtered) chips.push(`${plural(f.filtered, 'request')} the http-filter would refuse`);
-    if (!f.hostsDenied && !f.filtered) chips.push('nothing would be blocked');
+    if (input.sudoPolicy && f.sudoWouldBlock)
+      chips.push(`${plural(f.sudoWouldBlock, 'sudo command')} would be blocked`);
+    if (!f.hostsDenied && !f.filtered && !(input.sudoPolicy && f.sudoWouldBlock))
+      chips.push('nothing would be blocked');
   }
   if (input.selfTests.length) {
     chips.push(`${f.selfFailed.length ? '❌' : '🧪'} self-tests ${f.selfOk}/${input.selfTests.length}`);
@@ -395,7 +439,8 @@ function titleAndChips(f: Facts): string {
 
 /** Verdict alerts (top level only: alerts don't render inside <details>). */
 function alerts(f: Facts): string {
-  const { input, enforce, groups, bypass, filtered, suggest, sudoRan } = f;
+  const { input, enforce, groups, bypass, filtered, suggest, sudoRan, sudoWouldBlock } = f;
+  const sudoKeptRan = !enforce && input.sudoPolicy?.kept === true && sudoRan > 0;
   let md = '';
   const critical: string[] = [];
   if (bypass.length) {
@@ -426,8 +471,15 @@ function alerts(f: Facts): string {
   }
   if (critical.length) md += '> [!CAUTION]\n' + critical.map(c => `> ${c}`).join('\n>\n') + '\n\n';
 
-  if (enforce && (input.sudoRetained || input.dockerRetained)) {
+  if (enforce && f.advisory) {
     const why: string[] = [];
+    if (f.sudoAllowlist) {
+      why.push(
+        `**ADVISORY: sudo was kept for ${plural(f.sudoAllowlist, 'command line')}** (\`sudo-config\`). ` +
+          SUDO_CONFIG_CAVEAT.replace(' Enforce with any `sudo-config` is ADVISORY.', '') +
+          ' Remove `sudo-config` to make enforce a boundary.'
+      );
+    }
     if (input.sudoRetained) {
       why.push(
         '**ADVISORY: sudo was retained** (`disable-sudo: false`), so any step could have used it to ' +
@@ -458,7 +510,7 @@ function alerts(f: Facts): string {
     md += '> [!IMPORTANT]\n' + `> **${what.join('; ')}.** If this job failed, this is probably why — see below.\n\n`;
   }
 
-  if (!enforce && (suggest.length || sudoRan)) {
+  if (!enforce && (suggest.length || sudoWouldBlock || sudoKeptRan)) {
     md += '> [!IMPORTANT]\n';
     if (suggest.length) {
       md += `> **Enforce would block ${plural(suggest.length, 'host')} this job used.** Add ${suggest.length === 1 ? 'it' : 'them'} to run this job under \`mode: enforce\` (review each one first):\n>\n`;
@@ -472,15 +524,51 @@ function alerts(f: Facts): string {
           .map(l => `> ${l}`)
           .join('\n') + '\n';
     }
-    if (sudoRan) {
+    if (sudoWouldBlock || sudoKeptRan) {
       if (suggest.length) md += '>\n';
-      md +=
-        `> **This job ran ${plural(sudoRan, 'sudo command')}.** Enforce removes sudo — drop that usage, ` +
-        'or add `disable-sudo: false` (which makes enforce ADVISORY: sudo can remove the controls).\n';
+      md += sudoAlert(f) + '\n';
     }
     md += '\n';
   }
   return md;
+}
+
+/** Analyze: the sudo commands enforce would block, and the suggested sudo-config (in an alert). */
+function sudoAlert(f: Facts): string {
+  const policy = f.input.sudoPolicy;
+  const quote = (text: string) =>
+    text
+      .split('\n')
+      .map(l => `> ${l}`)
+      .join('\n');
+  let md: string;
+  if (f.sudoWouldBlock) {
+    md =
+      `> **Enforce would block ${plural(f.sudoWouldBlock, 'sudo command')} this job ran** ` +
+      `(enforce removes sudo${policy?.rules.length ? ', except your `sudo-config` lines' : ''}; listed under Diagnostics). ` +
+      'Drop that usage, or allow the exact command lines with `sudo-config`';
+  } else {
+    md =
+      `> **This job ran ${plural(f.sudoRan, 'sudo command')}, and \`disable-sudo: false\` keeps sudo**, so enforce ` +
+      'would be ADVISORY (sudo can remove the controls). To make enforce a boundary, remove `disable-sudo: false`';
+  }
+  const s = policy?.suggestion;
+  if (!s?.rules.length) return md + `.\n>\n> ${SUDO_BEST_EFFORT}\n`;
+  md += ' (review each line):\n>\n';
+  const yaml =
+    'sudo-config: |\n' +
+    sudoConfigYaml(s.rules, policy?.flagged)
+      .replace(/^(?=.)/gm, '  ')
+      .trimEnd();
+  md += quote(codeBlock('yaml', yaml)) + '\n';
+  const left = [
+    s.omitted.secret ? `${s.omitted.secret} with arguments that look like a secret` : '',
+    s.omitted.unrepresentable ? `${s.omitted.unrepresentable} that a sudo-config line cannot express` : '',
+    s.omitted.other_user ? `${s.omitted.other_user} run as another user` : '',
+    s.omitted.over_cap ? `${s.omitted.over_cap} over the limit` : ''
+  ].filter(Boolean);
+  if (left.length) md += `>\n> Not suggested: ${left.join(', ')}.\n`;
+  return md + `>\n> ${SUDO_CONFIG_CAVEAT} ${SUDO_BEST_EFFORT}\n`;
 }
 
 /** The scorecard, or the one-line clean verdict. */
@@ -492,7 +580,7 @@ function scorecard(f: Facts): string {
     return enforce
       ? `**✅ Nothing blocked.** ${allowedLine} through the proxy.\n\n`
       : `**✅ Nothing would be blocked.** ${allowedLine} through the proxy.` +
-          (f.sudoRan ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
+          (f.sudoWouldBlock ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
   }
   const rows: string[][] = [];
   if (bypass.length) rows.push(['🚨 **Bypass attempts**', `**${plural(bypass.length, 'host')} ${blockedWord}**`]);
@@ -725,7 +813,8 @@ function diagnostics(f: Facts): string {
     diag.push(
       (ran.length === 0 ? 'no workflow sudo' : `workflow ran ${plural(ran.length, 'sudo command')}`) +
         (internal.length ? ` (${internal.length} by Safer Runner)` : '') +
-        (refused.length ? ` · ${plural(refused.length, 'sudo attempt')} refused` : '')
+        (refused.length ? ` · ${plural(refused.length, 'sudo attempt')} refused` : '') +
+        (!enforce && f.sudoWouldBlock ? ` · enforce would block ${f.sudoWouldBlock}` : '')
     );
     const lines = (cmds: SudoCommand[]) =>
       cmds
@@ -740,6 +829,10 @@ function diagnostics(f: Facts): string {
     body += ran.length ? ':\n\n' + codeBlock('console', lines(ran)) + '\n\n' : '.\n\n';
     if (refused.length) {
       body += `Refused by sudo (${refused.length}):\n\n` + codeBlock('console', lines(refused)) + '\n\n';
+    }
+    const wouldBlock = enforce ? [] : (input.sudoPolicy?.wouldBlock ?? []);
+    if (wouldBlock.length) {
+      body += `Enforce would block (${wouldBlock.length}):\n\n` + codeBlock('console', lines(wouldBlock)) + '\n\n';
     }
   }
   if (input.docker) {

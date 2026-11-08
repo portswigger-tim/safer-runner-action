@@ -18,6 +18,7 @@ import {
   SUDOERS_TEMP_FILE,
   SUDO_LOGGING_TEMP_FILE,
   parseSudoFlavour,
+  type RestrictingSudo,
   type SudoFlavour,
   type SudoRendered
 } from './config';
@@ -87,10 +88,10 @@ export async function setupSudoLogging(h: Host, r: SudoRendered): Promise<SudoLo
  * validation (see getValidationSudoCommands()). The file is checked with the active visudo
  * (visudo-rs on sudo-rs systems) before it is moved into place; a rejected file fails setup.
  */
-export async function restrictSudo(h: Host, r: SudoRendered, _baseline: BaselineCaptured): Promise<void> {
+export async function restrictSudo(h: Host, r: RestrictingSudo, _baseline: BaselineCaptured): Promise<void> {
   core.info('Restricting sudo access to validation commands only');
 
-  await sudo(['tee', SUDOERS_TEMP_FILE], { input: Buffer.from(r.sudoers) }, h);
+  await sudo(['tee', SUDOERS_TEMP_FILE], { input: Buffer.from(r.restrict.sudoers) }, h);
 
   // the exit code is checked here, not ignored: a rejected file is never installed
   const visudo = await h.output('sudo', ['visudo', '-c', '-f', SUDOERS_TEMP_FILE], { ignoreReturnCode: true });

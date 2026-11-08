@@ -526,6 +526,47 @@ describe('job summary golden snapshots', () => {
     ).toMatchSnapshot();
   });
 
+  it('analyze: sudo the policy would block, with the suggested sudo-config', () => {
+    const records = allowedTraffic();
+    const extra = { ...SUDO.ran[0], command: '/usr/sbin/service', args: 'nginx restart' };
+    expect(
+      report({
+        mode: 'analyze',
+        hosts: summarizeFlows(records),
+        httpFilter: summarizeHttpFilter(records),
+        sudo: { ...SUDO, ran: [...SUDO.ran, extra] },
+        sudoPolicy: {
+          rules: ['/usr/sbin/service nginx restart'],
+          kept: false,
+          wouldBlock: SUDO.ran,
+          suggestion: {
+            rules: ['/usr/bin/apt-get install -y jq', '/usr/sbin/service nginx restart'],
+            omitted: { secret: 1, unrepresentable: 0, other_user: 1, over_cap: 0 }
+          }
+        },
+        docker: { requested: 'keep', access: 'retained' },
+        integrity: undefined
+      })
+    ).toMatchSnapshot();
+  });
+
+  it('enforce ADVISORY: a sudo-config allowlist', () => {
+    const records = allowedTraffic();
+    expect(
+      report({
+        mode: 'enforce',
+        hosts: summarizeFlows(records),
+        httpFilter: summarizeHttpFilter(records),
+        sudo: SUDO,
+        sudoPolicy: {
+          rules: ['/usr/bin/apt-get install -y jq', '/usr/bin/apt-get update'],
+          kept: false,
+          wouldBlock: []
+        }
+      })
+    ).toMatchSnapshot();
+  });
+
   it('enforce ADVISORY: sudo and docker retained', () => {
     const records = [...allowedTraffic(), ...refusedTraffic('BLOCK', plain).slice(4, 8)];
     expect(

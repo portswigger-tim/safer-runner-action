@@ -1,5 +1,26 @@
 # v2 release notes
 
+## v2.4.0 (unreleased)
+
+Sudo gets the analyze-then-enforce flow the egress allowlist and `http-filter` already have.
+
+- **New `sudo-config` input.** With sudo removed in `enforce`, the job may still run these exact
+  sudo command lines as root (a YAML list, on top of the action's own read-only checks). The
+  input is parsed strictly and fails the step on anything it cannot express exactly. Any
+  `sudo-config` labels the job **ADVISORY**: a command that can run code or write files gives
+  the job root. The v1 `sudo-config` format is not accepted.
+- **`analyze` reports and suggests for sudo.** The summary lists the sudo commands `enforce`
+  would block under your `disable-sudo` / `sudo-config`, and suggests a `sudo-config` built from
+  the job's own sudo use (exact lines only; secret-looking arguments are left out). Best effort:
+  the sudo log does not show `sudo -E` or argument boundaries, so check the job under `enforce`.
+- **Behaviour change: `mode: analyze` never changes sudo.** `disable-sudo: true` in `analyze`
+  now reports what enforce would block and suggests a `sudo-config`, instead of removing sudo.
+  To remove sudo, use `mode: enforce`.
+- **`disable-sudo` defaults to `true` in both modes.** In `analyze` this changes nothing on the
+  runner (analyze only evaluates it); in `enforce` it is the same as before.
+- **`sudo-config` with `disable-sudo: false` is rejected** (sudo is kept, so the list would have
+  no effect).
+
 ## v2.3.0
 
 Internal refactors and stricter, standards-based `http-filter` parsing. No new inputs.

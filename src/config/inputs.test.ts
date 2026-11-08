@@ -13,29 +13,25 @@ import {
 
 jest.mock('@actions/core');
 
-describe('resolveDisableSudo (review H2: enforce removes sudo by default)', () => {
-  it('defaults ON in enforce mode when disable-sudo is unset', () => {
-    expect(resolveDisableSudo('', 'enforce')).toEqual([true, true]);
-    expect(resolveDisableSudo('  ', 'enforce')).toEqual([true, true]);
+describe('resolveDisableSudo (review H2: the policy removes sudo by default; the mode applies or evaluates it)', () => {
+  it('defaults to removing sudo when disable-sudo is unset, in either mode', () => {
+    expect(resolveDisableSudo('')).toEqual([true, true]);
+    expect(resolveDisableSudo('  ')).toEqual([true, true]);
   });
 
-  it('defaults off in analyze mode', () => {
-    expect(resolveDisableSudo('', 'analyze')).toEqual([false, true]);
+  it('honours an explicit false (the advisory opt-out) - unset and false differ', () => {
+    expect(resolveDisableSudo('false')).toEqual([false, false]);
+    expect(resolveDisableSudo('FALSE')).toEqual([false, false]);
   });
 
-  it('honours an explicit false in enforce (the advisory opt-out) - unset and false differ', () => {
-    expect(resolveDisableSudo('false', 'enforce')).toEqual([false, false]);
-    expect(resolveDisableSudo('FALSE', 'enforce')).toEqual([false, false]);
-  });
-
-  it('honours an explicit true in any mode', () => {
-    expect(resolveDisableSudo('true', 'analyze')).toEqual([true, false]);
-    expect(resolveDisableSudo('True', 'enforce')).toEqual([true, false]);
+  it('honours an explicit true', () => {
+    expect(resolveDisableSudo('true')).toEqual([true, false]);
+    expect(resolveDisableSudo('True')).toEqual([true, false]);
   });
 
   it('rejects anything that is not a YAML boolean', () => {
-    expect(() => resolveDisableSudo('yes', 'enforce')).toThrow(/disable-sudo must be true or false/);
-    expect(() => resolveDisableSudo('0', 'enforce')).toThrow();
+    expect(() => resolveDisableSudo('yes')).toThrow(/disable-sudo must be true or false/);
+    expect(() => resolveDisableSudo('0')).toThrow();
   });
 });
 
@@ -124,11 +120,11 @@ describe('readInputs', () => {
     });
   });
 
-  it('analyze with nothing set changes nothing on the runner', () => {
+  it('analyze with nothing set: the sudo policy still removes sudo (analyze only evaluates it)', () => {
     inputs({});
     expect(readInputs()).toMatchObject({
       mode: 'analyze',
-      disableSudo: false,
+      disableSudo: true,
       docker: 'keep',
       failOnTampering: false
     });
@@ -137,16 +133,37 @@ describe('readInputs', () => {
   it('has no removed inputs left in its result', () => {
     inputs({ mode: 'enforce' });
     const keys = Object.keys(readInputs());
-    for (const gone of [
-      'proxyPort',
-      'streamLargeBodies',
-      'containerTls',
-      'sudoConfig',
-      'disableDocker',
-      'stopDocker'
-    ]) {
+    for (const gone of ['proxyPort', 'streamLargeBodies', 'containerTls', 'disableDocker', 'stopDocker']) {
       expect(keys).not.toContain(gone);
     }
+  });
+});
+
+describe('readInputs: sudo-config', () => {
+  const inputs = (values: Record<string, string>) =>
+    (core.getInput as jest.Mock).mockImplementation((name: string) => values[name] ?? '');
+
+  it('is empty when unset', () => {
+    inputs({ mode: 'enforce' });
+    expect(readInputs().sudoConfig).toEqual([]);
+  });
+
+  it('parses the command lines', () => {
+    inputs({ mode: 'enforce', 'sudo-config': '- /usr/bin/apt-get update\n- /usr/bin/apt-get install *\n' });
+    expect(readInputs().sudoConfig).toEqual([
+      { path: '/usr/bin/apt-get', args: ['update'], anyRest: false },
+      { path: '/usr/bin/apt-get', args: ['install'], anyRest: true }
+    ]);
+  });
+
+  it.each(['enforce', 'analyze'])('%s: sudo-config with an explicit disable-sudo: false fails the step', mode => {
+    inputs({ mode, 'disable-sudo': 'false', 'sudo-config': '- /usr/bin/apt-get update' });
+    expect(() => readInputs()).toThrow(/sudo-config has no effect with disable-sudo: false/);
+  });
+
+  it('an invalid sudo-config fails the step', () => {
+    inputs({ mode: 'enforce', 'sudo-config': '- /usr/bin/x --opt=v' });
+    expect(() => readInputs()).toThrow(/sudo-config line 1: .*unsupported character/);
   });
 });
 
