@@ -29,7 +29,7 @@ import {
   imageLabel,
   type DockerPolicyReport
 } from '../aggregate/docker';
-import { PATH_HIDDEN } from '../redact';
+import { PATH_HIDDEN, sudoCommandShown } from '../redact';
 import { capped, code, codeBlock, humanBytes, plural, table } from './markdown';
 
 export interface ReportInput {
@@ -899,10 +899,7 @@ function diagnostics(f: Facts): string {
     const lines = (cmds: SudoCommand[]) =>
       cmds
         .slice(0, 50)
-        .map(
-          c =>
-            `$ sudo ${c.targetUser && c.targetUser !== 'root' ? `-u ${c.targetUser} ` : ''}${c.command}${c.args ? ` ${c.args}` : ''}`
-        )
+        .map(c => `$ sudo ${sudoCommandShown(c)}`)
         .join('\n') + (cmds.length > 50 ? `\n# ... +${cmds.length - 50} more (job log)` : '');
     body += `**Sudo** — the workflow ran ${ran.length ? plural(ran.length, 'command') : 'none'}`;
     body += internal.length ? `; Safer Runner itself ran ${internal.length} (setup, integrity checks)` : '';

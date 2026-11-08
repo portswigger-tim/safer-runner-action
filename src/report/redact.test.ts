@@ -9,13 +9,18 @@ import {
   methodLabel,
   needsRedaction,
   redactName,
-  STANDARD_METHODS
+  STANDARD_METHODS,
+  secretMask,
+  sudoArgsShown,
+  sudoCommandShown,
+  sudoPathShown
 } from './redact';
 
 /** proxy/test-vectors.json "redact": also run by proxy/suggest_test.py (suggest.looks_encoded) */
-const VECTORS = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
-).redact;
+const ALL_VECTORS = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8'));
+const VECTORS = ALL_VECTORS.redact;
+/** proxy/test-vectors.json "sudo_secret": also run by proxy/sudo_suggest_test.py (secret_mask, path_secret) */
+const SUDO_VECTORS = ALL_VECTORS.sudo_secret;
 
 const b32 = (b: Buffer) => {
   const A = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -134,5 +139,32 @@ describe('methodLabel', () => {
     for (const m of ['A1B2C3D4E5F6', 'PROPFIND', '', undefined, 'GET ']) expect(methodLabel(m)).toBe(CUSTOM_METHOD);
     expect(CUSTOM_METHOD).toBe('INVALID');
     expect(PATH_HIDDEN).toBe('‹path hidden›');
+  });
+});
+
+describe('sudo command lines (shared vectors with proxy/sudo_suggest.py)', () => {
+  it.each(SUDO_VECTORS.args as { args: string[]; mask: boolean[]; shown: string[] }[])(
+    '$args',
+    ({ args, mask, shown }) => {
+      expect(secretMask(args)).toEqual(mask);
+      expect(sudoArgsShown(args)).toEqual(shown);
+    }
+  );
+  it.each(SUDO_VECTORS.paths as { path: string; secret: boolean; shown: string }[])(
+    '$path',
+    ({ path: p, secret, shown }) => {
+      expect(sudoPathShown(p)).toBe(shown);
+      expect(shown.includes(REDACTED)).toBe(secret);
+    }
+  );
+  it('keeps the path, the target user and the argument count', () => {
+    expect(
+      sudoCommandShown({ command: '/usr/bin/mysql', args: '-u root  -p hunter2xyz appdb', targetUser: 'postgres' })
+    ).toBe(`-u postgres /usr/bin/mysql -u root -p ${REDACTED} appdb`);
+    expect(sudoCommandShown({ command: '/usr/bin/nproc', args: '', targetUser: 'root' })).toBe('/usr/bin/nproc');
+  });
+  it('hides a random token whatever flag carries it', () => {
+    const t = crypto.randomBytes(20).toString('hex');
+    for (const args of [[t], [`--x=${t}`], ['--x', t]]) expect(sudoArgsShown(args).join(' ')).not.toContain(t);
   });
 });

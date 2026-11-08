@@ -31,6 +31,7 @@ have: `analyze` never changes either, and reports what `enforce` would block.
   suggests one: a job that uses docker needs `docker: keep` (ADVISORY), and `docker: stop` that
   would stop service containers is flagged. Only kinds, counts and image names are shown. Best
   effort: in `analyze` the job has docker, so it can stop the recording.
+- **Hardening:** redact sudo arguments in the job summary and log.
 
 ## v2.3.0
 

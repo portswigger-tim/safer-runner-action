@@ -1832,5 +1832,42 @@
         "allowed": false
       }
     ]
+  },
+  "sudo_secret_comment": "Sudo arguments and command paths that could carry a credential. src/report/redact.ts secretMask/sudoArgsShown/sudoPathShown print a masked argument or path segment as the placeholder (keeping the path and the argument count); proxy/sudo_suggest.py secret_mask/path_secret leaves the whole line out of the suggested sudo-config. Both read these vectors.",
+  "sudo_secret": {
+    "args": [
+      {"args": ["install", "-y", "jq"], "mask": [false, false, false], "shown": ["install", "-y", "jq"]},
+      {"args": ["--token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"], "mask": [true], "shown": ["--token=‹redacted›"]},
+      {"args": ["--token", "hunter2xyz"], "mask": [false, true], "shown": ["--token", "‹redacted›"]},
+      {"args": ["--password=hunter2xyz"], "mask": [true], "shown": ["--password=‹redacted›"]},
+      {"args": ["-u", "root", "-p", "hunter2xyz", "appdb"], "mask": [false, false, false, true, false], "shown": ["-u", "root", "-p", "‹redacted›", "appdb"]},
+      {"args": ["-phunter2xyz", "appdb"], "mask": [true, false], "shown": ["‹redacted›", "appdb"]},
+      {"args": ["-p", "/srv/data"], "mask": [false, false], "shown": ["-p", "/srv/data"]},
+      {"args": ["-p", "22", "host"], "mask": [false, false, false], "shown": ["-p", "22", "host"]},
+      {"args": ["-p22"], "mask": [false], "shown": ["-p22"]},
+      {"args": ["API_TOKEN=hunter2xyz", "make"], "mask": [true, false], "shown": ["API_TOKEN=‹redacted›", "make"]},
+      {"args": ["DB_PASS=x"], "mask": [true], "shown": ["DB_PASS=‹redacted›"]},
+      {"args": ["net.ipv4.ip_forward=1"], "mask": [false], "shown": ["net.ipv4.ip_forward=1"]},
+      {"args": ["PREFIX=/usr/local"], "mask": [false], "shown": ["PREFIX=/usr/local"]},
+      {"args": ["clone", "https://bob:hunter2xyz@example.com/repo.git"], "mask": [false, true], "shown": ["clone", "‹redacted›"]},
+      {"args": ["clone", "https://example.com/repo.git"], "mask": [false, false], "shown": ["clone", "https://example.com/repo.git"]},
+      {"args": ["-u", "bob:hunter2xyz", "https://example.com"], "mask": [false, true, false], "shown": ["-u", "‹redacted›", "https://example.com"]},
+      {"args": ["-u", "nobody", "id"], "mask": [false, false, false], "shown": ["-u", "nobody", "id"]},
+      {"args": ["-H", "Authorization:", "Bearer", "hunter2xyz"], "mask": [false, false, true, true], "shown": ["-H", "Authorization:", "‹redacted›", "‹redacted›"]},
+      {"args": ["4f9c2e7a1b3d5f60a8e2c4b6d8f0a1c3"], "mask": [true], "shown": ["‹redacted›"]},
+      {"args": ["--data=4f9c2e7a1b3d5f60a8e2c4b6d8f0a1c3"], "mask": [true], "shown": ["--data=‹redacted›"]},
+      {"args": ["ghp_abcdefghijklmnopqrstuvwxyz0123456789=1"], "mask": [true], "shown": ["‹redacted›"]},
+      {"args": ["config", "--file", "/etc/aghvsbg8gd29ybgqc2vjcmv0.conf"], "mask": [false, false, true], "shown": ["config", "--file", "‹redacted›"]},
+      {"args": ["install", "-y", "linux-headers-6.8.0-1015-azure", "libxrandr2"], "mask": [false, false, false, false], "shown": ["install", "-y", "linux-headers-6.8.0-1015-azure", "libxrandr2"]}
+    ],
+    "paths": [
+      {"path": "/usr/bin/apt-get", "secret": false, "shown": "/usr/bin/apt-get"},
+      {"path": "/opt/hostedtoolcache/Python/3.12.7/x64/bin/python3", "secret": false, "shown": "/opt/hostedtoolcache/Python/3.12.7/x64/bin/python3"},
+      {"path": "/usr/lib/x86_64-linux-gnu/helper", "secret": false, "shown": "/usr/lib/x86_64-linux-gnu/helper"},
+      {"path": "/home/runner/work/repo/repo/scripts/build.sh", "secret": false, "shown": "/home/runner/work/repo/repo/scripts/build.sh"},
+      {"path": "/tmp/4f9c2e7a1b3d5f60a8e2c4b6d8f0a1c3/run.sh", "secret": true, "shown": "/tmp/‹redacted›/run.sh"},
+      {"path": "/tmp/k7xq2zbm/run.sh", "secret": true, "shown": "/tmp/‹redacted›/run.sh"},
+      {"path": "/tmp/build.a1b2c3d4e5/run", "secret": true, "shown": "/tmp/‹redacted›/run"}
+    ]
   }
 }

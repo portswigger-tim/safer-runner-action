@@ -30,6 +30,8 @@ const NOW = new Date('2026-11-07T12:34:56Z');
 const CANARY = '5ec7e7c0ffee1234';
 const PATH_CANARY = 'pathcanary-0f1e2d3c4b5a';
 const METHOD_CANARY = 'EXFILMETHODCANARY';
+/** A short password: no telltale shape, so only the flag in front of it gives it away. */
+const SUDO_CANARY = 'hunter2sudo';
 /** Encoded-looking pieces of a dotted image tag (each piece is checked on its own). */
 const TAG_CANARIES = ['k3j9x8q2', 'a1b2c3'];
 
@@ -698,6 +700,38 @@ describe('redaction canary (C5)', () => {
     expect(md).not.toContain(PATH_CANARY);
     expect(md).not.toContain(METHOD_CANARY);
     for (const c of TAG_CANARIES) expect(md).not.toContain(c);
+  });
+
+  // A sudo argument can be a credential: every form the check knows, in every list the summary
+  // prints (ran, refused, would block), in both modes. The path and the argument count stay.
+  it.each(['enforce', 'analyze'] as const)('%s: no credential from a sudo argument or path is printed', mode => {
+    const at = (command: string, args: string) => ({
+      timestamp: 'Nov  7 12:00:00',
+      user: 'runner',
+      targetUser: 'root',
+      command,
+      args
+    });
+    const cmds = [
+      at('/usr/local/bin/deploy', `--token=${SUDO_CANARY}`),
+      at('/usr/bin/mysql', `-u root -p ${SUDO_CANARY} appdb`),
+      at('/usr/bin/mysql', `-p${SUDO_CANARY}`),
+      at('/usr/bin/make', `API_KEY=${SUDO_CANARY} install`),
+      at('/usr/bin/git', `clone https://bob:${SUDO_CANARY}@example.com/r.git`),
+      at(`/tmp/${CANARY}/run.sh`, '--verbose')
+    ];
+    const md = report({
+      mode,
+      hosts: [],
+      sudo: { ran: cmds, refused: cmds, internal: SUDO.internal },
+      sudoPolicy: { rules: [], kept: false, wouldBlock: cmds }
+    });
+    expect(md).toContain('$ sudo /usr/bin/mysql -u root -p ‹redacted› appdb');
+    expect(md).toContain('$ sudo /usr/local/bin/deploy --token=‹redacted›');
+    expect(md).toContain('$ sudo /usr/bin/make API_KEY=‹redacted› install');
+    expect(md).toContain('$ sudo /tmp/‹redacted›/run.sh --verbose');
+    expect(md).not.toContain(SUDO_CANARY);
+    expect(md).not.toContain(CANARY);
   });
 
   // Allowed names are redacted too, as in the host tables: a name under an allowed wildcard

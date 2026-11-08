@@ -101,3 +101,99 @@ export function methodLabel(method: unknown): string {
  * request chose the path, and no per-segment check stops data split into short chunks.
  */
 export const PATH_HIDDEN = '‹path hidden›';
+
+// ---------------------------------------------------------------- sudo command lines
+
+/**
+ * Sudo command lines the job ran (the summary and the job log). An argument can be a credential
+ * (`--token=...`, `mysql -p ...`), and GitHub masks only the literal value of a registered secret.
+ * Each argument that could carry one prints as REDACTED, so the path and the number of arguments
+ * stay readable. The same check decides which lines proxy/sudo_suggest.py leaves out of the
+ * suggested sudo-config (secret_mask, path_secret); both run against proxy/test-vectors.json
+ * "sudo_secret". Best effort, like the name check: a short credential with no telltale flag in
+ * front of it can still get through.
+ */
+
+/** credentials with a known shape */
+const TOKEN_PREFIX = /^(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-|xox[abprs]-|npm_|AKIA|ASIA|sk-)/;
+const LONG_RUN = /[A-Za-z0-9]{32,}/;
+const PART = /[/.@+_=:-]/;
+const SECRET_PART_LEN = 16;
+/** a flag whose value is a credential: the next argument (or the value after `=`) */
+const SECRET_FLAGS = new Set([
+  '--password',
+  '--passwd',
+  '--pass',
+  '--token',
+  '--secret',
+  '--api-key',
+  '--apikey',
+  '--auth'
+]);
+/** `NAME=value` with a name like these: the value is a credential */
+const SECRET_NAME = /pass|pwd|secret|token|key|auth|cred|cookie|session/i;
+/** words an HTTP credential follows (`-H Authorization: Bearer x`, joined by spaces in the sudo log) */
+const AUTH_WORDS = new Set(['authorization', 'bearer', 'basic', 'token', 'cookie', 'x-api-key']);
+/** `scheme://user:password@` */
+const USERINFO = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/;
+/** the name in `name=value`, shown when it is a plain option or variable name */
+const PLAIN_NAME = /^-{0,2}[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+
+/** Could this argument be a credential? (sudo_suggest.looks_secret) */
+export function looksSecret(arg: string): boolean {
+  if (TOKEN_PREFIX.test(arg) || LONG_RUN.test(arg)) return true;
+  return arg.split(PART).some(p => p.length >= SECRET_PART_LEN && looksEncoded(p));
+}
+
+/** `-phunter2` (mysql), not `-p22` (a port) or `-p/x` (a path). */
+function shortPValue(arg: string): boolean {
+  return (
+    arg.length > 2 && ['-p', '-P'].includes(arg.slice(0, 2)) && !'-/.'.includes(arg[2]) && !/^\d+$/.test(arg.slice(2))
+  );
+}
+
+/** For each argument: could it carry a credential? (sudo_suggest.secret_mask) */
+export function secretMask(args: readonly string[]): boolean[] {
+  return args.map((a, i) => {
+    const prev = i ? args[i - 1] : '';
+    const eq = a.indexOf('=');
+    const name = eq < 0 ? '' : a.slice(0, eq);
+    return (
+      looksSecret(a) ||
+      SECRET_FLAGS.has(prev.toLowerCase()) ||
+      // `mysql -p hunter2`; not `mkdir -p /x` (a path) or `ssh -p 22` (a port)
+      (['-p', '-P'].includes(prev) && !/^[/.-]/.test(a) && !/^\d+$/.test(a)) ||
+      shortPValue(a) ||
+      // `curl -u user:password`
+      (['-u', '--user'].includes(prev) && a.includes(':')) ||
+      AUTH_WORDS.has(prev.toLowerCase().replace(/:+$/, '')) ||
+      (eq >= 0 && (SECRET_FLAGS.has(name.toLowerCase()) || SECRET_NAME.test(name) || looksSecret(a.slice(eq + 1)))) ||
+      USERINFO.test(a)
+    );
+  });
+}
+
+/** The arguments as printed: a masked one as REDACTED, or `name=` + REDACTED when its name is plain. */
+export function sudoArgsShown(args: readonly string[]): string[] {
+  const mask = secretMask(args);
+  return args.map((a, i) => {
+    if (!mask[i]) return a;
+    const name = a.slice(0, a.indexOf('='));
+    return a.includes('=') && PLAIN_NAME.test(name) && !looksSecret(name) ? `${name}=${REDACTED}` : REDACTED;
+  });
+}
+
+/** A command path as printed: a segment that looks like encoded data as REDACTED (sudo_suggest.path_secret). */
+export function sudoPathShown(path: string): string {
+  return path
+    .split('/')
+    .map(seg => (seg && (looksSecret(seg) || seg.split('.').some(looksEncoded)) ? REDACTED : seg))
+    .join('/');
+}
+
+/** `[-u user] <path> <args>` as printed, from a sudo log entry (arguments are space-joined there). */
+export function sudoCommandShown(c: { command: string; args: string; targetUser?: string }): string {
+  const user = c.targetUser && c.targetUser !== 'root' ? `-u ${c.targetUser} ` : '';
+  const args = sudoArgsShown(c.args.split(/\s+/).filter(Boolean));
+  return user + [sudoPathShown(c.command), ...args].join(' ');
+}

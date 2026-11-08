@@ -38,6 +38,10 @@ This is the full list; the README keeps the few that change how you use the acti
   refused hostname. Treat the summary of a job that ran untrusted code as able to contain
   anything that code could read. The raw logs on the runner (`/var/log/safer-runner/`, including
   `proxy-flows.jsonl`) are **not** redacted: don't upload them as artifacts from a public repository.
+- **Sudo arguments are redacted the same way, best effort.** The summary and job log show the
+  job's sudo command lines with any argument that looks like it could be a credential as
+  `‹redacted›`, keeping the command path and the number of arguments. It is a heuristic: a
+  credential that doesn't look like one can still be printed.
 - **No DNS-rebinding protection for clients outside the proxy.** The resolver returns internal
   answers as-is; the proxy refuses them for all proxied traffic. A process that dials a
   loopback, docker-bridge or IMDS address by name gets no more than it could by IP literal

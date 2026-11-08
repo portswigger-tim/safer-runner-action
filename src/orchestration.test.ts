@@ -1477,6 +1477,28 @@ describe('post step transcript', () => {
     );
     expect(h.log).toContain('info: sudo WOULD_BLOCK /usr/bin/apt-get remove -y jq');
   });
+
+  // the job log is as public as the summary: a credential passed as a sudo argument is in neither
+  it.each(['analyze, disable-sudo: true, sudo-config', 'enforce, sudo-config'])(
+    '%s: sudo arguments that could be credentials are redacted in the summary and the job log',
+    async name => {
+      const canary = 'hunter2sudo';
+      const h = await setup(SCENARIOS.find(c => c.s.name === name)!.s);
+      // commands the fake runner knows; refused in enforce (not in the sudo-config)
+      for (const c of [`apt-get -u root -p ${canary} appdb`, `nproc --token=${canary}`]) {
+        await h.exec('sudo', c.split(' '), { ignoreReturnCode: true });
+      }
+      await post(h);
+      const lists = name.startsWith('analyze') ? ['sudo (workflow)', 'sudo WOULD_BLOCK'] : ['sudo REFUSED'];
+      for (const l of lists) {
+        expect(h.log).toContain(`info: ${l} /usr/bin/apt-get -u root -p ‹redacted› appdb`);
+        expect(h.log).toContain(`info: ${l} /usr/bin/nproc --token=‹redacted›`);
+      }
+      expect(h.summaryText).toContain('$ sudo /usr/bin/apt-get -u root -p ‹redacted› appdb');
+      expect(h.summaryText).not.toContain(canary);
+      expect(h.log.join('\n')).not.toContain(canary);
+    }
+  );
 });
 
 describe('invariants have teeth (mutation check)', () => {
