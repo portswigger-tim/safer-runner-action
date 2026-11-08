@@ -1,7 +1,7 @@
 """safer-runner v2: the suggested ``http-filter`` for the job summary (advisory, never applied).
 
 Built from the job's ALLOWED intercepted requests (the post step selects them from the flow log
-and sends them here as JSON; src/suggest.ts). It lives next to the matcher so the suggestion is
+and sends them here as JSON; src/report/suggest.ts). It lives next to the matcher so the suggestion is
 checked with the same path matching that enforces it (policy_core: path_forms, PathGlob,
 specificity): there is no second copy of the matcher to drift. The path-segment redaction a
 suggestion needs (which segments may be printed) lives here too, in one place.
@@ -27,7 +27,7 @@ import policy_core as pc
 #
 # A suggestion prints hostnames and path segments from the job's own traffic. Anything that looks
 # like encoded data stays out: a host is left out of the suggestion, a segment becomes `*`. Best
-# effort, like the report's redaction of refused names (src/redact.ts, same label heuristic, both
+# effort, like the report's redaction of refused names (src/report/redact.ts, same label heuristic, both
 # checked against proxy/test-vectors.json "redact"): word-like data can still get through.
 
 LONG_LABEL_LEN = 40
@@ -56,7 +56,7 @@ def shannon_bits(s):
 
 
 def looks_encoded(label):
-    """Does this label look like encoded data rather than a name a person chose? (src/redact.ts looksEncoded)"""
+    """Does this label look like encoded data rather than a name a person chose? (src/report/redact.ts looksEncoded)"""
     lab = label.lower()
     if len(lab) >= LONG_LABEL_LEN:
         return True
@@ -113,7 +113,7 @@ def path_segment_shown(segment):
 
 # ---------------------------------------------------------------- what goes into a suggestion
 
-# Request methods a suggestion can name; any other token is the caller's choice (src/redact.ts).
+# Request methods a suggestion can name; any other token is the caller's choice (src/report/redact.ts).
 STANDARD_METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT")
 # Not the exfil surface: in a suggestion they collapse to one `"*"` line per host.
 READ_METHODS = ("GET", "HEAD", "OPTIONS")

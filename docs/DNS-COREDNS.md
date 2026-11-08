@@ -18,13 +18,13 @@ settled by two spikes, kept on branches that are not part of `main`:
 
 ## Pieces
 
-- `src/config/corefile-builder.ts` is a pure function that turns patterns into a Corefile.
+- `buildCorefile` (`src/services/coredns/config.ts`) is a pure function that turns patterns into a Corefile.
   - **enforce** has two server blocks.
     - The first block's `view` expression is allowed-and-not-denied: exact names go in one `name() in [...]`, `*.x` becomes `endsWith '.x.'`, and a glob becomes an anchored regex. It forwards with `cache 3600 { serve_stale 1h }`.
     - The second block is a catch-all `template ANY ANY { rcode NXDOMAIN }`. That makes the gate default-deny and fail-closed: a view that matches nothing denies, and a Corefile that doesn't parse means nothing listens on :53.
   - **analyze**: both blocks forward. The second block labels its queries `WOULD_BLOCK`.
   - The builder is checked against `proxy/test-vectors.json`, the same vectors as `compilePattern` (TS) and `compile_pattern` (Py). Names are restricted to `[a-z0-9_.-]`, so a quote or backslash can't inject into the expression.
-- `src/dns.ts` handles install, Corefile, start and readiness.
+- `src/services/coredns/index.ts` handles install, Corefile, start and readiness.
   - The service runs via `systemd-run` as unit `safer-runner-dns`, as the random DNS uid, with `AmbientCapabilities=CAP_NET_BIND_SERVICE` and nothing else (`CapabilityBoundingSet` is the same). It uses `Restart=always`.
   - `StandardOutput=append:/var/log/safer-runner/dns.log` writes to a log that is pre-created root-owned with mode 0644.
   - CoreDNS starts **before** `resolv.conf` is switched to it, so there is no resolution gap. The firewall is unchanged: it is keyed on port 53 and the DNS uid.
@@ -33,10 +33,10 @@ settled by two spikes, kept on branches that are not part of `main`:
   - They can't live in the deny block: in CoreDNS's fixed plugin order, `template` runs before `hosts`.
   - When `/etc/hosts` lacks the VM's own hostname (AWS-hosted runners), the address it resolved to before setup is added inline. Otherwise every `sudo` warns "unable to resolve host"; that happened under dnsmasq too.
   - These names are never forwarded. A subdomain of one is still refused.
-- `src/parsers/dns-parser.ts` is about 20 lines.
+- The log parser (`src/report/logs/dns-log.ts`) is about 20 lines.
 - Self-test `dns-exact`: at setup, a random name under an exact entry must get `BLOCK` + NXDOMAIN in enforce, or `WOULD_BLOCK` in analyze.
 - Report: refused lookups, including names under an exact entry, are listed under **Diagnostics → DNS refused**. (A separate **Subdomains of exact entries** section with an `add *.parent` hint shipped in beta.5. It was removed after v2.0.0: it repeated the DNS-refused list, and the hint could suggest allowing exactly the lookups an exact entry is there to refuse.)
-- Every blocked name in the summary and job log goes through `src/redact.ts`: the DNS-refused diagnostics, blocked SNI/Host rows, fronting SNIs and container rows.
+- Every blocked name in the summary and job log goes through `src/report/redact.ts`: the DNS-refused diagnostics, blocked SNI/Host rows, fronting SNIs and container rows.
   - Labels that look *encoded* (hex, base32/64) are shown as `‹redacted›`, without their length; a run of them is one marker. Every label is checked, the registrable domain and TLD included. Charset and length are the primary signal (short hex/digit runs, vowel ratio, digit runs), with Shannon entropy as a tie-breaker. The constants are tunable.
   - It is best effort, not a guarantee: short or word-like labels get through part of the time, so data shaped to avoid the filter can reach the summary whole and recoverable, even through a single refused name. The raw logs under `/var/log/safer-runner/` (`proxy-flows.jsonl`, the DNS and firewall logs) are not redacted and are not meant to be published.
   - This complements GitHub's own masking, which only catches a secret's literal value. A refused lookup can carry data, and the public summary must not become the channel the resolver just closed.

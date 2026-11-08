@@ -7,11 +7,11 @@
  *
  * The canary puts an encoded-looking label, a refused path and a custom method into every
  * section that prints a refused name, and checks that none of them appears anywhere in the
- * summary (src/redact.ts: the C5 disclosure boundary).
+ * summary (src/report/redact.ts: the C5 disclosure boundary).
  */
 
 import type { FlowRecord } from './flowlog';
-import type { SudoUsage } from './parsers/sudo-parser';
+import type { SudoUsage } from './report/logs/sudo-log';
 import {
   buildReport,
   parseFirewallLog,

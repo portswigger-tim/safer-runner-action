@@ -53,7 +53,7 @@ def allowed_methods(s):
 
 
 class RedactVectors(unittest.TestCase):
-    """The label check is shared with src/redact.ts (looksEncoded): both run these vectors."""
+    """The label check is shared with src/report/redact.ts (looksEncoded): both run these vectors."""
 
     def setUp(self):
         self.v = load_vectors()["redact"]

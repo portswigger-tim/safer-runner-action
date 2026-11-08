@@ -29,7 +29,7 @@ import {
 } from './constants';
 import { runSetup, SETUP_MARKER } from './setup/run';
 import { readInputs } from './config/inputs';
-import { classifySudoCommands, type SudoCommand } from './parsers/sudo-parser';
+import { classifySudoCommands, type SudoCommand } from './report/logs/sudo-log';
 import {
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_RSYSLOG_FILE,
@@ -674,7 +674,7 @@ const FAIL_CLOSED =
   /^sudo (ip6?tables-restore |(tee|visudo -c -f|chmod 0440|chown root:root|mv) \/tmp\/(runner-sudoers|safer-runner-sudo-logging)\.tmp)/;
 /**
  * Ignored on purpose because the caller checks the code: applyFirewall throws in enforce when
- * ip6tables-restore fails (tested below); disableSudoForRunner throws when visudo rejects the
+ * ip6tables-restore fails (tested below); restrictSudo throws when visudo rejects the
  * file (services/sudo/index.test.ts).
  */
 const CHECKED_IGNORES = [P.restore6, P.visudo];

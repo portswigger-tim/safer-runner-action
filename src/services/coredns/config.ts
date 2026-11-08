@@ -16,7 +16,7 @@
  * the deny block).
  *
  * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
- * format, so the report parser never has to infer a verdict (src/parsers/dns-parser.ts).
+ * format, so the report parser never has to infer a verdict (src/report/logs/dns-log.ts).
  */
 
 import * as net from 'net';

@@ -123,7 +123,7 @@ export interface SudoUsage {
   ran: SudoCommand[];
   /** commands sudo refused (classic sudo only - sudo-rs does not log refusals) */
   refused: SudoCommand[];
-  /** commands the action ran itself (setup, validation, teardown) */
+  /** commands the action ran itself (setup, validation) */
   internal: SudoCommand[];
 }
 

@@ -517,7 +517,7 @@ def _decide_form(rules, platform, method, path):
     return Decision("block", FILTER_METHOD, rule)
 
 
-# The action's own setup probe (src/selftest.ts repointSelfTest): a bodiless GET of a fixed
+# The action's own setup probe (src/setup/selftest.ts repointSelfTest): a bodiless GET of a fixed
 # public file, dialled at TEST-NET-1 so the proxy has to repoint it. It is exempt from
 # http-filter, so a job's filter on that host can never fail setup; it carries nothing.
 SELFTEST_PROBE = ("github.com", "GET", "/robots.txt")

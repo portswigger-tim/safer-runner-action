@@ -132,7 +132,7 @@ http-filter: |
 
 **DNS would refuse** (2): \`tunnel.example.com\`
 
-**Sudo** — the workflow ran 1 command; Safer Runner itself ran 1 (setup, integrity checks, teardown):
+**Sudo** — the workflow ran 1 command; Safer Runner itself ran 1 (setup, integrity checks):
 
 \`\`\`console
 $ sudo /usr/bin/apt-get install -y jq
@@ -225,7 +225,7 @@ allowed-domains: |
 | \`1.1.1.1:853\` | TCP | DNS-over-TLS | 1001 | 2 | ❌ rejected |
 | \`198.51.100.7:22\` | TCP | SSH | 1001 | 1 | ❌ rejected |
 
-**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks, teardown).
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
 
 **Docker** — \`docker: remove-group\`; verified at setup: runner user removed from the docker group, socket root-only
 
@@ -310,7 +310,7 @@ allowed-domains: |
 - ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
 - ✅ \`dns-exact\` — srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
 
-**Sudo** — the workflow ran 1 command; Safer Runner itself ran 1 (setup, integrity checks, teardown):
+**Sudo** — the workflow ran 1 command; Safer Runner itself ran 1 (setup, integrity checks):
 
 \`\`\`console
 $ sudo /usr/bin/apt-get install -y jq
@@ -370,7 +370,7 @@ exports[`job summary golden snapshots enforce, nothing blocked 1`] = `
 - ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
 - ✅ \`dns-exact\` — srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
 
-**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks, teardown).
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
 
 **Docker** — \`docker: remove-group\`; verified at setup: runner user removed from the docker group, socket root-only
 
@@ -520,7 +520,7 @@ http-filter: |
 
 **DNS refused** (3): \`srst-x.objects.githubusercontent.com\`, \`tunnel.example.com\`
 
-**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks, teardown).
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
 
 **Docker** — \`docker: remove-group\`; verified at setup: runner user removed from the docker group, socket root-only
 
@@ -581,7 +581,7 @@ exports[`job summary golden snapshots integrity tampered, self-test failed 1`] =
 - ✅ \`repoint\` — client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
 - ❌ \`dns-exact\` — no BLOCK line
 
-**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks, teardown).
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
 
 **Docker** — \`docker: remove-group\`; verified at setup: runner user removed from the docker group, socket root-only
 
@@ -627,7 +627,7 @@ exports[`job summary golden snapshots integrity unavailable, no self-tests 1`] =
 <details>
 <summary>🔧 <b>Diagnostics</b> — self-tests not run · nothing bypassed the proxy · no workflow sudo (1 by Safer Runner) · docker removed ✓ · config: no baseline</summary>
 
-**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks, teardown).
+**Sudo** — the workflow ran none; Safer Runner itself ran 1 (setup, integrity checks).
 
 **Docker** — \`docker: remove-group\`; verified at setup: runner user removed from the docker group, socket root-only
 
