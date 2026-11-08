@@ -1414,6 +1414,8 @@ describe('post step transcript', () => {
       expect(h.log).toContain('info: docker WOULD_BLOCK container x2');
       expect(h.log).toContain('info: docker WOULD_BLOCK exec x1');
       expect(h.summaryText).not.toContain('should run unchanged');
+      expect(h.summaryText).not.toMatch(/nothing would be blocked/i);
+      expect(h.summaryText).toContain('**No host would be blocked.**');
     });
 
     it('only the service containers ran: docker: stop would stop them; leave docker unset', async () => {
@@ -1437,7 +1439,7 @@ describe('post step transcript', () => {
         '**No use of docker after setup was seen, but the recording did not cover the whole job**, and enforce ' +
           '(`docker: remove-group`) would block any use it missed.'
       );
-      expect(h.summaryText).not.toContain('nothing would be blocked');
+      expect(h.summaryText).not.toMatch(/nothing would be blocked/i);
       expect(h.summaryText).not.toContain('should run unchanged');
     });
 

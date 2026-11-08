@@ -657,10 +657,10 @@ function scorecard(f: Facts): string {
   const platNote = platform.length && plat.bytes ? ` <sub>(${humanBytes(plat.bytes)} of it GitHub platform)</sub>` : '';
   const allowedLine = `${plural(f.allowed.length, 'host')} · ${plural(all.requests, 'request')} · ${humanBytes(all.bytes)}`;
   if (f.denied.length === 0 && fw.rows.length === 0) {
-    return enforce
-      ? `**✅ Nothing blocked.** ${allowedLine} through the proxy.\n\n`
-      : `**✅ Nothing would be blocked.** ${allowedLine} through the proxy.` +
-          (f.sudoWouldBlock || f.dockerAlert ? '\n\n' : ' This job should run unchanged with `mode: enforce`.\n\n');
+    if (enforce) return `**✅ Nothing blocked.** ${allowedLine} through the proxy.\n\n`;
+    // sudo or docker would be blocked (or could not be checked): the all-clear is for egress only
+    if (f.sudoWouldBlock || f.dockerAlert) return `**No host would be blocked.** ${allowedLine} through the proxy.\n\n`;
+    return `**✅ Nothing would be blocked.** ${allowedLine} through the proxy. This job should run unchanged with \`mode: enforce\`.\n\n`;
   }
   const rows: string[][] = [];
   if (bypass.length) rows.push(['🚨 **Bypass attempts**', `**${plural(bypass.length, 'host')} ${blockedWord}**`]);

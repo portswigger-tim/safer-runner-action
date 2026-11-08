@@ -24,8 +24,9 @@ export const DOCKER_KEEP_CAVEAT =
 
 /** What analyze cannot see. */
 export const DOCKER_BEST_EFFORT =
-  'Best effort: in analyze the job can use docker (root) to stop the recording, and docker use outside the ' +
-  "runner's dockerd (rootless docker, podman) is not seen.";
+  'Best effort: read-only docker calls (`docker ps`, `logs`, `inspect`, `login`) leave no event and are not ' +
+  "seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze " +
+  'the job can use docker (root) to stop the recording.';
 
 /** The recording did not cover the whole job. */
 export const DOCKER_PARTIAL =

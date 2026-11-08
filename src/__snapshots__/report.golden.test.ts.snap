@@ -8,9 +8,9 @@ exports[`job summary golden snapshots analyze: docker: keep with no use of docke
 > [!IMPORTANT]
 > **No use of docker after setup was seen, but \`docker: keep\` keeps it**, so enforce would be ADVISORY (docker is root-equivalent). Remove \`docker: keep\` to make enforce a boundary.
 >
-> The recording did not cover the whole job (dockerd stopped, restarted or was not running at setup), so some use of docker may be missing. Best effort: in analyze the job can use docker (root) to stop the recording, and docker use outside the runner's dockerd (rootless docker, podman) is not seen.
+> The recording did not cover the whole job (dockerd stopped, restarted or was not running at setup), so some use of docker may be missing. Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.
 
-**✅ Nothing would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
 
 ### Allowed — this job's hosts (2)
 
@@ -62,9 +62,9 @@ exports[`job summary golden snapshots analyze: docker: stop would stop the servi
 > [!IMPORTANT]
 > **\`docker: stop\` would stop this job's 2 service containers.** Leave \`docker\` unset: \`remove-group\` keeps them running and still takes docker from the job.
 >
-> Best effort: in analyze the job can use docker (root) to stop the recording, and docker use outside the runner's dockerd (rootless docker, podman) is not seen.
+> Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.
 
-**✅ Nothing would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
 
 ### Allowed — this job's hosts (2)
 
@@ -125,7 +125,7 @@ exports[`job summary golden snapshots analyze: sudo the policy would block, with
 > A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Enforce with any \`sudo-config\` is ADVISORY. Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.
 
 
-**✅ Nothing would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
 
 ### Allowed — this job's hosts (2)
 
@@ -339,9 +339,9 @@ exports[`job summary golden snapshots analyze: the job used docker, so enforce w
 >
 > Docker access is root-equivalent: any step can use it to remove the egress controls, so enforce with \`docker: keep\` is ADVISORY.
 >
-> Best effort: in analyze the job can use docker (root) to stop the recording, and docker use outside the runner's dockerd (rootless docker, podman) is not seen.
+> Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.
 
-**✅ Nothing would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
+**No host would be blocked.** 4 hosts · 5 requests · 3.3 MiB through the proxy.
 
 ### Allowed — this job's hosts (2)
 

@@ -116,8 +116,9 @@ stops the daemon and its containers. `analyze` never changes docker: the summary
 use of docker after setup (container runs, `docker exec`, pulls and builds, container actions)
 that enforce would block, and suggests a `docker` setting. A job that uses docker needs
 `docker: keep`, which makes enforce **ADVISORY** (docker is root-equivalent): move that work to a
-job that does not run under enforce where you can. This is best effort: in analyze the job has
-docker, so it can stop the recording.
+job that does not run under enforce where you can. This is best effort: read-only calls
+(`docker ps`, `logs`, `inspect`, `login`) leave no event and are not seen, and in analyze the job
+has docker, so it can stop the recording.
 
 ### Allowlist syntax
 

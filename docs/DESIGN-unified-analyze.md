@@ -173,8 +173,10 @@ mode-aware.
   recording, the post step asks dockerd for what it still holds (if it runs), and calls the
   result partial.
 - **What counts as use** (`classifyDockerEvents`): every event except dockerd's own (exits,
-  `oom`, health status, its reload) and a container's healthcheck exec (the exec command equals
-  its `Config.Healthcheck`). A step's `docker exec` into a service container counts.
+  `oom`, a container leaving its networks and volumes as it exits, health status, its reload)
+  and a container's healthcheck exec (the exec command equals its `Config.Healthcheck`). A step's
+  `docker exec` into a service container counts. Read-only calls (`docker ps`, `logs`, `inspect`,
+  `login`) leave no event, so they are not seen.
 - **`evaluate`**: `evaluateDocker(policy, observed)` returns what the policy would block (any
   use, under `remove-group` or `stop`), the service containers `stop` would stop, and a
   suggestion `{ input: 'docker', value, advisory, change }` for the report's later "Suggested

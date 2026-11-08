@@ -6,7 +6,6 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import type { DockerPolicy } from '../../config/inputs';
-import type { Mode } from '../../policy';
 import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants';
 import type { SelfTestsRun } from '../../setup/selftest';
 import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
@@ -360,13 +359,9 @@ export interface DockerOutcome {
  * instead of leaving a reversible boundary. `keep` in enforce is ADVISORY, like sudo. analyze
  * only reads the state.
  */
-export async function applyAccessPolicy(
-  h: Host,
-  mode: Mode,
-  plan: DockerPlan,
-  _selfTests: SelfTestsRun
-): Promise<DockerOutcome> {
-  const { apply } = plan;
+export async function applyAccessPolicy(h: Host, plan: DockerPlan, _selfTests: SelfTestsRun): Promise<DockerOutcome> {
+  const { apply, mode } = plan;
+  if (mode !== 'enforce' && apply.removal !== null) throw new Error('docker: analyze never changes docker access');
   const docker = plan.applied;
   const failures =
     apply.removal === null

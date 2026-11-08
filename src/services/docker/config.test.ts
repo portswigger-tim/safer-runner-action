@@ -11,14 +11,25 @@ const ev = (Type: string, Action: string, ID: string, Attributes: Record<string,
 describe('planDocker', () => {
   it('enforce applies a removal; keep and analyze change nothing', () => {
     expect(planDocker('enforce', 'remove-group')).toEqual({
+      mode: 'enforce',
       policy: 'remove-group',
       applied: 'remove-group',
       apply: { removal: 'remove-group' }
     });
     expect(planDocker('enforce', 'stop').apply).toEqual({ removal: 'stop' });
-    expect(planDocker('enforce', 'keep')).toEqual({ policy: 'keep', applied: 'keep', apply: { removal: null } });
+    expect(planDocker('enforce', 'keep')).toEqual({
+      mode: 'enforce',
+      policy: 'keep',
+      applied: 'keep',
+      apply: { removal: null }
+    });
     for (const p of ['keep', 'remove-group', 'stop'] as const) {
-      expect(planDocker('analyze', p)).toEqual({ policy: p, applied: 'keep', apply: { removal: null } });
+      expect(planDocker('analyze', p)).toEqual({
+        mode: 'analyze',
+        policy: p,
+        applied: 'keep',
+        apply: { removal: null }
+      });
     }
   });
 });
@@ -72,6 +83,18 @@ describe('classifyDockerEvents', () => {
       ev('daemon', 'reload', 'd1')
     ]);
     expect(classifyDockerEvents(e, HEALTH)).toEqual({ uses: {}, images: [] });
+  });
+
+  it('a service container that exits leaves its networks and volumes on its own: not a use', () => {
+    const e = events([
+      ev('container', 'kill', 'svc', { signal: '9' }),
+      ev('container', 'die', 'svc', { exitCode: '137' }),
+      ev('network', 'disconnect', 'n1', { container: 'svc' }),
+      ev('volume', 'unmount', 'v1', { container: 'svc' })
+    ]);
+    // `kill` is a client's (docker kill / docker stop); the rest is dockerd tearing down
+    expect(classifyDockerEvents(e)).toEqual({ uses: { container: 1 }, images: [] });
+    expect(classifyDockerEvents(e.slice(1))).toEqual({ uses: {}, images: [] });
   });
 
   it("a step's docker exec into a service container is a use, even into one with a healthcheck", () => {

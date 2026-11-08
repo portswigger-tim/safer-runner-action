@@ -80,9 +80,11 @@ This is the full list; the README keeps the few that change how you use the acti
   containers also logs a harmless permission warning.
 - **`analyze`'s docker evaluation is best effort.** It records `docker events` from setup on;
   the job has docker in analyze, so it can stop the recording (the summary then says the
-  recording was partial). Docker outside the runner's dockerd (rootless docker, podman) is not
-  seen, and a step's `docker exec` of exactly a container's healthcheck command is taken for the
-  healthcheck.
+  recording was partial). Read-only docker calls (`docker ps`, `logs`, `inspect`, `info`,
+  `login`) leave no event and are not seen, so a job whose only docker use is, say, `docker logs`
+  in a failure step can still break under enforce. Docker outside the runner's dockerd (rootless
+  docker, podman) is not seen, and a step's `docker exec` of exactly a container's healthcheck
+  command is taken for the healthcheck.
 - **`docker build`**: RUN steps get container-path filtering; allowlisted HTTPS works by
   SNI without a CA. To intercept inside a build, `COPY` or secret-mount the CA yourself.
 

@@ -2260,8 +2260,8 @@ exports.DOCKER_SOCKET = '/var/run/docker.sock';
 const NO_CHANGE = Object.freeze({ removal: null });
 function planDocker(mode, policy) {
     if (mode !== 'enforce' || policy === 'keep')
-        return { policy, applied: 'keep', apply: NO_CHANGE };
-    return { policy, applied: policy, apply: Object.freeze({ removal: policy }) };
+        return { mode, policy, applied: 'keep', apply: NO_CHANGE };
+    return { mode, policy, applied: policy, apply: Object.freeze({ removal: policy }) };
 }
 /**
  * analyze: the docker events recorder. It only subscribes (`docker events`) and appends each
@@ -2335,6 +2335,8 @@ function parseContainerAddresses(output) {
 exports.DOCKER_USES = ['container', 'exec', 'image', 'build', 'network', 'volume', 'other'];
 /** Container actions dockerd makes on its own (no client asked): not a use of docker. */
 const DAEMON_ACTIONS = new Set(['die', 'oom', 'exec_die', 'exec_detach', 'health_status']);
+/** What dockerd does on its own when a container exits: it leaves its networks and volumes. */
+const DAEMON_TEARDOWN = { network: 'disconnect', volume: 'unmount' };
 /**
  * The commands a container's healthcheck runs, as dockerd names them in its exec events
  * (`exec_create: <entrypoint> <args>`). `test` and `shell` are the container's
@@ -2353,7 +2355,8 @@ function healthcheckCommands(test, shell) {
 }
 /**
  * The job's use of docker in the events after setup. Not a use: what dockerd does on its own
- * (a container exiting, its healthcheck and health status, its own reload). `healthchecks` maps
+ * (a container exiting and leaving its networks and volumes, its healthcheck and health status,
+ * its own reload). Read-only calls (`docker ps`, `logs`, `inspect`, `login`) leave no event. `healthchecks` maps
  * a container to its healthcheck commands (healthcheckCommands): an exec of exactly that is the
  * healthcheck, any other exec (a step's `docker exec`) is a use.
  */
@@ -2362,7 +2365,7 @@ function classifyDockerEvents(events, healthchecks = new Map()) {
     const images = [];
     const add = (k) => (uses[k] = (uses[k] ?? 0) + 1);
     for (const e of events) {
-        if (e.type === 'daemon')
+        if (e.type === 'daemon' || DAEMON_TEARDOWN[e.type] === e.action)
             continue;
         if (e.type === 'container') {
             if (DAEMON_ACTIONS.has(e.action))
@@ -2762,8 +2765,10 @@ async function observeDocker(h, recorded, setupAt, access) {
  * instead of leaving a reversible boundary. `keep` in enforce is ADVISORY, like sudo. analyze
  * only reads the state.
  */
-async function applyAccessPolicy(h, mode, plan, _selfTests) {
-    const { apply } = plan;
+async function applyAccessPolicy(h, plan, _selfTests) {
+    const { apply, mode } = plan;
+    if (mode !== 'enforce' && apply.removal !== null)
+        throw new Error('docker: analyze never changes docker access');
     const docker = plan.applied;
     const failures = apply.removal === null
         ? []
@@ -4522,7 +4527,7 @@ async function runSetup(inputs, h = host_1.realHost) {
         core.warning(msg);
     }
     // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-    const dockerAccess = await docker.applyAccessPolicy(h, mode, dockerPlan, selfTests);
+    const dockerAccess = await docker.applyAccessPolicy(h, dockerPlan, selfTests);
     // analyze: record the use of docker from here on, for the post step's docker evaluation
     const dockerEvents = mode === 'analyze' && dockerd.active ? await docker.startEventRecorder(h, dockerd.prepared) : null;
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {

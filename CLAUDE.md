@@ -239,8 +239,9 @@ checks the same order (L1-L29) on a recording fake runner.
      Setup then verifies the real access (`readDockerState`). Only enforce changes docker access:
      `planDocker` (`config.ts`) makes the `ApplyingDocker` that the functions changing access
      require, and only in enforce; otherwise a `NoDockerChange` (an object, so `plan.apply!` does
-     not get past the type check). Analyze changing access does not compile, the functions check
-     the change again at run time, and L28 checks the transcript. The post step asks dockerd
+     not get past the type check). The plan carries its mode, so `applyAccessPolicy(h, plan, ...)`
+     cannot be given a mode and a plan that disagree. Analyze changing access does not compile,
+     the functions check the change and the mode again at run time, and L28 checks the transcript. The post step asks dockerd
      (`docker ps`, `inspect`, `events`) only while `docker.service` runs. Analyze is treated as `keep` (the dockerd CA restart and the container rules
      still apply), and records the use of docker after setup for the post step: a transient unit
      runs `docker events` (read only; `eventRecorderUnit`), started only if `docker.service`

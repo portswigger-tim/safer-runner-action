@@ -33,6 +33,8 @@ export type NoDockerChange = { readonly removal: null; readonly [noDockerChange]
 const NO_CHANGE = Object.freeze({ removal: null }) as NoDockerChange;
 
 export interface DockerPlan<A extends ApplyingDocker | NoDockerChange = ApplyingDocker | NoDockerChange> {
+  /** the mode the plan was made for: applyAccessPolicy takes it from here, never separately */
+  mode: Mode;
   /** the docker policy: the input, or remove-group when unset */
   policy: DockerPolicy;
   /** what setup leaves in place: the policy in enforce; analyze never changes docker (keep) */
@@ -50,8 +52,8 @@ export function planDocker(mode: 'analyze', policy: DockerPolicy): DockerPlan<No
 export function planDocker(mode: 'enforce', policy: Exclude<DockerPolicy, 'keep'>): DockerPlan<ApplyingDocker>;
 export function planDocker(mode: Mode, policy: DockerPolicy): DockerPlan;
 export function planDocker(mode: Mode, policy: DockerPolicy): DockerPlan {
-  if (mode !== 'enforce' || policy === 'keep') return { policy, applied: 'keep', apply: NO_CHANGE };
-  return { policy, applied: policy, apply: Object.freeze({ removal: policy }) as ApplyingDocker };
+  if (mode !== 'enforce' || policy === 'keep') return { mode, policy, applied: 'keep', apply: NO_CHANGE };
+  return { mode, policy, applied: policy, apply: Object.freeze({ removal: policy }) as ApplyingDocker };
 }
 
 /**
@@ -145,6 +147,8 @@ export const DOCKER_USES: DockerUse[] = ['container', 'exec', 'image', 'build', 
 
 /** Container actions dockerd makes on its own (no client asked): not a use of docker. */
 const DAEMON_ACTIONS = new Set(['die', 'oom', 'exec_die', 'exec_detach', 'health_status']);
+/** What dockerd does on its own when a container exits: it leaves its networks and volumes. */
+const DAEMON_TEARDOWN: Record<string, string> = { network: 'disconnect', volume: 'unmount' };
 
 /**
  * The commands a container's healthcheck runs, as dockerd names them in its exec events
@@ -174,7 +178,8 @@ export interface DockerObserved {
 
 /**
  * The job's use of docker in the events after setup. Not a use: what dockerd does on its own
- * (a container exiting, its healthcheck and health status, its own reload). `healthchecks` maps
+ * (a container exiting and leaving its networks and volumes, its healthcheck and health status,
+ * its own reload). Read-only calls (`docker ps`, `logs`, `inspect`, `login`) leave no event. `healthchecks` maps
  * a container to its healthcheck commands (healthcheckCommands): an exec of exactly that is the
  * healthcheck, any other exec (a step's `docker exec`) is a use.
  */
@@ -186,7 +191,7 @@ export function classifyDockerEvents(
   const images: string[] = [];
   const add = (k: DockerUse) => (uses[k] = (uses[k] ?? 0) + 1);
   for (const e of events) {
-    if (e.type === 'daemon') continue;
+    if (e.type === 'daemon' || DAEMON_TEARDOWN[e.type] === e.action) continue;
     if (e.type === 'container') {
       if (DAEMON_ACTIONS.has(e.action)) continue;
       if (e.action.startsWith('exec_')) {
