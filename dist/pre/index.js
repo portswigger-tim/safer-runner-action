@@ -4618,6 +4618,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DOWNLOAD_TIMEOUT_MS = exports.DOWNLOAD_ATTEMPTS = void 0;
+exports.backoffMs = backoffMs;
 exports.downloadVerified = downloadVerified;
 exports.installPinnedBinary = installPinnedBinary;
 const core = __importStar(__nccwpck_require__(7484));
@@ -4625,31 +4627,65 @@ const crypto = __importStar(__nccwpck_require__(6982));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const host_1 = __nccwpck_require__(7020);
+exports.DOWNLOAD_ATTEMPTS = 5;
+/** per attempt, the response body included */
+exports.DOWNLOAD_TIMEOUT_MS = 60_000;
+const BACKOFF_BASE_MS = 1_000;
+const BACKOFF_MAX_MS = 10_000;
+/** A downloaded artefact that is not the pinned one: never retried. */
+class DigestMismatch extends Error {
+}
 /**
- * Download a pinned release artefact and verify its sha256 before anything touches it
- * (3 attempts on network errors; a digest mismatch fails immediately).
+ * The wait before retry `n` (1-based): exponential from 1s, capped at 10s, with jitter (50-150%)
+ * so many jobs hitting the same outage do not retry in step. About 15s in all before the 5th.
+ */
+function backoffMs(n, random = Math.random) {
+    return Math.round(Math.min(BACKOFF_BASE_MS * 2 ** (n - 1), BACKOFF_MAX_MS) * (0.5 + random()));
+}
+/** One attempt: the body, or an error (HTTP status, network, timeout). */
+async function fetchOnce(url) {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), exports.DOWNLOAD_TIMEOUT_MS);
+    try {
+        const res = await fetch(url, { signal: abort.signal });
+        if (!res.ok)
+            throw new Error(`HTTP ${res.status}`);
+        return Buffer.from(await res.arrayBuffer());
+    }
+    catch (e) {
+        if (abort.signal.aborted)
+            throw new Error(`timed out after ${exports.DOWNLOAD_TIMEOUT_MS / 1000}s`);
+        throw e;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+/**
+ * Download a pinned release artefact and verify its sha256 before anything touches it. Network
+ * errors, HTTP errors and timeouts are retried with backoff (DOWNLOAD_ATTEMPTS in all); a digest
+ * mismatch fails at once.
  */
 async function downloadVerified(url, sha256, dest, label) {
     await (0, host_1.timed)(`download ${label}`, async () => {
         let lastError;
-        for (let attempt = 1; attempt <= 3; attempt++) {
+        for (let attempt = 1; attempt <= exports.DOWNLOAD_ATTEMPTS; attempt++) {
+            if (attempt > 1)
+                await (0, host_1.sleep)(backoffMs(attempt - 1));
             try {
-                const res = await fetch(url);
-                if (!res.ok)
-                    throw new Error(`HTTP ${res.status}`);
-                const buf = Buffer.from(await res.arrayBuffer());
+                const buf = await fetchOnce(url);
                 const digest = crypto.createHash('sha256').update(buf).digest('hex');
                 if (digest !== sha256) {
-                    throw new Error(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
+                    throw new DigestMismatch(`sha256 mismatch for ${url}: got ${digest}, want ${sha256}`);
                 }
                 fs.writeFileSync(dest, buf);
                 return;
             }
             catch (e) {
                 lastError = e;
-                if (String(e).includes('sha256 mismatch'))
+                if (e instanceof DigestMismatch)
                     break;
-                core.warning(`${label} download attempt ${attempt} failed: ${e}`);
+                core.warning(`${label} download attempt ${attempt}/${exports.DOWNLOAD_ATTEMPTS} failed: ${e}`);
             }
         }
         throw new Error(`could not download ${label}: ${lastError}`);
