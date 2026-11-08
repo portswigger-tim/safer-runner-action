@@ -2,11 +2,11 @@
  * Tests for the sudo service - covers both classic sudo (Ubuntu 24.04) and sudo-rs (Ubuntu 25.10+ / 26.04)
  */
 
-import * as core from '@actions/core';
-import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import type { BaselineCaptured } from '../../integrity/baseline';
+import { recordingHost } from '../../system/testing';
 import {
   parseSudoFlavour,
   detectSudoFlavour,
@@ -14,8 +14,9 @@ import {
   getValidationSudoCommands,
   getSudoLoggingConfigFile,
   buildSudoRsyslogConfig,
+  render,
   setupSudoLogging,
-  disableSudoForRunner,
+  restrictSudo,
   readSudoUsage,
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_SUDOERS_FILE,
@@ -23,45 +24,12 @@ import {
 } from '.';
 
 jest.mock('@actions/core');
-jest.mock('@actions/exec');
-jest.mock('fs', () => {
-  const actual = jest.requireActual('fs');
-  return { ...actual, existsSync: jest.fn(actual.existsSync) };
-});
 
-const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
-const mockGetExecOutput = exec.getExecOutput as jest.MockedFunction<typeof exec.getExecOutput>;
-const mockExistsSync = fs.existsSync as jest.MockedFunction<typeof fs.existsSync>;
-const realExistsSync = jest.requireActual('fs').existsSync;
-
-/** Return the stdin passed to the `sudo tee <file>` call */
-function teeInput(file: string): string {
-  const call = mockExec.mock.calls.find(([cmd, args]) => cmd === 'sudo' && args?.[0] === 'tee' && args?.[1] === file);
-  expect(call).toBeDefined();
-  return (call![2]!.input as Buffer).toString();
-}
-
-/** All sudo invocations as "arg0 arg1 ..." strings, in order */
-function sudoCalls(): string[] {
-  return mockExec.mock.calls.filter(([cmd]) => cmd === 'sudo').map(([, args]) => (args || []).join(' '));
-}
-
-function visudoResult(exitCode: number, stderr = '') {
-  mockGetExecOutput.mockImplementation(async (_cmd, args) => {
-    if (args?.[0] === '--version') {
-      return { exitCode: 0, stdout: 'sudo-rs 0.2.13-0ubuntu1.2\n', stderr: '' };
-    }
-    return { exitCode, stdout: '', stderr };
-  });
-}
+/** the baseline's token (a test stands in for capturePostSetupBaseline) */
+const BASELINE = Object.freeze({}) as BaselineCaptured;
+const LOG = '/var/log/safer-runner/sudo.log';
 
 describe('sudo module', () => {
-  beforeEach(() => {
-    jest.resetAllMocks();
-    mockExec.mockResolvedValue(0);
-    mockExistsSync.mockImplementation(realExistsSync);
-  });
-
   describe('parseSudoFlavour', () => {
     it('detects sudo-rs (Ubuntu 26.04)', () => {
       expect(parseSudoFlavour('sudo-rs 0.2.13-0ubuntu1.2\n')).toBe('sudo-rs');
@@ -82,14 +50,17 @@ describe('sudo module', () => {
 
   describe('detectSudoFlavour', () => {
     it('runs sudo --version silently', async () => {
-      mockGetExecOutput.mockResolvedValue({ exitCode: 0, stdout: 'sudo-rs 0.2.13\n', stderr: '' });
-      await expect(detectSudoFlavour()).resolves.toBe('sudo-rs');
-      expect(mockGetExecOutput).toHaveBeenCalledWith('sudo', ['--version'], expect.objectContaining({ silent: true }));
+      const { host, calls } = recordingHost(undefined, () => 'sudo-rs 0.2.13\n');
+      await expect(detectSudoFlavour(host)).resolves.toBe('sudo-rs');
+      expect(calls).toEqual(['sudo --version [ignore-rc] [silent]']);
     });
 
     it('falls back to classic sudo if detection fails', async () => {
-      mockGetExecOutput.mockRejectedValue(new Error('boom'));
-      await expect(detectSudoFlavour()).resolves.toBe('sudo');
+      const { host } = recordingHost();
+      host.output = async () => {
+        throw new Error('boom');
+      };
+      await expect(detectSudoFlavour(host)).resolves.toBe('sudo');
     });
   });
 
@@ -136,8 +107,7 @@ describe('sudo module', () => {
         '/usr/sbin/iptables -t nat -L SAFER_RUNNER_NAT -n --line-numbers',
         '/usr/sbin/iptables -L DOCKER-USER -n --line-numbers',
         '/usr/sbin/iptables -L SAFER_RUNNER_CFWD -n --line-numbers',
-        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers',
-        '/opt/safer-runner/bin/teardown ""'
+        '/usr/sbin/iptables -t nat -L SAFER_RUNNER_CNAT -n --line-numbers'
       ]);
     });
 
@@ -168,37 +138,56 @@ describe('sudo module', () => {
     });
   });
 
+  describe('render', () => {
+    it.each([
+      ['sudo', SUDO_LOGGING_SUDOERS_FILE, `Defaults logfile=${LOG}\nDefaults loglinelen=0\n`],
+      ['sudo-rs', SUDO_LOGGING_RSYSLOG_FILE, buildSudoRsyslogConfig(LOG)]
+    ] as const)('%s: the logging config and the restricted sudoers', (flavour, file, content) => {
+      const r = render({ flavour, logFile: LOG });
+      expect(r.logging).toEqual({ path: file, content });
+      expect(r.sudoers).toBe(
+        '# Safer Runner Action - Validation-only sudo access\n' +
+          '# This configuration allows only the commands needed for post-action integrity validation.\n' +
+          '# All other sudo commands will be denied.\n' +
+          getRequiredSudoCommands('runner') +
+          '\n'
+      );
+    });
+  });
+
   describe('setupSudoLogging', () => {
     it('classic sudo: installs a logfile drop-in, moved into place last', async () => {
-      await setupSudoLogging('/var/log/safer-runner/main-sudo.log', 'sudo');
-
-      const drop = teeInput('/tmp/safer-runner-sudo-logging.tmp');
-      expect(drop).toContain('Defaults logfile=/var/log/safer-runner/main-sudo.log');
-      expect(drop).toContain('Defaults loglinelen=0');
-
-      const calls = sudoCalls();
-      expect(calls[calls.length - 1]).toBe(`mv /tmp/safer-runner-sudo-logging.tmp ${SUDO_LOGGING_SUDOERS_FILE}`);
-      expect(calls).toContain('chmod 0440 /tmp/safer-runner-sudo-logging.tmp');
-      expect(calls).toContain('chown root:root /tmp/safer-runner-sudo-logging.tmp');
-      expect(calls).not.toContain('systemctl restart rsyslog');
-      expect(calls.some(c => c.includes(SUDO_LOGGING_RSYSLOG_FILE))).toBe(false);
+      const { host, calls, stdin } = recordingHost();
+      await setupSudoLogging(host, render({ flavour: 'sudo', logFile: LOG }));
+      expect(calls).toEqual([
+        `sudo touch ${LOG}`,
+        `sudo chmod 0644 ${LOG}`,
+        'sudo tee /tmp/safer-runner-sudo-logging.tmp [silent]',
+        'sudo chmod 0440 /tmp/safer-runner-sudo-logging.tmp',
+        'sudo chown root:root /tmp/safer-runner-sudo-logging.tmp',
+        `sudo mv /tmp/safer-runner-sudo-logging.tmp ${SUDO_LOGGING_SUDOERS_FILE}`
+      ]);
+      expect(stdin['sudo tee /tmp/safer-runner-sudo-logging.tmp']).toBe(
+        `Defaults logfile=${LOG}\nDefaults loglinelen=0\n`
+      );
     });
 
     it('sudo-rs: installs an rsyslog rule and restarts rsyslog', async () => {
-      await setupSudoLogging('/var/log/safer-runner/pre-sudo.log', 'sudo-rs');
-
-      expect(teeInput(SUDO_LOGGING_RSYSLOG_FILE)).toBe(buildSudoRsyslogConfig('/var/log/safer-runner/pre-sudo.log'));
-
-      const calls = sudoCalls();
-      expect(calls).toContain('chown syslog:adm /var/log/safer-runner/pre-sudo.log');
-      expect(calls[calls.length - 1]).toBe('systemctl restart rsyslog');
-      expect(calls.some(c => c.includes(SUDO_LOGGING_SUDOERS_FILE))).toBe(false);
+      const { host, calls, stdin } = recordingHost();
+      await setupSudoLogging(host, render({ flavour: 'sudo-rs', logFile: LOG }));
+      expect(calls).toEqual([
+        `sudo touch ${LOG}`,
+        `sudo chmod 0644 ${LOG}`,
+        `sudo chown syslog:adm ${LOG}`,
+        `sudo tee ${SUDO_LOGGING_RSYSLOG_FILE} [silent]`,
+        'sudo systemctl restart rsyslog'
+      ]);
+      expect(stdin[`sudo tee ${SUDO_LOGGING_RSYSLOG_FILE}`]).toBe(buildSudoRsyslogConfig(LOG));
     });
 
-    it('detects the sudo implementation when not provided', async () => {
-      mockGetExecOutput.mockResolvedValue({ exitCode: 0, stdout: 'sudo-rs 0.2.13\n', stderr: '' });
-      await setupSudoLogging('/var/log/safer-runner/main-sudo.log');
-      expect(sudoCalls()).toContain('systemctl restart rsyslog');
+    it('fails when a logging step fails (no exit code is ignored)', async () => {
+      const { host } = recordingHost(l => (l.startsWith('sudo mv ') ? 1 : 0));
+      await expect(setupSudoLogging(host, render({ flavour: 'sudo', logFile: LOG }))).rejects.toThrow(/exit code 1/);
     });
   });
 
@@ -214,33 +203,54 @@ describe('sudo module', () => {
     });
   });
 
-  describe('disableSudoForRunner', () => {
-    it.each(['sudo', 'sudo-rs'] as const)('%s: writes a validation-only sudoers file', async flavour => {
-      visudoResult(0);
-      await disableSudoForRunner(flavour);
+  describe('restrictSudo', () => {
+    it.each(['sudo', 'sudo-rs'] as const)(
+      '%s: validates, then installs a validation-only sudoers file',
+      async flavour => {
+        const { host, calls, stdin } = recordingHost();
+        await restrictSudo(host, render({ flavour, logFile: LOG }), BASELINE);
 
-      const written = teeInput('/tmp/runner-sudoers.tmp');
-      expect(written).toContain(getRequiredSudoCommands('runner'));
-      expect(written).not.toContain('NOPASSWD: ALL');
-      expect(written).not.toContain('*');
+        const written = stdin['sudo tee /tmp/runner-sudoers.tmp'];
+        expect(written).toContain(getRequiredSudoCommands('runner'));
+        expect(written).not.toContain('NOPASSWD: ALL');
+        expect(written).not.toContain('*');
+        // visudo's exit code is checked by restrictSudo itself (the next test), never just ignored
+        expect(calls).toEqual([
+          'sudo tee /tmp/runner-sudoers.tmp',
+          'sudo visudo -c -f /tmp/runner-sudoers.tmp [ignore-rc]',
+          'sudo chmod 0440 /tmp/runner-sudoers.tmp',
+          'sudo chown root:root /tmp/runner-sudoers.tmp',
+          'sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner'
+        ]);
+      }
+    );
 
-      expect(mockGetExecOutput).toHaveBeenCalledWith(
-        'sudo',
-        ['visudo', '-c', '-f', '/tmp/runner-sudoers.tmp'],
-        expect.anything()
+    it('a sudoers file visudo rejects is removed and never installed', async () => {
+      const { host, calls } = recordingHost(
+        l => (l.startsWith('sudo visudo') ? 1 : 0),
+        l => (l.startsWith('sudo visudo') ? 'syntax error' : '')
       );
-      const calls = sudoCalls();
-      expect(calls[calls.length - 1]).toBe('mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner');
+      await expect(restrictSudo(host, render({ flavour: 'sudo-rs', logFile: LOG }), BASELINE)).rejects.toThrow(
+        /rejected by visudo \(sudo-rs\): syntax error/
+      );
+      expect(calls.slice(-1)).toEqual(['sudo rm -f /tmp/runner-sudoers.tmp [ignore-rc]']);
+      expect(calls.some(c => c.startsWith('sudo mv '))).toBe(false);
     });
-  });
 
-  describe('disableSudoForRunner: visudo rejection', () => {
-    it('removes the temp file and never installs a rejected sudoers file', async () => {
-      visudoResult(1, 'syntax error');
+    it.each(['tee', 'chmod 0440', 'chown root:root', 'mv'])('fails when `%s` of the sudoers file fails', async step => {
+      const { host, calls } = recordingHost(l => (l.startsWith(`sudo ${step} /tmp/runner-sudoers.tmp`) ? 1 : 0));
+      await expect(restrictSudo(host, render({ flavour: 'sudo', logFile: LOG }), BASELINE)).rejects.toThrow(
+        /exit code 1/
+      );
+      expect(calls[calls.length - 1]).toMatch(new RegExp(`^sudo ${step} `));
+    });
 
-      await expect(disableSudoForRunner('sudo-rs')).rejects.toThrow(/rejected by visudo \(sudo-rs\): syntax error/);
-      expect(sudoCalls()).toContain('rm -f /tmp/runner-sudoers.tmp');
-      expect(sudoCalls()).not.toContain('mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner');
+    it('needs the integrity baseline first (a compile-time order check)', () => {
+      const { host } = recordingHost();
+      const r = render({ flavour: 'sudo', logFile: LOG });
+      // @ts-expect-error - restricting sudo before the baseline is stored does not compile
+      const early = () => restrictSudo(host, r, {});
+      expect(early).toBeInstanceOf(Function);
     });
   });
 
@@ -342,10 +352,9 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
       fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    // Real enforce job (v2.0.0-beta.2 suite, ubuntu-latest): the summary said "Workflow executed 4
-    // sudo commands". Teardown is the action's own post step; the other three were the
-    // workflow's attempts, all refused because enforce removed sudo.
-    it('attributes the post-step teardown to the action and refused attempts to the workflow', () => {
+    // Real enforce job (v2.0.0-beta.2 suite, ubuntu-latest): the workflow's three attempts were
+    // all refused because enforce removed sudo.
+    it("attributes the action's own commands to the action and refused attempts to the workflow", () => {
       const log = path.join(dir, 'sudo.log');
       const pwd = 'PWD=/home/runner/work/x/x';
       fs.writeFileSync(
@@ -355,8 +364,7 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
           `Nov  4 19:17:13 : runner : ${pwd} ; USER=root ; COMMAND=/usr/bin/mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner`,
           `Nov  4 19:17:35 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/true`,
           `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/bin/journalctl -u safer-runner-proxy --no-pager`,
-          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/sbin/iptables-save`,
-          `Nov  4 19:20:30 : runner : ${pwd} ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown`
+          `Nov  4 19:20:01 : runner : a password is required ; ${pwd} ; USER=root ; COMMAND=/usr/sbin/iptables-save`
         ].join('\n') + '\n'
       );
       const u = readSudoUsage(log);
@@ -366,17 +374,7 @@ Nov  3 16:23:52 : runner :  PWD=/ ; USER=root ; COMMAND=/usr/bin/rm -f ${SUDO_LO
         '/usr/bin/journalctl',
         '/usr/sbin/iptables-save'
       ]);
-      expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv', '/opt/safer-runner/bin/teardown']);
-    });
-
-    it('only matches the teardown helper by its exact root-owned path', () => {
-      const log = path.join(dir, 'sudo.log');
-      fs.writeFileSync(
-        log,
-        'Nov  4 19:20:30 : runner : PWD=/ ; USER=root ; COMMAND=/home/runner/opt/safer-runner/bin/teardown\n' +
-          'Nov  4 19:20:31 : runner : PWD=/ ; USER=root ; COMMAND=/opt/safer-runner/bin/teardown --evil\n'
-      );
-      expect(readSudoUsage(log).ran).toHaveLength(2);
+      expect(u.internal.map(c => c.command)).toEqual(['/usr/bin/cat', '/usr/bin/mv']);
     });
 
     it('is empty for a missing file', () => {

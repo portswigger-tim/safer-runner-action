@@ -1,8 +1,11 @@
 import { BASELINE_WRITE_COMMANDS, SystemValidator } from './baseline';
-import { INTERNAL_SUDO_COMMANDS } from '../services/sudo';
+import { INTERNAL_SUDO_COMMANDS, type SudoLogging } from '../services/sudo';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
+
+/** sudo logging's token (a test stands in for setupSudoLogging) */
+const LOGGING = Object.freeze({}) as SudoLogging;
 
 const TEST_STATE_FILE = '/tmp/safer-runner-test-validation-state.json';
 
@@ -126,19 +129,25 @@ num  target     prot opt source               destination
   });
 
   describe('Post-setup baseline capture', () => {
+    it('needs sudo logging on first (a compile-time order check)', () => {
+      // @ts-expect-error - capturing the baseline before sudo logging is on does not compile
+      const early = () => validator.capturePostSetupBaseline({});
+      expect(early).toBeInstanceOf(Function);
+    });
+
     it('should capture post-setup baseline without errors', async () => {
-      await expect(validator.capturePostSetupBaseline()).resolves.not.toThrow();
+      await expect(validator.capturePostSetupBaseline(LOGGING)).resolves.not.toThrow();
     });
 
     it('should create validation state file', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
       const stateFile = TEST_STATE_FILE;
 
       expect(fs.existsSync(stateFile)).toBe(true);
     });
 
     it('should capture checksums for all critical files', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
       const stateFile = TEST_STATE_FILE;
       const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
 
@@ -149,14 +158,14 @@ num  target     prot opt source               destination
 
   describe('Baseline validation', () => {
     it('should verify against baseline successfully when nothing changed', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
       const validationResult = await validator.verifyAgainstBaseline();
 
       expect(validationResult).toBe(true);
     });
 
     it('should detect file tampering', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
 
       // Tamper with one of the test files
       fs.writeFileSync(testFiles[0], 'TAMPERED CONTENT\n');
@@ -167,7 +176,7 @@ num  target     prot opt source               destination
     });
 
     it('should detect file deletion', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
 
       // Delete one of the test files
       fs.unlinkSync(testFiles[0]);
@@ -186,7 +195,7 @@ num  target     prot opt source               destination
 
   describe('Validation report generation', () => {
     it('should generate validation report', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
       const report = await validator.generateValidationReport();
 
       expect(report).toBeDefined();
@@ -195,7 +204,7 @@ num  target     prot opt source               destination
     });
 
     it('should include key sections in report', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
       const report = await validator.generateValidationReport();
 
       // Check for expected report sections
@@ -210,7 +219,7 @@ num  target     prot opt source               destination
     });
 
     it('should show VERIFIED status for unchanged files', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
       const report = await validator.generateValidationReport();
 
       expect(report).toContain('VERIFIED');
@@ -219,7 +228,7 @@ num  target     prot opt source               destination
     });
 
     it('should show TAMPERED status for modified files', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
 
       // Tamper with a file
       fs.writeFileSync(testFiles[0], 'MODIFIED CONTENT\n');
@@ -232,7 +241,7 @@ num  target     prot opt source               destination
     });
 
     it('should show DELETED status for removed files', async () => {
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
 
       // Delete a file
       fs.unlinkSync(testFiles[0]);
@@ -258,14 +267,14 @@ num  target     prot opt source               destination
       const testValidator = new TestSystemValidator(nonExistentFiles);
 
       // Should fail during baseline capture because files don't exist
-      expect(testValidator.capturePostSetupBaseline()).rejects.toThrow();
+      expect(testValidator.capturePostSetupBaseline(LOGGING)).rejects.toThrow();
     });
   });
 
   describe('Integration scenarios', () => {
     it('should handle complete workflow: capture -> validate -> report', async () => {
       // Capture baseline
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
 
       // Verify (should pass)
       const isValid = await validator.verifyAgainstBaseline();
@@ -278,7 +287,7 @@ num  target     prot opt source               destination
 
     it('should detect tampering in complete workflow', async () => {
       // Capture baseline
-      await validator.capturePostSetupBaseline();
+      await validator.capturePostSetupBaseline(LOGGING);
 
       // Tamper with files
       fs.writeFileSync(testFiles[1], 'TAMPERED\n');

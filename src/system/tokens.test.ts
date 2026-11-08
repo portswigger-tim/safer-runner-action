@@ -19,7 +19,9 @@ const TOKENS: Record<string, { owner: string; invariants: string[] }> = {
   TrustInstalled: { owner: 'services/mitmproxy/trust.ts', invariants: ['L10'] },
   FirewallOn: { owner: 'services/iptables/index.ts', invariants: ['L14', 'L15'] },
   DockerPrepared: { owner: 'services/docker/index.ts', invariants: ['L12'] },
-  SelfTestsRun: { owner: 'setup/selftest.ts', invariants: ['L15', 'L16'] }
+  SelfTestsRun: { owner: 'setup/selftest.ts', invariants: ['L15', 'L16'] },
+  SudoLogging: { owner: 'services/sudo/index.ts', invariants: ['L18'] },
+  BaselineCaptured: { owner: 'integrity/baseline.ts', invariants: ['L19', 'L21'] }
 };
 
 function sources(dir: string): string[] {

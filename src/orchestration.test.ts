@@ -25,7 +25,6 @@ import {
   SELFTEST_HOST,
   SUDO_LOG,
   SYSTEM_CA_FILE,
-  TEARDOWN_BIN,
   VALIDATION_STATE_FILE
 } from './constants';
 import { runSetup, SETUP_MARKER } from './setup/run';
@@ -395,9 +394,6 @@ class FakeHost {
         return { code: 1 }; // nothing matched
       case 'curl':
         return this.curl(a);
-      case TEARDOWN_BIN:
-        this.files.delete(PROXY_CA_KEY_FILE);
-        return ok();
       default:
         if (c.endsWith('/bin/keytool')) return ok();
         throw new Error(`fake runner: unhandled command: ${a.join(' ')}`);
@@ -521,7 +517,7 @@ function absCommand(a: string[]): string {
 
 /** Does the restricted sudoers (getValidationSudoCommands) allow `sudo <args>`? */
 function sudoersAllows(args: string[]): boolean {
-  const allowed = new Set(getValidationSudoCommands().map(c => c.replace(/^\/usr\/s?bin\//, '').replace(/ ""$/, '')));
+  const allowed = new Set(getValidationSudoCommands().map(c => c.replace(/^\/usr\/s?bin\//, '')));
   return allowed.has(sudoArgv(args).join(' '));
 }
 
@@ -630,7 +626,6 @@ const P = {
   proxyRun: re(`sudo systemd-run --unit=${constants.PROXY_UNIT}`),
   dnsRun: re(`sudo systemd-run --unit=${constants.DNS_UNIT}`),
   proxyListening: re('ss -Hltn sport = :'),
-  teardownWrite: re(`sudo tee ${TEARDOWN_BIN}`),
   caToStore: re(`sudo install -m 0644 -o root -g root ${CA_CERT_FILE} ${SYSTEM_CA_FILE}`),
   updateCa: re('sudo update-ca-certificates'),
   nodeCaEnv: re(`<export> NODE_EXTRA_CA_CERTS=${CA_CERT_FILE}`),
@@ -666,7 +661,6 @@ const P = {
   sudoersChmod: re('sudo chmod 0440 /tmp/runner-sudoers.tmp'),
   sudoersChown: re('sudo chown root:root /tmp/runner-sudoers.tmp'),
   sudoersMv: re('sudo mv /tmp/runner-sudoers.tmp /etc/sudoers.d/runner'),
-  teardownRun: re(`sudo -n ${TEARDOWN_BIN}`),
   baselineRead: re(`sudo -n cat ${VALIDATION_STATE_FILE}`),
   summary: re('<summary.write>')
 };
@@ -725,7 +719,6 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
   before('L7', P.flowLogTouch, P.proxyRun);
   before('L7', P.dnsLogTouch, P.dnsRun);
   before('L8', P.caGenerate, P.proxyRun);
-  before('L8', P.teardownWrite, P.marker);
   if (t.some(e => e.argv[0] === 'sudo' && e.argv[1] === 'tee' && e.argv[2].startsWith(constants.PROXY_CONF_DIR))) {
     v.push('L8: the CA key directory must only be written by the openssl step run as the proxy user');
   }
@@ -763,6 +756,8 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
   before('L17', P.dockerPolicy, P.marker, { optional: true, aLast: true });
   before('L17', P.selftestWrite, P.marker);
 
+  // the baseline (and everything after it) runs with sudo logging on (sudo-rs: see loggingStart)
+  before('L18', x.flavour === 'sudo' ? P.loggingClassic : P.loggingRsTee, P.baselineTouch);
   const logging = loggingStart(t, x.flavour);
   const markerAt = at(P.marker);
   if (logging < 0) v.push('L18: sudo logging was never turned on');
@@ -827,8 +822,6 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
 function postInvariants(t: Entry[]): string[] {
   const v: string[] = [];
   const sudo = t.filter(e => e.argv[0] === 'sudo');
-  if (!sudo.length || !P.teardownRun.test(line(sudo[0])))
-    v.push('L22: the CA key teardown must be the first privileged step');
   const read = first(t, P.baselineRead);
   const summary = first(t, P.summary);
   if (read < 0 || summary < 0 || read > summary) v.push('L22: the integrity check must run before the report');
@@ -1006,11 +999,12 @@ describe('post step transcript', () => {
     return h;
   }
 
-  it('enforce: teardown, integrity, report', async () => {
+  it('enforce: integrity, report', async () => {
     const h = await jobThenPost();
     expect(postInvariants(h.transcript)).toEqual([]);
     expect(h.failed).toEqual([]);
-    expect(h.files.has(PROXY_CA_KEY_FILE)).toBe(false);
+    // nothing deletes the CA key: it is on tmpfs and dies with the VM
+    expect(h.files.has(PROXY_CA_KEY_FILE)).toBe(true);
     expect(transcriptText(h.transcript)).toMatchSnapshot('transcript');
     expect(h.summaryText).toContain('🔎 no config change seen (advisory)');
     // setup's own sudo, as logged, is never reported as the workflow's
@@ -1101,16 +1095,27 @@ describe('invariants have teeth (mutation check)', () => {
       'a workflow-looking sudo command after logging started',
       (t: Entry[]) => [...t.slice(0, -1), { argv: ['sudo', 'cat', '/etc/shadow'] }, t[t.length - 1]]
     ],
+    [
+      'L18',
+      'baseline written before sudo logging is on',
+      (t: Entry[]) => moveBefore(t, P.baselineTouch, P.loggingClassic)
+    ],
     ['L21', 'sudo restricted before the baseline', (t: Entry[]) => moveBefore(t, P.sudoersMv, P.baselineTouch)],
+    [
+      'L21',
+      'a privileged step after sudo is restricted',
+      (t: Entry[]) => [...t, { argv: ['sudo', 'systemctl', 'restart', 'rsyslog'] }]
+    ],
     ['L24', 'iptables-restore with its failure ignored', (t: Entry[]) => ignoreAt(t, P.restore4)],
-    ['L24', 'the sudoers move with its failure ignored', (t: Entry[]) => ignoreAt(t, P.sudoersMv)]
+    ['L24', 'the sudoers move with its failure ignored', (t: Entry[]) => ignoreAt(t, P.sudoersMv)],
+    ['L24', 'the sudo-logging move with its failure ignored', (t: Entry[]) => ignoreAt(t, P.loggingClassic)]
   ])('%s: %s', (id, _what, mutate) => {
     const v = setupInvariants(mutate(base), x);
     expect(ids(v)).toContain(id);
   });
 
   it('L22: the post step must not need sudo beyond the restricted sudoers', () => {
-    const t: Entry[] = [{ argv: ['sudo', '-n', TEARDOWN_BIN] }, { argv: ['sudo', 'iptables', '-F'] }];
+    const t: Entry[] = [{ argv: ['sudo', '-n', 'cat', VALIDATION_STATE_FILE] }, { argv: ['sudo', 'iptables', '-F'] }];
     expect(ids(postInvariants(t))).toContain('L22');
   });
 });

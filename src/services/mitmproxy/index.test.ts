@@ -1,18 +1,10 @@
 import * as fs from 'fs';
-import {
-  FLOW_LOG,
-  MITMDUMP_BIN,
-  POLICY_FILE,
-  PROXY_CA_KEY_FILE,
-  PROXY_CONF_DIR,
-  PROXY_UNIT,
-  TEARDOWN_BIN
-} from '../../constants';
+import { FLOW_LOG, MITMDUMP_BIN, POLICY_FILE, PROXY_CA_KEY_FILE, PROXY_CONF_DIR, PROXY_UNIT } from '../../constants';
 import type { PolicyConfig } from '../../policy';
 import { recordingHost } from '../../system/testing';
 import { transientUnitArgs } from '../../system/unit';
 import { PROXY_PORT_BAND, allocateProxyPorts, ensureUser, mitmdumpArgs, render, start, writeConfig } from '.';
-import { generateCa, installTeardown, teardownHelper, type CaReady } from './ca';
+import { generateCa, type CaReady } from './ca';
 import type { ProxyConfigWritten } from '.';
 
 jest.mock('@actions/core');
@@ -239,27 +231,5 @@ describe('the CA (ca.ts)', () => {
       `sudo install -m 0644 -o root -g root ${PROXY_CONF_DIR}/ca-cert.pem /etc/safer-runner/ca.pem`
     );
     expect(calls).toHaveLength(4);
-  });
-
-  it('teardown helper removes exactly the key files, root-owned 0755', async () => {
-    const t = teardownHelper();
-    expect(t).toMatchObject({ kind: 'file', path: TEARDOWN_BIN, mode: '0755', owner: 'root:root' });
-    expect(t.kind === 'file' && t.content).toContain(
-      `rm -f ${PROXY_CA_KEY_FILE} ${PROXY_CONF_DIR}/ca-key.pem ${PROXY_CONF_DIR}/mitmproxy-ca.p12`
-    );
-    const { host, calls } = recordingHost();
-    await installTeardown(host, CA);
-    expect(calls).toEqual([
-      `sudo tee ${TEARDOWN_BIN} [silent]`,
-      `sudo chown root:root ${TEARDOWN_BIN}`,
-      `sudo chmod 0755 ${TEARDOWN_BIN}`
-    ]);
-  });
-
-  it('the teardown helper needs the CA first (a compile-time order check)', () => {
-    const { host } = recordingHost();
-    // @ts-expect-error - installing the teardown before the CA exists does not compile
-    const early = () => installTeardown(host, {});
-    expect(early).toBeInstanceOf(Function);
   });
 });
