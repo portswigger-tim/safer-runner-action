@@ -127,9 +127,10 @@ export function sudoLogSeconds(timestamp: string, now: Date): number | null {
 }
 
 /**
- * Where the action's own sudo is in the log, by entry position (the log is in order, and no step
- * runs while setup or the post step does): entries up to `setupEnd` (setup's last sudo command;
- * -1 when it was not found) and from `postStart` (the first entry the post step wrote).
+ * Where the action's own sudo is in the log, by entry position (the log is in order): entries up
+ * to `setupEnd` (setup's last sudo command; -1 when it was not found) and from `postStart` (the
+ * first entry after the log's size when the post step began its own sudo). Best effort: a
+ * background process the job left running can still run sudo during the post step.
  */
 export interface ActionSudoBounds {
   setupEnd: number;

@@ -1,7 +1,7 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
 exports[`job summary golden snapshots analyze: docker: keep with no use of docker (partial recording) 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -13,7 +13,7 @@ Nothing was blocked: analyze only observes. **Under enforce, check the ⚠️ ro
 |:-:|:--|:--|
 | ⚠️ | Docker | \`docker: keep\` keeps docker, though no use was seen (ADVISORY) |
 | ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ✅ | Sudo | the job ran no sudo |
 
 ## 🔧 Suggested Enforce Configuration
@@ -100,7 +100,7 @@ No use of docker after setup was seen.
 `;
 
 exports[`job summary golden snapshots analyze: docker: stop would stop the service containers 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -112,7 +112,7 @@ Nothing was blocked: analyze only observes. **Under enforce, this job would be b
 |:-:|:--|:--|
 | 🟠 | Docker | \`docker: stop\` would stop 2 service containers |
 | ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ✅ | Sudo | the job ran no sudo |
 
 ## 🔧 Suggested Enforce Configuration
@@ -201,7 +201,7 @@ No use of docker after setup was seen.
 `;
 
 exports[`job summary golden snapshots analyze: sudo the policy would block, with the suggested sudo-config 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -214,7 +214,7 @@ Nothing was blocked: analyze only observes. **Under enforce, this job would be b
 | 🟠 | Sudo | 1 command would be blocked |
 | ⚠️ | Docker | not evaluated: the job's use of docker was not seen |
 | ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 
 ## 🔧 Suggested Enforce Configuration
 
@@ -307,7 +307,7 @@ No container traffic.
 `;
 
 exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker policy not applied 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -320,15 +320,11 @@ Nothing was blocked: analyze only observes. **Under enforce, this job would be b
 
 |  | Area | Result |
 |:-:|:--|:--|
-| 🟠 | Network | **2 bypass attempts would be blocked** |
-| 🟠 | Network | 3 hosts not on the allowlist would be blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` |
-| 🟠 | Network | 4 more hosts would be blocked (did not resolve, no hostname, other) |
+| 🟠 | Network | **2 bypass attempts would be blocked** · 3 hosts not on the allowlist would be blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` · 1 connection outside the proxy would be rejected (SSH to \`198.51.100.7:22\`) · 3 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | 🟠 | HTTP filter | 2 requests would be blocked: \`uploads.example.com\` |
-| 🟠 | Network | 1 connection outside the proxy would be rejected (SSH to \`198.51.100.7:22\`) |
 | 🟠 | Sudo | 1 command would be blocked |
 | ⚠️ | Docker | not evaluated: the job's use of docker was not seen |
 | ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 3 hosts beyond GitHub · 3 requests · 3.3 MiB |
 
 ## 🔧 Suggested Enforce Configuration
 
@@ -473,7 +469,7 @@ No container traffic.
 `;
 
 exports[`job summary golden snapshots analyze: the job used docker, so enforce would block it (docker: keep suggested) 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -485,7 +481,7 @@ Nothing was blocked: analyze only observes. **Under enforce, this job would be b
 |:-:|:--|:--|
 | 🟠 | Docker | used after setup (4 container actions, 1 exec into a container, 2 image actions, 1 build, 2 network changes): enforce would block it |
 | ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ✅ | Sudo | the job ran no sudo |
 
 ## 🔧 Suggested Enforce Configuration
@@ -582,7 +578,7 @@ Images: \`alpine:3.20\`, \`postgres:16\`, \`ghcr.io/acme/app:1.4.2\`
 `;
 
 exports[`job summary golden snapshots containers: SNI-only, refused, untrusted CA, outside the proxy 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -595,12 +591,9 @@ exports[`job summary golden snapshots containers: SNI-only, refused, untrusted C
 
 |  | Area | Result |
 |:-:|:--|:--|
-| ⛔ | Network | 1 host not on the allowlist blocked: \`ctr-exfil.example.net\` |
-| ⛔ | Network | 2 connections outside the proxy rejected |
-| ⛔ | Docker | container egress: 2 destinations blocked |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ⛔ | Network | 1 host not on the allowlist blocked: \`ctr-exfil.example.net\` · 2 connections outside the proxy rejected · 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
+| ⛔ | Docker | container egress: 2 destinations blocked · runner user removed from the docker group |
 | ✅ | Sudo | removed from the job |
-| ✅ | Docker | runner user removed from the docker group |
 | ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
 
 ## 🔧 Suggested Enforce Configuration
@@ -717,7 +710,7 @@ The job ran no sudo.
 `;
 
 exports[`job summary golden snapshots enforce ADVISORY: a sudo-config allowlist 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -733,7 +726,7 @@ exports[`job summary golden snapshots enforce ADVISORY: a sudo-config allowlist 
 |  | Area | Result |
 |:-:|:--|:--|
 | ⚠️ | Sudo | \`sudo-config\` keeps 2 command lines; the job ran 1 command |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ✅ | Docker | runner user removed from the docker group |
 | ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
 
@@ -823,7 +816,7 @@ No container traffic.
 `;
 
 exports[`job summary golden snapshots enforce ADVISORY: sudo and docker retained 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -843,10 +836,9 @@ exports[`job summary golden snapshots enforce ADVISORY: sudo and docker retained
 
 |  | Area | Result |
 |:-:|:--|:--|
-| ⛔ | Network | 3 hosts not on the allowlist blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` |
+| ⛔ | Network | 3 hosts not on the allowlist blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` · 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ⚠️ | Sudo | kept (\`disable-sudo: false\`) |
 | ⚠️ | Docker | kept (\`docker: keep\`) |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
 | ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
 
 ## 🔧 Suggested Enforce Configuration
@@ -951,7 +943,7 @@ No container traffic.
 `;
 
 exports[`job summary golden snapshots enforce, nothing blocked 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -961,7 +953,7 @@ Nothing was blocked.
 
 |  | Area | Result |
 |:-:|:--|:--|
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ✅ | Sudo | removed from the job |
 | ✅ | Docker | runner user removed from the docker group |
 | ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
@@ -1050,7 +1042,7 @@ No container traffic.
 `;
 
 exports[`job summary golden snapshots enforce: bypass attempts, not-allowed hosts, http-filter refusals and the rest 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -1063,12 +1055,8 @@ exports[`job summary golden snapshots enforce: bypass attempts, not-allowed host
 
 |  | Area | Result |
 |:-:|:--|:--|
-| ⛔ | Network | **2 bypass attempts blocked** |
-| ⛔ | Network | 3 hosts not on the allowlist blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` |
-| ⛔ | Network | 4 more hosts blocked (did not resolve, no hostname, other) |
+| ⛔ | Network | **2 bypass attempts blocked** · 3 hosts not on the allowlist blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` · 2 connections outside the proxy rejected · 3 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ⛔ | HTTP filter | 2 requests blocked: \`uploads.example.com\` |
-| ⛔ | Network | 2 connections outside the proxy rejected |
-| ✅ | Network | 3 hosts beyond GitHub · 3 requests · 3.3 MiB |
 | ✅ | Sudo | removed from the job |
 | ✅ | Docker | runner user removed from the docker group |
 | ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
@@ -1216,7 +1204,7 @@ No container traffic.
 `;
 
 exports[`job summary golden snapshots integrity tampered, self-test failed 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -1232,7 +1220,7 @@ Nothing was blocked.
 |  | Area | Result |
 |:-:|:--|:--|
 | ⚠️ | Setup | self-tests 2/3 · config CHANGED |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ✅ | Sudo | removed from the job |
 | ✅ | Docker | runner user removed from the docker group |
 
@@ -1316,7 +1304,7 @@ No container traffic.
 `;
 
 exports[`job summary golden snapshots integrity unavailable, no self-tests 1`] = `
-"<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>
+"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
 
 # 📋 Summary
 
@@ -1327,7 +1315,7 @@ Nothing was blocked.
 |  | Area | Result |
 |:-:|:--|:--|
 | ⚠️ | Setup | self-tests not run · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub · 3 requests · 3.3 MiB |
+| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
 | ✅ | Sudo | removed from the job |
 | ✅ | Docker | runner user removed from the docker group |
 

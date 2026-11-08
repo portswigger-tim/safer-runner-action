@@ -44,13 +44,17 @@ const fronting = (verdict: 'BLOCK' | 'WOULD_BLOCK'): FlowRecord => ({
 describe('proxy report (its Section)', () => {
   it('allowed traffic only: one allowed row, no alert, no suggestion', () => {
     const s = report({ hosts: summarizeFlows([allowed]) }, ENFORCE);
-    expect(s.score).toEqual([{ verdict: 'allowed', area: 'Network', text: '1 host · 1 request · 2.0 KiB' }]);
+    expect(s.score).toEqual([{ verdict: 'allowed', area: 'Network', text: '1 host allowed · 1 request · 2.0 KiB' }]);
     expect([s.alerts, s.suggestions, s.deniedNames]).toEqual([[], [], []]);
   });
 
   it('counts the hosts beyond GitHub when the job has its own allowlist', () => {
     const s = report({ hosts: summarizeFlows([allowed]), userDomains: ['registry.npmjs.org'] }, ENFORCE);
-    expect(s.score[0].text).toBe('1 host beyond GitHub · 1 request · 2.0 KiB');
+    expect(s.score[0].text).toBe('1 host beyond GitHub allowed · 1 request · 2.0 KiB');
+    // none beyond GitHub: a part that says nothing on its own (dropped when Network has another)
+    expect(report({ hosts: [], userDomains: ['registry.npmjs.org'] }, ENFORCE).score).toEqual([
+      { verdict: 'allowed', area: 'Network', text: 'no hosts beyond GitHub', minor: true }
+    ]);
   });
 
   it('enforce: a host not on the allowlist is a blocked row, an IMPORTANT alert, and no suggestion', () => {
@@ -114,6 +118,23 @@ describe('proxy report (its Section)', () => {
       const s = report({ hosts: summarizeFlows([fronting(v), notListed(v)]) }, ctx);
       expect(s.alerts.map(a => a.kind)).toEqual(['CAUTION']);
     }
+  });
+
+  it('hosts that did not resolve or had no name are a minor part (Detail lists them)', () => {
+    const unresolved: FlowRecord = {
+      ts: 4,
+      ev: 'upstream',
+      verdict: 'BLOCK',
+      reason: 'upstream-unresolved',
+      layer: 'ip',
+      host: 'typo.example.com',
+      client: '10.1.0.4:1003'
+    };
+    const s = report({ hosts: summarizeFlows([unresolved, notListed('BLOCK')]) }, ENFORCE);
+    expect(s.score.find(r => r.text.includes('did not resolve'))).toMatchObject({
+      minor: true,
+      text: '1 host blocked (did not resolve)'
+    });
   });
 
   it('the platform allowlist count goes under Runner System only when it allowed anything', () => {

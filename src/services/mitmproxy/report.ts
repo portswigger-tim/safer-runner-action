@@ -268,10 +268,12 @@ function score(f: Facts): ScoreRow[] {
   const others = OTHER_GROUPS.filter(([g]) => groups[g].length);
   if (others.length) {
     const n = others.reduce((a, [g]) => a + groups[g].length, 0);
+    // in the scorecard only when nothing more alarming is there (the Detail lists them all)
     rows.push({
       verdict: refused,
       area: 'Network',
-      text: `${plural(n, 'more host')} ${blockedWord} (${others.map(([, what]) => what).join(', ')})`
+      text: `${plural(n, 'host')} ${blockedWord} (${others.map(([, what]) => what).join(', ')})`,
+      minor: true
     });
   }
   if (f.filterBlocks.length) {
@@ -282,13 +284,22 @@ function score(f: Facts): ScoreRow[] {
     });
   }
   const hosts = f.o.userDomains
-    ? `${plural(f.jobHosts.length, 'host')} beyond GitHub`
-    : plural(f.allowed.length, 'host');
-  rows.push({
-    verdict: 'allowed',
-    area: 'Network',
-    text: `${hosts} · ${plural(f.job.requests, 'request')} · ${humanBytes(f.job.bytes)}`
-  });
+    ? `${plural(f.jobHosts.length, 'host')} beyond GitHub allowed`
+    : `${plural(f.allowed.length, 'host')} allowed`;
+  rows.push(
+    f.jobHosts.length
+      ? {
+          verdict: 'allowed',
+          area: 'Network',
+          text: `${hosts} · ${plural(f.job.requests, 'request')} · ${humanBytes(f.job.bytes)}`
+        }
+      : {
+          verdict: 'allowed',
+          area: 'Network',
+          text: f.o.userDomains ? 'no hosts beyond GitHub' : 'no traffic',
+          minor: true
+        }
+  );
   return rows;
 }
 
@@ -330,15 +341,15 @@ const KEEP_ENTRIES = 'keep your existing allowed-domains entries too';
 
 /**
  * The job's own entries to repeat in the suggestion: only valid patterns, never one that looks
- * like data (an entry from an unmasked variable can be an internal name, and a masked secret
- * shows as ***). `held` is true when any was held back: the block then says to keep them.
+ * like data (an entry from an unmasked variable can be an internal name). `held` is true when any
+ * was held back: the block then says to keep them.
  */
 function keptEntries(entries: string[]): { kept: string[]; held: boolean } {
   const kept: string[] = [];
   let held = false;
   for (const e of entries) {
     try {
-      if (e.includes('***') || expandPattern(e).some(p => needsRedaction(validatePattern(p)))) {
+      if (expandPattern(e).some(p => needsRedaction(validatePattern(p)))) {
         throw new Error('not repeated');
       }
       if (!kept.includes(e)) kept.push(e);

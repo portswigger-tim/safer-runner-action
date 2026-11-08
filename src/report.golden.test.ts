@@ -448,6 +448,11 @@ function report(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'ho
   const md = render(overrides);
   // every golden and canary summary: functional emoji only
   expect(emojiOutsideAllowlist(md)).toEqual([]);
+  // and one scorecard row per area
+  const scorecard = md.slice(md.indexOf('| Area | Result |'), md.indexOf('## 🔧'));
+  const rowAreas = [...scorecard.matchAll(/^\| \S+ \| ([^|]+) \| /gm)].map(m => m[1].trim());
+  expect(rowAreas.length).toBeGreaterThan(0);
+  expect(new Set(rowAreas).size).toBe(rowAreas.length);
   return md;
 }
 

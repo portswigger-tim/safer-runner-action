@@ -26,7 +26,14 @@ import { report as dockerReport, type DockerPolicyReport, type DockerReportObser
 import type { ContainerSummary } from '../services/docker/containers';
 import { setupChecks, type Checks, type IntegrityDetails, type SelfTest } from './checks';
 import { code, codeBlock, table } from './markdown';
-import { VERDICT_ICON, type ReportContext, type RunnerSystem, type Section, type Suggestion } from './section';
+import {
+  VERDICT_ICON,
+  type ReportContext,
+  type RunnerSystem,
+  type ScoreRow,
+  type Section,
+  type Suggestion
+} from './section';
 
 export interface ReportInput {
   mode: Mode;
@@ -139,8 +146,8 @@ export function banner(repository: string | undefined, ref: string | undefined):
   const r = safeRef(ref);
   if (!repo || !r) return '';
   return (
-    `<p align="center"><img src="https://raw.githubusercontent.com/${repo}/${r}/docs/assets/banner.svg" ` +
-    'width="480" alt="Safer Runner Action"></p>\n\n'
+    `<img src="https://raw.githubusercontent.com/${repo}/${r}/docs/assets/banner.svg" width="480" ` +
+    'alt="Safer Runner Action">\n\n'
   );
 }
 
@@ -185,15 +192,28 @@ const services = (s: ReportSections): Section[] => [s.proxy, s.firewall, s.dns, 
 
 const SEVERITY: Record<string, number> = { blocked: 0, 'would-block': 0, advisory: 1, allowed: 2 };
 
-/** Every scorecard row, worst first (stable: each part's own order within a verdict). */
-function scoreRows(s: ReportSections) {
-  return [...s.proxy.score, ...s.firewall.score, ...s.sudo.score, ...s.docker.score, s.checks.score].sort(
-    (a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]
-  );
+/**
+ * The scorecard: one row per area, with the area's worst verdict, its problems first and then what
+ * was allowed (a minor part is left out when the area has more to say); areas worst first, in the
+ * parts' order otherwise.
+ */
+function scoreRows(s: ReportSections): ScoreRow[] {
+  const parts = [...s.proxy.score, ...s.firewall.score, ...s.sudo.score, ...s.docker.score, s.checks.score];
+  const areas = [...new Set(parts.map(p => p.area))];
+  return areas
+    .map(area => {
+      const all = parts.filter(p => p.area === area);
+      const outranked = (p: ScoreRow) =>
+        all.some(q => q !== p && (SEVERITY[q.verdict] < SEVERITY[p.verdict] || (!q.minor && q.verdict === p.verdict)));
+      const mine = all.filter(p => !p.minor || !outranked(p));
+      mine.sort((a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]);
+      return { verdict: mine[0].verdict, area, text: mine.map(p => p.text).join(' · ') };
+    })
+    .sort((a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]);
 }
 
 /** The services' rows: what enforce would block or make ADVISORY (the setup checks are not a policy). */
-const policyRows = (s: ReportSections) => scoreRows(s).filter(r => r !== s.checks.score);
+const policyRows = (s: ReportSections) => scoreRows(s).filter(r => r.area !== s.checks.score.area);
 
 /** The verdict line: what was (or would be) blocked, by area. */
 function headline(s: ReportSections): string {
@@ -314,7 +334,7 @@ function suggested(s: ReportSections): string {
   } else {
     const advisory = policyRows(s).some(r => r.verdict === 'advisory');
     md += advisory
-      ? 'No input to change, but enforce would be ADVISORY (⚠️ above).\n\n'
+      ? 'No input to change, but some rows above are ADVISORY or were not seen (⚠️).\n\n'
       : 'Nothing to change: this job should run under `mode: enforce` as it is configured.\n\n';
   }
   if (notes.length) md += `<sub>${notes.map(sentence).join(' ')}</sub>\n\n`;

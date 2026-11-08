@@ -1,7 +1,7 @@
 import { parse as parseYaml } from 'yaml';
 import type { FlowRecord } from '../flowlog';
 import { readInputs } from '../config/inputs';
-import { parseAllowedDomains, validatePattern } from '../policy';
+import { buildPolicyConfig, parseAllowedDomains, validatePattern } from '../policy';
 import { ruleText } from '../services/sudo/config';
 import { evaluateDocker } from '../services/docker/config';
 import { summarizeFlows } from '../services/mitmproxy/flows';
@@ -131,6 +131,25 @@ describe('Suggested Enforce Configuration: the block pastes back as printed', ()
     expect(inputs.docker).toBe('keep');
   });
 
+  it('an entry built from a secret prints masked: pasted back, it is refused, never widened', () => {
+    const md = buildReport(analyzeInput({ allowedDomains: ['svc.vault-a1.corp.example.com'] }));
+    // what the summary shows once the runner has masked the secret part
+    const masked = md.replace('svc.vault-a1.corp.example.com', 'svc.***.corp.example.com');
+    const w = pastedInputs(masked);
+    const inputs = withInputs(w, readInputs);
+    const { config, warnings } = buildPolicyConfig({
+      mode: 'enforce',
+      githubDomains: [],
+      allowedDomains: inputs.allowedDomains,
+      passthroughDomains: '',
+      blockRiskySubdomains: true,
+      containerPort: 1
+    });
+    expect(config.allow).not.toContain('svc.***.corp.example.com');
+    expect(config.allow.some(p => p.includes('*'))).toBe(false);
+    expect(warnings).toContainEqual(expect.stringContaining('svc.***.corp.example.com'));
+  });
+
   it('marks the inputs that make enforce ADVISORY on their own line', () => {
     const md = buildReport(analyzeInput());
     expect(md).toContain('    sudo-config: | # ⚠️ any sudo-config makes enforce ADVISORY\n');
@@ -182,6 +201,33 @@ describe('Suggested Enforce Configuration: the block pastes back as printed', ()
     });
     expect(md).toContain('Nothing to change: this job should run under `mode: enforce` as it is configured.');
     expect(md).not.toContain('```');
+  });
+});
+
+describe('scorecard: one glance per area', () => {
+  const unresolved: FlowRecord = {
+    ts: 3,
+    ev: 'upstream',
+    verdict: 'BLOCK',
+    reason: 'upstream-unresolved',
+    layer: 'ip',
+    host: 'typo.example.com',
+    client: 'c:9'
+  };
+  const scorecard = (md: string) => md.slice(md.indexOf('| Area | Result |'), md.indexOf('## 🔧'));
+  const base = { mode: 'enforce' as const, job: 'j', firewall: [], dnsRefused: [], selfTests: [] };
+
+  it('hosts that did not resolve are in the Network row only when nothing more alarming is there', () => {
+    const alone = buildReport({ ...base, hosts: summarizeFlows([unresolved]) });
+    expect(scorecard(alone)).toContain('| ⛔ | Network | 1 host blocked (did not resolve) |');
+    const withMiss = buildReport({
+      ...base,
+      hosts: summarizeFlows([unresolved, tls('pypi.org', 'BLOCK', 'sni-not-allowed', 'c:8')])
+    });
+    expect(scorecard(withMiss)).toContain('| ⛔ | Network | 1 host not on the allowlist blocked: `pypi.org` |');
+    expect(scorecard(withMiss)).not.toContain('did not resolve');
+    // still listed in Detail
+    expect(withMiss).toContain('| ⛔ | `typo.example.com` | Did not resolve; nothing was sent | 1 |');
   });
 });
 
@@ -258,8 +304,9 @@ describe('size', () => {
 
 describe('banner', () => {
   it('the repository and ref the workflow used: its banner at that ref', () => {
+    // left-aligned: a plain image, no wrapper
     expect(banner('portswigger-tim/safer-runner-action', 'v2.5.0')).toBe(
-      '<p align="center"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.5.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></p>\n\n'
+      '<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.5.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">\n\n'
     );
     // a fork shows its own banner, at its own ref
     expect(banner('acme-corp/safer-runner-action', 'a'.repeat(40))).toContain(
@@ -295,7 +342,7 @@ describe('banner', () => {
   });
 
   it('heads the summary', () => {
-    expect(buildReport(analyzeInput()).startsWith('<p align="center"><img src=')).toBe(true);
+    expect(buildReport(analyzeInput()).startsWith('<img src="https://raw.githubusercontent.com/')).toBe(true);
     expect(buildReport(analyzeInput({ actionRef: '' })).startsWith('# 📋 Summary')).toBe(true);
     expect(buildReport(analyzeInput({ actionRepository: '' })).startsWith('# 📋 Summary')).toBe(true);
   });

@@ -42,7 +42,11 @@ This is the full list; the README keeps the few that change how you use the acti
   suggested block keeps the job's existing `allowed-domains` entries (as setup applied them) and
   adds the names enforce would block. An entry that looks like encoded data, or a masked secret, is
   left out with a comment to keep it; anything else you put in `allowed-domains` is published in
-  the summary.
+  the summary. An entry built from a secret prints masked (`***`) and has to be restored by hand:
+  pasted as it is, setup refuses it.
+- **Telling the action's own sudo from the job's is best effort.** It goes by command line and by
+  place in the sudo log (setup, then the post step); a background process the job left running can
+  still run sudo while the post step does.
 - **Sudo arguments are redacted the same way, best effort.** The summary and job log show the
   job's sudo command lines with any argument that looks like it could be a credential as
   `‹redacted›`, keeping the command path and the number of arguments. It is a heuristic: a

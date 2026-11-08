@@ -65,7 +65,9 @@ function readSetupMarker(): SetupMarker | null {
  * tmpfs, with it).
  */
 async function run(): Promise<void> {
-  // the sudo log as this step found it: anything after is this step's own sudo
+  // let the job's last flow, syslog and sudo lines land (sudo-rs reaches the sudo log through
+  // rsyslog), then take the sudo log as this step found it: anything after is this step's own
+  await new Promise(r => setTimeout(r, 1000));
   const sudoLogBytes = fileSize(SUDO_LOG);
   const marker = readSetupMarker();
   const mode = marker?.mode;
@@ -85,7 +87,6 @@ async function run(): Promise<void> {
   const intact = integrity?.intact === true;
 
   try {
-    await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
     // Each service's observations (its own log, and its policy where it has one). Its full lists
     // go to the job log as soon as it has them, so a later failure never loses them (names and
     // sudo arguments redacted like the summary: the job log is just as public).

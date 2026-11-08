@@ -1323,6 +1323,9 @@ function validatePattern(pattern) {
     const labels = p.split('.');
     if (!labels.every(l => LABEL.test(l)))
         throw new Error(`invalid domain pattern: '${pattern}'`);
+    // one `*` per run: a masked value (`***`) must fail here, never widen to a wildcard
+    if (labels.some(l => l.includes('**')))
+        throw new Error(`repeated wildcard in a label: '${pattern}'`);
     if (labels.slice(-2).some(l => l.includes('*'))) {
         throw new Error(`wildcard too broad (in the registrable part): '${pattern}'`);
     }

@@ -30,6 +30,11 @@ export interface ScoreRow {
   verdict: Verdict;
   area: string;
   text: string;
+  /**
+   * left out when its area has a worse part, or another part as bad that is not minor (no traffic
+   * beyond GitHub; hosts that did not resolve or had no name, listed in Detail)
+   */
+  minor?: boolean;
 }
 
 /** A top-level alert paragraph (alerts don't render inside <details>). */

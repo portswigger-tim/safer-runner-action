@@ -1517,6 +1517,9 @@ function validatePattern(pattern) {
     const labels = p.split('.');
     if (!labels.every(l => LABEL.test(l)))
         throw new Error(`invalid domain pattern: '${pattern}'`);
+    // one `*` per run: a masked value (`***`) must fail here, never widen to a wildcard
+    if (labels.some(l => l.includes('**')))
+        throw new Error(`repeated wildcard in a label: '${pattern}'`);
     if (labels.slice(-2).some(l => l.includes('*'))) {
         throw new Error(`wildcard too broad (in the registrable part): '${pattern}'`);
     }
@@ -1793,7 +1796,9 @@ function readSetupMarker() {
  * tmpfs, with it).
  */
 async function run() {
-    // the sudo log as this step found it: anything after is this step's own sudo
+    // let the job's last flow, syslog and sudo lines land (sudo-rs reaches the sudo log through
+    // rsyslog), then take the sudo log as this step found it: anything after is this step's own
+    await new Promise(r => setTimeout(r, 1000));
     const sudoLogBytes = fileSize(constants_1.SUDO_LOG);
     const marker = readSetupMarker();
     const mode = marker?.mode;
@@ -1812,7 +1817,6 @@ async function run() {
     }
     const intact = integrity?.intact === true;
     try {
-        await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
         // Each service's observations (its own log, and its policy where it has one). Its full lists
         // go to the job log as soon as it has them, so a later failure never loses them (names and
         // sudo arguments redacted like the summary: the job log is just as public).
@@ -2028,8 +2032,8 @@ function banner(repository, ref) {
     const r = safeRef(ref);
     if (!repo || !r)
         return '';
-    return (`<p align="center"><img src="https://raw.githubusercontent.com/${repo}/${r}/docs/assets/banner.svg" ` +
-        'width="480" alt="Safer Runner Action"></p>\n\n');
+    return (`<img src="https://raw.githubusercontent.com/${repo}/${r}/docs/assets/banner.svg" width="480" ` +
+        'alt="Safer Runner Action">\n\n');
 }
 /** Every part, each from its own observations. */
 function reportSections(input) {
@@ -2062,12 +2066,26 @@ function reportSections(input) {
 const services = (s) => [s.proxy, s.firewall, s.dns, s.sudo, s.docker];
 // ---------------------------------------------------------------- summary
 const SEVERITY = { blocked: 0, 'would-block': 0, advisory: 1, allowed: 2 };
-/** Every scorecard row, worst first (stable: each part's own order within a verdict). */
+/**
+ * The scorecard: one row per area, with the area's worst verdict, its problems first and then what
+ * was allowed (a minor part is left out when the area has more to say); areas worst first, in the
+ * parts' order otherwise.
+ */
 function scoreRows(s) {
-    return [...s.proxy.score, ...s.firewall.score, ...s.sudo.score, ...s.docker.score, s.checks.score].sort((a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]);
+    const parts = [...s.proxy.score, ...s.firewall.score, ...s.sudo.score, ...s.docker.score, s.checks.score];
+    const areas = [...new Set(parts.map(p => p.area))];
+    return areas
+        .map(area => {
+        const all = parts.filter(p => p.area === area);
+        const outranked = (p) => all.some(q => q !== p && (SEVERITY[q.verdict] < SEVERITY[p.verdict] || (!q.minor && q.verdict === p.verdict)));
+        const mine = all.filter(p => !p.minor || !outranked(p));
+        mine.sort((a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]);
+        return { verdict: mine[0].verdict, area, text: mine.map(p => p.text).join(' · ') };
+    })
+        .sort((a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]);
 }
 /** The services' rows: what enforce would block or make ADVISORY (the setup checks are not a policy). */
-const policyRows = (s) => scoreRows(s).filter(r => r !== s.checks.score);
+const policyRows = (s) => scoreRows(s).filter(r => r.area !== s.checks.score.area);
 /** The verdict line: what was (or would be) blocked, by area. */
 function headline(s) {
     const rows = policyRows(s);
@@ -2175,7 +2193,7 @@ function suggested(s) {
     else {
         const advisory = policyRows(s).some(r => r.verdict === 'advisory');
         md += advisory
-            ? 'No input to change, but enforce would be ADVISORY (⚠️ above).\n\n'
+            ? 'No input to change, but some rows above are ADVISORY or were not seen (⚠️).\n\n'
             : 'Nothing to change: this job should run under `mode: enforce` as it is configured.\n\n';
     }
     if (notes.length)
@@ -5918,10 +5936,12 @@ function score(f) {
     const others = OTHER_GROUPS.filter(([g]) => groups[g].length);
     if (others.length) {
         const n = others.reduce((a, [g]) => a + groups[g].length, 0);
+        // in the scorecard only when nothing more alarming is there (the Detail lists them all)
         rows.push({
             verdict: refused,
             area: 'Network',
-            text: `${(0, markdown_1.plural)(n, 'more host')} ${blockedWord} (${others.map(([, what]) => what).join(', ')})`
+            text: `${(0, markdown_1.plural)(n, 'host')} ${blockedWord} (${others.map(([, what]) => what).join(', ')})`,
+            minor: true
         });
     }
     if (f.filterBlocks.length) {
@@ -5932,13 +5952,20 @@ function score(f) {
         });
     }
     const hosts = f.o.userDomains
-        ? `${(0, markdown_1.plural)(f.jobHosts.length, 'host')} beyond GitHub`
-        : (0, markdown_1.plural)(f.allowed.length, 'host');
-    rows.push({
-        verdict: 'allowed',
-        area: 'Network',
-        text: `${hosts} · ${(0, markdown_1.plural)(f.job.requests, 'request')} · ${(0, markdown_1.humanBytes)(f.job.bytes)}`
-    });
+        ? `${(0, markdown_1.plural)(f.jobHosts.length, 'host')} beyond GitHub allowed`
+        : `${(0, markdown_1.plural)(f.allowed.length, 'host')} allowed`;
+    rows.push(f.jobHosts.length
+        ? {
+            verdict: 'allowed',
+            area: 'Network',
+            text: `${hosts} · ${(0, markdown_1.plural)(f.job.requests, 'request')} · ${(0, markdown_1.humanBytes)(f.job.bytes)}`
+        }
+        : {
+            verdict: 'allowed',
+            area: 'Network',
+            text: f.o.userDomains ? 'no hosts beyond GitHub' : 'no traffic',
+            minor: true
+        });
     return rows;
 }
 function alerts(f) {
@@ -5977,15 +6004,15 @@ function alerts(f) {
 const KEEP_ENTRIES = 'keep your existing allowed-domains entries too';
 /**
  * The job's own entries to repeat in the suggestion: only valid patterns, never one that looks
- * like data (an entry from an unmasked variable can be an internal name, and a masked secret
- * shows as ***). `held` is true when any was held back: the block then says to keep them.
+ * like data (an entry from an unmasked variable can be an internal name). `held` is true when any
+ * was held back: the block then says to keep them.
  */
 function keptEntries(entries) {
     const kept = [];
     let held = false;
     for (const e of entries) {
         try {
-            if (e.includes('***') || (0, policy_1.expandPattern)(e).some(p => (0, redact_1.needsRedaction)((0, policy_1.validatePattern)(p)))) {
+            if ((0, policy_1.expandPattern)(e).some(p => (0, redact_1.needsRedaction)((0, policy_1.validatePattern)(p)))) {
                 throw new Error('not repeated');
             }
             if (!kept.includes(e))

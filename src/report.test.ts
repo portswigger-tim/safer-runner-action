@@ -314,7 +314,10 @@ describe('Summary + Detail layout', () => {
     const allowed = hosts.filter(h => !['BLOCK', 'WOULD_BLOCK'].includes(h.verdict));
     const blockedRequests = hosts.filter(h => h.verdict === 'BLOCK').reduce((a, h) => a + h.requests, 0);
     expect(blockedRequests).toBeGreaterThan(0);
-    expect(md).toContain('| ✅ | Network | 7 hosts beyond GitHub · 26 requests · ');
+    // one Network row: its problems first, then the allowed traffic
+    expect(md).toMatch(
+      /\| ⛔ \| Network \| \*\*4 bypass attempts blocked\*\* · .* · 7 hosts beyond GitHub allowed · 26 requests · [\d.]+ MiB \|/
+    );
     expect(allowed.map(h => h.name)).not.toEqual(expect.arrayContaining(['100.64.0.1.nip.io']));
     expect(allowed).toHaveLength(15); // 18 in beta.2: 3 phantoms refused upstream
   });
@@ -363,7 +366,8 @@ describe('Summary + Detail layout', () => {
 
   it('puts what the firewall and the resolver did under Network › Runner System', () => {
     expect(md).toContain('| ⛔ | `1.1.1.1:853` | TCP | DNS-over-TLS | 1001 | 1 |');
-    expect(md).toContain('| ⛔ | Network | 1 connection outside the proxy rejected (DNS-over-TLS to `1.1.1.1:853`) |');
+    // folded into the one Network row
+    expect(md).toContain(' · 1 connection outside the proxy rejected (DNS-over-TLS to `1.1.1.1:853`) · ');
   });
 
   it('ends with a metadata footer', () => {
@@ -429,7 +433,7 @@ describe('Summary + Detail layout', () => {
     expect(out).not.toContain('```');
     expect(out).toContain('<kbd>ENFORCE</kbd>\n\nNothing was blocked.');
     expect(out).toContain('Running under enforce: the controls were applied at setup.');
-    expect(out).toContain('| ✅ | Network | 1 host beyond GitHub · 1 request · 2.0 KiB |');
+    expect(out).toContain('| ✅ | Network | 1 host beyond GitHub allowed · 1 request · 2.0 KiB |');
     // outside <details> and tables: headings, chips, the verdict and a line per section
     const visible = out
       .replace(/<details>[\s\S]*?<\/details>/g, '')
@@ -1064,7 +1068,7 @@ describe('container egress (P2)', () => {
       selfTests: [],
       containers: summarizeContainers(records, firewall)
     });
-    expect(md).toContain('| ⛔ | Network | 1 connection outside the proxy rejected');
+    expect(md).toMatch(/\| ⛔ \| Network \| .*1 connection outside the proxy rejected/);
     expect(md).toContain('| ⛔ | Docker | container egress: ');
     expect(md).toContain('**Container egress**');
   });
