@@ -1,144 +1,34 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import * as path from 'path';
-import { DNS_LOG, FIREWALL_LOG, FLOW_LOG, POLICY_FILE, SELFTEST_FILE, SUDO_LOG } from './constants';
+import { SELFTEST_FILE, SUDO_LOG } from './constants';
 import { SETUP_MARKER } from './setup/run';
-import { parseFlowLogWithOffsets } from './flowlog';
-import {
-  PATH_HIDDEN,
-  blockedName,
-  buildReport,
-  parseFirewallLog,
-  readRefusedNames,
-  suggestHttpFilter,
-  suggestSudoConfig,
-  summarizeContainers,
-  summarizeFlows,
-  summarizeHttpFilter,
-  sudoCommandShown,
-  type AllowedRequest,
-  type DockerPolicyReport,
-  type HttpFilterSuggestion,
-  type SudoCommand,
-  type SudoPolicyReport
-} from './report';
-import {
-  DOCKER_USES,
-  containerAddresses,
-  evaluateDocker,
-  observeDocker,
-  type DockerEventsStart
-} from './services/docker';
-import type { DockerPolicy } from './config/inputs';
-import { actionRoot } from './services/mitmproxy';
-import { type SelfTestWindow, withoutSelfTests } from './setup/selftest';
-import {
-  evaluateSudo,
-  parseSudoLine,
-  readSudoUsage,
-  runnerWritableDirs,
-  sudoRuleWarning,
-  type SudoRule
-} from './services/sudo';
+import { compose, jobLog, reportSections } from './report/compose';
+import { observeProxy } from './services/mitmproxy/observe';
+import { observeFirewall } from './services/iptables/observe';
+import { observeDns } from './services/coredns/observe';
+import { observeSudoPolicy, type SudoMarker } from './services/sudo/observe';
+import { readSudoUsage } from './services/sudo';
+import { observeContainers, observeDockerPolicy, type DockerMarker } from './services/docker/observe';
+import { type SelfTestWindow } from './setup/selftest';
 import { checkIntegrity, type IntegrityResult } from './integrity/check';
 import { realHost } from './system/host';
-import { parseAllowedDomains, type Mode } from './policy';
 import { effectiveFailOnTampering } from './config/inputs';
 
-interface SetupMarker {
-  mode: Mode;
-  sudoRetained?: boolean;
+interface SetupMarker extends SudoMarker, DockerMarker {
   dockerRetained?: boolean;
-  /** the docker policy and the verified access (G4) */
-  docker?: { requested: string; access: 'retained' | 'group-removed' | 'not-running' };
-  /** analyze: where the docker events recording started */
-  dockerEvents?: DockerEventsStart;
-  /** when setup wrote the marker */
-  at?: string;
   /** resolved fail-on-tampering (mode-aware); kept in the root-owned marker, not re-read from inputs */
   failOnTampering?: boolean;
   /** flow-log byte range the setup self-tests wrote */
   selfTestWindow?: SelfTestWindow;
   /** the name the DNS self-test looked up (refused by design; not the job's traffic) */
   dnsSelfTestName?: string;
-  /** sudo-config lines setup used (absent: none) */
-  sudoConfig?: string[];
-  /** analyze with disable-sudo: false (the policy keeps sudo) */
-  sudoKept?: boolean;
 }
 
-/** GitHub platform endpoints the built-in list allowed on filtered hosts (policy.json, 0644). */
-function readPlatformAutoAllowed(): number | undefined {
+function readSelfTests(): { name: string; ok: boolean; detail: string }[] {
   try {
-    const n = JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8'))?.http_filter?.platform_auto_allowed;
-    return typeof n === 'number' ? n : undefined;
+    return JSON.parse(fs.readFileSync(SELFTEST_FILE, 'utf8'));
   } catch {
-    return undefined;
-  }
-}
-
-/**
- * The suggested http-filter (proxy/suggest.py, from the action checkout). A failure costs only
- * the suggestion: the rest of the report still renders.
- */
-function suggestion(requests: AllowedRequest[]): HttpFilterSuggestion | undefined {
-  try {
-    return suggestHttpFilter(requests, path.join(actionRoot(), 'proxy'));
-  } catch (error) {
-    core.warning(`No suggested http-filter: ${error}`);
-    return undefined;
-  }
-}
-
-/**
- * The sudo policy setup recorded (in the root-owned marker, not re-read from the inputs) and,
- * in analyze, what it would block in enforce and the suggested sudo-config.
- */
-function sudoPolicy(mode: Mode, marker: SetupMarker, ran: SudoCommand[]): SudoPolicyReport {
-  let rules: SudoRule[] = [];
-  try {
-    rules = (marker.sudoConfig ?? []).map(parseSudoLine);
-  } catch (error) {
-    core.warning(`Unreadable sudo-config in the setup marker: ${error}`);
-  }
-  const kept = marker.sudoRetained === true || marker.sudoKept === true;
-  // the lines as recorded: if they do not parse back, the report still counts them (ADVISORY),
-  // and analyze evaluates against no rules (everything would be blocked)
-  const policy: SudoPolicyReport = { rules: [...(marker.sudoConfig ?? [])], kept, wouldBlock: [] };
-  if (mode !== 'analyze') return policy;
-  policy.wouldBlock = evaluateSudo(rules, kept, ran).wouldBlock;
-  if (ran.length) {
-    try {
-      const suggestion = suggestSudoConfig(ran, path.join(actionRoot(), 'proxy'));
-      const writable = runnerWritableDirs();
-      policy.suggestion = suggestion;
-      policy.flagged = Object.fromEntries(
-        suggestion.rules.flatMap(line => {
-          const why = sudoRuleWarning(parseSudoLine(line), writable);
-          return why ? [[line, why]] : [];
-        })
-      );
-    } catch (error) {
-      core.warning(`No suggested sudo-config: ${error}`);
-    }
-  }
-  return policy;
-}
-
-/**
- * Analyze: the job's use of docker after setup, what the docker policy setup recorded would
- * break in enforce, and the docker setting to suggest. Report only.
- */
-async function dockerPolicy(marker: SetupMarker): Promise<DockerPolicyReport | undefined> {
-  const policy = marker.docker?.requested as DockerPolicy | undefined;
-  if (marker.mode !== 'analyze' || !policy) return undefined;
-  try {
-    const observed = await observeDocker(realHost, marker.dockerEvents, marker.at, marker.docker?.access);
-    return { policy, observed, evaluation: evaluateDocker(policy, observed) };
-  } catch (error) {
-    // costs only the docker evaluation: the rest of the report still renders
-    core.warning(`No docker evaluation: ${error}`);
-    return undefined;
+    return [];
   }
 }
 
@@ -175,71 +65,38 @@ async function run(): Promise<void> {
 
   try {
     await new Promise(r => setTimeout(r, 1000)); // let the last flow / syslog lines land
-    const flows = fs.existsSync(FLOW_LOG)
-      ? parseFlowLogWithOffsets(fs.readFileSync(FLOW_LOG, 'utf8'))
-      : { records: [], offsets: [] };
-    const records = withoutSelfTests(flows.records, flows.offsets, marker.selfTestWindow);
-    const hosts = summarizeFlows(records);
-    const httpFilter = summarizeHttpFilter(records, suggestion);
-    const firewall = fs.existsSync(FIREWALL_LOG) ? parseFirewallLog(fs.readFileSync(FIREWALL_LOG, 'utf8')) : [];
-    const containers = summarizeContainers(records, firewall, await containerAddresses());
-    const dnsRefused = readRefusedNames(DNS_LOG).filter(n => n !== marker.dnsSelfTestName);
-    let selfTests = [];
-    try {
-      selfTests = JSON.parse(fs.readFileSync(SELFTEST_FILE, 'utf8'));
-    } catch {
-      selfTests = [];
-    }
-
-    // Full lists in the job log, so nothing is ever silently dropped from the summary (names
-    // and sudo arguments redacted like the summary: the job log is just as public).
-    for (const h of hosts) {
-      core.info(
-        `${h.verdict.padEnd(11)} ${blockedName(h.name)} conns=${h.connections} reqs=${h.requests} tries=${h.tries} ${h.reasons.join(',')}`
-      );
-    }
-    for (const b of httpFilter.blocks) {
-      core.info(
-        `${b.verdict.padEnd(11)} http-filter ${b.host} ${b.method} ${PATH_HIDDEN} tries=${b.tries} ${b.reason}`
-      );
-    }
-
+    // each service's observations (its own log, and its policy where it has one)
+    const proxy = observeProxy(marker.selfTestWindow);
+    const firewall = observeFirewall();
+    const containers = await observeContainers(proxy.records, firewall);
+    const dnsRefused = observeDns(marker.dnsSelfTestName);
+    const selfTests = readSelfTests();
     const sudo = readSudoUsage(SUDO_LOG);
-    for (const c of sudo.ran) core.info(`sudo (workflow) ${sudoCommandShown(c)}`);
-    for (const c of sudo.refused) core.info(`sudo REFUSED ${sudoCommandShown(c)}`);
-    const sudoPolicyReport = sudoPolicy(mode, marker, sudo.ran);
-    for (const c of sudoPolicyReport.wouldBlock) core.info(`sudo WOULD_BLOCK ${sudoCommandShown(c)}`);
-    const dockerPolicyReport = await dockerPolicy(marker);
-    for (const k of DOCKER_USES) {
-      const n = dockerPolicyReport?.evaluation.wouldBlock[k];
-      if (n) core.info(`docker WOULD_BLOCK ${k} x${n}`);
-    }
+    const sudoPolicy = observeSudoPolicy(mode, marker, sudo.ran);
+    const dockerPolicy = await observeDockerPolicy(marker);
 
-    const md = buildReport({
+    // each service's part, then the summary from the parts
+    const sections = reportSections({
       mode,
       sudoRetained: marker.sudoRetained === true,
       dockerRetained: marker.dockerRetained === true,
       docker: marker.docker,
-      dockerPolicy: dockerPolicyReport,
+      dockerPolicy,
       sudo,
-      sudoPolicy: sudoPolicyReport,
+      sudoPolicy,
       job: process.env.GITHUB_JOB || 'unknown',
       actionRef: process.env.GITHUB_ACTION_REF,
-      hosts,
+      ...proxy.observed,
       firewall,
       dnsRefused,
-      // allow = GitHub list + these, so allowed traffic to anything else is GitHub's own
-      userDomains: [
-        ...parseAllowedDomains(core.getInput('allowed-domains')),
-        ...parseAllowedDomains(core.getInput('passthrough-domains'))
-      ],
       selfTests,
       integrity: integrity?.details,
-      containers,
-      httpFilter,
-      platformEndpoints: readPlatformAutoAllowed()
+      containers
     });
-    await core.summary.addRaw(md).write();
+    // Full lists in the job log, so nothing is ever silently dropped from the summary (names
+    // and sudo arguments redacted like the summary: the job log is just as public).
+    for (const line of jobLog(sections)) core.info(line);
+    await core.summary.addRaw(compose(sections)).write();
   } catch (error) {
     core.warning(`Failed to generate the safer-runner report: ${error}`);
   }

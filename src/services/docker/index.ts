@@ -10,7 +10,7 @@ import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../..
 import type { SelfTestsRun } from '../../setup/selftest';
 import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
 import { startUnit } from '../../system/unit';
-import { parseDockerEvents } from '../../report/logs/docker-events';
+import { parseDockerEvents } from './log';
 import type { TrustInstalled } from '../mitmproxy/trust';
 import {
   DOCKER_GROUP,

@@ -95,7 +95,7 @@ present) **plus** the `sudo-config` allowlist — the middle ground between "ful
 (validation only). `disable-sudo: false` = keep full sudo (ADVISORY). The restricted sudoers is
 still validated with the active `visudo` before install, fail-closed.
 
-**analyze:** never restricts. The post step parses `sudo.log` (existing `report/logs/sudo-log.ts`),
+**analyze:** never restricts. The post step parses `sudo.log` (existing `services/sudo/log.ts`),
 classifies each command against the declared `sudo-config`, lists the commands that **would be
 blocked**, and shows a **suggested `sudo-config`** built from the observed non-internal usage.
 The suggester is Python (sibling of `proxy/suggest.py`), run via `src/suggest.ts`; TypeScript

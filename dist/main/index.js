@@ -1576,267 +1576,6 @@ function buildPolicyConfig(opts) {
 
 /***/ }),
 
-/***/ 7039:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-/**
- * CoreDNS query log parser. Each server block's `log` format labels its own lines
- * (src/services/coredns/config.ts), so a policy refusal is never confused with an upstream
- * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
- *
- *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
- *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
- *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
- */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseDnsLog = parseDnsLog;
-exports.refusedNames = refusedNames;
-exports.readRefusedNames = readRefusedNames;
-const fs = __importStar(__nccwpck_require__(9896));
-// anchored on the plugin's own prefix: a query name can't inject a second verdict
-const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
-function parseDnsLog(text) {
-    const out = [];
-    for (const line of text.split('\n')) {
-        const m = LINE.exec(line);
-        if (!m)
-            continue;
-        out.push({
-            client: m[1],
-            verdict: m[2],
-            type: m[3],
-            name: m[4].toLowerCase().replace(/\.$/, ''),
-            rcode: m[5]
-        });
-    }
-    return out;
-}
-/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
-function refusedNames(queries) {
-    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
-}
-function readRefusedNames(file) {
-    try {
-        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
-    }
-    catch {
-        return [];
-    }
-}
-
-
-/***/ }),
-
-/***/ 7333:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-/** Parser for the docker events the analyze recorder writes (`docker events --format '{{json .}}'`). */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseDockerEvents = parseDockerEvents;
-const str = (v) => (typeof v === 'string' ? v : undefined);
-/** Parse the recorder's log; a line that is not a docker event is skipped. */
-function parseDockerEvents(text) {
-    const out = [];
-    for (const line of text.split('\n')) {
-        if (!line.trim())
-            continue;
-        let e;
-        try {
-            e = JSON.parse(line);
-        }
-        catch {
-            continue;
-        }
-        if (e === null || typeof e !== 'object')
-            continue;
-        const actor = (e.Actor ?? {});
-        const attrs = (actor.Attributes ?? {});
-        const type = str(e.Type);
-        const raw = str(e.Action);
-        const id = str(actor.ID) ?? '';
-        if (!type || !raw)
-            continue;
-        const sep = raw.indexOf(': ');
-        const action = sep < 0 ? raw : raw.slice(0, sep);
-        const command = sep < 0 ? undefined : raw.slice(sep + 2);
-        // image events: the reference (`alpine:3.20`), or for an image ID (`sha256:...`) its name
-        const image = type === 'container'
-            ? str(attrs.image)
-            : type === 'image'
-                ? id.startsWith('sha256:')
-                    ? str(attrs.name)
-                    : id
-                : undefined;
-        out.push({ type, action, id, ...(command !== undefined ? { command } : {}), ...(image ? { image } : {}) });
-    }
-    return out;
-}
-
-
-/***/ }),
-
-/***/ 8305:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-/**
- * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
- * syslog lines copied there by rsyslog in the same format (see sudo.ts)
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseSudoLogLine = parseSudoLogLine;
-exports.deduplicateSudoCommands = deduplicateSudoCommands;
-exports.parseSudoLogsFromString = parseSudoLogsFromString;
-exports.classifySudoCommands = classifySudoCommands;
-/**
- * Classic sudo prefixes refused commands with a reason, e.g.
- * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
- */
-const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
-/**
- * Parse a single sudo log entry
- * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
- */
-function parseSudoLogLine(line) {
-    // Match sudo log format with timestamp
-    // classic sudo logs variables set on the command line as `ENV=A=1 B=2 ;` before COMMAND
-    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*(ENV=[^;]*;\s*)?COMMAND=(.+)$/);
-    if (!match) {
-        return null;
-    }
-    const [, timestamp, user, targetUser, env, fullCommand] = match;
-    // Split command and args
-    const commandParts = fullCommand.trim().split(/\s+/);
-    const command = commandParts[0];
-    const args = commandParts.slice(1).join(' ');
-    return {
-        timestamp,
-        user,
-        targetUser,
-        command,
-        args,
-        ...(DENIED_PATTERN.test(line) && { denied: true }),
-        ...(env && { env: true })
-    };
-}
-/**
- * Deduplicate sudo commands by command+args combination
- */
-function deduplicateSudoCommands(commands) {
-    const seen = new Set();
-    const deduplicated = [];
-    for (const cmd of commands) {
-        const key = `${cmd.command} ${cmd.args}`;
-        if (!seen.has(key)) {
-            seen.add(key);
-            deduplicated.push(cmd);
-        }
-    }
-    return deduplicated;
-}
-/**
- * Join wrapped log entries back into single lines
- * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
- * continuation lines, which can split a command from its arguments:
- *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
- *       /etc/resolv.conf
- */
-function joinContinuationLines(content) {
-    const joined = [];
-    for (const line of content.split('\n')) {
-        if (/^\s+\S/.test(line) && joined.length > 0) {
-            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
-        }
-        else {
-            joined.push(line);
-        }
-    }
-    return joined;
-}
-/**
- * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
- * entry is matched as one line.
- */
-function parseSudoLogsFromString(content) {
-    const commands = [];
-    for (const line of joinContinuationLines(content)) {
-        const cmd = parseSudoLogLine(line);
-        if (cmd) {
-            commands.push(cmd);
-        }
-    }
-    // Deduplicate and limit to 1000 commands
-    return deduplicateSudoCommands(commands).slice(0, 1000);
-}
-/**
- * Whether a (successful) command is one of the action's own. System binaries match by
- * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
- * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
- */
-function isInternal(cmd, internal) {
-    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
-    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
-    if (match) {
-        return internal.has(withArgs(match[1]));
-    }
-    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
-}
-/** Split parsed sudo log entries by who ran them and whether they were allowed. */
-function classifySudoCommands(commands, internalCommands) {
-    const internal = new Set(internalCommands);
-    const usage = { ran: [], refused: [], internal: [] };
-    for (const cmd of commands) {
-        if (cmd.denied)
-            usage.refused.push(cmd);
-        else if (isInternal(cmd, internal))
-            usage.internal.push(cmd);
-        else
-            usage.ran.push(cmd);
-    }
-    return usage;
-}
-
-
-/***/ }),
-
 /***/ 5744:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -1860,7 +1599,7 @@ function classifySudoCommands(commands, internalCommands) {
  * the deny block).
  *
  * Every log line labels itself (ALLOW / BLOCK / WOULD_BLOCK) through its block's own `log`
- * format, so the report parser never has to infer a verdict (src/report/logs/dns-log.ts).
+ * format, so the report parser never has to infer a verdict (src/services/coredns/log.ts).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2232,6 +1971,92 @@ async function cutover(h, _dns) {
 
 /***/ }),
 
+/***/ 822:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * CoreDNS query log parser. Each server block's `log` format labels its own lines
+ * (src/services/coredns/config.ts), so a policy refusal is never confused with an upstream
+ * NXDOMAIN (a typo), and every query type is seen (dnsmasq's parser only chained A queries):
+ *
+ *   [INFO] 127.0.0.1:41452 ALLOW A github.com. NOERROR upstream=9.9.9.9:53 0.0086s
+ *   [INFO] 127.0.0.1:39637 BLOCK TXT s3cr3t.example.com. NXDOMAIN
+ *   [INFO] 127.0.0.1:51924 WOULD_BLOCK A example.org. NOERROR upstream=- 0.0001s   (analyze)
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDnsLog = parseDnsLog;
+exports.refusedNames = refusedNames;
+exports.readRefusedNames = readRefusedNames;
+const fs = __importStar(__nccwpck_require__(9896));
+// anchored on the plugin's own prefix: a query name can't inject a second verdict
+const LINE = /^\[INFO\] (\S+) (ALLOW|BLOCK|WOULD_BLOCK) (\S+) (\S+) (\S+)/;
+function parseDnsLog(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        const m = LINE.exec(line);
+        if (!m)
+            continue;
+        out.push({
+            client: m[1],
+            verdict: m[2],
+            type: m[3],
+            name: m[4].toLowerCase().replace(/\.$/, ''),
+            rcode: m[5]
+        });
+    }
+    return out;
+}
+/** Names the resolver refused (enforce) or would have refused (analyze), first-seen order. */
+function refusedNames(queries) {
+    return Array.from(new Set(queries.filter(q => q.verdict !== 'ALLOW').map(q => q.name)));
+}
+function readRefusedNames(file) {
+    try {
+        return refusedNames(parseDnsLog(fs.readFileSync(file, 'utf8')));
+    }
+    catch {
+        return [];
+    }
+}
+
+
+/***/ }),
+
 /***/ 8290:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -2480,7 +2305,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const host_1 = __nccwpck_require__(7020);
 const unit_1 = __nccwpck_require__(812);
-const docker_events_1 = __nccwpck_require__(7333);
+const log_1 = __nccwpck_require__(7248);
 const config_1 = __nccwpck_require__(8290);
 __exportStar(__nccwpck_require__(8290), exports);
 /** A sudo step whose failure is collected, not thrown: the verified state decides. */
@@ -2754,7 +2579,7 @@ async function observeDocker(h, recorded, setupAt, access) {
         });
         text = r.exitCode === 0 ? r.stdout : '';
     }
-    const events = (0, docker_events_1.parseDockerEvents)(text);
+    const events = (0, log_1.parseDockerEvents)(text);
     const execs = Array.from(new Set(events.filter(e => e.type === 'container' && e.command !== undefined).map(e => e.id)));
     const { uses, images } = (0, config_1.classifyDockerEvents)(events, await healthchecks(h, execs));
     return { uses, images, services: recorded?.containers.length ?? 0, partial };
@@ -2811,6 +2636,56 @@ async function containerAddresses(h = host_1.realHost) {
     const fmt = '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}';
     const { stdout, exitCode } = await h.output('docker', ['inspect', '--format', fmt, ...list], opts);
     return exitCode === 0 ? (0, config_1.parseContainerAddresses)(stdout) : new Map();
+}
+
+
+/***/ }),
+
+/***/ 7248:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/** Parser for the docker events the analyze recorder writes (`docker events --format '{{json .}}'`). */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDockerEvents = parseDockerEvents;
+const str = (v) => (typeof v === 'string' ? v : undefined);
+/** Parse the recorder's log; a line that is not a docker event is skipped. */
+function parseDockerEvents(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+        if (!line.trim())
+            continue;
+        let e;
+        try {
+            e = JSON.parse(line);
+        }
+        catch {
+            continue;
+        }
+        if (e === null || typeof e !== 'object')
+            continue;
+        const actor = (e.Actor ?? {});
+        const attrs = (actor.Attributes ?? {});
+        const type = str(e.Type);
+        const raw = str(e.Action);
+        const id = str(actor.ID) ?? '';
+        if (!type || !raw)
+            continue;
+        const sep = raw.indexOf(': ');
+        const action = sep < 0 ? raw : raw.slice(0, sep);
+        const command = sep < 0 ? undefined : raw.slice(sep + 2);
+        // image events: the reference (`alpine:3.20`), or for an image ID (`sha256:...`) its name
+        const image = type === 'container'
+            ? str(attrs.image)
+            : type === 'image'
+                ? id.startsWith('sha256:')
+                    ? str(attrs.name)
+                    : id
+                : undefined;
+        out.push({ type, action, id, ...(command !== undefined ? { command } : {}), ...(image ? { image } : {}) });
+    }
+    return out;
 }
 
 
@@ -3855,7 +3730,7 @@ function getSudoLoggingConfigFile(flavour) {
  *
  * sudo-rs logs "runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/id" to syslog.
  * The template prefixes it with an RFC3164 timestamp so the file matches the
- * classic sudo logfile format understood by report/logs/sudo-log.ts.
+ * classic sudo logfile format understood by services/sudo/log.ts.
  */
 function buildSudoRsyslogConfig(logFile) {
     return `template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")
@@ -4182,7 +4057,7 @@ exports.restrictSudo = restrictSudo;
 exports.readSudoUsage = readSudoUsage;
 const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
-const sudo_log_1 = __nccwpck_require__(8305);
+const log_1 = __nccwpck_require__(1277);
 const host_1 = __nccwpck_require__(7020);
 const config_1 = __nccwpck_require__(5665);
 __exportStar(__nccwpck_require__(5665), exports);
@@ -4259,13 +4134,138 @@ async function restrictSudo(h, r, _baseline) {
 function readSudoUsage(logFile) {
     try {
         if (fs.existsSync(logFile)) {
-            return (0, sudo_log_1.classifySudoCommands)((0, sudo_log_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS);
+            return (0, log_1.classifySudoCommands)((0, log_1.parseSudoLogsFromString)(fs.readFileSync(logFile, 'utf-8')), config_1.INTERNAL_SUDO_COMMANDS);
         }
     }
     catch (error) {
         core.warning(`Could not parse sudo logs from ${logFile}: ${error}`);
     }
     return { ran: [], refused: [], internal: [] };
+}
+
+
+/***/ }),
+
+/***/ 1277:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Parser for the sudo log (/var/log/safer-runner/sudo.log): classic sudo's logfile, or sudo-rs
+ * syslog lines copied there by rsyslog in the same format (see sudo.ts)
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSudoLogLine = parseSudoLogLine;
+exports.deduplicateSudoCommands = deduplicateSudoCommands;
+exports.parseSudoLogsFromString = parseSudoLogsFromString;
+exports.classifySudoCommands = classifySudoCommands;
+/**
+ * Classic sudo prefixes refused commands with a reason, e.g.
+ * "runner : command not allowed ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id"
+ */
+const DENIED_PATTERN = /command not allowed|password is required|incorrect password|NOT in sudoers/i;
+/**
+ * Parse a single sudo log entry
+ * Format: "Oct  3 13:06:55 : runner : *** ; USER=root ; COMMAND=/usr/bin/tee /etc/resolv.conf"
+ */
+function parseSudoLogLine(line) {
+    // Match sudo log format with timestamp
+    // classic sudo logs variables set on the command line as `ENV=A=1 B=2 ;` before COMMAND
+    const match = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d+:\d+:\d+)\s*:\s*(\w+)\s*:.*USER=(\w+)\s*;\s*(ENV=[^;]*;\s*)?COMMAND=(.+)$/);
+    if (!match) {
+        return null;
+    }
+    const [, timestamp, user, targetUser, env, fullCommand] = match;
+    // Split command and args
+    const commandParts = fullCommand.trim().split(/\s+/);
+    const command = commandParts[0];
+    const args = commandParts.slice(1).join(' ');
+    return {
+        timestamp,
+        user,
+        targetUser,
+        command,
+        args,
+        ...(DENIED_PATTERN.test(line) && { denied: true }),
+        ...(env && { env: true })
+    };
+}
+/**
+ * Deduplicate sudo commands by command+args combination
+ */
+function deduplicateSudoCommands(commands) {
+    const seen = new Set();
+    const deduplicated = [];
+    for (const cmd of commands) {
+        const key = `${cmd.command} ${cmd.args}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            deduplicated.push(cmd);
+        }
+    }
+    return deduplicated;
+}
+/**
+ * Join wrapped log entries back into single lines
+ * Classic sudo wraps logfile entries (loglinelen, default 80) with indented
+ * continuation lines, which can split a command from its arguments:
+ *   Nov  3 16:24:32 : runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/cat
+ *       /etc/resolv.conf
+ */
+function joinContinuationLines(content) {
+    const joined = [];
+    for (const line of content.split('\n')) {
+        if (/^\s+\S/.test(line) && joined.length > 0) {
+            joined[joined.length - 1] = `${joined[joined.length - 1].trimEnd()} ${line.trim()}`;
+        }
+        else {
+            joined.push(line);
+        }
+    }
+    return joined;
+}
+/**
+ * Parse sudo logs from string content. Wrapped and multi-line entries are joined first, so every
+ * entry is matched as one line.
+ */
+function parseSudoLogsFromString(content) {
+    const commands = [];
+    for (const line of joinContinuationLines(content)) {
+        const cmd = parseSudoLogLine(line);
+        if (cmd) {
+            commands.push(cmd);
+        }
+    }
+    // Deduplicate and limit to 1000 commands
+    return deduplicateSudoCommands(commands).slice(0, 1000);
+}
+/**
+ * Whether a (successful) command is one of the action's own. System binaries match by
+ * basename ("cat /etc/resolv.conf"); anything else only by its exact absolute path, so a
+ * same-named binary elsewhere (e.g. /home/runner/cat) is still reported.
+ */
+function isInternal(cmd, internal) {
+    const withArgs = (c) => (cmd.args ? `${c} ${cmd.args}` : c);
+    const match = cmd.command.match(/^\/(?:usr\/)?s?bin\/([^/]+)$/);
+    if (match) {
+        return internal.has(withArgs(match[1]));
+    }
+    return cmd.command.startsWith('/') && internal.has(withArgs(cmd.command));
+}
+/** Split parsed sudo log entries by who ran them and whether they were allowed. */
+function classifySudoCommands(commands, internalCommands) {
+    const internal = new Set(internalCommands);
+    const usage = { ran: [], refused: [], internal: [] };
+    for (const cmd of commands) {
+        if (cmd.denied)
+            usage.refused.push(cmd);
+        else if (isInternal(cmd, internal))
+            usage.internal.push(cmd);
+        else
+            usage.ran.push(cmd);
+    }
+    return usage;
 }
 
 
@@ -4631,7 +4631,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 const constants_1 = __nccwpck_require__(8729);
 const flowlog_1 = __nccwpck_require__(5422);
 const coredns_1 = __nccwpck_require__(5212);
-const dns_log_1 = __nccwpck_require__(7039);
+const log_1 = __nccwpck_require__(822);
 const policy_1 = __nccwpck_require__(2224);
 /**
  * The repoint probe: a bodiless GET of this fixed public file. The addon recognises exactly this
@@ -4715,7 +4715,7 @@ async function dnsExactSelfTest(mode, name) {
     let logged = false;
     for (let i = 0; i < 15 && !logged; i++) {
         const log = fs.existsSync(constants_1.DNS_LOG) ? fs.readFileSync(constants_1.DNS_LOG, 'utf8') : '';
-        logged = (0, dns_log_1.parseDnsLog)(log).some(q => q.name === name && q.verdict === want);
+        logged = (0, log_1.parseDnsLog)(log).some(q => q.name === name && q.verdict === want);
         if (!logged)
             await new Promise(r => setTimeout(r, 200));
     }

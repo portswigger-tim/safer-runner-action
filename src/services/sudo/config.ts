@@ -8,7 +8,7 @@
 
 import { isScalar, isSeq } from 'yaml';
 import { strictYaml } from '../../config/yaml';
-import type { SudoCommand } from '../../report/logs/sudo-log';
+import type { SudoCommand } from './log';
 import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from '../../integrity/baseline';
 import { DOCKER_DAEMON_JSON, VALIDATION_STATE_FILE } from '../../constants';
 
@@ -55,7 +55,7 @@ export function getSudoLoggingConfigFile(flavour: SudoFlavour): string {
  *
  * sudo-rs logs "runner : PWD=/ ; USER=root ; COMMAND=/usr/bin/id" to syslog.
  * The template prefixes it with an RFC3164 timestamp so the file matches the
- * classic sudo logfile format understood by report/logs/sudo-log.ts.
+ * classic sudo logfile format understood by services/sudo/log.ts.
  */
 export function buildSudoRsyslogConfig(logFile: string): string {
   return `template(name="SaferRunnerSudo" type="string" string="%timereported:::date-rfc3164% :%msg%\\n")

@@ -33,7 +33,7 @@ settled by two spikes, kept on branches that are not part of `main`:
   - They can't live in the deny block: in CoreDNS's fixed plugin order, `template` runs before `hosts`.
   - When `/etc/hosts` lacks the VM's own hostname (AWS-hosted runners), the address it resolved to before setup is added inline. Otherwise every `sudo` warns "unable to resolve host"; that happened under dnsmasq too.
   - These names are never forwarded. A subdomain of one is still refused.
-- The log parser (`src/report/logs/dns-log.ts`) is about 20 lines.
+- The log parser (`src/services/coredns/log.ts`) is about 20 lines.
 - Self-test `dns-exact`: at setup, a random name under an exact entry must get `BLOCK` + NXDOMAIN in enforce, or `WOULD_BLOCK` in analyze.
 - Report: refused lookups, including names under an exact entry, are listed under **Diagnostics → DNS refused**. (A separate **Subdomains of exact entries** section with an `add *.parent` hint shipped in beta.5. It was removed after v2.0.0: it repeated the DNS-refused list, and the hint could suggest allowing exactly the lookups an exact entry is there to refuse.)
 - Every blocked name in the summary and job log goes through `src/report/redact.ts`: the DNS-refused diagnostics, blocked SNI/Host rows, fronting SNIs and container rows.

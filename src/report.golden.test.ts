@@ -13,7 +13,7 @@
 import type { FlowRecord } from './flowlog';
 import { evaluateDocker, type DockerObserved } from './services/docker/config';
 import type { DockerPolicy } from './config/inputs';
-import type { SudoUsage } from './report/logs/sudo-log';
+import type { SudoUsage } from './services/sudo/log';
 import {
   buildReport,
   parseFirewallLog,

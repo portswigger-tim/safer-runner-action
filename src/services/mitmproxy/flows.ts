@@ -5,7 +5,7 @@
 
 import { ipOf, type FlowRecord } from '../../flowlog';
 import { isIpLiteral } from '../../policy';
-import { needsRedaction, redactName } from '../redact';
+import { needsRedaction, redactName } from '../../report/redact';
 
 export interface HostSummary {
   name: string;

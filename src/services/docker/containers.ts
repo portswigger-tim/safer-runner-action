@@ -2,9 +2,9 @@
 
 import { ipOf, type FlowRecord } from '../../flowlog';
 import type { Mode } from '../../policy';
-import { CONTAINER_PREFIXES, type FirewallEvent } from '../logs/firewall-log';
-import { capped, code, plural, table } from '../render/markdown';
-import { DECISIONS, DENIED, MAX_LIST, addUnique, blockedName, nameOf } from './flows';
+import { CONTAINER_PREFIXES, type FirewallEvent } from '../iptables/log';
+import { capped, code, plural, table } from '../../report/markdown';
+import { DECISIONS, DENIED, MAX_LIST, addUnique, blockedName, nameOf } from '../mitmproxy/flows';
 
 export interface ContainerSummary {
   /** container address (the proxy / firewall source) */
