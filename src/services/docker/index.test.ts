@@ -20,6 +20,7 @@ import {
   isRunnerInDockerGroup,
   mergeLiveRestore,
   parseContainerAddresses,
+  planDocker,
   prepare,
   readDockerState,
   stopDockerService
@@ -37,6 +38,9 @@ const actualFs = jest.requireActual('fs');
 /** tokens for tests that call a step directly */
 const TRUST = Object.freeze({}) as TrustInstalled;
 const SELF_TESTS = Object.freeze({}) as SelfTestsRun;
+/** the access changes, as only planDocker() makes them (enforce) */
+const REMOVE_GROUP = planDocker('enforce', 'remove-group').apply!;
+const STOP = planDocker('enforce', 'stop').apply!;
 
 interface World {
   inGroup: boolean;
@@ -96,7 +100,7 @@ describe('docker access (docker input)', () => {
   describe('disableDockerForRunner (docker: remove-group)', () => {
     it('removes the runner from the group and locks the socket to root', async () => {
       const { host, calls } = runner();
-      expect(await disableDockerForRunner(host)).toEqual([]);
+      expect(await disableDockerForRunner(host, REMOVE_GROUP)).toEqual([]);
       expect(sudoCalls(calls)).toEqual([
         `gpasswd -d ${RUNNER_USERNAME} ${DOCKER_GROUP} [ignore-rc]`,
         `chown root:root ${DOCKER_SOCKET} [ignore-rc]`,
@@ -107,20 +111,20 @@ describe('docker access (docker input)', () => {
 
     it('is idempotent: skips the group change and a missing socket', async () => {
       const { host, calls } = runner({ inGroup: false, socket: false });
-      expect(await disableDockerForRunner(host)).toEqual([]);
+      expect(await disableDockerForRunner(host, REMOVE_GROUP)).toEqual([]);
       expect(sudoCalls(calls)).toEqual([]);
     });
 
     it('reports failed steps instead of swallowing them (G4)', async () => {
       const { host } = runner({ failing: /gpasswd/ });
-      expect(await disableDockerForRunner(host)).toEqual([`sudo gpasswd -d runner docker exited 3`]);
+      expect(await disableDockerForRunner(host, REMOVE_GROUP)).toEqual([`sudo gpasswd -d runner docker exited 3`]);
     });
   });
 
   describe('stopDockerService (docker: stop)', () => {
     it('stops, then disables, the socket and the service', async () => {
       const { host, calls } = runner();
-      expect(await stopDockerService(host)).toEqual([]);
+      expect(await stopDockerService(host, STOP)).toEqual([]);
       expect(sudoCalls(calls)).toEqual([
         'systemctl stop docker.socket [ignore-rc]',
         'systemctl stop docker.service [ignore-rc]',
@@ -131,7 +135,7 @@ describe('docker access (docker input)', () => {
 
     it('reports failed steps instead of swallowing them (G4)', async () => {
       const { host } = runner({ failing: /systemctl (stop|disable)/ });
-      expect(await stopDockerService(host)).toHaveLength(4);
+      expect(await stopDockerService(host, STOP)).toHaveLength(4);
     });
   });
 
@@ -185,9 +189,11 @@ describe('docker access (docker input)', () => {
 });
 
 describe('applyAccessPolicy (G4: verified by observation)', () => {
+  const enforce = (docker: 'keep' | 'remove-group' | 'stop') => planDocker('enforce', docker);
+
   it('remove-group: records the verified state', async () => {
     const { host } = runner();
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'remove-group' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, 'enforce', enforce('remove-group'), SELF_TESTS);
     expect(r).toEqual({
       requested: 'remove-group',
       access: 'group-removed',
@@ -198,42 +204,49 @@ describe('applyAccessPolicy (G4: verified by observation)', () => {
 
   it('stop: records the daemon as not running', async () => {
     const { host, calls } = runner();
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, 'enforce', enforce('stop'), SELF_TESTS);
     expect(r.access).toBe('not-running');
     expect(calls.some(c => c.includes('gpasswd'))).toBe(false);
   });
 
   it.each(['remove-group', 'stop'] as const)('enforce: fails closed when %s did not take', async docker => {
     const { host } = runner({ failing: /gpasswd|chmod|chown|systemctl (stop|disable)/ });
-    await expect(applyAccessPolicy(host, { mode: 'enforce', docker }, SELF_TESTS)).rejects.toThrow(
+    await expect(applyAccessPolicy(host, 'enforce', enforce(docker), SELF_TESTS)).rejects.toThrow(
       new RegExp(`docker: ${docker} did not take effect.*exited 3`)
     );
   });
 
   it('enforce: fails closed even when every command "succeeded" but access remains', async () => {
     const { host } = runner({ sticky: true });
-    await expect(applyAccessPolicy(host, { mode: 'enforce', docker: 'remove-group' }, SELF_TESTS)).rejects.toThrow(
+    await expect(applyAccessPolicy(host, 'enforce', enforce('remove-group'), SELF_TESTS)).rejects.toThrow(
       /still use docker/
     );
   });
 
-  it('analyze: a failed removal warns and never breaks the job', async () => {
-    const { host } = runner({ sticky: true, failing: /gpasswd/ });
-    const r = await applyAccessPolicy(host, { mode: 'analyze', docker: 'remove-group' }, SELF_TESTS);
-    expect(r.access).toBe('retained');
-    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('did not take effect'));
-  });
+  it.each(['keep', 'remove-group', 'stop'] as const)(
+    'analyze never changes docker access (docker: %s): it only reads the state',
+    async docker => {
+      const plan = planDocker('analyze', docker);
+      expect(plan).toEqual({ policy: docker, applied: 'keep', apply: null });
+      const { host, calls, w } = runner();
+      const r = await applyAccessPolicy(host, 'analyze', plan, SELF_TESTS);
+      expect(r).toMatchObject({ requested: docker, access: 'retained' });
+      expect(sudoCalls(calls)).toEqual([]);
+      expect(w).toMatchObject({ inGroup: true, daemon: true, socketUnit: true, locked: false });
+      expect(core.warning).not.toHaveBeenCalled();
+    }
+  );
 
   it('a step failure with access verifiably gone is only a warning', async () => {
     const { host } = runner({ failing: /systemctl disable/ });
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, 'enforce', enforce('stop'), SELF_TESTS);
     expect(r.access).toBe('not-running');
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('systemctl disable docker.socket exited 3'));
   });
 
   it('enforce + keep is ADVISORY', async () => {
     const { host, calls } = runner();
-    const r = await applyAccessPolicy(host, { mode: 'enforce', docker: 'keep' }, SELF_TESTS);
+    const r = await applyAccessPolicy(host, 'enforce', enforce('keep'), SELF_TESTS);
     expect(calls.some(c => c.includes('gpasswd'))).toBe(false);
     expect(r.access).toBe('retained');
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('ADVISORY'), {
@@ -241,17 +254,20 @@ describe('applyAccessPolicy (G4: verified by observation)', () => {
     });
   });
 
-  it('analyze + keep says nothing', async () => {
-    const { host } = runner();
-    await applyAccessPolicy(host, { mode: 'analyze', docker: 'keep' }, SELF_TESTS);
-    expect(core.warning).not.toHaveBeenCalled();
-  });
-
   it('needs the self-tests first (a compile-time order check)', () => {
     const { host } = runner();
     // @ts-expect-error - changing docker access before the self-tests ran does not compile
-    const early = () => applyAccessPolicy(host, { mode: 'enforce', docker: 'stop' }, {});
+    const early = () => applyAccessPolicy(host, 'enforce', enforce('stop'), {});
     expect(early).toBeInstanceOf(Function);
+  });
+
+  it('only planDocker() can make an access change (a compile-time check)', () => {
+    const { host } = runner();
+    // @ts-expect-error - a plain object is not an access change (analyze never makes one)
+    const forged = () => stopDockerService(host, { removal: 'stop' });
+    // @ts-expect-error - nor is an analyze plan's
+    const fromAnalyze = () => disableDockerForRunner(host, planDocker('analyze', 'remove-group').apply);
+    expect([forged, fromAnalyze]).toHaveLength(2);
   });
 });
 

@@ -74,10 +74,10 @@ cache, OIDC) are allowed automatically.
 | `dns-servers` | `9.9.9.9 149.112.112.112` | Upstream resolvers for allowlisted names (Quad9 by default) |
 | `disable-sudo` | `true` | Remove the runner's sudo after setup. `enforce` applies it; `analyze` never changes sudo, it reports what enforce would block. `false` keeps sudo, which makes enforce **ADVISORY** |
 | `sudo-config` | | With sudo removed, the exact sudo command lines the job may still run as root. [Below](#sudo-allowlist-sudo-config). Any entry makes enforce **ADVISORY** |
-| `docker` | follows `mode` | `keep`, `remove-group`, or `stop`. `enforce` uses `remove-group`. `keep` in enforce makes the job **ADVISORY** |
+| `docker` | `remove-group` | `keep`, `remove-group`, or `stop`. `enforce` applies it; `analyze` never changes docker. `keep` in enforce makes the job **ADVISORY** |
 | `fail-on-tampering` | follows `mode` | `enforce` fails the post step if the safer-runner config changed during the job |
 
-An explicit value always wins; leaving `docker` or `fail-on-tampering` unset follows the mode.
+An explicit value always wins; leaving `fail-on-tampering` unset follows the mode.
 `analyze` never changes sudo or docker on the runner. Keeping sudo or docker in enforce means a
 root step could remove the controls, so the job is labelled **ADVISORY** rather than enforced.
 See [docs/DESIGN-v2.md](docs/DESIGN-v2.md) for the full enforce behaviour.

@@ -7,7 +7,7 @@
  *
  * Each scenario records the ordered transcript of every command, fetch, DNS lookup and exported
  * variable, plus the files setup left behind, and snapshots both. On top of the snapshots, the
- * setup and post-step ordering rules (L1-L24, see setupInvariants) are checked as executable
+ * setup and post-step ordering rules (L1-L28, see setupInvariants) are checked as executable
  * invariants, and a mutation check proves each rule fails when its order is broken.
  */
 
@@ -633,7 +633,7 @@ function writtenFiles(h: FakeHost): Record<string, string> {
   return out;
 }
 
-// ------------------------------------------------------------------ invariants (L1-L24)
+// ------------------------------------------------------------------ invariants (L1-L28)
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const re = (s: string) => new RegExp(`^${esc(s)}`);
@@ -683,6 +683,9 @@ const P = {
   selftestWrite: re(`sudo tee ${constants.SELFTEST_FILE}`),
   dockerPolicy:
     /^sudo (gpasswd -d runner docker|chown root:root \/var\/run\/docker\.sock|chmod 600 \/var\/run\/docker\.sock|systemctl (stop|disable) docker\.(socket|service))$/,
+  /** anything that changes who can use docker, or whether it runs (wider than what setup does) */
+  dockerAccessChange:
+    /^sudo ((gpasswd|usermod|deluser|groupmod)\b.*\bdocker\b|(chown|chmod|chgrp|setfacl|rm|mv)\b.*docker\.sock|systemctl (stop|disable|mask|kill) docker(\.(socket|service))?$)/,
   marker: re(`sudo tee ${SETUP_MARKER}`),
   loggingClassic: re(`sudo mv /tmp/safer-runner-sudo-logging.tmp ${SUDO_LOGGING_SUDOERS_FILE}`),
   loggingRsTee: re(`sudo tee ${SUDO_LOGGING_RSYSLOG_FILE}`),
@@ -842,6 +845,13 @@ function setupInvariants(t: Entry[], x: Expect): string[] {
     for (const e of touched) v.push(`L26: analyze changed the runner's sudoers: ${line(e)}`);
   }
 
+  // L28: analyze never changes docker access (it evaluates the docker policy in the post step)
+  if (x.mode === 'analyze') {
+    for (const e of t.filter(e => P.dockerAccessChange.test(line(e)))) {
+      v.push(`L28: analyze changed docker access: ${line(e)}`);
+    }
+  }
+
   // L27: the restricted sudoers is exactly the validation commands plus the job's sudo-config
   // lines, as root only; a command with no arguments carries "" (bare, it would allow any)
   const sudoersTee = t.find(e => line(e) === 'sudo tee /tmp/runner-sudoers.tmp');
@@ -964,6 +974,21 @@ const SCENARIOS: { s: Scenario; x: Omit<Expect, 'mode' | 'flavour'> }[] = [
       inputs: { ...ENFORCE.inputs, 'sudo-config': SUDO_CONFIG }
     },
     x: { disableSudo: true, dockerRestart: false, containerRules: false, sudoConfig: SUDO_CONFIG_LINES }
+  },
+  {
+    // analyze evaluates the docker policy, never applies it: docker stays usable, so dockerd
+    // still restarts for the CA and the containers get the container rules
+    s: {
+      ...ENFORCE,
+      name: 'analyze, docker: stop with running service containers',
+      inputs: { mode: 'analyze', docker: 'stop' },
+      docker: { active: true, dockerUser: true, containers: CONTAINER_IDS }
+    },
+    x: { disableSudo: true, dockerRestart: true, containerRules: true }
+  },
+  {
+    s: { ...ENFORCE, name: 'analyze, docker: remove-group', inputs: { mode: 'analyze', docker: 'remove-group' } },
+    x: { disableSudo: true, dockerRestart: true, containerRules: true }
   },
   {
     // the one behaviour change: analyze evaluates disable-sudo and sudo-config, never applies them
@@ -1396,6 +1421,21 @@ describe('invariants have teeth (mutation check)', () => {
     expect(setupInvariants(t, ax)).toEqual([]);
     const restricted = [...t, { argv: ['sudo', 'mv', '/tmp/runner-sudoers.tmp', '/etc/sudoers.d/runner'] }];
     expect(ids(setupInvariants(restricted, ax))).toContain('L26');
+  });
+
+  it.each([
+    ['sudo', 'gpasswd', '-d', 'runner', 'docker'],
+    ['sudo', 'chmod', '600', '/var/run/docker.sock'],
+    ['sudo', 'systemctl', 'stop', 'docker.service'],
+    ['sudo', 'systemctl', 'disable', 'docker']
+  ])('L28: analyze changes no docker access (%s %s %s ...)', async (...argv) => {
+    const analyze = SCENARIOS.find(c => c.s.name === 'analyze, docker: stop with running service containers')!;
+    const t = (await setup(analyze.s)).transcript;
+    const ax: Expect = { ...analyze.x, mode: 'analyze', flavour: 'sudo' };
+    expect(setupInvariants(t, ax)).toEqual([]);
+    const marker = first(t, P.marker);
+    const changed = [...t.slice(0, marker), { argv }, ...t.slice(marker)];
+    expect(ids(setupInvariants(changed, ax))).toEqual(['L28']);
   });
 
   it('L25: the integrity check reads each file once (one comparison)', () => {

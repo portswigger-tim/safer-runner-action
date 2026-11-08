@@ -545,13 +545,14 @@ function resolveDisableSudo(raw) {
     return v === null ? [true, true] : [v, false];
 }
 /**
- * docker. Unset means remove-group in enforce (docker is root-equivalent, mirroring
- * disable-sudo), keep in analyze.
+ * docker: the docker policy. Unset means remove-group, in either mode (docker is root-equivalent,
+ * mirroring disable-sudo). The mode decides whether the policy is applied (enforce) or only
+ * evaluated (analyze never changes docker; see planDocker).
  */
-function resolveDocker(raw, mode) {
+function resolveDocker(raw) {
     const v = (raw || '').trim().toLowerCase();
     if (v === '')
-        return [mode === 'enforce' ? 'remove-group' : 'keep', true];
+        return ['remove-group', true];
     if (exports.DOCKER_POLICIES.includes(v))
         return [v, false];
     throw new Error(`docker must be one of ${exports.DOCKER_POLICIES.join(', ')}, got "${raw}"`);
@@ -763,7 +764,7 @@ function readInputs() {
     if (sudoConfig.length && !disableSudo) {
         throw new Error('sudo-config has no effect with disable-sudo: false (sudo is kept as it is): remove one of them');
     }
-    const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'), mode);
+    const [docker, dockerDefaulted] = resolveDocker(core.getInput('docker'));
     const [failOnTampering] = resolveFailOnTampering(core.getInput('fail-on-tampering'), mode);
     const allowGithubPlatform = triState(core.getInput('allow-github-platform'), 'allow-github-platform');
     return {
@@ -2184,17 +2185,29 @@ async function cutover(h, _dns) {
 "use strict";
 
 /**
- * Docker's pure parts: the observed-access classification, the daemon.json merge for the CA
- * restart (F1), and the container address parser for the report. No I/O.
+ * Docker's pure parts: the access plan (what the docker input changes, by mode), the
+ * observed-access classification, the daemon.json merge for the CA restart (F1), and the
+ * container address parser for the report. No I/O.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DOCKER_SOCKET = exports.DOCKER_GROUP = exports.RUNNER_USERNAME = void 0;
+exports.planDocker = planDocker;
 exports.dockerAccess = dockerAccess;
 exports.mergeLiveRestore = mergeLiveRestore;
 exports.parseContainerAddresses = parseContainerAddresses;
 exports.RUNNER_USERNAME = 'runner';
 exports.DOCKER_GROUP = 'docker';
 exports.DOCKER_SOCKET = '/var/run/docker.sock';
+/**
+ * The docker policy as setup applies it. enforce applies it; analyze never changes docker access
+ * (it evaluates the policy in the post step instead), so docker stays usable and is treated as
+ * `keep` (the CA restart and the container rules follow from that).
+ */
+function planDocker(mode, policy) {
+    if (mode !== 'enforce' || policy === 'keep')
+        return { policy, applied: 'keep', apply: null };
+    return { policy, applied: policy, apply: Object.freeze({ removal: policy }) };
+}
 function dockerAccess(s) {
     if (!s.daemonActive && !s.socketUnitActive)
         return 'not-running';
@@ -2317,7 +2330,7 @@ async function step(h, args) {
  * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
  * afterwards - the caller fails closed on that, not on these messages.
  */
-async function disableDockerForRunner(h, socket = config_1.DOCKER_SOCKET) {
+async function disableDockerForRunner(h, _apply, socket = config_1.DOCKER_SOCKET) {
     core.info('Removing the runner user from the docker group and locking the docker socket...');
     const failed = [];
     if (await isRunnerInDockerGroup(h)) {
@@ -2341,7 +2354,7 @@ async function disableDockerForRunner(h, socket = config_1.DOCKER_SOCKET) {
  * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
  * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
-async function stopDockerService(h) {
+async function stopDockerService(h, _apply) {
     core.info('Stopping and disabling the docker daemon...');
     const failed = [];
     for (const verb of ['stop', 'disable']) {
@@ -2475,23 +2488,27 @@ async function prepare(h, policy, _trust) {
     return { active, configWritten, prepared: Object.freeze({}) };
 }
 /**
- * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
- * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
- * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ * Apply the docker plan (enforce only: see planDocker), then verify the runner user's real docker
+ * access (G4). Docker is root-equivalent, so a removal that did not take fails setup closed
+ * instead of leaving a reversible boundary. `keep` in enforce is ADVISORY, like sudo. analyze
+ * only reads the state.
  */
-async function applyAccessPolicy(h, inputs, _selfTests) {
-    const { mode, docker } = inputs;
-    const failures = docker === 'stop' ? await stopDockerService(h) : docker === 'remove-group' ? await disableDockerForRunner(h) : [];
+async function applyAccessPolicy(h, mode, plan, _selfTests) {
+    const { apply } = plan;
+    const docker = plan.applied;
+    const failures = !apply
+        ? []
+        : apply.removal === 'stop'
+            ? await stopDockerService(h, apply)
+            : await disableDockerForRunner(h, apply);
     const state = await readDockerState(h);
     const access = (0, config_1.dockerAccess)(state);
-    core.info(`docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+    core.info(`docker: ${plan.policy}${mode === 'analyze' ? ' (analyze: not applied)' : ''} -> verified ${access} ` +
+        `(daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
         `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`);
-    if (docker !== 'keep' && access === 'retained') {
-        const msg = `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
-            (failures.length ? `: ${failures.join('; ')}` : '');
-        if (mode === 'enforce')
-            throw new Error(msg);
-        core.warning(msg);
+    if (apply && access === 'retained') {
+        throw new Error(`docker: ${apply.removal} did not take effect - the runner user can still use docker (root-equivalent)` +
+            (failures.length ? `: ${failures.join('; ')}` : ''));
     }
     else if (failures.length) {
         core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
@@ -2501,7 +2518,7 @@ async function applyAccessPolicy(h, inputs, _selfTests) {
             'so any step can use it to remove the egress controls. Use docker: remove-group (the enforce default) ' +
             'or docker: stop unless the job needs docker.', { title: 'safer-runner: enforce (ADVISORY - docker retained)' });
     }
-    return { requested: docker, access, state };
+    return { requested: plan.policy, access, state };
 }
 /**
  * Container IP -> name for the report. Without sudo: under the default enforce the runner has
@@ -4143,6 +4160,12 @@ async function runSetup(inputs, h = host_1.realHost) {
     if (mode === 'enforce' && inputs.dockerDefaulted) {
         core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
     }
+    // analyze never changes docker access: it evaluates the policy in the post step
+    const dockerPlan = docker.planDocker(mode, inputs.docker);
+    if (mode === 'analyze' && inputs.docker !== 'keep' && !inputs.dockerDefaulted) {
+        core.warning(`docker: ${inputs.docker} is not applied in analyze mode: analyze never changes docker access. Use ` +
+            `mode: enforce to ${inputs.docker === 'stop' ? 'stop docker' : 'remove docker access'}.`, { title: 'safer-runner: analyze does not change docker' });
+    }
     const sudoFlavour = await sudo.detectSudoFlavour(h);
     core.info(`sudo implementation: ${sudoFlavour}`);
     const ports = await mitmproxy.allocateProxyPorts();
@@ -4200,7 +4223,7 @@ async function runSetup(inputs, h = host_1.realHost) {
     });
     // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
     // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
-    const dockerd = await docker.prepare(h, inputs.docker, trust);
+    const dockerd = await docker.prepare(h, dockerPlan.applied, trust);
     // 8. Firewall: only once the resolver points at CoreDNS, the CA is trusted and dockerd settled
     const { containerRules, firewall } = await timed('Configure firewall', () => iptables.configure(h, {
         mode,
@@ -4227,7 +4250,7 @@ async function runSetup(inputs, h = host_1.realHost) {
         core.warning(msg);
     }
     // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-    const dockerAccess = await docker.applyAccessPolicy(h, inputs, selfTests);
+    const dockerAccess = await docker.applyAccessPolicy(h, mode, dockerPlan, selfTests);
     await exec.exec('sudo', ['tee', exports.SETUP_MARKER], {
         input: Buffer.from(JSON.stringify({
             mode,

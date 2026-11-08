@@ -470,7 +470,7 @@ describe('job summary golden snapshots', () => {
     ).toMatchSnapshot();
   });
 
-  it('analyze: suggestions, sudo usage, docker kept', () => {
+  it('analyze: suggestions, sudo usage, docker policy not applied', () => {
     const records = [...allowedTraffic(), ...refusedTraffic('WOULD_BLOCK', plain)];
     expect(
       report({
@@ -480,7 +480,7 @@ describe('job summary golden snapshots', () => {
         firewall: parseFirewallLog(FIREWALL_ANALYZE),
         dnsRefused: ['exfil.example.net', 'tunnel.example.com'],
         sudo: SUDO,
-        docker: { requested: 'keep', access: 'retained' },
+        docker: { requested: 'remove-group', access: 'retained' },
         integrity: undefined
       })
     ).toMatchSnapshot();

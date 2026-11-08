@@ -41,7 +41,7 @@ exports[`job summary golden snapshots analyze: sudo the policy would block, with
 </details>
 
 <details>
-<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · workflow ran 2 sudo commands (1 by Safer Runner) · enforce would block 1 · docker retained</summary>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · nothing bypassed the proxy · workflow ran 2 sudo commands (1 by Safer Runner) · enforce would block 1 · docker unchanged (analyze)</summary>
 
 **Self-tests**
 
@@ -62,7 +62,7 @@ Enforce would block (1):
 $ sudo /usr/bin/apt-get install -y jq
 \`\`\`
 
-**Docker** — \`docker: keep\`; verified at setup: runner user can use docker
+**Docker** — policy \`docker: keep\` (analyze: evaluated, not applied); verified at setup: runner user can use docker
 
 </details>
 
@@ -70,7 +70,7 @@ $ sudo /usr/bin/apt-get install -y jq
 "
 `;
 
-exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker kept 1`] = `
+exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker policy not applied 1`] = `
 "## 🛡️ Safer Runner — egress
 
 <kbd>📊 ANALYZE</kbd> <kbd>9 hosts would be blocked</kbd> <kbd>2 requests the http-filter would refuse</kbd> <kbd>🧪 self-tests 3/3</kbd>
@@ -189,7 +189,7 @@ http-filter: |
 </details>
 
 <details>
-<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · 1 allowed outside the proxy · 2 DNS lookup enforce would refuses · workflow ran 1 sudo command (1 by Safer Runner) · enforce would block 1 · docker retained</summary>
+<summary>🔧 <b>Diagnostics</b> — self-tests 3/3 ✓ · 1 allowed outside the proxy · 2 DNS lookup enforce would refuses · workflow ran 1 sudo command (1 by Safer Runner) · enforce would block 1 · docker unchanged (analyze)</summary>
 
 **Self-tests**
 
@@ -211,7 +211,7 @@ http-filter: |
 $ sudo /usr/bin/apt-get install -y jq
 \`\`\`
 
-**Docker** — \`docker: keep\`; verified at setup: runner user can use docker
+**Docker** — policy \`docker: remove-group\` (analyze: evaluated, not applied); verified at setup: runner user can use docker
 
 </details>
 

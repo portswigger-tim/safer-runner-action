@@ -64,11 +64,13 @@ describe('readiness tokens', () => {
 });
 
 /**
- * Validated inputs: a branded type made only by its parser, so security-relevant text (the
- * sudoers file) is never built from a string that was not checked.
+ * Validated inputs: a branded type made only by its parser or planner, so security-relevant
+ * text (the sudoers file) is never built from a string that was not checked, and a privilege
+ * change (docker access) is never made outside enforce.
  */
 const VALIDATED: Record<string, string> = {
-  SudoRule: 'services/sudo/config.ts'
+  SudoRule: 'services/sudo/config.ts',
+  ApplyingDocker: 'services/docker/config.ts'
 };
 
 describe('validated inputs', () => {

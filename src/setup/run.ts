@@ -140,6 +140,15 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   if (mode === 'enforce' && inputs.dockerDefaulted) {
     core.info('docker not set: enforce mode removes docker access by default (docker: remove-group)');
   }
+  // analyze never changes docker access: it evaluates the policy in the post step
+  const dockerPlan = docker.planDocker(mode, inputs.docker);
+  if (mode === 'analyze' && inputs.docker !== 'keep' && !inputs.dockerDefaulted) {
+    core.warning(
+      `docker: ${inputs.docker} is not applied in analyze mode: analyze never changes docker access. Use ` +
+        `mode: enforce to ${inputs.docker === 'stop' ? 'stop docker' : 'remove docker access'}.`,
+      { title: 'safer-runner: analyze does not change docker' }
+    );
+  }
 
   const sudoFlavour = await sudo.detectSudoFlavour(h);
   core.info(`sudo implementation: ${sudoFlavour}`);
@@ -215,7 +224,7 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
 
   // 7. Docker. Containers get the container rules unless docker is about to be stopped. If
   // dockerd already did TLS (service/job container pulls), restart it so it trusts the CA (F1).
-  const dockerd = await docker.prepare(h, inputs.docker, trust);
+  const dockerd = await docker.prepare(h, dockerPlan.applied, trust);
 
   // 8. Firewall: only once the resolver points at CoreDNS, the CA is trusted and dockerd settled
   const { containerRules, firewall } = await timed('Configure firewall', () =>
@@ -250,7 +259,7 @@ export async function runSetup(inputs: Inputs, h: Host = realHost): Promise<void
   }
 
   // 10. Privilege layer (carried from v1). Docker first: it needs sudo.
-  const dockerAccess = await docker.applyAccessPolicy(h, inputs, selfTests);
+  const dockerAccess = await docker.applyAccessPolicy(h, mode, dockerPlan, selfTests);
   await exec.exec('sudo', ['tee', SETUP_MARKER], {
     input: Buffer.from(
       JSON.stringify({

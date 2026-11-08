@@ -21,10 +21,10 @@
 > stop), `fail-on-tampering`, `http-filter` + `allow-github-platform` (L7 method/path filter -
 > [docs/DESIGN-L7-path-method.md](docs/DESIGN-L7-path-method.md); matcher `HttpFilter` in
 > `proxy/policy_core.py`, platform list `GITHUB_PLATFORM_ENDPOINTS`) - parsed in `src/config/inputs.ts`.
-> `docker` and `fail-on-tampering` are mode-aware (no action.yaml default; unset = the
-> enforce-safe value in enforce). `disable-sudo` unset means remove sudo in both modes: `mode`
-> decides apply (enforce) or evaluate (analyze never changes sudo; it reports what enforce would
-> block and suggests a `sudo-config`) - see [docs/DESIGN-unified-analyze.md](docs/DESIGN-unified-analyze.md).
+> `fail-on-tampering` is mode-aware (no action.yaml default; unset = on in enforce). `disable-sudo`
+> unset means remove sudo, and `docker` unset means `remove-group`, in both modes: `mode` decides
+> apply (enforce) or evaluate (analyze never changes sudo or docker access; it reports what
+> enforce would block and suggests a config) - see [docs/DESIGN-unified-analyze.md](docs/DESIGN-unified-analyze.md).
 > Removed (v1 or early beta only - do not document as current): v1's `sudo-config` format, `disable-docker`, `stop-docker`, `primary-dns-server`,
 > `secondary-dns-server`, `proxy-port`, `proxy-stream-large-bodies`, `container-tls`.
 
@@ -142,7 +142,7 @@ The action is a `node24` JavaScript action with `pre`, `main` and `post` entry p
 Each step depends on the one before it. Where a step needs an earlier one, it takes that
 step's readiness token (a branded type only the owning module can mint, listed in
 `src/system/tokens.test.ts`), so the wrong order does not compile; `src/orchestration.test.ts`
-checks the same order (L1-L27) on a recording fake runner.
+checks the same order (L1-L28) on a recording fake runner.
 
 1. Job-container guard: a job `container:` is unsupported (enforce fails, analyze warns).
 2. Allowlist: GitHub domains from `api.github.com/meta` (before DNS changes), plus user entries.
@@ -155,8 +155,8 @@ checks the same order (L1-L27) on a recording fake runner.
 8. If docker runs, restart dockerd so it trusts the CA (F1).
 9. Firewall: nat REDIRECT and filter chains, plus the container rules when docker runs.
 10. Live self-tests (`src/setup/selftest.ts`).
-11. Docker policy (`docker` input), then verify real docker access. In enforce, a removal that
-    did not take fails setup.
+11. Docker policy (`docker` input; enforce only, analyze never changes it), then verify real
+    docker access. In enforce, a removal that did not take fails setup.
 12. Write the setup marker, set up sudo logging, capture the integrity baseline, and
     **restrict sudo last**.
 
@@ -235,11 +235,16 @@ checks the same order (L1-L27) on a recording fake runner.
        reports through `INTERNAL_SUDO_COMMANDS`.
    - **docker**: `docker: remove-group` removes the runner user from the `docker` group and
      locks the socket to `root:root 0600`; `stop` stops and disables the daemon; `keep` leaves it.
-     Setup then verifies the real access (`readDockerState`).
-   - **Mode-aware defaults** (`src/config/inputs.ts`): unset `docker` and `fail-on-tampering`
-     take the enforce-safe value in enforce and the permissive value in analyze; unset
-     `disable-sudo` is `true` in both (analyze only evaluates it). An explicit value always wins. Enforce with sudo or docker kept is **ADVISORY**:
-     the controls are applied, but they are not an enforced boundary.
+     Setup then verifies the real access (`readDockerState`). Only enforce changes docker access:
+     `planDocker` (`config.ts`) makes the `ApplyingDocker` that the functions changing access
+     require, and only in enforce, so analyze changing it does not compile (L28 checks the
+     transcript). Analyze is treated as `keep` (the dockerd CA restart and the container rules
+     still apply).
+   - **Defaults** (`src/config/inputs.ts`): unset `disable-sudo` is `true` and unset `docker` is
+     `remove-group`, in both modes (analyze only evaluates them). Unset `fail-on-tampering` is
+     mode-aware: on in enforce, off in analyze. An explicit value always wins. Enforce with sudo
+     or docker kept is **ADVISORY**: the controls are applied, but they are not an enforced
+     boundary.
 
 ### Integrity check - `src/integrity/`
 
@@ -392,7 +397,7 @@ Python only: `npm run test:py`.
 - `orchestration.test.ts` - `runSetup` and the post step on a recording fake runner that fakes
   only external boundaries (`@actions/*`, `fs`, `os`, `dns`, `net`, randomness, timers).
   Snapshots the command transcript and the files setup writes, checks the ordering invariants
-  L1-L27, and proves each one bites with a mutation check. Also pre then main around the setup
+  L1-L28, and proves each one bites with a mutation check. Also pre then main around the setup
   marker.
 - `system/tokens.test.ts` - every readiness token is minted only by its owning module and has an
   ordering invariant; `system/system.test.ts` - `writeFiles` and transient units.

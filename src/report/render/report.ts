@@ -837,10 +837,18 @@ function diagnostics(f: Facts): string {
   }
   if (input.docker) {
     const { requested, access } = input.docker;
-    diag.push(
-      access === 'retained' ? 'docker retained' : access === 'group-removed' ? 'docker removed ✓' : 'docker stopped ✓'
-    );
-    body += `**Docker** — \`docker: ${requested}\`; verified at setup: ${DOCKER_ACCESS_TEXT[access] ?? access}\n\n`;
+    if (enforce) {
+      diag.push(
+        access === 'retained' ? 'docker retained' : access === 'group-removed' ? 'docker removed ✓' : 'docker stopped ✓'
+      );
+    } else {
+      diag.push('docker unchanged (analyze)');
+    }
+    // analyze never changes docker access: the policy is only evaluated
+    const policy = enforce
+      ? `\`docker: ${requested}\``
+      : `policy \`docker: ${requested}\` (analyze: evaluated, not applied)`;
+    body += `**Docker** — ${policy}; verified at setup: ${DOCKER_ACCESS_TEXT[access] ?? access}\n\n`;
   }
   if (input.integrity) {
     const s = input.integrity.status;

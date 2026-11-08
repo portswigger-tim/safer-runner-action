@@ -5,7 +5,8 @@
 
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import type { DockerPolicy, Inputs } from '../../config/inputs';
+import type { DockerPolicy } from '../../config/inputs';
+import type { Mode } from '../../policy';
 import { DOCKER_DAEMON_JSON } from '../../constants';
 import type { SelfTestsRun } from '../../setup/selftest';
 import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
@@ -17,7 +18,9 @@ import {
   dockerAccess,
   mergeLiveRestore,
   parseContainerAddresses,
+  type ApplyingDocker,
   type DockerAccess,
+  type DockerPlan,
   type DockerState
 } from './config';
 
@@ -45,7 +48,11 @@ async function step(h: Host, args: string[]): Promise<string | null> {
  * Returns the steps that failed. Whether access is really gone is decided by readDockerState()
  * afterwards - the caller fails closed on that, not on these messages.
  */
-export async function disableDockerForRunner(h: Host, socket: string = DOCKER_SOCKET): Promise<string[]> {
+export async function disableDockerForRunner(
+  h: Host,
+  _apply: ApplyingDocker,
+  socket: string = DOCKER_SOCKET
+): Promise<string[]> {
   core.info('Removing the runner user from the docker group and locking the docker socket...');
   const failed: string[] = [];
   if (await isRunnerInDockerGroup(h)) {
@@ -68,7 +75,7 @@ export async function disableDockerForRunner(h: Host, socket: string = DOCKER_SO
  * docker: stop. Stops and disables the docker daemon and its socket unit (this also stops any
  * running containers). Returns the steps that failed; readDockerState() is the verdict.
  */
-export async function stopDockerService(h: Host): Promise<string[]> {
+export async function stopDockerService(h: Host, _apply: ApplyingDocker): Promise<string[]> {
   core.info('Stopping and disabling the docker daemon...');
   const failed: string[] = [];
   for (const verb of ['stop', 'disable']) {
@@ -220,36 +227,43 @@ export async function prepare(
 
 /** What the setup marker (and so the report) records about docker: requested AND verified. */
 export interface DockerOutcome {
+  /** the docker policy (the input, or remove-group when unset); applied only in enforce */
   requested: DockerPolicy;
   access: DockerAccess;
   state: DockerState;
 }
 
 /**
- * Apply the docker input, then verify the runner user's real docker access (G4). Docker is
- * root-equivalent, so in enforce a removal that did not take fails setup closed instead of
- * leaving a reversible boundary; analyze warns. `keep` in enforce is ADVISORY, like sudo.
+ * Apply the docker plan (enforce only: see planDocker), then verify the runner user's real docker
+ * access (G4). Docker is root-equivalent, so a removal that did not take fails setup closed
+ * instead of leaving a reversible boundary. `keep` in enforce is ADVISORY, like sudo. analyze
+ * only reads the state.
  */
 export async function applyAccessPolicy(
   h: Host,
-  inputs: Pick<Inputs, 'mode' | 'docker'>,
+  mode: Mode,
+  plan: DockerPlan,
   _selfTests: SelfTestsRun
 ): Promise<DockerOutcome> {
-  const { mode, docker } = inputs;
-  const failures =
-    docker === 'stop' ? await stopDockerService(h) : docker === 'remove-group' ? await disableDockerForRunner(h) : [];
+  const { apply } = plan;
+  const docker = plan.applied;
+  const failures = !apply
+    ? []
+    : apply.removal === 'stop'
+      ? await stopDockerService(h, apply)
+      : await disableDockerForRunner(h, apply);
   const state = await readDockerState(h);
   const access = dockerAccess(state);
   core.info(
-    `docker: ${docker} -> verified ${access} (daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
+    `docker: ${plan.policy}${mode === 'analyze' ? ' (analyze: not applied)' : ''} -> verified ${access} ` +
+      `(daemon ${state.daemonActive ? 'active' : 'inactive'}, ` +
       `runner in docker group: ${state.runnerInGroup}, socket usable: ${state.socketAccessible})`
   );
-  if (docker !== 'keep' && access === 'retained') {
-    const msg =
-      `docker: ${docker} did not take effect - the runner user can still use docker (root-equivalent)` +
-      (failures.length ? `: ${failures.join('; ')}` : '');
-    if (mode === 'enforce') throw new Error(msg);
-    core.warning(msg);
+  if (apply && access === 'retained') {
+    throw new Error(
+      `docker: ${apply.removal} did not take effect - the runner user can still use docker (root-equivalent)` +
+        (failures.length ? `: ${failures.join('; ')}` : '')
+    );
   } else if (failures.length) {
     core.warning(`docker: ${docker}: ${failures.join('; ')} (verified: ${access})`);
   }
@@ -261,7 +275,7 @@ export async function applyAccessPolicy(
       { title: 'safer-runner: enforce (ADVISORY - docker retained)' }
     );
   }
-  return { requested: docker, access, state };
+  return { requested: plan.policy, access, state };
 }
 
 /**
