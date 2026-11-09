@@ -1,12 +1,14 @@
-# Verifying this action (supply chain)
+# Verifying this action
 
-This action's `pre` step runs as root and installs root-owned binaries, so a tampered release
-of it would own your runner. Treat it like any other privileged dependency.
+The action's `pre` step uses `sudo` to install binaries and change the runner's configuration as
+root. A tampered release could take control of your runner. Treat the action as you would any
+other privileged dependency.
 
-## Pin it by full commit SHA
+## Pin the action to a commit SHA
 
-Not a tag or branch. Tags can be moved, and there is no moving `@v2` tag. Keep the version in a
-comment so Dependabot or Renovate can update it:
+Use the full commit SHA, not a tag or a branch: tags can be moved. There is no `@v2` tag that
+moves to new releases. Put the version in a comment, so that Dependabot or Renovate can update
+the SHA:
 
 ```yaml
 - uses: portswigger-tim/safer-runner-action@ebd9bc0bc39df7c9b044ee698cbec5efc201a248 # v2.3.0
@@ -14,13 +16,20 @@ comment so Dependabot or Renovate can update it:
 
 ## Check the build provenance
 
-Check the provenance of the commit you pin. Releases from the
-[release workflow](../.github/workflows/release.yml) onward carry a signed
+Each release made by the [release workflow](../.github/workflows/release.yml) has a signed
 [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
-for the files the runner executes (`action.yaml`, `dist/**`, `proxy/policy.py`,
-`proxy/policy_core.py`). It is only produced after the release workflow has checked that the
-tag is on a release branch, the tests pass, and a clean rebuild of `dist/` from the tagged
-source is byte-identical to the committed `dist/`. Earlier tags have no attestation.
+for `action.yaml`, `dist/**`, `proxy/policy.py` and `proxy/policy_core.py`, the files that setup
+runs and installs as root. The workflow makes the attestation only after it checks that:
+
+- the tag is on a release branch,
+- the tests pass, and
+- a clean build of `dist/` from the tagged source is identical to the `dist/` in the commit.
+
+Releases before the release workflow have no attestation. The post step also runs
+`proxy/suggest.py` and `proxy/sudo_suggest.py`, which have no attestation. Pinning the commit SHA
+fixes their content.
+
+To check the commit that you pin:
 
 ```bash
 REPO=portswigger-tim/safer-runner-action
@@ -33,23 +42,8 @@ for f in action.yaml dist/*/index.js proxy/policy.py proxy/policy_core.py; do
 done
 ```
 
-A passing check means those exact files were built and checked by this repository's release
-workflow from that commit. It does not prove the source is safe, and a missing or failing
-attestation on a new tag means: don't use it, and please [report it](../SECURITY.md).
+A passing check shows that this repository's release workflow built and checked those files from
+that commit. It does not show that the source is safe. If a new release has no attestation, or
+the check fails, do not use the release, and [report it](../SECURITY.md).
 
-## Run it alongside supply-chain-aware defaults
-
-Safer Runner limits where a compromised dependency can send data; these limit what that
-dependency can reach in the first place:
-
-- Least-privilege `permissions:` at the top of every workflow (start from `contents: read`)
-  and grant more per job.
-- `npm ci --ignore-scripts` (and equivalents) where your build doesn't need install scripts.
-- Don't share caches between untrusted jobs (PRs) and release/publish jobs: use distinct
-  cache keys, or no cache, for anything that publishes.
-- Put publish and deploy jobs that use OIDC (`id-token: write`) behind a protected
-  [environment](https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-  with required reviewers, and scope the cloud-side trust policy to that environment.
-
-For the wider picture — pinning actions by SHA, protecting the files that control the pipeline,
-keeping secrets off public repos — see [CICD-GOOD-PRACTICE.md](CICD-GOOD-PRACTICE.md).
+[CI/CD good practice](CICD-GOOD-PRACTICE.md) describes other controls to use with this action.

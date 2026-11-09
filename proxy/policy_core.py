@@ -12,7 +12,7 @@ Pattern semantics (mirrors src/policy.ts):
 Decisions are made on names only, never on the destination IP the client chose.
 
 HTTP filter (``http-filter``): after the host check, a request to a filtered host is allowed
-only if a path rule matches and lists its method (docs/DESIGN-L7-path-method.md). Paths use
+only if a path rule matches and lists its method (docs/HTTP-FILTER.md). Paths use
 the same glob, with ``/`` in the role of ``.``: a segment that is exactly ``*`` spans any
 depth, a ``*`` inside a segment stays within it. Only HTTP the proxy sees (intercepted HTTPS,
 plain HTTP) can be filtered; passthrough connections never reach it.

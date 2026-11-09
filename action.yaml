@@ -55,7 +55,7 @@ inputs:
       (`org/app/git-receive-pack` also matches `/Org/app.git/git-receive-pack`). It never grants access: a host not
       in allowed-domains stays unreachable. The value is strict YAML (or JSON): a duplicate host or
       path, or any other shape, fails the step; put a key or value that starts with `*` in quotes.
-      See docs/DESIGN-L7-path-method.md.
+      See docs/HTTP-FILTER.md.
     required: false
     default: ''
   allow-github-platform:

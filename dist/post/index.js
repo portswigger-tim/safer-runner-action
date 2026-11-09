@@ -257,7 +257,7 @@ exports.RISKY_GITHUB_SUBDOMAINS = [
     'raw.githubusercontent.com' // Common vector for serving malicious raw file content
 ];
 /**
- * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
+ * Built-in platform allowlist for http-filter (docs/HTTP-FILTER.md): the endpoints
  * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
  * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
  * is on) only on a host the job filters. Essential entries always apply: step/job log
@@ -696,7 +696,7 @@ function parseMethods(value, where = 'http-filter') {
     return tokens;
 }
 /**
- * http-filter (docs/DESIGN-L7-path-method.md): host -> { path pattern -> methods }. Naming a
+ * http-filter (docs/HTTP-FILTER.md): host -> { path pattern -> methods }. Naming a
  * host makes it default-deny; it only ever narrows hosts already in allowed-domains.
  *
  * Input is YAML or JSON, read by the `yaml` library (parseFilterYaml): host keys; under each,
@@ -1068,7 +1068,7 @@ function ipOf(hostport) {
  * 3. Post step -> checkIntegrity() compares the current state with the baseline, once
  *
  * A tripwire, not tamper-proof: the post step runs as the runner user from files the job can
- * modify (docs/DESIGN-post-run-integrity.md).
+ * modify (docs/LIMITATIONS.md).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2985,7 +2985,7 @@ function render(f) {
  *
  * No DNS-rebind filtering: the proxy's upstream-IP guard (server_connect) refuses a strict
  * superset of internal answers and logs the address, and anything outside the proxy can
- * only reach addresses a step could dial by IP anyway. See docs/DNS-COREDNS.md.
+ * only reach addresses a step could dial by IP anyway. See docs/LIMITATIONS.md.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -6225,7 +6225,7 @@ function report(o, ctx) {
 "use strict";
 
 /**
- * v2 CA trust injection (docs/DESIGN-v2.md section 5). Trust is not one store: the system
+ * v2 CA trust injection (docs/HOW-IT-WORKS.md). Trust is not one store: the system
  * bundle covers OpenSSL/GnuTLS consumers (curl, git, python ssl, .NET), Node and several
  * language ecosystems need environment variables, and Java has its own keystores.
  *

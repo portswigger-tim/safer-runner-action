@@ -1,26 +1,29 @@
 # v2 release notes
 
-## v2.4.0 (unreleased)
+## v2.4.0
 
 Sudo and docker get the analyze-then-enforce flow the egress allowlist and `http-filter` already
-have: `analyze` never changes either, and reports what `enforce` would block.
+have: `analyze` never changes either, and reports what `enforce` would block. One new input,
+`sudo-config`.
 
 - **New `sudo-config` input.** With sudo removed in `enforce`, the job may still run these exact
-  sudo command lines as root (a YAML list, on top of the action's own read-only checks). The
-  input is parsed strictly and fails the step on anything it cannot express exactly. Any
-  `sudo-config` labels the job **ADVISORY**: a command that can run code or write files gives
-  the job root. The v1 `sudo-config` format is not accepted.
+  sudo command lines as root (a YAML list, on top of the action's own read-only checks; a lone
+  trailing `*` allows further arguments). The input is parsed strictly and fails the step on
+  anything it cannot express exactly. Any `sudo-config` labels the job **ADVISORY**: a command
+  that can run code or write files gives the job root. Setup warns about entries that make this
+  easy, such as a command in a directory the job can write to. The v1 `sudo-config` format is
+  not accepted.
 - **`analyze` reports and suggests for sudo.** The summary lists the sudo commands `enforce`
   would block under your `disable-sudo` / `sudo-config`, and suggests a `sudo-config` built from
   the job's own sudo use (exact lines only; secret-looking arguments are left out). Best effort:
   the sudo log does not show `sudo -E` or argument boundaries, so check the job under `enforce`.
 - **Behaviour change: `mode: analyze` never changes sudo.** `disable-sudo: true` in `analyze`
-  now reports what enforce would block and suggests a `sudo-config`, instead of removing sudo.
-  To remove sudo, use `mode: enforce`.
+  now reports what enforce would block and suggests a `sudo-config`, instead of removing sudo
+  (setup warns). To remove sudo, use `mode: enforce`.
 - **`disable-sudo` defaults to `true` in both modes.** In `analyze` this changes nothing on the
   runner (analyze only evaluates it); in `enforce` it is the same as before.
-- **`sudo-config` with `disable-sudo: false` is rejected** (sudo is kept, so the list would have
-  no effect).
+- **`sudo-config` with `disable-sudo: false` fails the step** (sudo is kept, so the list would
+  have no effect).
 - **Behaviour change: `mode: analyze` never changes docker access.** `docker: remove-group` or
   `docker: stop` in `analyze` is now evaluated, not applied (setup warns), and docker stays usable
   for the job. To remove docker access, use `mode: enforce`.
@@ -31,13 +34,32 @@ have: `analyze` never changes either, and reports what `enforce` would block.
   suggests one: a job that uses docker needs `docker: keep` (ADVISORY), and `docker: stop` that
   would stop service containers is flagged. Only kinds, counts and image names are shown. Best
   effort: in `analyze` the job has docker, so it can stop the recording.
+- **A reorganised job summary.** It opens with a Summary: a scorecard with one row per area and,
+  in `analyze`, one Suggested Enforce Configuration block to paste (the inputs this job needs to
+  run under `enforce`; ADVISORY settings are marked). In `enforce` with sudo or docker kept, a
+  warning gives the reasons the job is ADVISORY. Network, sudo and docker details follow, with
+  what the action itself did collapsed under Runner System. In `analyze`, a check with nothing to
+  go on, such as a missing sudo log, shows as not seen, never as all clear. The suggested block
+  keeps the repository and ref the workflow used, and repeats the job's own `allowed-domains`
+  entries only when they are safe to print.
+- **More reliable setup downloads.** The pinned CoreDNS and mitmproxy downloads retry with
+  backoff and a timeout on each request. CoreDNS is fetched through the GitHub API first, then
+  from the release download link, so setup keeps working when GitHub's release download links
+  fail. Every source is checked against the same pinned sha256, and setup still fails closed if
+  none serves it.
+- **The post step no longer deletes the proxy's CA private key.** The key is only ever held in
+  memory-backed storage (tmpfs) and is destroyed with the runner VM. The action's own sudo
+  allowlist under `disable-sudo` is now only read-only commands.
 - **Hardening:** redact sudo arguments in the job summary and log.
-- **Hardening:** reject repeated wildcards in a domain label.
-- **A shorter job summary.** It opens with a scorecard and, in `analyze`, one Suggested Enforce
-  Configuration block to paste (the inputs this job needs to run under `enforce`; ADVISORY
-  settings are marked). Network, sudo and docker details follow, with what the action itself did
-  collapsed under Runner System. The suggested `uses:` line keeps the repository and ref the
-  workflow used.
+- **Hardening:** allowed hostnames in the job summary's container table get the same redaction
+  as the other host tables.
+- **Hardening:** a domain pattern with `**` in a label is rejected as invalid.
+- **Documentation reorganised.** The README walks through `analyze`, then `enforce`. Reference
+  and how-to pages are in `docs/`: [CONFIGURATION](CONFIGURATION.md) (every input),
+  [TROUBLESHOOTING](TROUBLESHOOTING.md), [HOW-IT-WORKS](HOW-IT-WORKS.md),
+  [HTTP-FILTER](HTTP-FILTER.md) (replaces `DESIGN-L7-path-method.md`),
+  [LIMITATIONS](LIMITATIONS.md) and [VERIFYING](VERIFYING.md). The design notes were removed;
+  they remain in git history.
 
 ## v2.3.0
 
@@ -86,8 +108,8 @@ existing inputs; drop-in for v2.1.0.
   and paths you name — make a package host or API read-only (`"*": GET, HEAD`), or allow
   `git push` only to specific repos while clones and reads keep working. It is purely subtractive
   (it never widens access) and applies to intercepted HTTPS and plain HTTP. `*` is the same glob
-  as `allowed-domains`. See the README section and
-  [docs/DESIGN-L7-path-method.md](DESIGN-L7-path-method.md).
+  as `allowed-domains`. See
+  [docs/HTTP-FILTER.md](HTTP-FILTER.md).
 - **`allow-github-platform`** (new input, default `true`): an explicit built-in allowlist that
   keeps the Actions platform working when you filter a GitHub host — step logs, status, artifact
   and cache uploads, OIDC, and job lease renewal / completion. Set it `false` for a hard lockdown.
@@ -111,8 +133,7 @@ Security hardening and report accuracy. No input changes — drop-in for v2.0.0.
 - **Post-run integrity is labelled advisory.** The summary no longer shows "boundary intact" on
   the strength of a check a malicious step could suppress. It shows "controls applied at setup"
   plus a separate post-run status chip (advisory / tampered / unverified). Enforcement never
-  depended on the post step. See [docs/DESIGN-post-run-integrity.md](DESIGN-post-run-integrity.md)
-  for a proposed supervisor design.
+  depended on the post step.
 - **Report tidy-up.** The "Subdomains of exact entries" section is removed; refused subdomains
   of exact entries are still listed under Diagnostics → DNS refused.
 - **New: [docs/CICD-GOOD-PRACTICE.md](CICD-GOOD-PRACTICE.md)** — defence-in-depth practices for

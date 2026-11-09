@@ -1,68 +1,65 @@
 # CI/CD good practice
 
-Safer Runner hardens one layer — what a job can reach on the network. The practices below
-reduce the chance a hostile step runs at all, or finds anything worth taking. Most cost
-nothing, and they matter most on public repositories, where a pull request or a dependency
-can run attacker-controlled code.
+Safer Runner limits where a compromised step can send data. The practices on this page make it
+less likely that a hostile step runs at all, and limit what it can take if it does. Most of them
+cost nothing. They are most important on public repositories, where a pull request or a
+dependency can run an attacker's code.
 
-They are defence in depth. Use them alongside the action, not instead of it.
+Use them with the action, not in place of it.
 
-1. **Pin actions to a full commit SHA, not a tag.** Tags move. A stolen maintainer account or
-   a repointed tag changes what runs without changing your workflow — the shape of the
-   tj-actions/changed-files compromise. Keep `# vX.Y.Z` in a comment so Dependabot or Renovate
-   can bump the SHA for you.
+## Control what runs
 
-2. **Give `GITHUB_TOKEN` least privilege.** Default the workflow token to read-only, then grant
-   `permissions:` per job — only what that job needs. A compromised step can do no more than the
-   token allows.
+- **Pin actions to a full commit SHA, not a tag.** A tag can be moved to different code, for
+  example by an attacker who steals a maintainer's account. The tj-actions/changed-files
+  compromise worked like this. Put the version in a comment so that Dependabot or Renovate can
+  update the SHA. [Verifying this action](VERIFYING.md) shows how to do this for Safer Runner.
+- **Pin the rest of the toolchain.** Use lockfiles with integrity hashes (`npm ci`,
+  `pip --require-hashes`), and pin base images by digest. Do not use `curl | bash` installers:
+  vendor or pin what they download.
+- **Do not run install scripts that you do not need** (`npm ci --ignore-scripts`). The Shai-Hulud
+  npm worm ran from install scripts.
+- **Protect the files that control the pipeline.** Workflows, `action.yaml`, Dockerfiles, build
+  and release scripts, and hook configuration such as `.pre-commit-config.yaml` all run code,
+  often before your tests and sometimes with network access. Require CODEOWNERS review for
+  changes to them. A pull request that changes the pipeline can turn off every other control.
+- **Use `pull_request`, not `pull_request_target`, for pull requests from forks,** and require
+  approval for external contributors. Never check out and run the code of a pull request in a
+  job that has secrets or a write token.
+- **Keep CI small.** Fewer actions, permissions and network destinations give a smaller attack
+  surface, and an allowlist that you can understand.
 
-3. **Keep secrets out of jobs that run untrusted code — and off public repos where you can.**
-   Put credentialed steps (publish, deploy, sign) in a separate private repository, or in a
-   protected environment with required reviewers, and trigger them from the public build with
-   `workflow_run`. A public job that holds a secret can leak it through any dependency it runs.
+## Limit what a compromised step can reach
 
-4. **Separate "build untrusted" from "release trusted."** Build and test in a low-privilege,
-   egress-hardened job with no secrets. Hand the artifact — verified by digest — to a separate
-   job that signs and publishes with credentials and required approvals.
+- **Give `GITHUB_TOKEN` the least privilege.** Set the workflow's default `permissions:` to
+  `contents: read`, and give each job only the permissions that it needs.
+- **Keep secrets out of jobs that run untrusted code.** A job that has a secret can leak it
+  through any dependency that it runs.
+- **Separate the untrusted build from the trusted release.** Build and test in a job with low
+  privilege, no secrets and Safer Runner in `enforce` mode. Give the artifact, checked by digest,
+  to a separate job that signs and publishes it.
+- **Put publish and deploy jobs behind a protected
+  [environment](https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment)**
+  with required reviewers.
+- **Use short-lived credentials (OIDC) in place of stored secrets.** Exchange the job's GitHub
+  OIDC token for cloud credentials, and limit the cloud trust policy to the protected environment.
+  Give each credential access to the smallest set of repositories, registries or paths. A
+  credential that expires in minutes and reaches one resource has little value to an attacker.
+- **Do not share caches between untrusted jobs and release jobs.** A pull request can put
+  malicious content in a shared cache. Use separate cache keys, or no cache, for jobs that
+  publish.
 
-5. **Protect the files that control the pipeline.** Workflows, `action.yaml`/`Dockerfile`,
-   build and release scripts, and hook configs such as `.pre-commit-config.yaml` all run code,
-   often before your tests and sometimes with network access. Require CODEOWNERS review for
-   changes to them. A pull request that edits the pipeline can switch off every other control.
+## Limit where data can go
 
-6. **Use `pull_request`, not `pull_request_target`, for fork pull requests; require approval
-   for external contributors.** Untrusted pull-request code should run with no secrets and no
-   write token. Never check out and execute pull-request-head code in a privileged context.
+- **Use Safer Runner in `enforce` mode,** with exact hostnames in place of wildcards where you can.
+  Read the job summary after each run to find new or unexpected destinations.
+- **Do not treat logs or build output as a security boundary.** A hostile step can read anything
+  in the job, encode it, and print it past log masking. Keep sensitive data out of jobs that run
+  untrusted code. For the same reason, Safer Runner's own job summary is advisory.
 
-7. **Pin and verify the whole toolchain, not just actions.** Use lockfiles with integrity
-   hashes (`npm ci`, `pip --require-hashes`), pin base images by digest, and skip install
-   lifecycle scripts where you do not need them (`npm ci --ignore-scripts`) — the route the
-   Shai-Hulud npm worm used to phone home.
+## Find problems early
 
-8. **Prefer short-lived, scoped credentials (OIDC) over stored secrets.** Exchange a GitHub
-   OIDC token for per-job cloud credentials instead of long-lived keys, and scope every token
-   to the minimum repository, registry or path. A credential that expires in minutes and
-   reaches one resource is worth little if it is stolen.
+Turn on secret scanning with push protection, and Dependabot. They cost little, and they find
+common problems early.
 
-9. **Do not treat logs or build output as a security boundary.** Assume a hostile step can read
-   anything in the job and print it — encoded — past log masking. Keep anything genuinely
-   sensitive out of jobs that run untrusted code. (Safer Runner's own post-run report and
-   redaction are advisory for the same reason.)
-
-10. **Keep CI minimal on public repos.** Fewer actions, permissions and network destinations
-    mean a smaller attack surface and an allowlist you can reason about. Avoid `curl | bash`
-    installers; vendor or pin what they fetch.
-
-11. **Turn on the platform's supply-chain tripwires.** Secret scanning with push protection,
-    Dependabot, and build provenance / attestation (so consumers can `gh attestation verify`
-    your artifacts). They are cheap and catch the common failures early.
-
-12. **Harden egress, then watch it.** Run Safer Runner in `analyze` to learn the real
-    allowlist, then switch to `enforce`. Prefer exact names over `*.zone` wildcards — a wildcard
-    is a DNS channel to the whole zone — and read the egress report after runs to spot new or
-    unexpected destinations.
-
----
-
-See the main [README](../README.md) for how to configure the action, and
-[Limitations](LIMITATIONS.md) for what it does and does not cover.
+Publish build provenance attestations for your own artifacts. The users of your artifacts can
+then check them with `gh attestation verify`.

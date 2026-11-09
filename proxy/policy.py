@@ -4,7 +4,7 @@ Loaded with ``mitmdump -s policy.py``. The decision logic lives in policy_core.p
 wires it into mitmproxy. PINNED to mitmproxy 12.3.1: it uses layer classes that are not a
 stable public API, so it refuses to start on any other version.
 
-Security rules (docs/DESIGN-v2.md section 4):
+Security rules (docs/HOW-IT-WORKS.md, "Four layers of control"):
   * This addon owns layer selection. The built-in NextLayer addon is disabled, so a
     connection we have not decided on (e.g. a ClientHello split across segments) can never
     fall through to a default "intercept/forward" decision.

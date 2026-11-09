@@ -1,6 +1,6 @@
 {
   "name": "safer-runner",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "L7 egress control for GitHub Actions runners: hostname allowlisting through a TLS-terminating proxy",
   "main": "dist/main/index.js",
   "scripts": {

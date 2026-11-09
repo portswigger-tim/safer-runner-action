@@ -1,5 +1,5 @@
 /**
- * v2 CA trust injection (docs/DESIGN-v2.md section 5). Trust is not one store: the system
+ * v2 CA trust injection (docs/HOW-IT-WORKS.md). Trust is not one store: the system
  * bundle covers OpenSSL/GnuTLS consumers (curl, git, python ssl, .NET), Node and several
  * language ecosystems need environment variables, and Java has its own keystores.
  *

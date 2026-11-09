@@ -7,7 +7,7 @@
  * 3. Post step -> checkIntegrity() compares the current state with the baseline, once
  *
  * A tripwire, not tamper-proof: the post step runs as the runner user from files the job can
- * modify (docs/DESIGN-post-run-integrity.md).
+ * modify (docs/LIMITATIONS.md).
  */
 
 import * as core from '@actions/core';
