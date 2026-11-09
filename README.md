@@ -13,6 +13,11 @@ The action checks the hostname, not the IP address. Allowed IP addresses often b
 CDNs and cloud ranges, so an IP allowlist also lets traffic through to an attacker's site on the
 same range. [How it works](docs/HOW-IT-WORKS.md) explains the design.
 
+An allowed host is still a way out: a step can `npm publish` or `git push` your secrets to it.
+With `http-filter`, the action also checks the method and path of each request to the hosts that
+you name. For example, a job can install from npm but not publish, or push only to your own
+repositories.
+
 Safer Runner runs on GitHub-hosted Ubuntu 24.04 and 26.04 runners.
 
 ## Get started
@@ -42,7 +47,10 @@ change to `enforce` mode, which blocks everything that the configuration does no
    **Suggested Enforce Configuration** section contains a `uses:` block with the settings that
    this job needs.
 
-4. Review the suggestion, and copy it into the workflow. It looks like this:
+4. Review the suggestion, and copy it into the workflow. Below it, the section **Optional: narrow
+   the allowed hosts further with `http-filter`** suggests the methods and paths that the job used
+   on each host. Add that too, to block the writes that the job does not need. The step then looks
+   like this:
 
    ```yaml
          - uses: portswigger-tim/safer-runner-action@9874c0f024d1dff1e137c2c687c04b954287b498 # v2.4.0
@@ -50,7 +58,14 @@ change to `enforce` mode, which blocks everything that the configuration does no
              mode: enforce
              allowed-domains: |
                registry.npmjs.org
+             http-filter: |
+               registry.npmjs.org:
+                 "*": GET, HEAD
    ```
+
+   The `http-filter` makes `registry.npmjs.org` read-only: `npm ci` can install packages, but
+   `npm publish` is blocked. [Limit methods and paths on a host](docs/HTTP-FILTER.md) shows more
+   examples, such as allowing `git push` only to your own repositories.
 
    You do not need to allow GitHub's own hosts (checkout, artifacts, cache and OIDC). The action
    allows them automatically.
