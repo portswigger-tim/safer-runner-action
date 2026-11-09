@@ -237,7 +237,7 @@ export function parseMethods(value: string | string[] | null, where = 'http-filt
 }
 
 /**
- * http-filter (docs/DESIGN-L7-path-method.md): host -> { path pattern -> methods }. Naming a
+ * http-filter (docs/HTTP-FILTER.md): host -> { path pattern -> methods }. Naming a
  * host makes it default-deny; it only ever narrows hosts already in allowed-domains.
  *
  * Input is YAML or JSON, read by the `yaml` library (parseFilterYaml): host keys; under each,

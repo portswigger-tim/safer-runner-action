@@ -48,7 +48,7 @@ export interface PlatformEndpoint {
 }
 
 /**
- * Built-in platform allowlist for http-filter (docs/DESIGN-L7-path-method.md): the endpoints
+ * Built-in platform allowlist for http-filter (docs/HTTP-FILTER.md): the endpoints
  * the Actions machinery and first-party actions need, so that filtering a GitHub host does not
  * break the job's own step logs, artifacts, cache or OIDC. Applied (when allow-github-platform
  * is on) only on a host the job filters. Essential entries always apply: step/job log

@@ -86,8 +86,8 @@ existing inputs; drop-in for v2.1.0.
   and paths you name — make a package host or API read-only (`"*": GET, HEAD`), or allow
   `git push` only to specific repos while clones and reads keep working. It is purely subtractive
   (it never widens access) and applies to intercepted HTTPS and plain HTTP. `*` is the same glob
-  as `allowed-domains`. See the README section and
-  [docs/DESIGN-L7-path-method.md](DESIGN-L7-path-method.md).
+  as `allowed-domains`. See
+  [docs/HTTP-FILTER.md](HTTP-FILTER.md).
 - **`allow-github-platform`** (new input, default `true`): an explicit built-in allowlist that
   keeps the Actions platform working when you filter a GitHub host — step logs, status, artifact
   and cache uploads, OIDC, and job lease renewal / completion. Set it `false` for a hard lockdown.
@@ -111,8 +111,7 @@ Security hardening and report accuracy. No input changes — drop-in for v2.0.0.
 - **Post-run integrity is labelled advisory.** The summary no longer shows "boundary intact" on
   the strength of a check a malicious step could suppress. It shows "controls applied at setup"
   plus a separate post-run status chip (advisory / tampered / unverified). Enforcement never
-  depended on the post step. See [docs/DESIGN-post-run-integrity.md](DESIGN-post-run-integrity.md)
-  for a proposed supervisor design.
+  depended on the post step.
 - **Report tidy-up.** The "Subdomains of exact entries" section is removed; refused subdomains
   of exact entries are still listed under Diagnostics → DNS refused.
 - **New: [docs/CICD-GOOD-PRACTICE.md](CICD-GOOD-PRACTICE.md)** — defence-in-depth practices for

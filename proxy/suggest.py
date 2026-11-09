@@ -6,7 +6,7 @@ checked with the same path matching that enforces it (policy_core: path_forms, P
 specificity): there is no second copy of the matcher to drift. The path-segment redaction a
 suggestion needs (which segments may be printed) lives here too, in one place.
 
-Shape (level B, docs/DESIGN-L7-path-method.md "Suggested http-filter (report)"):
+Shape (docs/HTTP-FILTER.md "Build a filter from the job's own traffic"):
 observe -> split reads from writes -> template writes -> union methods. Reads collapse to one
 ``"*"`` line per host; write paths keep their structure with ids and hashes as ``*``; git push
 and fetch stay pinned to the repos used.

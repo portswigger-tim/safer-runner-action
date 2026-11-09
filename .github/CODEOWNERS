@@ -1,6 +1,6 @@
 # Owner review for the files that decide what runs (with root) on users' runners and how it is
-# built and released. Enforced only when branch protection / a ruleset requires code-owner
-# review - see docs/security/repo-hardening.md.
+# built and released. This requests review only: the main-branch ruleset does not require
+# code-owner review.
 
 /dist/                @portswigger-tim
 /src/                 @portswigger-tim
