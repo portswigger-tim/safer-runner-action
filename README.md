@@ -79,13 +79,11 @@ needs them, the suggestion includes `sudo-config` or `docker: keep`, and the job
 
 ## Documentation
 
-### How-to guides
+### Explanation
 
-- [Troubleshooting](docs/TROUBLESHOOTING.md): find why a request was blocked, and fix it.
-- [Limit methods and paths on a host](docs/HTTP-FILTER.md): make a registry read-only, allow
-  `git push` only to your own repositories, or build a filter from the job's traffic.
-- [Verifying this action](docs/VERIFYING.md): pin the action by SHA and check its build
-  provenance.
+- [How it works](docs/HOW-IT-WORKS.md): the threat model, the four layers of control, and the
+  job lifecycle.
+- [CI/CD good practice](docs/CICD-GOOD-PRACTICE.md): other controls to use with this action.
 
 ### Reference
 
@@ -96,10 +94,12 @@ needs them, the suggestion includes `sudo-config` or `docker: keep`, and the job
 - [Limitations](docs/LIMITATIONS.md): what the action does not control.
 - [Release notes](docs/RELEASE-NOTES.md)
 
-### Explanation
+### How-to guides
 
-- [How it works](docs/HOW-IT-WORKS.md): the threat model, the four layers of control, and the
-  job lifecycle.
-- [CI/CD good practice](docs/CICD-GOOD-PRACTICE.md): other controls to use with this action.
+- [Troubleshooting](docs/TROUBLESHOOTING.md): find why a request was blocked, and fix it.
+- [Limit methods and paths on a host](docs/HTTP-FILTER.md): make a registry read-only, allow
+  `git push` only to your own repositories, or build a filter from the job's traffic.
+- [Verifying this action](docs/VERIFYING.md): pin the action by SHA and check its build
+  provenance.
 
 To report a vulnerability, read the [security policy](SECURITY.md).
