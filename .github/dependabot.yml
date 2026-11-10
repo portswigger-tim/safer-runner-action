@@ -8,8 +8,9 @@
 #   upstream release has time to be caught and yanked before it reaches a PR here.
 # - groups cover minor/patch only, so a major arrives as its own PR (grouping a major with
 #   minors produces an unmergeable PR). Majors that need a migration are ignored here and
-#   tracked as issues: TypeScript (7.x = native rewrite; ts-jest and our jest-globals aren't
-#   ready) and @actions/core / @actions/exec (3.x = ESM-only; the build/test toolchain is CJS).
+#   tracked as issues: @actions/core / @actions/exec (3.x = ESM-only; the build/test toolchain
+#   is CJS). Native TypeScript is tracked via @typescript/native; the typescript alias stays
+#   on the TS6 compatibility API used by ts-jest.
 
 version: 2
 updates:
@@ -35,7 +36,7 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@actions/exec"
         update-types: ["version-update:semver-major"]
-      # 7.x is the native-compiler rewrite; ts-jest peers <7 (tracked as an issue).
+      # Keep Jest's JavaScript compiler API on TS6; update the native compiler separately.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
 

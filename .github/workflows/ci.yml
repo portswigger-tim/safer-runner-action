@@ -37,7 +37,7 @@ jobs:
       # No dependency of this project needs an install script.
       - run: npm ci --ignore-scripts
 
-      # Clean + Prettier (write) + jest + python + build all three ncc bundles.
+      # Clean + Prettier (write) + TS7 checks (production/tests) + jest + python + three ncc bundles.
       # Same work as `pre-commit run --all-files`; a type error fails the build (tsc) and a
       # test failure fails here, each with its own output.
       - name: Build and test (npm run package)

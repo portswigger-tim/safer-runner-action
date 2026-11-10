@@ -110,7 +110,8 @@ proxy/
 npm run build        # tsc, then ncc: lib/main.js -> dist/main/index.js
 npm run build:pre    # ncc: lib/pre.js  -> dist/pre/index.js
 npm run build:post   # ncc: lib/post.js -> dist/post/index.js
-npm run package      # clean + prettier --write + test + build all three (recommended)
+npm run typecheck    # native TS7 checks production and tests, including @ts-expect-error guards
+npm run package      # clean + prettier --write + typecheck + test + build all three (recommended)
 npm test             # jest + the Python tests (npm run test:py)
 npm run gen:domains  # regenerate src/config/github-domains.generated.ts
 ```
@@ -122,7 +123,18 @@ byte-identical to a clean rebuild. The proxy addon files `proxy/policy.py` and
 `proxy/policy_core.py` are not bundled: setup copies them from the action checkout to the
 root-owned `/opt/safer-runner/proxy/`.
 
-`.pre-commit-config.yaml` runs the same checks (format, `tsc --noEmit`, tests, dist sync)
+TypeScript uses the [upstream-supported side-by-side setup](https://github.com/kulshekhar/ts-jest/blob/main/website/docs/guides/typescript-7.md):
+`@typescript/native` aliases TypeScript 7 and provides `tsc` for builds and type checks;
+`typescript` aliases `@typescript/typescript6`, whose JavaScript compiler API `ts-jest` uses
+for transforms and diagnostics. `npx tsc6` runs that compatibility compiler for comparison.
+`tsconfig.json` checks production code with Node types; `tsconfig.test.json` includes tests
+and Jest globals. Both keep CommonJS/ES2022 output and use the modern `bundler` resolver.
+`npm run typecheck` checks both with TS7 so tests' compile-time guards are checked by the
+compiler that builds the action. For native editor tooling in VS Code, use Microsoft's
+[TypeScript 7 extension](https://marketplace.visualstudio.com/items?itemName=TypeScriptTeam.native-preview);
+the package named `typescript` intentionally exposes the TS6 compatibility API.
+
+`.pre-commit-config.yaml` runs the same checks (format, `npm run typecheck`, tests, dist sync)
 on `git commit`.
 
 ### Lifecycle (pre / main / post)
@@ -579,7 +591,8 @@ version. Release notes describe security fixes as "hardening" and carry no explo
 - `conntrack` from apt
 
 **Development**:
-- `typescript`, `@vercel/ncc` (bundles each entry point), `jest` + `ts-jest`, `prettier`
+- `@typescript/native` (TS7 builds/checks), `typescript` (TS6 compatibility API for `ts-jest`),
+  `@vercel/ncc` (bundles each entry point), `jest` + `ts-jest`, `prettier`
 - Python 3 (unittest) for the addon tests
 
 **Node.js built-ins**: `crypto` (SHA256 for the integrity check and downloads), `fs`, `dns`, `net`.
@@ -587,7 +600,7 @@ version. Release notes describe security fixes as "hardening" and carry no explo
 ## 🐛 Troubleshooting
 
 ### Build Issues
-- Type errors: `npx tsc --noEmit`.
+- Type errors: `npm run typecheck` (production and tests).
 - CI says `dist/` is out of date: run `npm run package` and commit the result.
 - Prettier changes files in `npm run package`: commit them (CI checks the tree is clean).
 

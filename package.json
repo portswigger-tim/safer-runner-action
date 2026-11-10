@@ -10,7 +10,8 @@
     "clean": "rm -rf dist lib",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "package": "npm run clean && npm run format && npm test && npm run build && npm run build:pre && npm run build:post",
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json",
+    "package": "npm run clean && npm run format && npm run typecheck && npm test && npm run build && npm run build:pre && npm run build:post",
     "test": "jest && npm run test:py",
     "all": "npm run package",
     "gen:domains": "tsc && node lib/scripts/gen-github-domains.js && prettier --write src/config/github-domains.generated.ts",
@@ -33,10 +34,11 @@
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^26.6.6",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "@vercel/ncc": "^0.45.0",
     "jest": "^30.5.2",
     "prettier": "^3.9.10",
     "ts-jest": "^29.4.15",
-    "typescript": "^5.2.2"
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }
