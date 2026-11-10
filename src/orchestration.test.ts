@@ -1504,7 +1504,10 @@ describe('post step transcript', () => {
       delete process.env['STATE_setup-end-main'];
       delete process.env['STATE_setup-end-pre'];
     }
-    expect(h.summaryText).toContain('| `disable-sudo` | sudo | 1 | `/usr/bin/cat /etc/resolv.conf` |');
+    // the job's own, and allowed: enforce keeps the action's read-only check lines for every step
+    expect(h.summaryText).toContain('<summary>Sudo, allowed: 1 command · 1 run</summary>');
+    expect(h.summaryText).not.toMatch(/\| sudo \| \d/);
+    expect(h.summaryText).not.toContain('sudo-config: |');
     // only that one: setup's own lines (before its last command) and this step's stay the action's
     expect(h.log.filter(l => l.startsWith('info: sudo (workflow)'))).toEqual([
       'info: sudo (workflow) /usr/bin/cat /etc/resolv.conf'

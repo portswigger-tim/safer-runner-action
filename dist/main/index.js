@@ -3690,6 +3690,7 @@ exports.getSudoLoggingConfigFile = getSudoLoggingConfigFile;
 exports.buildSudoRsyslogConfig = buildSudoRsyslogConfig;
 exports.buildSudoLoggingDropIn = buildSudoLoggingDropIn;
 exports.getValidationSudoCommands = getValidationSudoCommands;
+exports.isBuiltinSudoCommand = isBuiltinSudoCommand;
 exports.getRequiredSudoCommands = getRequiredSudoCommands;
 exports.sudoersCommand = sudoersCommand;
 exports.buildRestrictedSudoers = buildRestrictedSudoers;
@@ -3763,6 +3764,15 @@ function getValidationSudoCommands() {
         ...files.map(file => `/usr/bin/cat ${file}`),
         ...baseline_1.IPTABLES_CHAINS.map(chain => `/usr/sbin/iptables ${(0, baseline_1.iptablesListArgs)(chain).join(' ')}`)
     ];
+}
+const BUILTIN_SUDO = new Set(getValidationSudoCommands());
+/**
+ * A command the restricted sudoers always keeps (getRequiredSudoCommands: the exact read-only
+ * check lines, as any user, no SETENV), so enforce allows it to any step and a sudo-config never
+ * needs it. With `sudo -E` it is not: the sudoers line has no SETENV.
+ */
+function isBuiltinSudoCommand(c) {
+    return !c.env && BUILTIN_SUDO.has([c.command, ...c.args.split(/ +/).filter(Boolean)].join(' '));
 }
 /**
  * Sudo commands run by the action itself while sudo logging is active
@@ -3995,8 +4005,9 @@ function ruleAllows(r, command, args) {
 }
 /**
  * Analyze: the workflow's own sudo commands the declared policy would block in enforce. With sudo
- * kept (disable-sudo: false) nothing would be; otherwise everything the sudo-config rules don't
- * allow (they run as root only, and allow no environment variables: no SETENV).
+ * kept (disable-sudo: false) nothing would be; otherwise everything that neither the action's own
+ * read-only check lines (isBuiltinSudoCommand) nor the sudo-config rules allow (they run as root
+ * only, and allow no environment variables: no SETENV).
  *
  * Best effort: the sudo log shows neither `sudo -E` nor argument boundaries (arguments are joined
  * with spaces), so a command this allows can still be refused in enforce.
@@ -4005,7 +4016,9 @@ function evaluateSudo(rules, kept, ran) {
     const allowed = [];
     const wouldBlock = [];
     for (const c of ran) {
-        const ok = kept || ((c.targetUser || 'root') === 'root' && !c.env && rules.some(r => ruleAllows(r, c.command, c.args)));
+        const ok = kept ||
+            isBuiltinSudoCommand(c) ||
+            ((c.targetUser || 'root') === 'root' && !c.env && rules.some(r => ruleAllows(r, c.command, c.args)));
         (ok ? allowed : wouldBlock).push(c);
     }
     return { allowed, wouldBlock };

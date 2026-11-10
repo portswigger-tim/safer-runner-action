@@ -5,7 +5,14 @@ import * as path from 'path';
 import type { Mode } from '../../policy';
 import { suggestSudoConfig } from '../../report/suggest';
 import { actionRoot } from '../mitmproxy/index';
-import { evaluateSudo, parseSudoLine, runnerWritableDirs, sudoRuleWarning, type SudoRule } from './config';
+import {
+  evaluateSudo,
+  isBuiltinSudoCommand,
+  parseSudoLine,
+  runnerWritableDirs,
+  sudoRuleWarning,
+  type SudoRule
+} from './config';
 import type { SudoCommand } from './log';
 import type { SudoPolicyReport } from './report';
 
@@ -35,9 +42,11 @@ export function observeSudoPolicy(mode: Mode, marker: SudoMarker, ran: SudoComma
   const policy: SudoPolicyReport = { rules: [...(marker.sudoConfig ?? [])], kept, wouldBlock: [] };
   if (mode !== 'analyze') return policy;
   policy.wouldBlock = evaluateSudo(rules, kept, ran).wouldBlock;
-  if (ran.length) {
+  // enforce keeps the action's own read-only check lines for every step: never suggest them
+  const needed = ran.filter(c => !isBuiltinSudoCommand(c));
+  if (needed.length) {
     try {
-      const suggestion = suggestSudoConfig(ran, path.join(actionRoot(), 'proxy'));
+      const suggestion = suggestSudoConfig(needed, path.join(actionRoot(), 'proxy'));
       const writable = runnerWritableDirs();
       policy.suggestion = suggestion;
       policy.flagged = Object.fromEntries(

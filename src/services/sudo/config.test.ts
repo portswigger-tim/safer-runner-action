@@ -2,6 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   evaluateSudo,
+  getRequiredSudoCommands,
+  getValidationSudoCommands,
+  isBuiltinSudoCommand,
   parseSudoConfig,
   parseSudoLine,
   ruleAllows,
@@ -169,5 +172,27 @@ describe('evaluateSudo (analyze: what enforce would block)', () => {
 
   it('disable-sudo: false keeps sudo: nothing would be blocked', () => {
     expect(evaluateSudo([], true, RAN)).toEqual({ allowed: RAN, wouldBlock: [] });
+  });
+
+  // the restricted sudoers keeps the action's read-only check lines for the runner user, whoever
+  // runs them: analyze must not say enforce would block them (and so suggest them as sudo-config)
+  it("the action's own read-only check lines: allowed with no sudo-config, as the sudoers keeps them", () => {
+    const builtin = getValidationSudoCommands().map(line => {
+      const [command, ...args] = line.split(' ');
+      return ran(command, args.join(' '));
+    });
+    expect(builtin.length).toBeGreaterThan(10);
+    expect(evaluateSudo([], false, builtin)).toEqual({ allowed: builtin, wouldBlock: [] });
+    // every one is a line of the sudoers file enforce installs
+    for (const line of getValidationSudoCommands()) expect(getRequiredSudoCommands()).toContain(line);
+  });
+
+  it('only the exact line: other arguments, or sudo -E (no SETENV), would be blocked', () => {
+    const cat = ran('/usr/bin/cat', '/etc/resolv.conf');
+    expect(isBuiltinSudoCommand(cat)).toBe(true);
+    expect(isBuiltinSudoCommand(ran('/usr/bin/cat', '/etc/shadow'))).toBe(false);
+    expect(isBuiltinSudoCommand(ran('/usr/bin/cat', '/etc/resolv.conf /etc/shadow'))).toBe(false);
+    expect(isBuiltinSudoCommand({ ...cat, env: true })).toBe(false);
+    expect(evaluateSudo([], false, [ran('/usr/bin/cat', '/etc/shadow')]).wouldBlock).toHaveLength(1);
   });
 });
