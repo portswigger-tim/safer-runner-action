@@ -1,337 +1,241 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
 exports[`job summary golden snapshots analyze: docker: keep with no use of docker (partial recording) 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`analyze\` · job \`build\`
 
-<kbd>ANALYZE</kbd>
+| Enforce would block | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| 0 | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | 0 | ⚠️ 0, partial |
 
-Nothing was blocked: analyze only observes. **Under enforce, check the ⚠️ rows below** (ADVISORY, or not fully seen).
-
-|  | Area | Result |
-|:-:|:--|:--|
-| ⚠️ | Docker | \`docker: keep\` keeps docker, though no use was seen (ADVISORY) |
-| ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ✅ | Sudo | the job ran no sudo |
-
-## 🔧 Suggested Enforce Configuration
-
-Review every line before you use it; inputs not listed stay as they are. A ⚠️ line makes enforce ADVISORY.
+#### For enforce
 
 \`\`\`yaml
-- uses: portswigger-tim/safer-runner-action@v2.3.0 # pin an exact version or commit SHA
+- uses: portswigger-tim/safer-runner-action@v2.3.0
   with:
     mode: enforce
     docker: remove-group
 \`\`\`
 
-<sub>Docker access is root-equivalent: any step can use it to remove the egress controls, so enforce with \`docker: keep\` is ADVISORY. The recording did not cover the whole job (dockerd stopped, restarted or was not running at setup), so some use of docker may be missing. Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.</sub>
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+<sub>The docker recording did not cover the whole job (dockerd stopped, restarted or was not running at setup).</sub>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
-
-</details>
-
-## 🔑 Sudo
-
-The job ran no sudo.
-
-<details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
-
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
-
-</details>
-
-## 🐳 Docker
-
-No use of docker after setup was seen.
-
-<details>
-<summary>🖥️ <b>Runner System</b>: docker access unchanged (analyze)</summary>
-
-|  | Action | Result |
-|:-:|:--|:--|
-| ✅ | \`docker: keep\` | evaluated, not applied (analyze); runner user can use docker |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · config not verified</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<details>
+<summary>Safer Runner: self-tests 3/3 · tamper check: not run</summary>
+
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ⚠️ | tamper check | not run |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
+| ✅ | \`docker: keep\` | not applied (analyze); runner user can use docker |
+
+</details>
+
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots analyze: docker: stop would stop the service containers 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`analyze\` · job \`build\`
 
-<kbd>ANALYZE</kbd>
+| Enforce would block | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| **1** | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | 0 | 0 |
 
-Nothing was blocked: analyze only observes. **Under enforce, this job would be blocked in Docker.** Use the configuration below, or change the job.
+#### Enforce would block
 
-|  | Area | Result |
-|:-:|:--|:--|
-| 🟠 | Docker | \`docker: stop\` would stop 2 service containers |
-| ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ✅ | Sudo | the job ran no sudo |
+| Reason | Layer | Tries | Names |
+|:--|:--|--:|:--|
+| \`docker: stop\` | docker | 2 | service containers |
 
-## 🔧 Suggested Enforce Configuration
-
-Review every line before you use it; inputs not listed stay as they are. A ⚠️ line makes enforce ADVISORY.
+#### For enforce
 
 \`\`\`yaml
-- uses: portswigger-tim/safer-runner-action@v2.3.0 # pin an exact version or commit SHA
+- uses: portswigger-tim/safer-runner-action@v2.3.0
   with:
     mode: enforce
     docker: remove-group
 \`\`\`
 
-<sub>\`docker: stop\` would stop service containers: \`remove-group\` keeps them running and still takes docker from the job.</sub>
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+<sub>\`docker: remove-group\` keeps service containers running, where \`docker: stop\` would stop them.</sub>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
-
-</details>
-
-## 🔑 Sudo
-
-The job ran no sudo.
-
-<details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
-
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
-
-</details>
-
-## 🐳 Docker
-
-No use of docker after setup was seen.
-
-2 containers already ran at setup (service containers).
-
-<details>
-<summary>🖥️ <b>Runner System</b>: docker access unchanged (analyze)</summary>
-
-|  | Action | Result |
-|:-:|:--|:--|
-| ✅ | \`docker: stop\` | evaluated, not applied (analyze); runner user can use docker |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · config not verified</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<details>
+<summary>Docker use after setup: none</summary>
+
+Service containers running at setup: 2
+
+</details>
+
+<details>
+<summary>Safer Runner: self-tests 3/3 · tamper check: not run</summary>
+
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ⚠️ | tamper check | not run |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
+| ✅ | \`docker: stop\` | not applied (analyze); runner user can use docker |
+
+</details>
+
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots analyze: sudo the policy would block, with the suggested sudo-config 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`analyze\` · job \`build\`
 
-<kbd>ANALYZE</kbd>
+| Enforce would block | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| **1** | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | ⚠️ 2 | not recorded |
 
-Nothing was blocked: analyze only observes. **Under enforce, this job would be blocked in Sudo.** Use the configuration below, or change the job.
+#### Enforce would block
 
-|  | Area | Result |
-|:-:|:--|:--|
-| 🟠 | Sudo | 1 command would be blocked |
-| ⚠️ | Docker | not evaluated: the job's use of docker was not seen |
-| ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
+| Reason | Layer | Tries | Names |
+|:--|:--|--:|:--|
+| \`sudo-config\` | sudo | 1 | \`/usr/bin/apt-get install -y jq\` |
 
-## 🔧 Suggested Enforce Configuration
-
-Review every line before you use it; inputs not listed stay as they are. A ⚠️ line makes enforce ADVISORY.
+#### For enforce
 
 \`\`\`yaml
-- uses: portswigger-tim/safer-runner-action@v2.3.0 # pin an exact version or commit SHA
+- uses: portswigger-tim/safer-runner-action@v2.3.0
   with:
     mode: enforce
-    sudo-config: | # ⚠️ any sudo-config makes enforce ADVISORY
+    sudo-config: | # ⚠️ ADVISORY
       - /usr/bin/apt-get install -y jq
       - /usr/sbin/service nginx restart
 \`\`\`
 
-<sub>Sudo lines not suggested: 1 with arguments that look like a secret, 1 run as another user. A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Enforce with any \`sudo-config\` is ADVISORY. Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.</sub>
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+<sub>The job sets \`sudo-config\`, so enforce would be ADVISORY. Sudo lines not suggested: 1 with arguments that look like a secret, 1 run as another user.</sub>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
-
-</details>
-
-## 🔑 Sudo
-
-|  | Command | Result |
-|:-:|:--|:--|
-| 🟠 | \`sudo /usr/bin/apt-get install -y jq\` | enforce would block it |
-| ⚠️ | \`sudo /usr/sbin/service nginx restart\` | allowed by \`sudo-config\` |
-
-<sub>Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.</sub>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
-
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
-
-</details>
-
-## 🐳 Docker
-
-No container traffic.
-
-<details>
-<summary>🖥️ <b>Runner System</b>: docker access unchanged (analyze)</summary>
-
-|  | Action | Result |
-|:-:|:--|:--|
-| ✅ | \`docker: keep\` | evaluated, not applied (analyze); runner user can use docker |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · config not verified</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<details>
+<summary>Sudo, allowed: 1 command · 1 run</summary>
+
+| Command | Runs |
+|:--|--:|
+| \`/usr/sbin/service nginx restart\` | 1 |
+
+</details>
+
+<details>
+<summary>Safer Runner: self-tests 3/3 · tamper check: not run</summary>
+
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ⚠️ | tamper check | not run |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
+| ✅ | \`docker: keep\` | not applied (analyze); runner user can use docker |
+
+</details>
+
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots analyze: suggestions, sudo usage, docker policy not applied 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`analyze\` · job \`build\`
 
-<kbd>ANALYZE</kbd>
+| Enforce would block | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| **14** | 3 + 3 GitHub | 5 | 1.0 KiB | 3.3 MiB | 1 | not recorded |
 
-Nothing was blocked: analyze only observes. **Under enforce, this job would be blocked in Network, HTTP filter, Sudo.** Use the configuration below, or change the job.
+#### Enforce would block
 
-> [!CAUTION]
-> **Bypass attempts to 2 hosts were seen** (1 Host/SNI spoof, 1 name that points at internal addresses). Enforce blocks them. A normal build does not do this: check the steps that ran.
+| Reason | Layer | Tries | Names |
+|:--|:--|--:|:--|
+| \`host-sni-mismatch\` | http | 1 | \`front.example.org\` inside TLS for \`cdn.jsdelivr.net\`, dialled \`151.101.1.229\` |
+| \`upstream-ip-forbidden\` | ip, http | 1 | \`imds.example.org\` <sub>plain HTTP</sub> → \`169.254.169.254\` |
+| \`sni-not-allowed\` | sni | 2 | \`exfil.example.net\` |
+| \`sni-denied\` | sni | 1 | \`gist.githubusercontent.com\` |
+| \`no-sni\` | sni | 1 | \`1.1.1.1:443\` |
+| \`ip-literal-sni\` | sni | 1 | \`8.8.8.8\` |
+| \`host-not-allowed\` | http | 1 | \`pypi.example.com\` <sub>plain HTTP</sub> |
+| \`upstream-unresolved\` | ip | 1 | \`typo.example.com\` |
+| \`future-reason\` | sni | 1 | \`other.example.com\` |
+| \`path-not-allowed\` | http-filter | 1 | \`uploads.example.com\` \`PUT\` ‹path hidden› |
+| \`method-not-allowed\` | http-filter | 1 | \`uploads.example.com\` \`INVALID\` ‹path hidden› |
+| \`WOULD_BLOCK\` | dns | — | \`tunnel.example.com\` |
+| \`Egress\` | firewall | 1 | \`198.51.100.7:22\` TCP · SSH · uid 1001 |
+| \`disable-sudo\` | sudo | 1 | \`/usr/bin/apt-get install -y jq\` |
 
-|  | Area | Result |
-|:-:|:--|:--|
-| 🟠 | Network | **2 bypass attempts would be blocked** · 3 hosts not on the allowlist would be blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` · 1 connection outside the proxy would be rejected (SSH to \`198.51.100.7:22\`) · 3 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| 🟠 | HTTP filter | 2 requests would be blocked: \`uploads.example.com\` |
-| 🟠 | Sudo | 1 command would be blocked |
-| ⚠️ | Docker | not evaluated: the job's use of docker was not seen |
-| ⚠️ | Setup | self-tests 3/3 · config not verified |
-
-## 🔧 Suggested Enforce Configuration
-
-Review every line before you use it; inputs not listed stay as they are. A ⚠️ line makes enforce ADVISORY.
+#### For enforce
 
 \`\`\`yaml
-- uses: portswigger-tim/safer-runner-action@v2.3.0 # pin an exact version or commit SHA
+- uses: portswigger-tim/safer-runner-action@v2.3.0
   with:
     mode: enforce
     allowed-domains: |
@@ -341,358 +245,202 @@ Review every line before you use it; inputs not listed stay as they are. A ⚠�
       .example.org
       exfil.example.net
       pypi.example.com
+    http-filter: |
+      api.github.com:
+        "*": GET, HEAD
+        "repos/*/*/issues/*/comments": POST
 \`\`\`
 
-<sub>1 blocked name not suggested (on the risky-subdomain denylist, or a name that looks like data). GitHub's own hosts are trusted automatically and are not listed. Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.</sub>
+<sub>1 blocked name not suggested (on the risky-subdomain denylist, or it looks like data).</sub>
 
 <details>
-<summary>Optional: narrow the allowed hosts further with <code>http-filter</code> (12 requests → 2 rules; 1 write endpoint kept specific)</summary>
+<summary>Allowed: 3 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-Built from this job's allowed requests: reads collapse to one \`"*"\` line per host, write paths keep their structure. A filter only narrows: each host must still be allowed. Add it under \`with:\`.
-
-\`\`\`yaml
-http-filter: |
-  api.github.com:
-    "*": GET, HEAD
-    "repos/*/*/issues/*/comments": POST
-\`\`\`
-
-</details>
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Would be blocked**
-
-|  | Host | What happened | Tries |
-|:-:|:--|:--|--:|
-| 🟠 | \`front.example.org\` | Host/SNI mismatch (domain fronting)<br><sub>inside TLS for \`cdn.jsdelivr.net\` · dialled \`151.101.1.229\`</sub> | 1 |
-| 🟠 | \`imds.example.org\` | Internal address → \`169.254.169.254\` (cloud metadata service) | 1 |
-| 🟠 | \`exfil.example.net\` | Not on the allowlist | 2 |
-| 🟠 | \`gist.githubusercontent.com\` | On the risky-subdomain denylist | 1 |
-| 🟠 | \`pypi.example.com\` | Not on the allowlist (plain HTTP) | 1 |
-| 🟠 | \`typo.example.com\` | Did not resolve; nothing was sent | 1 |
-| 🟠 | \`1.1.1.1:443\` | TLS with no SNI | 1 |
-| 🟠 | \`8.8.8.8\` | TLS with an IP address as SNI | 1 |
-| 🟠 | \`other.example.com\` | Refused: \`future-reason\` | 1 |
-
-**Would be refused by \`http-filter\`**
-
-|  | Host | Request | Why | Tries |
-|:-:|:--|:--|:--|--:|
-| 🟠 | \`uploads.example.com\` | \`PUT\` ‹path hidden› | path not allowed | 1 |
-| 🟠 | \`uploads.example.com\` | \`INVALID\` ‹path hidden› | method not allowed on this path | 1 |
-
-<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. If the job needs one of these requests, run it in analyze mode without that host's \`http-filter\` entry: the suggested \`http-filter\` then covers it. Review the rule before you add it: a write is how data leaves.</sub>
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
-| ✅ | \`uploads.example.com\` | 0 | — | — |
-
-<details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 3 hosts · DNS 2 names enforce would refuse · 1 connection outside the proxy</summary>
-
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`cdn.jsdelivr.net\` | 0 | — | — |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
-
-|  | DNS would refuse |
-|:-:|:--|
-| 🟠 | \`tunnel.example.com\` |
-
-**Outside the proxy** <sub>(only TCP 80/443 is proxied; new connections only; logging rate-limited to 60/min)</sub>
-
-|  | Destination | Proto | Likely | UID | Packets |
-|:-:|:--|:--|:--|--:|--:|
-| 🟠 | \`198.51.100.7:22\` | TCP | SSH | 1001 | 1 |
-
-</details>
-
-## 🔑 Sudo
-
-|  | Command | Result |
-|:-:|:--|:--|
-| 🟠 | \`sudo /usr/bin/apt-get install -y jq\` | enforce would block it |
-
-<sub>Best effort: the sudo log does not show \`sudo -E\` or where one argument ends and the next begins, so a command shown as allowed can still be refused in enforce.</sub>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
-
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
-
-</details>
-
-## 🐳 Docker
-
-No container traffic.
-
-<details>
-<summary>🖥️ <b>Runner System</b>: docker access unchanged (analyze)</summary>
-
-|  | Action | Result |
-|:-:|:--|:--|
-| ✅ | \`docker: remove-group\` | evaluated, not applied (analyze); runner user can use docker |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
+| \`uploads.example.com\` | 0 |  |  |  |
 
 </details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · config not verified</summary>
+<summary>GitHub, always allowed: 3 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`cdn.jsdelivr.net\` | 0 |  |  |  |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<details>
+<summary>Safer Runner: self-tests 3/3 · tamper check: not run</summary>
+
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ⚠️ | tamper check | not run |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
+| ✅ | \`docker: remove-group\` | not applied (analyze); runner user can use docker |
+
+</details>
+
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots analyze: the job used docker, so enforce would block it (docker: keep suggested) 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`analyze\` · job \`build\`
 
-<kbd>ANALYZE</kbd>
+| Enforce would block | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| **1** | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | 0 | ⚠️ 10 |
 
-Nothing was blocked: analyze only observes. **Under enforce, this job would be blocked in Docker.** Use the configuration below, or change the job.
+#### Enforce would block
 
-|  | Area | Result |
-|:-:|:--|:--|
-| 🟠 | Docker | used after setup (4 container actions, 1 exec into a container, 2 image actions, 1 build, 2 network changes): enforce would block it |
-| ⚠️ | Setup | self-tests 3/3 · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ✅ | Sudo | the job ran no sudo |
+| Reason | Layer | Tries | Names |
+|:--|:--|--:|:--|
+| \`docker: remove-group\` | docker | 10 | 4 container actions, 1 exec into a container, 2 image actions, 1 build, 2 network changes |
 
-## 🔧 Suggested Enforce Configuration
-
-Review every line before you use it; inputs not listed stay as they are. A ⚠️ line makes enforce ADVISORY.
+#### For enforce
 
 \`\`\`yaml
-- uses: portswigger-tim/safer-runner-action@v2.3.0 # pin an exact version or commit SHA
+- uses: portswigger-tim/safer-runner-action@v2.3.0
   with:
     mode: enforce
-    docker: keep # ⚠️ docker is root-equivalent: enforce is ADVISORY
+    docker: keep # ⚠️ ADVISORY
 \`\`\`
 
-<sub>Docker access is root-equivalent: any step can use it to remove the egress controls, so enforce with \`docker: keep\` is ADVISORY. Best effort: read-only docker calls (\`docker ps\`, \`logs\`, \`inspect\`, \`login\`) leave no event and are not seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze the job can use docker (root) to stop the recording.</sub>
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
-
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
-## 🔑 Sudo
-
-The job ran no sudo.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-## 🐳 Docker
+<details>
+<summary>Docker use after setup: 4 container actions, 1 exec into a container, 2 image actions, 1 build, 2 network changes</summary>
 
-|  | Use after setup | Events |
-|:-:|:--|--:|
-| 🟠 | container action | 4 |
-| 🟠 | exec into a container | 1 |
-| 🟠 | image action | 2 |
-| 🟠 | build | 1 |
-| 🟠 | network change | 2 |
+| Use after setup | Events |
+|:--|--:|
+| container action | 4 |
+| exec into a container | 1 |
+| image action | 2 |
+| build | 1 |
+| network change | 2 |
 
-1 container already ran at setup (service containers).
+Service containers running at setup: 1
 
 Images: \`alpine:3.20\`, \`postgres:16\`, \`ghcr.io/acme/app:1.4.2\`
 
-<details>
-<summary>🖥️ <b>Runner System</b>: docker access unchanged (analyze)</summary>
-
-|  | Action | Result |
-|:-:|:--|:--|
-| ✅ | \`docker: remove-group\` | evaluated, not applied (analyze); runner user can use docker |
-
 </details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · config not verified</summary>
+<summary>Safer Runner: self-tests 3/3 · tamper check: not run</summary>
 
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ⚠️ | tamper check | not run |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
+| ✅ | \`docker: remove-group\` | not applied (analyze); runner user can use docker |
 
 </details>
 
-<sub>analyze · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots containers: SNI-only, refused, untrusted CA, outside the proxy 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`enforce\` · job \`build\`
 
-<kbd>ENFORCE</kbd>
+| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| **4** | 2 + 3 GitHub | 5 | 1.0 KiB | 3.3 MiB | removed | removed |
 
-**Blocked: Network, Docker** (see Detail).
+#### Blocked
 
-> [!IMPORTANT]
-> **1 host not on the allowlist was blocked.** If this job failed, this is probably why: see Network.
+| Reason | Layer | Tries | Names |
+|:--|:--|--:|:--|
+| \`sni-not-allowed\` | sni | 1 | \`ctr-exfil.example.net\` |
+| \`Drop\` | firewall | 2 | \`1.1.1.1:853\` TCP · DNS over TLS · uid 1001 |
+| \`Drop\` | firewall | 1 | \`198.51.100.7:22\` TCP · SSH · uid 1001 |
+| \`CDrop\` | firewall | 1 | \`198.51.100.8:123\` UDP · NTP · from \`redis\` |
 
-|  | Area | Result |
-|:-:|:--|:--|
-| ⛔ | Network | 1 host not on the allowlist blocked: \`ctr-exfil.example.net\` · 2 connections outside the proxy rejected · 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ⛔ | Docker | container egress: 2 destinations blocked · runner user removed from the docker group |
-| ✅ | Sudo | removed from the job |
-| ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
-
-## 🔧 Suggested Enforce Configuration
-
-Running under enforce: the controls were applied at setup.
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Blocked**
-
-|  | Host | What happened | Tries |
-|:-:|:--|:--|--:|
-| ⛔ | \`ctr-exfil.example.net\` | Not on the allowlist | 1 |
-
-If the job needs it, add it (review first):
+#### To allow what was blocked
 
 \`\`\`yaml
-allowed-domains: |
-  ctr-exfil.example.net
+    allowed-domains: |
+      ctr-exfil.example.net
 \`\`\`
 
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` <sub>SNI only</sub> | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
-
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 3 hosts · 2 connections outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-| ✅ | \`productionresultssa1.blob.core.windows.net\` | 0 | — | — |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
-
-**Outside the proxy** <sub>(only TCP 80/443 is proxied; new connections only; logging rate-limited to 60/min)</sub>
-
-|  | Destination | Proto | Likely | UID | Packets |
-|:-:|:--|:--|:--|--:|--:|
-| ⛔ | \`1.1.1.1:853\` | TCP | DNS-over-TLS | 1001 | 2 |
-| ⛔ | \`198.51.100.7:22\` | TCP | SSH | 1001 | 1 |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
-## 🔑 Sudo
-
-The job ran no sudo.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 3 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
+| \`productionresultssa1.blob.core.windows.net\` | 0 |  |  |  |
 
 </details>
 
-## 🐳 Docker
+<details>
+<summary>Containers: 2 containers</summary>
 
-**Container egress** <sub>(through the same proxy and DNS filter; SNI only = checked by TLS name, no CA needed)</sub>
+| Container | Allowed | Blocked |
+|:--|:--|:--|
+| \`redis\` <sub>172.17.0.2</sub> | \`registry.npmjs.org\` <sub>\`container-sni-only\`</sub> | \`ctr-exfil.example.net\` |
+| \`172.17.0.3\` | \`productionresultssa1.blob.core.windows.net\` | — |
 
-|  | Container | Allowed | Blocked | Outside the proxy |
-|:-:|:--|:--|:--|:--|
-| ⛔ | \`redis\`<br><sub>172.17.0.2</sub> | \`registry.npmjs.org\` <sub>SNI only</sub> | \`ctr-exfil.example.net\` | \`198.51.100.8:123\` UDP rejected |
-| ✅ | \`172.17.0.3\` | \`productionresultssa1.blob.core.windows.net\` | — | — |
+⚠️ **TLS failed: the container does not trust the proxy CA:** \`172.17.0.3\` → \`productionresultssa1.blob.core.windows.net\`. Azure Storage front doors stay intercepted for containers: reach them from a step on the runner, or give the container the CA (\`/etc/safer-runner/ca.pem\`).
 
-⚠️ **TLS failed because the container did not trust the runtime CA:** \`172.17.0.3\` → \`productionresultssa1.blob.core.windows.net\`. Containers need no CA, except for multi-tenant front doors (Azure Storage): those stay intercepted so the Host check still stops fronting to another tenant. Reach them from a step on the runner, or give the container the CA (\`/etc/safer-runner/ca.pem\`).
+</details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: docker removed from the runner user</summary>
+<summary>Safer Runner: self-tests 3/3 · tamper check: no change seen</summary>
 
-|  | Action | Result |
-|:-:|:--|:--|
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ✅ | tamper check | no change seen |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
 | ✅ | \`docker: remove-group\` | runner user removed from the docker group, socket root-only |
-
-</details>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · no config change seen (advisory)</summary>
-
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-**Config file tamper check** (advisory): all verified
 
 **Configuration Files**
 
@@ -700,105 +448,66 @@ The job ran no sudo.
 |--|--|
 | /etc/resolv.conf | VERIFIED |
 
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
-
 </details>
 
-<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots enforce ADVISORY: a sudo-config allowlist 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`enforce\` · ADVISORY · job \`build\`
 
-<kbd>ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo allowlist (2)</kbd>
-
-**ADVISORY: not an enforced boundary** (sudo allowlist (2)). Nothing was blocked.
+| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| 0 | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | ⚠️ 2 sudo-config lines | removed |
 
 > [!WARNING]
-> **The boundary was weaker than it looks.**
+> **ADVISORY: not an enforced boundary** (2 sudo-config lines).
 >
-> \`sudo-config\` kept sudo for 2 command lines. A sudo allowlist is not a boundary: a command that can run code or write files gives the job root, and root can remove the egress controls. Remove \`sudo-config\` to make enforce a boundary.
-
-|  | Area | Result |
-|:-:|:--|:--|
-| ⚠️ | Sudo | \`sudo-config\` keeps 2 command lines; the job ran 1 command |
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ✅ | Docker | runner user removed from the docker group |
-| ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
-
-## 🔧 Suggested Enforce Configuration
-
-Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+> \`sudo-config\` kept sudo for 2 command lines: a command that can run code or write files gives the job root, and root can remove the egress controls.
 
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
-## 🔑 Sudo
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ⚠️ | \`sudo /usr/bin/apt-get install -y jq\` | allowed by \`sudo-config\` |
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-## 🐳 Docker
+<details>
+<summary>Sudo, allowed: 1 command · 1 run</summary>
 
-No container traffic.
+| Command | Runs |
+|:--|--:|
+| \`/usr/bin/apt-get install -y jq\` | 1 |
+
+</details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: docker removed from the runner user</summary>
+<summary>Safer Runner: self-tests 3/3 · tamper check: no change seen</summary>
 
-|  | Action | Result |
-|:-:|:--|:--|
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ✅ | tamper check | no change seen |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
 | ✅ | \`docker: remove-group\` | runner user removed from the docker group, socket root-only |
-
-</details>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · no config change seen (advisory)</summary>
-
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-**Config file tamper check** (advisory): all verified
 
 **Configuration Files**
 
@@ -806,126 +515,84 @@ No container traffic.
 |--|--|
 | /etc/resolv.conf | VERIFIED |
 
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
-
 </details>
 
-<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots enforce ADVISORY: sudo and docker retained 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`enforce\` · ADVISORY · job \`build\`
 
-<kbd>ENFORCE · ADVISORY</kbd> <kbd>⚠️ sudo retained</kbd> <kbd>⚠️ docker retained</kbd>
-
-**ADVISORY: not an enforced boundary** (sudo retained, docker retained). **Blocked: Network** (see Detail).
+| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| **3** | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | ⚠️ kept | ⚠️ kept |
 
 > [!WARNING]
-> **The boundary was weaker than it looks.**
+> **ADVISORY: not an enforced boundary** (sudo kept, docker kept).
 >
-> \`disable-sudo: false\` kept sudo, so any step could have removed the egress controls. Remove it to make enforce a boundary.
+> \`disable-sudo: false\` kept sudo, so any step could have removed the egress controls.
 >
-> \`docker: keep\` kept docker (verified on the runner), which is root-equivalent: any step could have removed the egress controls. Use \`docker: remove-group\` (the default) or \`docker: stop\` unless the job needs docker.
+> \`docker: keep\` kept docker, which is root-equivalent: any step could have removed the egress controls.
 
-> [!IMPORTANT]
-> **3 hosts not on the allowlist were blocked.** If this job failed, this is probably why: see Network.
+#### Blocked
 
-|  | Area | Result |
-|:-:|:--|:--|
-| ⛔ | Network | 3 hosts not on the allowlist blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` · 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ⚠️ | Sudo | kept (\`disable-sudo: false\`) |
-| ⚠️ | Docker | kept (\`docker: keep\`) |
-| ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
+| Reason | Layer | Tries | Names |
+|:--|:--|--:|:--|
+| \`sni-not-allowed\` | sni | 2 | \`exfil.example.net\` |
+| \`sni-denied\` | sni | 1 | \`gist.githubusercontent.com\` |
+| \`host-not-allowed\` | http | 1 | \`pypi.example.com\` <sub>plain HTTP</sub> |
 
-## 🔧 Suggested Enforce Configuration
-
-Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Blocked**
-
-|  | Host | What happened | Tries |
-|:-:|:--|:--|--:|
-| ⛔ | \`exfil.example.net\` | Not on the allowlist | 2 |
-| ⛔ | \`gist.githubusercontent.com\` | On the risky-subdomain denylist | 1 |
-| ⛔ | \`pypi.example.com\` | Not on the allowlist (plain HTTP) | 1 |
-
-If the job needs them, add them (review first):
+#### To allow what was blocked
 
 \`\`\`yaml
-allowed-domains: |
-  exfil.example.net
-  pypi.example.com
+    allowed-domains: |
+      exfil.example.net
+      pypi.example.com
 \`\`\`
 
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
-
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
-## 🔑 Sudo
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ⚠️ | \`sudo /usr/bin/apt-get install -y jq\` | allowed: sudo kept |
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-## 🐳 Docker
+<details>
+<summary>Sudo, allowed: 1 command · 1 run</summary>
 
-No container traffic.
+| Command | Runs |
+|:--|--:|
+| \`/usr/bin/apt-get install -y jq\` | 1 |
+
+</details>
 
 <details>
-<summary>🖥️ <b>Runner System</b>: docker kept</summary>
+<summary>Safer Runner: self-tests 3/3 · tamper check: no change seen</summary>
 
-|  | Action | Result |
-|:-:|:--|:--|
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ✅ | tamper check | no change seen |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
 | ⚠️ | \`docker: keep\` | runner user can use docker |
-
-</details>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · no config change seen (advisory)</summary>
-
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-**Config file tamper check** (advisory): all verified
 
 **Configuration Files**
 
@@ -933,98 +600,52 @@ No container traffic.
 |--|--|
 | /etc/resolv.conf | VERIFIED |
 
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
-
 </details>
 
-<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots enforce, nothing blocked 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`enforce\` · job \`build\`
 
-<kbd>ENFORCE</kbd>
-
-Nothing was blocked.
-
-|  | Area | Result |
-|:-:|:--|:--|
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ✅ | Sudo | removed from the job |
-| ✅ | Docker | runner user removed from the docker group |
-| ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
-
-## 🔧 Suggested Enforce Configuration
-
-Running under enforce: the controls were applied at setup.
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| 0 | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | removed | removed |
 
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
-## 🔑 Sudo
-
-The job ran no sudo.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-## 🐳 Docker
-
-No container traffic.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: docker removed from the runner user</summary>
+<summary>Safer Runner: self-tests 3/3 · tamper check: no change seen</summary>
 
-|  | Action | Result |
-|:-:|:--|:--|
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ✅ | tamper check | no change seen |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
 | ✅ | \`docker: remove-group\` | runner user removed from the docker group, socket root-only |
-
-</details>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · no config change seen (advisory)</summary>
-
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-**Config file tamper check** (advisory): all verified
 
 **Configuration Files**
 
@@ -1032,161 +653,86 @@ No container traffic.
 |--|--|
 | /etc/resolv.conf | VERIFIED |
 
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
-
 </details>
 
-<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots enforce: bypass attempts, not-allowed hosts, http-filter refusals and the rest 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`enforce\` · job \`build\`
 
-<kbd>ENFORCE</kbd>
+| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| **15** | 3 + 3 GitHub | 5 | 1.0 KiB | 3.3 MiB | removed | removed |
 
-**Blocked: Network, HTTP filter** (see Detail).
+#### Blocked
 
-> [!CAUTION]
-> **Bypass attempts to 2 hosts were blocked** (1 Host/SNI spoof, 1 name that points at internal addresses). A normal build does not do this: check the steps that ran.
+| Reason | Layer | Tries | Names |
+|:--|:--|--:|:--|
+| \`host-sni-mismatch\` | http | 1 | \`front.example.org\` inside TLS for \`cdn.jsdelivr.net\`, dialled \`151.101.1.229\` |
+| \`upstream-ip-forbidden\` | ip, http | 1 | \`imds.example.org\` <sub>plain HTTP</sub> → \`169.254.169.254\` |
+| \`sni-not-allowed\` | sni | 2 | \`exfil.example.net\` |
+| \`sni-denied\` | sni | 1 | \`gist.githubusercontent.com\` |
+| \`no-sni\` | sni | 1 | \`1.1.1.1:443\` |
+| \`ip-literal-sni\` | sni | 1 | \`8.8.8.8\` |
+| \`host-not-allowed\` | http | 1 | \`pypi.example.com\` <sub>plain HTTP</sub> |
+| \`upstream-unresolved\` | ip | 1 | \`typo.example.com\` |
+| \`future-reason\` | sni | 1 | \`other.example.com\` |
+| \`path-not-allowed\` | http-filter | 1 | \`uploads.example.com\` \`PUT\` ‹path hidden› |
+| \`method-not-allowed\` | http-filter | 1 | \`uploads.example.com\` \`INVALID\` ‹path hidden› |
+| \`BLOCK\` | dns | — | \`srst-x.objects.githubusercontent.com\` |
+| \`BLOCK\` | dns | — | \`tunnel.example.com\` |
+| \`Drop\` | firewall | 2 | \`1.1.1.1:853\` TCP · DNS over TLS · uid 1001 |
+| \`Drop\` | firewall | 1 | \`198.51.100.7:22\` TCP · SSH · uid 1001 |
 
-|  | Area | Result |
-|:-:|:--|:--|
-| ⛔ | Network | **2 bypass attempts blocked** · 3 hosts not on the allowlist blocked: \`exfil.example.net\`, \`gist.githubusercontent.com\`, \`pypi.example.com\` · 2 connections outside the proxy rejected · 3 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ⛔ | HTTP filter | 2 requests blocked: \`uploads.example.com\` |
-| ✅ | Sudo | removed from the job |
-| ✅ | Docker | runner user removed from the docker group |
-| ✅ | Setup | self-tests 3/3 · no config change seen (advisory) |
-
-## 🔧 Suggested Enforce Configuration
-
-Running under enforce: the controls were applied at setup.
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Blocked**
-
-|  | Host | What happened | Tries |
-|:-:|:--|:--|--:|
-| ⛔ | \`front.example.org\` | Host/SNI mismatch (domain fronting)<br><sub>inside TLS for \`cdn.jsdelivr.net\` · dialled \`151.101.1.229\`</sub> | 1 |
-| ⛔ | \`imds.example.org\` | Internal address → \`169.254.169.254\` (cloud metadata service) | 1 |
-| ⛔ | \`exfil.example.net\` | Not on the allowlist | 2 |
-| ⛔ | \`gist.githubusercontent.com\` | On the risky-subdomain denylist | 1 |
-| ⛔ | \`pypi.example.com\` | Not on the allowlist (plain HTTP) | 1 |
-| ⛔ | \`typo.example.com\` | Did not resolve; nothing was sent | 1 |
-| ⛔ | \`1.1.1.1:443\` | TLS with no SNI | 1 |
-| ⛔ | \`8.8.8.8\` | TLS with an IP address as SNI | 1 |
-| ⛔ | \`other.example.com\` | Refused: \`future-reason\` | 1 |
-
-**Refused by \`http-filter\`**
-
-|  | Host | Request | Why | Tries |
-|:-:|:--|:--|:--|--:|
-| ⛔ | \`uploads.example.com\` | \`PUT\` ‹path hidden› | path not allowed | 1 |
-| ⛔ | \`uploads.example.com\` | \`INVALID\` ‹path hidden› | method not allowed on this path | 1 |
-
-<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. If the job needs one of these requests, run it in analyze mode without that host's \`http-filter\` entry: the suggested \`http-filter\` then covers it. Review the rule before you add it: a write is how data leaves.</sub>
-
-If the job needs them, add them (review first):
+#### To allow what was blocked
 
 \`\`\`yaml
-allowed-domains: |
-  exfil.example.net
-  pypi.example.com
+    allowed-domains: |
+      exfil.example.net
+      pypi.example.com
+    http-filter: |
+      api.github.com:
+        "*": GET, HEAD
+        "repos/*/*/issues/*/comments": POST
 \`\`\`
 
 <details>
-<summary>A <code>http-filter</code> built from this job's allowed requests (2 rules; review first)</summary>
+<summary>Allowed: 3 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-\`\`\`yaml
-http-filter: |
-  api.github.com:
-    "*": GET, HEAD
-    "repos/*/*/issues/*/comments": POST
-\`\`\`
-
-</details>
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
-| ✅ | \`uploads.example.com\` | 0 | — | — |
-
-<details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 3 hosts · 5 platform endpoints auto-allowed · DNS 3 names refused · 2 connections outside the proxy</summary>
-
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`cdn.jsdelivr.net\` | 0 | — | — |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
-
-**http-filter**: 5 GitHub platform endpoints auto-allowed on filtered hosts by the built-in platform allowlist (\`allow-github-platform: false\` turns it off).
-
-|  | DNS refused |
-|:-:|:--|
-| ⛔ | \`srst-x.objects.githubusercontent.com\` |
-| ⛔ | \`tunnel.example.com\` |
-
-**Outside the proxy** <sub>(only TCP 80/443 is proxied; new connections only; logging rate-limited to 60/min)</sub>
-
-|  | Destination | Proto | Likely | UID | Packets |
-|:-:|:--|:--|:--|--:|--:|
-| ⛔ | \`1.1.1.1:853\` | TCP | DNS-over-TLS | 1001 | 2 |
-| ⛔ | \`198.51.100.7:22\` | TCP | SSH | 1001 | 1 |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
+| \`uploads.example.com\` | 0 |  |  |  |
 
 </details>
 
-## 🔑 Sudo
-
-The job ran no sudo.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 3 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB · 5 platform endpoints</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`cdn.jsdelivr.net\` | 0 |  |  |  |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-## 🐳 Docker
-
-No container traffic.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: docker removed from the runner user</summary>
+<summary>Safer Runner: self-tests 3/3 · tamper check: no change seen</summary>
 
-|  | Action | Result |
-|:-:|:--|:--|
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ✅ | \`dns-exact\` | srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK |
+| ✅ | tamper check | no change seen |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
 | ✅ | \`docker: remove-group\` | runner user removed from the docker group, socket root-only |
-
-</details>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 3/3 · no config change seen (advisory)</summary>
-
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ✅ \`dns-exact\`: srst-abc.objects.githubusercontent.com -\\> NXDOMAIN; DNS log labels it BLOCK
-
-**Config file tamper check** (advisory): all verified
 
 **Configuration Files**
 
@@ -1194,201 +740,109 @@ No container traffic.
 |--|--|
 | /etc/resolv.conf | VERIFIED |
 
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
-
 </details>
 
-<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots integrity tampered, self-test failed 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`enforce\` · job \`build\`
 
-<kbd>ENFORCE</kbd>
-
-Nothing was blocked.
+| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| 0 | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | removed | removed |
 
 > [!CAUTION]
-> **Self-test failed:** \`dns-exact\`: the proxy may not be enforcing as designed on this runner.
+> **Self-test failed:** \`dns-exact\`.
 >
-> **Safer Runner configuration changed during the job**: see the setup checks under Runner System.
-
-|  | Area | Result |
-|:-:|:--|:--|
-| ⚠️ | Setup | self-tests 2/3 · config CHANGED |
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ✅ | Sudo | removed from the job |
-| ✅ | Docker | runner user removed from the docker group |
-
-## 🔧 Suggested Enforce Configuration
-
-Running under enforce: the controls were applied at setup.
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+> **Tamper check: Safer Runner configuration CHANGED.**
 
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
-## 🔑 Sudo
-
-The job ran no sudo.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-## 🐳 Docker
-
-No container traffic.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: docker removed from the runner user</summary>
+<summary>Safer Runner: self-tests 2/3 · tamper check: CHANGED</summary>
 
-|  | Action | Result |
-|:-:|:--|:--|
+|  | Check | Detail |
+|:--|:--|:--|
+| ✅ | \`sni-block\` | SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35 |
+| ✅ | \`repoint\` | client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200) |
+| ⚠️ | \`dns-exact\` | no BLOCK line |
+| ⚠️ | tamper check | CHANGED |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
 | ✅ | \`docker: remove-group\` | runner user removed from the docker group, socket root-only |
-
-</details>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests 2/3 · config CHANGED</summary>
-
-**Self-tests**
-
-- ✅ \`sni-block\`: SNI selftest.safer-runner.invalid -\\> BLOCK (sni-not-allowed); curl exit 35
-- ✅ \`repoint\`: client dialled 192.0.2.1, proxy connected to 140.82.112.3:443 (HTTP 200)
-- ⚠️ \`dns-exact\`: no BLOCK line
-
-**Config file tamper check** (advisory): ⚠️ CHANGED
 
 | /etc/resolv.conf | ⚠️ TAMPERED | abc -> def |
 
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
-
 </details>
 
-<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;
 
 exports[`job summary golden snapshots integrity unavailable, no self-tests 1`] = `
-"<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">
+"<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.3.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>
 
-# 📋 Summary
+### Safer Runner · \`enforce\` · job \`build\`
 
-<kbd>ENFORCE</kbd>
-
-Nothing was blocked.
-
-|  | Area | Result |
-|:-:|:--|:--|
-| ⚠️ | Setup | self-tests not run · config not verified |
-| ✅ | Network | 2 hosts beyond GitHub allowed · 3 requests · 3.3 MiB |
-| ✅ | Sudo | removed from the job |
-| ✅ | Docker | runner user removed from the docker group |
-
-## 🔧 Suggested Enforce Configuration
-
-Running under enforce: the controls were applied at setup.
-
-# 🔎 Detail
-
-## 🌐 Network
-
-**Allowed: this job's hosts**
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`registry.npmjs.org\` | 2 | ↑ 600 B ↓ 3.0 MiB | 2xx (1)<br>4xx (1) |
-| ✅ | \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | ↑ 200 B ↓ 256.0 KiB | 2xx (1) |
+| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |
+|--:|--:|--:|--:|--:|--:|--:|
+| 0 | 2 + 2 GitHub | 5 | 1.0 KiB | 3.3 MiB | removed | removed |
 
 <details>
-<summary>🖥️ <b>Runner System</b>: GitHub baseline 2 hosts · nothing outside the proxy</summary>
+<summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
-**GitHub baseline** (trusted automatically) · 2 requests · 4.2 KiB
-
-|  | Host | Requests | Data | Responses |
-|:-:|:--|--:|--:|:--|
-| ✅ | \`api.github.com\` | 2 | ↑ 240 B ↓ 4.0 KiB | 2xx (1)<br>3xx (1) |
-| ✅ | \`hosted-compute-abc.githubapp.com\` <sub>SNI only</sub> | — | n/a | n/a |
-
-<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`registry.npmjs.org\` | 2 | 600 B | 3.0 MiB | 200 ×1 · 404 ×1 |
+| \`archive.ubuntu.com\` <sub>plain HTTP</sub> | 1 | 200 B | 256.0 KiB | 200 ×1 |
 
 </details>
 
-## 🔑 Sudo
-
-The job ran no sudo.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: Safer Runner ran 1 sudo command</summary>
+<summary>GitHub, always allowed: 2 hosts · 2 requests · ↑ 240 B · ↓ 4.0 KiB</summary>
 
-**Safer Runner's own sudo** (setup, integrity checks)
-
-|  | Command | Result |
-|:-:|:--|:--|
-| ✅ | \`sudo /usr/bin/cat /etc/resolv.conf\` | the action |
+| Host | Requests | ↑ Out | ↓ In | Status |
+|:--|--:|--:|--:|:--|
+| \`api.github.com\` | 2 | 240 B | 4.0 KiB | 200 ×1 · 304 ×1 |
+| \`hosted-compute-abc.githubapp.com\` | — |  |  | \`passthrough\` |
 
 </details>
 
-## 🐳 Docker
-
-No container traffic.
-
 <details>
-<summary>🖥️ <b>Runner System</b>: docker removed from the runner user</summary>
+<summary>Safer Runner: self-tests not run · tamper check: no baseline</summary>
 
-|  | Action | Result |
-|:-:|:--|:--|
+|  | Check | Detail |
+|:--|:--|:--|
+| ⚠️ | self-tests | not run |
+| ⚠️ | tamper check | no baseline |
+| ✅ | own sudo | \`/usr/bin/cat /etc/resolv.conf\` |
 | ✅ | \`docker: remove-group\` | runner user removed from the docker group, socket root-only |
-
-</details>
-
-<details>
-<summary>🖥️ <b>Runner System</b>: setup checks: self-tests not run · config not verified</summary>
-
-**Config file tamper check** (advisory): no baseline
 
 No validation data available.
 
-
-
-<sub>The tamper check and this summary come from the post step, which runs as the runner user from files the job's steps can modify: an advisory tripwire, not tamper-proof evidence. The egress controls themselves are root-owned and don't depend on it.</sub>
-
 </details>
 
-<sub>enforce · job \`build\` · 2026-11-07 12:34 UTC · [Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2</sub>
+<sub>2026-11-07 12:34 UTC · [portswigger-tim/safer-runner-action@v2.3.0](https://github.com/portswigger-tim/safer-runner-action)</sub>
 "
 `;

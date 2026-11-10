@@ -1,57 +1,67 @@
 # Troubleshooting
 
-Start with the job summary of the failed run. In `enforce` mode, its **Summary** section tells
-you if the action blocked something. The **Detail** section lists each blocked host and why.
+Start with the job summary of the failed run. Its **Blocked** table has one row for each thing
+the action blocked. The **Reason** column is the word the action's log wrote, so you can search
+the logs for it. Find the reason below.
 
 If you are not sure what the job needs, run it in `analyze` mode, and use the suggested
 configuration.
 
 ## A host is blocked
 
-### Not on the allowlist
+### `sni-not-allowed` or `host-not-allowed`
+
+The host is not on the allowlist.
 
 1. Make sure that the job must connect to this host. An unknown host can be a sign of a
    compromised dependency.
-2. Add the host to `allowed-domains`. An entry allows only that exact name: `example.com` does
-   not allow `www.example.com`. [Configuration](CONFIGURATION.md#allowed-domains) shows the
-   wildcard forms.
+2. Add the host to `allowed-domains`. The job summary shows the lines to add under **To allow
+   what was blocked**. An entry allows only that exact name: `example.com` does not allow
+   `www.example.com`. [Configuration](CONFIGURATION.md#allowed-domains) shows the wildcard forms.
 
-### On the risky-subdomain denylist
+### `BLOCK` in the `dns` layer
 
-The host is `gist.github.com`, `gist.githubusercontent.com` or `raw.githubusercontent.com`.
-Adding it to `allowed-domains` does not help: the denylist takes priority. Do one of these:
+The job looked up a name that is not on the allowlist, and did not connect to it. If the job needs
+the name, add it to `allowed-domains`. In `analyze` mode the reason is `WOULD_BLOCK`.
+
+### `sni-denied` or `host-denied`
+
+The host is on the risky-subdomain denylist: `gist.github.com`, `gist.githubusercontent.com` or
+`raw.githubusercontent.com`. Adding it to `allowed-domains` does not help: the denylist takes
+priority. Do one of these:
 
 - Download the file from a release asset, or keep a copy of it in your repository.
 - Set `block-risky-github-subdomains: false`.
 
-### Did not resolve
+### `upstream-unresolved`
 
 The name does not exist in DNS, so the action sent nothing. Correct the name in the job.
 
-### Bypass attempts
+### `host-sni-mismatch` or `upstream-ip-forbidden`
 
-The job summary shows a **CAUTION** alert, and the host shows one of these:
+These are attempts to get round the proxy, and the **Blocked** table lists them first:
 
-- **Host/SNI mismatch (domain fronting)**: a request inside a TLS connection asked for a
-  different host than the TLS connection.
-- **Internal address**: an allowed name resolved to an internal address, such as the cloud
-  metadata service.
+- `host-sni-mismatch`: a request inside a TLS connection asked for a different host than the TLS
+  connection (domain fronting). The row shows the TLS name and the address the client dialled.
+- `upstream-ip-forbidden`: an allowed name resolved to an internal address, such as the cloud
+  metadata service. The row shows the address.
 
 A normal build does not do these things. Examine the steps that ran, and the dependencies they
 installed. Do not try to allow these connections.
 
-Runners with Azure private networking that reach private services by name also show **Internal
-address**. You cannot allow such names ([Limitations](LIMITATIONS.md#names-and-addresses)).
+Runners with Azure private networking that reach private services by name also show
+`upstream-ip-forbidden`. You cannot allow such names
+([Limitations](LIMITATIONS.md#names-and-addresses)).
 
-### TLS with no SNI, or with an IP address as SNI
+### `no-sni`, `ip-literal-sni` or `ip-literal-host`
 
 The client connected to an IP address, not to a hostname. The action cannot check such a
 connection, so you cannot allow it. Change the client to use a hostname.
 
 ## A request is blocked by `http-filter`
 
-The job summary lists the request under **Refused by `http-filter`**, with the host, the method
-and the reason. It does not show the path, because the path can carry data.
+The reason is `path-not-allowed` or `method-not-allowed`, in the `http-filter` layer. The row
+shows the host and the method. It does not show the path, because the path can carry data.
 
 1. Run the job in `analyze` mode without that host's `http-filter` entry.
 2. Find the host in the suggested `http-filter`, and review the rule. A write rule is how data
@@ -60,9 +70,9 @@ and the reason. It does not show the path, because the path can carry data.
 
 ## A connection on another port is blocked
 
-The job summary shows **connections outside the proxy rejected**. In `enforce` mode, only ports 80
-and 443 are allowed. Change the client to use HTTPS, for example `https://github.com/...` in
-place of `git@github.com:...`.
+The reason is `Drop`, in the `firewall` layer (`CDrop` for a container). In `enforce` mode, only
+ports 80 and 443 are allowed. Change the client to use HTTPS, for example
+`https://github.com/...` in place of `git@github.com:...`.
 
 ## A client fails with a TLS certificate error
 
@@ -91,7 +101,8 @@ it. The step does nothing if the JDK already trusts the CA:
 
 ## A `sudo` command fails
 
-In `enforce` mode, the action removes `sudo`, and `sudo` refuses the command. Do one of these:
+In `enforce` mode, the action removes `sudo`, and `sudo` refuses the command. The reason is
+`disable-sudo`, or `sudo-config` when the job keeps some command lines. Do one of these:
 
 - Change the step so that it does not need `sudo`.
 - Run the job in `analyze` mode, and add the suggested `sudo-config`. The job is then ADVISORY.
@@ -114,8 +125,8 @@ job is then ADVISORY.
 ## The post step reports tampering
 
 The action's configuration files or firewall rules changed during the job. In `enforce` mode, the
-job fails. The job summary names what changed. Examine the steps that ran: a normal build does not
-change these files.
+job fails. The job summary shows **tamper check: CHANGED**, and its **Safer Runner** part names
+what changed. Examine the steps that ran: a normal build does not change these files.
 
 ## Read the logs on the runner
 

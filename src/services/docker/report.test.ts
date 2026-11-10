@@ -50,10 +50,18 @@ describe('docker report (its Section)', () => {
   const observed = { uses: { container: 2 }, images: [], services: 0, partial: false };
   const used = { policy: 'remove-group', observed, evaluation: evaluateDocker('remove-group', observed) };
 
-  it('enforce with docker kept: ADVISORY row and chip', () => {
+  it('enforce with docker kept: ADVISORY, and the numbers cell says so', () => {
     const s = report({ retained: true, docker: { requested: 'keep', access: 'retained' } }, ENFORCE);
-    expect(s.score[0]).toMatchObject({ verdict: 'advisory', area: 'Docker' });
-    expect(s.advisory.map(a => a.chip)).toEqual(['⚠️ docker retained']);
+    expect(s.stat).toBe('⚠️ kept');
+    expect(s.advisory.map(a => a.label)).toEqual(['docker kept']);
+  });
+
+  it('enforce: removed, stopped or not running, as verified at setup', () => {
+    const stat = (requested: string, access: 'group-removed' | 'not-running') =>
+      report({ retained: false, docker: { requested, access } }, ENFORCE).stat;
+    expect(stat('remove-group', 'group-removed')).toBe('removed');
+    expect(stat('stop', 'not-running')).toBe('stopped');
+    expect(stat('remove-group', 'not-running')).toBe('not running');
   });
 
   it('analyze: a use enforce would block is a row, and docker: keep is suggested as ADVISORY', () => {
@@ -61,32 +69,52 @@ describe('docker report (its Section)', () => {
       { retained: true, docker: { requested: 'remove-group', access: 'retained' }, policy: used },
       ANALYZE
     );
-    expect(s.score[0].verdict).toBe('would-block');
-    expect(s.suggestions).toEqual([
-      { input: 'docker', value: 'keep', advisory: 'docker is root-equivalent: enforce is ADVISORY' }
+    // the suggested docker: keep makes enforce ADVISORY
+    expect(s.stat).toBe('⚠️ 2');
+    expect(s.blocked).toEqual([
+      { reason: '`docker: remove-group`', layer: 'docker', tries: 2, what: '2 container actions' }
     ]);
+    expect(s.suggestions).toEqual([{ input: 'docker', value: 'keep', advisory: 'ADVISORY' }]);
     expect(s.advisory).toEqual([]);
   });
 
-  it("the action's docker change (and the dockerd CA restart) go under Runner System", () => {
+  it("the action's docker change (and the dockerd CA restart) go in Safer Runner's part", () => {
     const s = report(
       { retained: false, docker: { requested: 'remove-group', access: 'group-removed', caRestart: true } },
       ENFORCE
     );
-    expect(s.runnerSystem[0].summary).toBe('docker removed from the runner user · dockerd restarted to trust the CA');
+    expect(s.checks).toEqual([
+      {
+        ok: true,
+        check: '`docker: remove-group`',
+        detail: 'runner user removed from the docker group, socket root-only'
+      },
+      { ok: true, check: 'dockerd restart', detail: 'restarted so it trusts the proxy CA' }
+    ]);
   });
 
-  it('analyze, dockerd running but not evaluated (the evaluation failed): unknown, never an all-clear', () => {
+  it('analyze, dockerd running but not evaluated (the evaluation failed): not recorded, never 0', () => {
     const s = report({ retained: true, docker: { requested: 'remove-group', access: 'retained' } }, ANALYZE);
-    expect(s.score[0]).toMatchObject({
-      verdict: 'advisory',
-      text: "not evaluated: the job's use of docker was not seen"
-    });
+    expect(s.stat).toBe('not recorded');
     const notRunning = report(
       { retained: false, docker: { requested: 'remove-group', access: 'not-running' } },
       ANALYZE
     );
-    expect(notRunning.score[0]).toMatchObject({ verdict: 'allowed', text: 'daemon not running' });
+    expect(notRunning.stat).toBe('not running');
+  });
+
+  it('analyze, a recording that did not cover the whole job: partial, in the cell and a note', () => {
+    const partial = { ...observed, uses: {}, partial: true };
+    const s = report(
+      {
+        retained: true,
+        docker: { requested: 'keep', access: 'retained' },
+        policy: { policy: 'keep', observed: partial, evaluation: evaluateDocker('keep', partial) }
+      },
+      ANALYZE
+    );
+    expect(s.stat).toBe('⚠️ 0, partial');
+    expect(s.notes).toContainEqual(expect.stringContaining('did not cover the whole job'));
   });
 
   it('job log: the uses enforce would block', () => {

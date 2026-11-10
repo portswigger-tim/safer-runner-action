@@ -10,40 +10,28 @@ export interface ReportContext {
   enforce: boolean;
 }
 
-/** The verdict column: ✅ allowed · 🟠 would be blocked (analyze) · ⛔ blocked (enforce) · ⚠️ advisory. */
-export type Verdict = 'allowed' | 'would-block' | 'blocked' | 'advisory';
-
-export const VERDICT_ICON: Record<Verdict, string> = {
-  allowed: '✅',
-  'would-block': '🟠',
-  blocked: '⛔',
-  advisory: '⚠️'
-};
-
-/** How a refusal shows in this mode. */
-export function refusedVerdict(ctx: ReportContext): Verdict {
-  return ctx.enforce ? 'blocked' : 'would-block';
-}
-
-/** One scorecard row in the Summary. */
-export interface ScoreRow {
-  verdict: Verdict;
-  area: string;
-  text: string;
-  /**
-   * left out when its area has a worse part, or another part as bad that is not minor (no traffic
-   * beyond GitHub; hosts that did not resolve or had no name, listed in Detail)
-   */
-  minor?: boolean;
+/** One row of the Blocked table: the reason as its log writes it, and what it blocked. */
+export interface BlockedRow {
+  /** the log's own word (`sni-not-allowed`, `BLOCK`, `Drop`), or the input that decided it */
+  reason: string;
+  /** where it was decided: the flow log's layer, or dns, firewall, http-filter, sudo, docker */
+  layer: string;
+  /** attempts; undefined when the log does not count them (a DNS name) */
+  tries?: number;
+  /** the name and its data, as a Markdown cell (untrusted parts already redacted and in code spans) */
+  what: string;
 }
 
 /** A top-level alert paragraph (alerts don't render inside <details>). */
 export interface Alert {
-  kind: 'CAUTION' | 'WARNING' | 'IMPORTANT';
+  kind: 'CAUTION' | 'WARNING';
   text: string;
 }
 
-/** One input of the Suggested Enforce Configuration (analyze). Report only, never applied. */
+/**
+ * One input of the suggested configuration. Analyze: the whole enforce step. Enforce: what to add
+ * to allow what was blocked. Report only, never applied.
+ */
 export interface Suggestion {
   input: 'allowed-domains' | 'http-filter' | 'sudo-config' | 'docker';
   /** the input's value, as the input reads it */
@@ -52,36 +40,42 @@ export interface Suggestion {
   advisory?: string;
   /** anything else to say on its line (a YAML comment, which the input ignores) */
   comment?: string;
-  /** shown under the block as an option, not in it */
-  optional?: boolean;
-  /** what it was built from, for an optional one's summary line */
-  label?: string;
 }
 
-/** Enforce: what made it ADVISORY, as a chip and a sentence. */
+/** Enforce: what made it ADVISORY, as a short label and a sentence. */
 export interface Advisory {
-  chip: string;
+  label: string;
   text: string;
 }
 
-/** What the action did, and the GitHub baseline it trusts: collapsed, its result in the summary line. */
-export interface RunnerSystem {
+/** A collapsed part: what went as expected, its numbers in the summary line. */
+export interface Details {
   summary: string;
   body: string;
 }
 
+/** One row of the Safer Runner table: a setup check, or something the action itself did. */
+export interface CheckRow {
+  ok: boolean;
+  check: string;
+  detail: string;
+}
+
 export interface Section {
-  score: ScoreRow[];
+  blocked: BlockedRow[];
   alerts: Alert[];
   suggestions: Suggestion[];
-  /** short notes under the Suggested block (analyze): what was left out, what analyze cannot see */
+  /** short notes under the suggested block: what was left out of it */
   notes: string[];
   advisory: Advisory[];
-  /** what the job did */
-  body: string;
-  runnerSystem: RunnerSystem[];
+  /** collapsed parts: what the job did that was allowed */
+  details: Details[];
+  /** what the action did (its own sudo, the docker change), for the Safer Runner table */
+  checks: CheckRow[];
+  /** this part's cell in the row of numbers (sudo, docker) */
+  stat?: string;
 }
 
 export function emptySection(): Section {
-  return { score: [], alerts: [], suggestions: [], notes: [], advisory: [], body: '', runnerSystem: [] };
+  return { blocked: [], alerts: [], suggestions: [], notes: [], advisory: [], details: [], checks: [] };
 }

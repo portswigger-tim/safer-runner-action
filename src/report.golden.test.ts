@@ -10,6 +10,8 @@
  * summary (src/report/redact.ts: the C5 disclosure boundary).
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import type { FlowRecord } from './flowlog';
 import { evaluateDocker, type DockerObserved } from './services/docker/config';
 import type { DockerPolicy } from './config/inputs';
@@ -448,11 +450,8 @@ function report(overrides: Partial<ReportInput> & Pick<ReportInput, 'mode' | 'ho
   const md = render(overrides);
   // every golden and canary summary: functional emoji only
   expect(emojiOutsideAllowlist(md)).toEqual([]);
-  // and one scorecard row per area
-  const scorecard = md.slice(md.indexOf('| Area | Result |'), md.indexOf('## 🔧'));
-  const rowAreas = [...scorecard.matchAll(/^\| \S+ \| ([^|]+) \| /gm)].map(m => m[1].trim());
-  expect(rowAreas.length).toBeGreaterThan(0);
-  expect(new Set(rowAreas).size).toBe(rowAreas.length);
+  // one verb: blocked (or would block), never refused, rejected or denied outside a log's own code
+  expect(md.replace(/`[^`]*`/g, '')).not.toMatch(/\b(refused|rejected|denied)\b/i);
   return md;
 }
 
@@ -723,15 +722,15 @@ describe('redaction canary (C5)', () => {
     const md = canaryReport(mode);
     // the sections are there, so the canary was really exercised
     for (const section of [
-      'Host/SNI mismatch',
-      'Internal address',
-      'Not on the allowlist',
-      'by `http-filter`',
-      'Did not resolve',
-      'Refused: ',
-      'Container egress',
-      '**GitHub baseline**',
-      `DNS ${mode === 'enforce' ? 'refused' : 'would refuse'} |`,
+      '`host-sni-mismatch`',
+      '`upstream-ip-forbidden`',
+      '`sni-not-allowed`',
+      '| http-filter |',
+      '`upstream-unresolved`',
+      '`future-reason`',
+      'Containers: ',
+      'GitHub, always allowed',
+      `\`${mode === 'enforce' ? 'BLOCK' : 'WOULD_BLOCK'}\` | dns |`,
       ...(mode === 'analyze' ? ['Images: '] : [])
     ]) {
       expect(md).toContain(section);
@@ -774,10 +773,10 @@ describe('redaction canary (C5)', () => {
       sudo: { ran: cmds, refused: cmds, internal: SUDO.internal },
       sudoPolicy: { rules: [], kept: false, wouldBlock: cmds }
     });
-    expect(md).toContain('`sudo /usr/bin/mysql -u root -p ‹redacted› appdb`');
-    expect(md).toContain('`sudo /usr/local/bin/deploy --token=‹redacted›`');
-    expect(md).toContain('`sudo /usr/bin/make API_KEY=‹redacted› install`');
-    expect(md).toContain('`sudo /tmp/‹redacted›/run.sh --verbose`');
+    expect(md).toContain('`/usr/bin/mysql -u root -p ‹redacted› appdb`');
+    expect(md).toContain('`/usr/local/bin/deploy --token=‹redacted›`');
+    expect(md).toContain('`/usr/bin/make API_KEY=‹redacted› install`');
+    expect(md).toContain('`/tmp/‹redacted›/run.sh --verbose`');
     expect(md).not.toContain(SUDO_CANARY);
     expect(md).not.toContain(CANARY);
     // the job log is as public as the summary
@@ -811,7 +810,35 @@ describe('redaction canary (C5)', () => {
       hosts: summarizeFlows(records),
       containers: summarizeContainers(records, [])
     });
-    expect(md).toContain('Container egress');
+    expect(md).toContain('Containers: ');
     expect(md).not.toContain(CANARY);
+  });
+});
+
+describe('the docs quote the summary as it is', () => {
+  const root = path.join(__dirname, '..');
+  const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
+  const goldens = read('src/__snapshots__/report.golden.test.ts.snap').replace(/\\`/g, '`');
+  const flat = (s: string) => s.replace(/\s+/g, ' ');
+
+  // a bold label in a paragraph about the job summary names part of it
+  it.each(['docs/TROUBLESHOOTING.md', 'README.md'])('%s: every bold label is in a golden summary', file => {
+    const labels = read(file)
+      .split(/\n\s*\n/)
+      .filter(p => /job summary/.test(p))
+      .flatMap(p => [...flat(p).matchAll(/\*\*([^*]+)\*\*/g)].map(m => m[1]));
+    expect(labels.length).toBeGreaterThan(0);
+    for (const l of labels) expect([l, flat(goldens).includes(l)]).toEqual([l, true]);
+  });
+
+  it('TROUBLESHOOTING: every reason in a heading is one the action writes', () => {
+    const codes = [...read('docs/TROUBLESHOOTING.md').matchAll(/^###? .*$/gm)].flatMap(m =>
+      [...m[0].matchAll(/`([^`]+)`/g)].map(c => c[1])
+    );
+    expect(codes).toEqual(expect.arrayContaining(['sni-not-allowed', 'upstream-ip-forbidden', 'BLOCK']));
+    const source = read('proxy/policy_core.py') + read('src/services/coredns/config.ts') + goldens;
+    const known = (c: string) =>
+      [`"${c}"`, `'${c}'`].some(q => source.includes(q)) || [`\`${c}\``, `| ${c} |`].some(q => goldens.includes(q));
+    for (const c of codes) expect([c, known(c)]).toEqual([c, true]);
   });
 });

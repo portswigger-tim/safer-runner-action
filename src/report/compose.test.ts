@@ -70,7 +70,6 @@ function analyzeInput(overrides: Partial<ReportInput> = {}): ReportInput {
     userDomains: ['registry.npmjs.org'],
     allowedDomains: ['registry.npmjs.org'],
     httpFilter: summarizeHttpFilter(records, () => SUGGESTION),
-    httpFilterSet: true,
     sudo: { ran, refused: [], internal: [] },
     sudoPolicy: {
       rules: [],
@@ -91,9 +90,9 @@ function analyzeInput(overrides: Partial<ReportInput> = {}): ReportInput {
   };
 }
 
-/** The `with:` inputs of the one YAML block in the Suggested Enforce Configuration. */
+/** The `with:` inputs of the one YAML block under For enforce. */
 function pastedInputs(md: string): Record<string, string> {
-  const section = md.slice(md.indexOf('## 🔧 Suggested Enforce Configuration'), md.indexOf('# 🔎 Detail'));
+  const section = md.slice(md.indexOf('#### For enforce'));
   const blocks = section.match(/```yaml\n([\s\S]*?)\n```/g) ?? [];
   expect(blocks.length).toBeGreaterThanOrEqual(1);
   const step = parseYaml(blocks[0]!.replace(/^```yaml\n|\n```$/g, ''))[0];
@@ -152,8 +151,8 @@ describe('Suggested Enforce Configuration: the block pastes back as printed', ()
 
   it('marks the inputs that make enforce ADVISORY on their own line', () => {
     const md = buildReport(analyzeInput());
-    expect(md).toContain('    sudo-config: | # ⚠️ any sudo-config makes enforce ADVISORY\n');
-    expect(md).toContain('    docker: keep # ⚠️ docker is root-equivalent: enforce is ADVISORY\n');
+    expect(md).toContain('    sudo-config: | # ⚠️ ADVISORY\n');
+    expect(md).toContain('    docker: keep # ⚠️ ADVISORY\n');
     expect(md).toContain('      - /usr/bin/apt-get install -y jq # ⚠️ gives the job root');
   });
 
@@ -166,8 +165,12 @@ describe('Suggested Enforce Configuration: the block pastes back as printed', ()
   it('echoes the action the workflow used: a fork or a mirror stays itself, never swapped for upstream', () => {
     const sha = 'e939400047ab163b522acb202191ec01af9aa9f7';
     const md = buildReport(analyzeInput({ actionRepository: 'acme-corp/safer-runner-action', actionRef: sha }));
-    expect(md).toContain(`- uses: acme-corp/safer-runner-action@${sha} # pin an exact version or commit SHA`);
+    // a SHA is pinned: no reminder, and no version (a fork's commit, or one between releases)
+    expect(md).toContain(`- uses: acme-corp/safer-runner-action@${sha}\n`);
     expect(md).not.toContain('portswigger-tim/safer-runner-action@');
+    expect(buildReport(analyzeInput({ actionRef: 'main' }))).toContain(
+      '- uses: portswigger-tim/safer-runner-action@main # pin an exact version or commit SHA\n'
+    );
   });
 
   it.each([
@@ -189,7 +192,7 @@ describe('Suggested Enforce Configuration: the block pastes back as printed', ()
     expect(parseYaml(block)[0].uses).toBe(uses);
   });
 
-  it('nothing to change: no block, and it says so', () => {
+  it('nothing to change: no Blocked table, and the block is just mode: enforce', () => {
     const md = buildReport({
       mode: 'analyze',
       job: 'j',
@@ -199,12 +202,15 @@ describe('Suggested Enforce Configuration: the block pastes back as printed', ()
       selfTests: [],
       sudo: { ran: [], refused: [], internal: [] }
     });
-    expect(md).toContain('Nothing to change: this job should run under `mode: enforce` as it is configured.');
-    expect(md).not.toContain('```');
+    expect(md).not.toContain('#### Enforce would block');
+    expect(md).toContain(
+      '```yaml\n- uses: <owner>/<repo>@<pin an exact version or SHA> # pin an exact version or commit SHA\n' +
+        '  with:\n    mode: enforce\n```'
+    );
   });
 });
 
-describe('scorecard: one glance per area', () => {
+describe('the row of numbers and the Blocked table', () => {
   const unresolved: FlowRecord = {
     ts: 3,
     ev: 'upstream',
@@ -214,33 +220,66 @@ describe('scorecard: one glance per area', () => {
     host: 'typo.example.com',
     client: 'c:9'
   };
-  const scorecard = (md: string) => md.slice(md.indexOf('| Area | Result |'), md.indexOf('## 🔧'));
   const base = { mode: 'enforce' as const, job: 'j', firewall: [], dnsRefused: [], selfTests: [] };
 
-  it('hosts that did not resolve are in the Network row only when nothing more alarming is there', () => {
-    const alone = buildReport({ ...base, hosts: summarizeFlows([unresolved]) });
-    expect(scorecard(alone)).toContain('| ⛔ | Network | 1 host blocked (did not resolve) |');
-    const withMiss = buildReport({
+  it('the Blocked count is the number of rows in the Blocked table', () => {
+    const md = buildReport({
       ...base,
-      hosts: summarizeFlows([unresolved, tls('pypi.org', 'BLOCK', 'sni-not-allowed', 'c:8')])
+      hosts: summarizeFlows([unresolved, tls('pypi.org', 'BLOCK', 'sni-not-allowed', 'c:8')]),
+      dnsRefused: ['tunnel.example.com']
     });
-    expect(scorecard(withMiss)).toContain('| ⛔ | Network | 1 host not on the allowlist blocked: `pypi.org` |');
-    expect(scorecard(withMiss)).not.toContain('did not resolve');
-    // still listed in Detail
-    expect(withMiss).toContain('| ⛔ | `typo.example.com` | Did not resolve; nothing was sent | 1 |');
+    expect(md).toContain('| **3** | 0 | 0 | 0 B | 0 B |');
+    expect(md).toContain(
+      '#### Blocked\n\n| Reason | Layer | Tries | Names |\n|:--|:--|--:|:--|\n' +
+        '| `sni-not-allowed` | sni | 1 | `pypi.org` |\n' +
+        '| `upstream-unresolved` | ip | 1 | `typo.example.com` |\n' +
+        '| `BLOCK` | dns | — | `tunnel.example.com` |\n'
+    );
+  });
+
+  it('a clean run is the row of numbers, and the rest collapsed', () => {
+    const md = buildReport({ ...base, hosts: summarizeFlows([tls('a.example.com', 'INTERCEPT', 'allowed', 'c:1')]) });
+    const open = md.replace(/<details>[\s\S]*?<\/details>\n\n/g, '');
+    expect(open).toBe(
+      '### Safer Runner · `enforce` · job `j`\n\n' +
+        '| Blocked | Hosts | Requests | ↑ Out | ↓ In | sudo | docker |\n|--:|--:|--:|--:|--:|--:|--:|\n' +
+        '| 0 | 1 | 0 | 0 B | 0 B | removed | not recorded |\n\n' +
+        open.slice(open.indexOf('<sub>'))
+    );
+  });
+
+  it('analyze: the count and the table are what enforce would block', () => {
+    const md = buildReport({
+      ...base,
+      mode: 'analyze',
+      hosts: summarizeFlows([tls('pypi.org', 'WOULD_BLOCK', 'sni-not-allowed', 'c:8')])
+    });
+    expect(md).toContain('| Enforce would block | Hosts |');
+    expect(md).toContain('#### Enforce would block\n');
   });
 });
 
-describe('enforce: no YAML block in the Summary', () => {
+describe('enforce: what would allow what was blocked, never the whole step', () => {
   it.each([
     ['sudo kept', { sudoRetained: true }],
     ['docker kept', { dockerRetained: true }],
     ['clean', {}]
   ])('%s', (_, extra) => {
     const md = buildReport({ ...analyzeInput(), mode: 'enforce', ...extra });
-    const summary = md.slice(0, md.indexOf('# 🔎 Detail'));
-    expect(summary).not.toContain('```');
-    expect(summary).toContain('Running under enforce');
+    expect(md).not.toContain('- uses:');
+    expect(md).not.toContain('#### For enforce');
+  });
+
+  it('the inputs to add, indented to paste under with:', () => {
+    const records = [tls('pypi.org', 'BLOCK', 'sni-not-allowed', 'c:2')];
+    const md = buildReport({ ...analyzeInput(), mode: 'enforce', hosts: summarizeFlows(records) });
+    expect(md).toContain('#### To allow what was blocked\n\n```yaml\n    allowed-domains: |\n      pypi.org\n```');
+  });
+
+  it('ADVISORY: in the title, and a warning with every reason', () => {
+    const md = buildReport({ ...analyzeInput(), mode: 'enforce', sudoRetained: true, dockerRetained: true });
+    expect(md).toContain('### Safer Runner · `enforce` · ADVISORY · job `build`');
+    expect(md).toContain('> [!WARNING]\n> **ADVISORY: not an enforced boundary** (sudo kept, docker kept).');
   });
 });
 
@@ -303,15 +342,14 @@ describe('size', () => {
 });
 
 describe('banner', () => {
-  it('the repository and ref the workflow used: its banner at that ref', () => {
-    // left-aligned: a plain image, no wrapper
+  it('the repository and ref the workflow used: its banner at that ref, linked to the repository', () => {
     expect(banner('portswigger-tim/safer-runner-action', 'v2.5.0')).toBe(
-      '<img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.5.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action">\n\n'
+      '<a href="https://github.com/portswigger-tim/safer-runner-action"><img src="https://raw.githubusercontent.com/portswigger-tim/safer-runner-action/v2.5.0/docs/assets/banner.svg" width="480" alt="Safer Runner Action"></a>\n\n'
     );
-    // a fork shows its own banner, at its own ref
-    expect(banner('acme-corp/safer-runner-action', 'a'.repeat(40))).toContain(
-      `raw.githubusercontent.com/acme-corp/safer-runner-action/${'a'.repeat(40)}/docs/`
-    );
+    // a fork shows its own banner, at its own ref, and links to itself
+    const fork = banner('acme-corp/safer-runner-action', 'a'.repeat(40));
+    expect(fork).toContain(`raw.githubusercontent.com/acme-corp/safer-runner-action/${'a'.repeat(40)}/docs/`);
+    expect(fork).toContain('href="https://github.com/acme-corp/safer-runner-action"');
   });
 
   it.each([
@@ -332,19 +370,20 @@ describe('banner', () => {
     expect(banner(repo, ref)).toBe('');
   });
 
-  it('the footer links the repository used, or upstream when it is unknown', () => {
+  it('the footer names the action as the workflow used it, linked to the repository', () => {
     expect(buildReport(analyzeInput({ actionRepository: 'acme-corp/safer-runner-action' }))).toContain(
-      '[Safer Runner Action](https://github.com/acme-corp/safer-runner-action) v2'
+      '[acme-corp/safer-runner-action@v2.5.0](https://github.com/acme-corp/safer-runner-action)</sub>'
     );
+    // unknown or not safe to print: upstream, by name only
     expect(buildReport(analyzeInput({ actionRepository: 'x" y' }))).toContain(
-      '[Safer Runner Action](https://github.com/portswigger-tim/safer-runner-action) v2'
+      '[Safer Runner](https://github.com/portswigger-tim/safer-runner-action)</sub>'
     );
   });
 
   it('heads the summary', () => {
-    expect(buildReport(analyzeInput()).startsWith('<img src="https://raw.githubusercontent.com/')).toBe(true);
-    expect(buildReport(analyzeInput({ actionRef: '' })).startsWith('# 📋 Summary')).toBe(true);
-    expect(buildReport(analyzeInput({ actionRepository: '' })).startsWith('# 📋 Summary')).toBe(true);
+    expect(buildReport(analyzeInput()).startsWith('<a href="https://github.com/')).toBe(true);
+    expect(buildReport(analyzeInput({ actionRef: '' })).startsWith('### Safer Runner')).toBe(true);
+    expect(buildReport(analyzeInput({ actionRepository: '' })).startsWith('### Safer Runner')).toBe(true);
   });
 
   it('safeRef accepts tags, branches and SHAs only', () => {

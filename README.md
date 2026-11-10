@@ -43,14 +43,13 @@ change to `enforce` mode, which blocks everything that the configuration does no
 
 2. Run the workflow. `analyze` is the default mode, which does not block hosts.
 
-3. Open the job summary of the run. The **Summary** section shows what `enforce` would block. The
-   **Suggested Enforce Configuration** section contains a `uses:` block with the settings that
-   this job needs.
+3. Open the job summary of the run. The **Enforce would block** table lists what `enforce` would
+   block, with the reason for each. Under **For enforce** is a `uses:` block with the settings
+   that this job needs, including an `http-filter` with the methods and paths that the job used
+   on each host.
 
-4. Review the suggestion, and copy it into the workflow. Below it, the section **Optional: narrow
-   the allowed hosts further with `http-filter`** suggests the methods and paths that the job used
-   on each host. Add that too, to block the writes that the job does not need. The step then looks
-   like this:
+4. Review the suggestion, and copy it into the workflow. The `http-filter` blocks the writes that
+   the job does not need. The step then looks like this:
 
    ```yaml
          - uses: portswigger-tim/safer-runner-action@9874c0f024d1dff1e137c2c687c04b954287b498 # v2.4.0

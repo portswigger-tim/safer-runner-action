@@ -7,20 +7,11 @@
 
 import type { DockerEvaluation, DockerObserved, DockerUse } from './config';
 import { DOCKER_USES } from './config';
-import { containerSection, type ContainerSummary } from './containers';
+import { containerBlocked, containerDetails, type ContainerSummary } from './containers';
 import { MAX_LIST } from '../mitmproxy/flows';
 import { REDACTED, looksEncoded } from '../../report/redact';
 import { code, plural, table } from '../../report/markdown';
-import {
-  VERDICT_ICON,
-  refusedVerdict,
-  type Advisory,
-  type ReportContext,
-  type RunnerSystem,
-  type ScoreRow,
-  type Section,
-  type Suggestion
-} from '../../report/section';
+import type { Advisory, BlockedRow, CheckRow, Details, ReportContext, Section, Suggestion } from '../../report/section';
 
 export interface DockerPolicyReport {
   /** the docker policy setup recorded (the input, or remove-group when unset) */
@@ -29,21 +20,9 @@ export interface DockerPolicyReport {
   evaluation: DockerEvaluation;
 }
 
-/** Fixed caveat for every suggested `docker: keep`. */
-export const DOCKER_KEEP_CAVEAT =
-  'Docker access is root-equivalent: any step can use it to remove the egress controls, so enforce with ' +
-  '`docker: keep` is ADVISORY.';
-
-/** What analyze cannot see. */
-export const DOCKER_BEST_EFFORT =
-  'Best effort: read-only docker calls (`docker ps`, `logs`, `inspect`, `login`) leave no event and are not ' +
-  "seen, docker use outside the runner's dockerd (rootless docker, podman) is not seen either, and in analyze " +
-  'the job can use docker (root) to stop the recording.';
-
 /** The recording did not cover the whole job. */
 export const DOCKER_PARTIAL =
-  'The recording did not cover the whole job (dockerd stopped, restarted or was not running at setup), ' +
-  'so some use of docker may be missing.';
+  'the docker recording did not cover the whole job (dockerd stopped, restarted or was not running at setup)';
 
 const USE_TEXT: Record<DockerUse, [string, string]> = {
   container: ['container action', 'container actions'],
@@ -100,68 +79,51 @@ const DOCKER_ACCESS_TEXT: Record<string, string> = {
   'not-running': 'docker daemon not running'
 };
 
-function score(o: DockerReportObserved, ctx: ReportContext): ScoreRow[] {
-  const area = 'Docker';
-  const rows: ScoreRow[] = [];
-  const d = o.policy;
-  if (ctx.enforce && o.docker) {
+/** The cell in the row of numbers. */
+function stat(o: DockerReportObserved, ctx: ReportContext): string {
+  if (ctx.enforce) {
+    if (!o.docker) return 'not recorded';
     const { access, requested } = o.docker;
-    if (access === 'retained') rows.push({ verdict: 'advisory', area, text: 'kept (`docker: keep`)' });
-    else if (access === 'group-removed')
-      rows.push({ verdict: 'allowed', area, text: 'runner user removed from the docker group' });
-    else rows.push({ verdict: 'allowed', area, text: requested === 'stop' ? 'daemon stopped' : 'daemon not running' });
-  } else if (d) {
-    const uses = dockerUseText(d.observed.uses);
-    const e = d.evaluation;
-    if (dockerUseCount(e.wouldBlock)) {
-      rows.push({ verdict: 'would-block', area, text: `used after setup (${uses}): enforce would block it` });
-    } else if (e.wouldStop) {
-      rows.push({
-        verdict: 'would-block',
-        area,
-        text: `\`docker: stop\` would stop ${plural(e.wouldStop, 'service container')}`
-      });
-    } else if (d.policy === 'keep') {
-      rows.push({
-        verdict: 'advisory',
-        area,
-        text: uses
-          ? `used after setup (${uses}); \`docker: keep\` keeps it (ADVISORY)`
-          : '`docker: keep` keeps docker, though no use was seen (ADVISORY)'
-      });
-    } else if (d.observed.partial) {
-      rows.push({ verdict: 'advisory', area, text: 'no use seen, but the recording did not cover the whole job' });
-    } else {
-      const alsoStop = d.evaluation.fits === 'stop' && d.policy !== 'stop' ? ' (`docker: stop` would too)' : '';
-      rows.push({ verdict: 'allowed', area, text: `no use after setup: \`docker: ${d.policy}\` fits${alsoStop}` });
-    }
-  } else if (o.docker) {
-    // analyze with dockerd running and no evaluation (it failed): unknown, never an all-clear
-    rows.push(
-      o.docker.access === 'not-running'
-        ? { verdict: 'allowed', area, text: 'daemon not running' }
-        : { verdict: 'advisory', area, text: "not evaluated: the job's use of docker was not seen" }
-    );
+    if (access === 'retained') return '⚠️ kept';
+    if (access === 'group-removed') return 'removed';
+    return requested === 'stop' ? 'stopped' : 'not running';
   }
-  const refused = (o.containers ?? []).reduce((a, c) => a + c.denied.length + c.firewall.length, 0);
-  if (refused) {
+  const d = o.policy;
+  if (!d) return o.docker?.access === 'not-running' ? 'not running' : 'not recorded';
+  const n = String(dockerUseCount(d.observed.uses));
+  if (d.observed.partial) return `⚠️ ${n}, partial`;
+  // docker: keep, set or suggested: enforce would be ADVISORY
+  return d.policy === 'keep' || d.evaluation.suggestion.advisory ? `⚠️ ${n}` : n;
+}
+
+/** Analyze: the job's use of docker that the policy would block, and service containers `stop` would stop. */
+function blocked(o: DockerReportObserved, ctx: ReportContext): BlockedRow[] {
+  const rows: BlockedRow[] = [];
+  const e = ctx.enforce ? undefined : o.policy?.evaluation;
+  if (e && dockerUseCount(e.wouldBlock)) {
     rows.push({
-      verdict: refusedVerdict(ctx),
-      area,
-      text: `container egress: ${plural(refused, 'destination')} ${ctx.enforce ? 'blocked' : 'would be blocked'}`
+      reason: code(`docker: ${o.policy!.policy}`),
+      layer: 'docker',
+      tries: dockerUseCount(e.wouldBlock),
+      what: dockerUseText(e.wouldBlock)
+    });
+  } else if (e?.wouldStop) {
+    rows.push({
+      reason: code('docker: stop'),
+      layer: 'docker',
+      tries: e.wouldStop,
+      what: e.wouldStop === 1 ? 'service container' : 'service containers'
     });
   }
-  return rows;
+  return [...rows, ...containerBlocked(o.containers ?? [])];
 }
 
 function advisory(o: DockerReportObserved, ctx: ReportContext): Advisory[] {
   if (!ctx.enforce || !o.retained) return [];
   return [
     {
-      chip: '⚠️ docker retained',
-      text:
-        '`docker: keep` kept docker (verified on the runner), which is root-equivalent: any step could have removed ' +
-        'the egress controls. Use `docker: remove-group` (the default) or `docker: stop` unless the job needs docker.'
+      label: 'docker kept',
+      text: '`docker: keep` kept docker, which is root-equivalent: any step could have removed the egress controls.'
     }
   ];
 }
@@ -169,13 +131,7 @@ function advisory(o: DockerReportObserved, ctx: ReportContext): Advisory[] {
 function suggestions(o: DockerReportObserved, ctx: ReportContext): Suggestion[] {
   const s = o.policy?.evaluation.suggestion;
   if (ctx.enforce || !s?.change) return [];
-  return [
-    {
-      input: 'docker',
-      value: s.value,
-      ...(s.advisory ? { advisory: 'docker is root-equivalent: enforce is ADVISORY' } : {})
-    }
-  ];
+  return [{ input: 'docker', value: s.value, ...(s.advisory ? { advisory: 'ADVISORY' } : {}) }];
 }
 
 function notes(o: DockerReportObserved, ctx: ReportContext): string[] {
@@ -183,85 +139,62 @@ function notes(o: DockerReportObserved, ctx: ReportContext): string[] {
   if (ctx.enforce || !d) return [];
   const out: string[] = [];
   if (d.evaluation.wouldStop && !dockerUseCount(d.evaluation.wouldBlock)) {
-    out.push(
-      '`docker: stop` would stop service containers: `remove-group` keeps them running and still takes docker from the job'
-    );
+    out.push('`docker: remove-group` keeps service containers running, where `docker: stop` would stop them');
   }
-  if (d.evaluation.suggestion.value === 'keep' || d.policy === 'keep') out.push(DOCKER_KEEP_CAVEAT);
   if (d.observed.partial) out.push(DOCKER_PARTIAL);
-  if (dockerUseCount(d.observed.uses) || d.observed.partial) out.push(DOCKER_BEST_EFFORT);
   return out;
 }
 
-function body(o: DockerReportObserved, ctx: ReportContext): string {
-  let md = '';
+/** Analyze: the job's use of docker after setup, by kind, and the images. */
+function useDetails(o: DockerReportObserved, ctx: ReportContext): Details | undefined {
   const d = ctx.enforce ? undefined : o.policy;
-  if (d) {
-    const blocks = dockerUseCount(d.evaluation.wouldBlock) > 0;
-    const kinds = DOCKER_USES.filter(k => d.observed.uses[k]);
-    if (kinds.length) {
-      md +=
-        table(
-          ['', 'Use after setup', 'Events'],
-          [':-:', ':--', '--:'],
-          kinds.map(k => [
-            VERDICT_ICON[blocks ? 'would-block' : 'advisory'],
-            dockerUseText({ [k]: 1 }).replace(/^1 /, ''),
-            String(d.observed.uses[k])
-          ])
-        ) + '\n\n';
-    } else {
-      md += 'No use of docker after setup was seen.\n\n';
-    }
-    if (d.observed.services)
-      md += `${plural(d.observed.services, 'container')} already ran at setup (service containers).\n\n`;
-    if (d.observed.images.length) {
-      const shown = d.observed.images.slice(0, MAX_LIST).map(i => code(imageLabel(i)));
-      const more = d.observed.images.length - shown.length;
-      md += `Images: ${shown.join(', ')}${more > 0 ? ` +${more} more` : ''}\n\n`;
-    }
+  if (!d) return undefined;
+  const kinds = DOCKER_USES.filter(k => d.observed.uses[k]);
+  let body = kinds.length
+    ? table(
+        ['Use after setup', 'Events'],
+        [':--', '--:'],
+        kinds.map(k => [dockerUseText({ [k]: 1 }).replace(/^1 /, ''), String(d.observed.uses[k])])
+      ) + '\n\n'
+    : '';
+  if (d.observed.services) body += `Service containers running at setup: ${d.observed.services}\n\n`;
+  if (d.observed.images.length) {
+    const shown = d.observed.images.slice(0, MAX_LIST).map(i => code(imageLabel(i)));
+    const more = d.observed.images.length - shown.length;
+    body += `Images: ${shown.join(', ')}${more > 0 ? ` +${more} more` : ''}\n\n`;
   }
-  md += containerSection(o.containers ?? [], ctx);
-  return md || 'No container traffic.\n\n';
+  if (!body) return undefined;
+  return { summary: `Docker use after setup: ${dockerUseText(d.observed.uses) || 'none'}`, body };
 }
 
-function runnerSystem(o: DockerReportObserved, ctx: ReportContext): RunnerSystem[] {
+/** What the action did to docker. */
+function checks(o: DockerReportObserved, ctx: ReportContext): CheckRow[] {
   if (!o.docker) return [];
   const { requested, access, caRestart } = o.docker;
-  const rows: string[][] = [
-    ctx.enforce
-      ? [
-          VERDICT_ICON[access === 'retained' ? 'advisory' : 'allowed'],
-          code(`docker: ${requested}`),
-          DOCKER_ACCESS_TEXT[access] ?? access
-        ]
-      : [
-          VERDICT_ICON.allowed,
-          code(`docker: ${requested}`),
-          `evaluated, not applied (analyze); ${DOCKER_ACCESS_TEXT[access] ?? access}`
-        ]
+  const rows: CheckRow[] = [
+    {
+      ok: !ctx.enforce || access !== 'retained',
+      check: code(`docker: ${requested}`),
+      detail: ctx.enforce
+        ? (DOCKER_ACCESS_TEXT[access] ?? access)
+        : `not applied (analyze); ${DOCKER_ACCESS_TEXT[access] ?? access}`
+    }
   ];
-  if (caRestart) rows.push([VERDICT_ICON.allowed, 'dockerd restart', 'restarted so it trusts the proxy CA']);
-  const summary =
-    (ctx.enforce
-      ? access === 'retained'
-        ? 'docker kept'
-        : access === 'group-removed'
-          ? 'docker removed from the runner user'
-          : 'docker daemon not running'
-      : 'docker access unchanged (analyze)') + (caRestart ? ' · dockerd restarted to trust the CA' : '');
-  return [{ summary, body: table(['', 'Action', 'Result'], [':-:', ':--', ':--'], rows) + '\n\n' }];
+  if (caRestart) rows.push({ ok: true, check: 'dockerd restart', detail: 'restarted so it trusts the proxy CA' });
+  return rows;
 }
 
 export function report(o: DockerReportObserved, ctx: ReportContext): Section {
+  const details = [useDetails(o, ctx), containerDetails(o.containers ?? [])].filter((x): x is Details => !!x);
   return {
-    score: score(o, ctx),
+    blocked: blocked(o, ctx),
     alerts: [],
     suggestions: suggestions(o, ctx),
     notes: notes(o, ctx),
     advisory: advisory(o, ctx),
-    body: body(o, ctx),
-    runnerSystem: runnerSystem(o, ctx)
+    details,
+    checks: checks(o, ctx),
+    stat: stat(o, ctx)
   };
 }
 

@@ -1,18 +1,21 @@
 /**
  * The job summary, put together from each service's part (services/<svc>/report.ts) and the setup
- * checks (checks.ts). This module only places the parts; every verdict, count and name comes from
+ * checks (checks.ts). This module only places the parts; every count, reason and name comes from
  * the part that owns it.
  *
- *   banner
- *   # 📋 Summary                          the verdict, alerts and the scorecard
- *     ## 🔧 Suggested Enforce Configuration   analyze: one block to paste; enforce: one line
- *   # 🔎 Detail
- *     ## 🌐 Network  ## 🔑 Sudo  ## 🐳 Docker   what the job did; what the action did (and the
- *                                              GitHub baseline it trusts) under a collapsed
- *                                              🖥️ Runner System
+ *   banner, linked to the repository
+ *   ### Safer Runner · mode · job      the row of numbers, then any alert
+ *   #### Blocked                       one row per reason, as the log writes it
+ *   #### For enforce                   analyze: the step to paste; enforce: what would allow
+ *                                      what was blocked
+ *   collapsed: what was allowed (the job's hosts, GitHub's, sudo, docker, containers), and
+ *   Safer Runner's own checks
+ *
+ * One verb throughout: blocked (enforce) and would block (analyze). A clean run is the row of
+ * numbers and nothing else.
  */
 
-import { Document, Pair, Scalar, YAMLMap, YAMLSeq, stringify } from 'yaml';
+import { Document, Pair, Scalar, YAMLMap, YAMLSeq } from 'yaml';
 import type { Mode } from '../policy';
 import { report as proxyReport, type ProxySection } from '../services/mitmproxy/report';
 import type { HostSummary } from '../services/mitmproxy/flows';
@@ -25,15 +28,8 @@ import type { SudoUsage } from '../services/sudo/log';
 import { report as dockerReport, type DockerPolicyReport, type DockerReportObserved } from '../services/docker/report';
 import type { ContainerSummary } from '../services/docker/containers';
 import { setupChecks, type Checks, type IntegrityDetails, type SelfTest } from './checks';
-import { code, codeBlock, table } from './markdown';
-import {
-  VERDICT_ICON,
-  type ReportContext,
-  type RunnerSystem,
-  type ScoreRow,
-  type Section,
-  type Suggestion
-} from './section';
+import { capped, code, codeBlock, humanBytes, table } from './markdown';
+import type { BlockedRow, CheckRow, Details, ReportContext, Section, Suggestion } from './section';
 
 export interface ReportInput {
   mode: Mode;
@@ -62,8 +58,6 @@ export interface ReportInput {
   userDomains?: string[];
   /** the job's `allowed-domains` entries alone: the suggested value keeps them */
   allowedDomains?: string[];
-  /** the job sets `http-filter` */
-  httpFilterSet?: boolean;
   selfTests: SelfTest[];
   integrity?: IntegrityDetails;
   /** requests refused by `http-filter` and the suggested filter (summarizeHttpFilter); undefined: no http-filter section */
@@ -94,14 +88,14 @@ export interface ReportSections {
   checks: Checks;
 }
 
-/** Where the action comes from, for the footer's attribution when the workflow's repository is unknown. */
+/** Where the action comes from, for the link when the workflow's repository is unknown. */
 export const ACTION_REPOSITORY = 'portswigger-tim/safer-runner-action';
 
 /**
- * Emoji are functional only: one per heading (📋 🔎 🌐 🔑 🐳 🔧, 🖥️ for Runner System) and the
- * verdicts (VERDICT_ICON). Anything else in a summary is a bug (the tests check every one).
+ * Emoji are functional only: ✅ a check passed, ⚠️ a check failed or an input makes enforce
+ * ADVISORY. Anything else in a summary is a bug (the tests check every one).
  */
-export const SUMMARY_EMOJI = ['📋', '🔎', '🌐', '🔑', '🐳', '🔧', '🖥', '✅', '🟠', '⛔', '⚠'];
+export const SUMMARY_EMOJI = ['✅', '⚠'];
 
 /** Pictographs in `md` that are not in SUMMARY_EMOJI. */
 export function emojiOutsideAllowlist(md: string): string[] {
@@ -137,17 +131,31 @@ export function usesLine(repository: string | undefined, ref: string | undefined
 }
 
 /**
+ * The comment on the `uses:` line: a reminder to pin, unless the ref already is an exact version
+ * or a commit SHA. A SHA gets no version: it can be a fork's commit, or one between releases.
+ */
+function usesComment(ref: string | undefined): string {
+  const r = safeRef(ref);
+  return /^[0-9a-f]{40}$/.test(r) || /^v\d+\.\d+\.\d+$/.test(r) ? '' : ' pin an exact version or commit SHA';
+}
+
+/** The repository on GitHub: the workflow's own (a fork links to itself), else this one. */
+export function repoUrl(repository: string | undefined): string {
+  return `https://github.com/${safeRepository(repository) || ACTION_REPOSITORY}`;
+}
+
+/**
  * The banner: docs/assets/banner.svg in the repository and at the ref the workflow used (inline
- * SVG is stripped from summaries), so a fork shows its own. None when either is unknown or not
- * safe to print (a local `uses: ./`, odd values).
+ * SVG is stripped from summaries), so a fork shows its own, linked to the repository. None when
+ * either is unknown or not safe to print (a local `uses: ./`, odd values).
  */
 export function banner(repository: string | undefined, ref: string | undefined): string {
   const repo = safeRepository(repository);
   const r = safeRef(ref);
   if (!repo || !r) return '';
   return (
-    `<img src="https://raw.githubusercontent.com/${repo}/${r}/docs/assets/banner.svg" width="480" ` +
-    'alt="Safer Runner Action">\n\n'
+    `<a href="${repoUrl(repo)}"><img src="https://raw.githubusercontent.com/${repo}/${r}/docs/assets/banner.svg" ` +
+    'width="480" alt="Safer Runner Action"></a>\n\n'
   );
 }
 
@@ -161,7 +169,6 @@ export function reportSections(input: ReportInput): ReportSections {
       userDomains: input.userDomains,
       allowedDomains: input.allowedDomains,
       httpFilter: input.httpFilter,
-      httpFilterSet: input.httpFilterSet,
       platformEndpoints: input.platformEndpoints
     },
     ctx
@@ -186,208 +193,195 @@ export function reportSections(input: ReportInput): ReportSections {
   };
 }
 
-const services = (s: ReportSections): Section[] => [s.proxy, s.firewall, s.dns, s.sudo, s.docker];
+/** The parts in the order the Blocked table lists them. */
+const services = (s: ReportSections): Section[] => [s.proxy, s.dns, s.firewall, s.sudo, s.docker];
 
-// ---------------------------------------------------------------- summary
+const blockedRows = (s: ReportSections): BlockedRow[] => services(s).flatMap(x => x.blocked);
 
-const SEVERITY: Record<string, number> = { blocked: 0, 'would-block': 0, advisory: 1, allowed: 2 };
+const advisories = (s: ReportSections) => services(s).flatMap(x => x.advisory);
 
-/**
- * The scorecard: one row per area, with the area's worst verdict, its problems first and then what
- * was allowed (a minor part is left out when the area has more to say); areas worst first, in the
- * parts' order otherwise.
- */
-function scoreRows(s: ReportSections): ScoreRow[] {
-  const parts = [...s.proxy.score, ...s.firewall.score, ...s.sudo.score, ...s.docker.score, s.checks.score];
-  const areas = [...new Set(parts.map(p => p.area))];
-  return areas
-    .map(area => {
-      const all = parts.filter(p => p.area === area);
-      const outranked = (p: ScoreRow) =>
-        all.some(q => q !== p && (SEVERITY[q.verdict] < SEVERITY[p.verdict] || (!q.minor && q.verdict === p.verdict)));
-      const mine = all.filter(p => !p.minor || !outranked(p));
-      mine.sort((a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]);
-      return { verdict: mine[0].verdict, area, text: mine.map(p => p.text).join(' · ') };
-    })
-    .sort((a, b) => SEVERITY[a.verdict] - SEVERITY[b.verdict]);
+// ---------------------------------------------------------------- numbers
+
+/** The heading the Blocked count and table carry: what enforce blocked, or would block. */
+const blockedWord = (s: ReportSections) => (s.ctx.enforce ? 'Blocked' : 'Enforce would block');
+
+function title(s: ReportSections): string {
+  const advisory = s.ctx.enforce && advisories(s).length ? ' · ADVISORY' : '';
+  return `### Safer Runner · ${code(s.ctx.mode)}${advisory} · job ${code(s.input.job)}\n\n`;
 }
 
-/** The services' rows: what enforce would block or make ADVISORY (the setup checks are not a policy). */
-const policyRows = (s: ReportSections) => scoreRows(s).filter(r => r.area !== s.checks.score.area);
-
-/** The verdict line: what was (or would be) blocked, by area. */
-function headline(s: ReportSections): string {
-  const rows = policyRows(s);
-  const areas = (v: string) => [...new Set(rows.filter(r => r.verdict === v).map(r => r.area))];
-  if (s.ctx.enforce) {
-    const blocked = areas('blocked');
-    const advisory = services(s).flatMap(x => x.advisory);
-    // a weakened boundary is never skimmable as clean
-    const weak = advisory.length
-      ? `**ADVISORY: not an enforced boundary** (${advisory.map(a => a.chip.replace(/^⚠️ /, '')).join(', ')}). `
-      : '';
-    return weak + (blocked.length ? `**Blocked: ${blocked.join(', ')}** (see Detail).` : 'Nothing was blocked.');
-  }
-  const would = areas('would-block');
-  if (would.length) {
-    return (
-      `Nothing was blocked: analyze only observes. **Under enforce, this job would be blocked in ${would.join(', ')}.** ` +
-      'Use the configuration below, or change the job.'
-    );
-  }
-  if (areas('advisory').length) {
-    // ADVISORY, or not fully seen (a partial docker recording): never an all-clear
-    return 'Nothing was blocked: analyze only observes. **Under enforce, check the ⚠️ rows below** (ADVISORY, or not fully seen).';
-  }
-  return 'Nothing was blocked: analyze only observes. **Nothing would be blocked under enforce:** this job should run unchanged with `mode: enforce`.';
-}
-
-function chips(s: ReportSections): string {
-  const advisory = services(s).flatMap(x => x.advisory);
-  const mode = s.ctx.enforce ? (advisory.length ? 'ENFORCE · ADVISORY' : 'ENFORCE') : 'ANALYZE';
-  return [mode, ...advisory.map(a => a.chip)].map(c => `<kbd>${c}</kbd>`).join(' ');
+function numbers(s: ReportSections): string {
+  const n = blockedRows(s).length;
+  const t = s.proxy.totals;
+  return (
+    table(
+      [blockedWord(s), 'Hosts', 'Requests', '↑ Out', '↓ In', 'sudo', 'docker'],
+      ['--:', '--:', '--:', '--:', '--:', '--:', '--:'],
+      [
+        [
+          n ? `**${n}**` : '0',
+          t.hosts,
+          String(t.requests),
+          humanBytes(t.out),
+          humanBytes(t.in),
+          s.sudo.stat ?? '',
+          s.docker.stat ?? ''
+        ]
+      ]
+    ) + '\n\n'
+  );
 }
 
 /** Alerts at the top level only (they don't render inside <details>), one per kind. */
 function alerts(s: ReportSections): string {
-  const all = [...s.proxy.alerts, ...s.checks.alerts, ...s.sudo.alerts, ...s.docker.alerts];
-  // enforce with a weakened boundary: one warning, with every reason
-  if (s.ctx.enforce) {
-    const advisory = services(s).flatMap(x => x.advisory);
-    if (advisory.length) {
-      all.push({ kind: 'WARNING', text: '**The boundary was weaker than it looks.**' });
-      all.push(...advisory.map(a => ({ kind: 'WARNING' as const, text: a.text })));
-    }
+  const all = [...s.checks.alerts, ...services(s).flatMap(x => x.alerts)];
+  const advisory = s.ctx.enforce ? advisories(s) : [];
+  if (advisory.length) {
+    all.push({
+      kind: 'WARNING',
+      text: `**ADVISORY: not an enforced boundary** (${advisory.map(a => a.label).join(', ')}).`
+    });
+    all.push(...advisory.map(a => ({ kind: 'WARNING' as const, text: a.text })));
   }
   let md = '';
-  for (const kind of ['CAUTION', 'WARNING', 'IMPORTANT'] as const) {
+  for (const kind of ['CAUTION', 'WARNING'] as const) {
     const items = all.filter(a => a.kind === kind);
     if (items.length) md += `> [!${kind}]\n` + items.map(a => `> ${a.text}`).join('\n>\n') + '\n\n';
   }
   return md;
 }
 
-function scorecard(s: ReportSections): string {
+// ---------------------------------------------------------------- blocked
+
+function blocked(s: ReportSections): string {
+  const rows = blockedRows(s);
+  if (!rows.length) return '';
+  const { shown, note } = capped(rows);
   return (
+    `#### ${blockedWord(s)}\n\n` +
     table(
-      ['', 'Area', 'Result'],
-      [':-:', ':--', ':--'],
-      scoreRows(s).map(r => [VERDICT_ICON[r.verdict], r.area, r.text])
-    ) + '\n\n'
+      ['Reason', 'Layer', 'Tries', 'Names'],
+      [':--', ':--', '--:', ':--'],
+      shown.map(r => [r.reason, r.layer, r.tries === undefined ? '—' : String(r.tries), r.what])
+    ) +
+    note +
+    '\n\n'
   );
 }
 
+// ---------------------------------------------------------------- suggestion
+
 const INPUT_ORDER: Suggestion['input'][] = ['allowed-domains', 'http-filter', 'sudo-config', 'docker'];
+
+/** An input's value as a YAML scalar: a block literal when it has lines, its comment on its line. */
+function scalar(s: Suggestion): Scalar {
+  const x = new Scalar(s.value);
+  if (s.value.includes('\n')) x.type = Scalar.BLOCK_LITERAL;
+  const comment = [s.advisory ? `⚠️ ${s.advisory}` : '', s.comment ?? ''].filter(Boolean).join('; ');
+  if (comment) x.comment = ` ${comment}`;
+  return x;
+}
+
+/** The suggested inputs under `with:`, in their usual order. */
+function inputsMap(suggestions: Suggestion[], mode?: string): YAMLMap {
+  const w = new YAMLMap();
+  if (mode) w.add(new Pair(new Scalar('mode'), new Scalar(mode)));
+  for (const input of INPUT_ORDER) {
+    const s = suggestions.find(x => x.input === input);
+    if (s) w.add(new Pair(new Scalar(s.input), scalar(s)));
+  }
+  return w;
+}
 
 /**
  * The suggested inputs as one `uses:` step, written by the `yaml` library that reads the inputs
  * back (so a pasted block reads as printed). An ADVISORY input carries a comment on its line.
  */
-export function suggestedBlock(uses: string, suggestions: Suggestion[]): string {
-  const scalar = (s: Suggestion) => {
-    const x = new Scalar(s.value);
-    if (s.value.includes('\n')) x.type = Scalar.BLOCK_LITERAL;
-    const comment = [s.advisory ? `⚠️ ${s.advisory}` : '', s.comment ?? ''].filter(Boolean).join('; ');
-    if (comment) x.comment = ` ${comment}`;
-    return x;
-  };
-  const w = new YAMLMap();
-  w.add(new Pair(new Scalar('mode'), new Scalar('enforce')));
-  for (const input of INPUT_ORDER) {
-    const s = suggestions.find(x => x.input === input);
-    if (s) w.add(new Pair(new Scalar(s.input), scalar(s)));
-  }
+export function suggestedBlock(uses: string, suggestions: Suggestion[], ref?: string): string {
   const action = new Scalar(uses);
-  action.comment = ' pin an exact version or commit SHA';
+  const comment = usesComment(ref);
+  if (comment) action.comment = comment;
   const step = new YAMLMap();
   step.add(new Pair(new Scalar('uses'), action));
-  step.add(new Pair(new Scalar('with'), w));
+  step.add(new Pair(new Scalar('with'), inputsMap(suggestions, 'enforce')));
   const doc = new Document();
   doc.contents = new YAMLSeq();
   (doc.contents as YAMLSeq).items.push(step);
   return doc.toString({ lineWidth: 0 }).trimEnd();
 }
 
-/** A sentence for the notes paragraph: capitalised, with a full stop. */
+/** Enforce: the inputs to add under the step's `with:`, indented to paste there. */
+export function inputsFragment(suggestions: Suggestion[]): string {
+  const doc = new Document();
+  doc.contents = inputsMap(suggestions);
+  return doc
+    .toString({ lineWidth: 0 })
+    .trimEnd()
+    .split('\n')
+    .map(l => (l ? `    ${l}` : l))
+    .join('\n');
+}
+
+/** A sentence for the notes line: capitalised, with a full stop. */
 const sentence = (n: string) => n[0].toUpperCase() + n.slice(1) + (/[.!?]$/.test(n) ? '' : '.');
 
 function suggested(s: ReportSections): string {
-  let md = '## 🔧 Suggested Enforce Configuration\n\n';
   const parts = services(s);
-  if (s.ctx.enforce) {
-    const advisory = parts.flatMap(x => x.advisory);
-    return (
-      md +
-      (advisory.length
-        ? 'Running under enforce. ⚠️ **ADVISORY:** not an enforced boundary (see the warning above).\n\n'
-        : 'Running under enforce: the controls were applied at setup.\n\n')
-    );
-  }
   const all = parts.flatMap(x => x.suggestions);
-  const inBlock = all.filter(x => !x.optional);
-  const optional = all.filter(x => x.optional);
-  const notes = parts.flatMap(x => x.notes);
-  if (inBlock.length) {
-    md +=
-      'Review every line before you use it; inputs not listed stay as they are. A ⚠️ line makes enforce ADVISORY.\n\n';
-    md += codeBlock('yaml', suggestedBlock(usesLine(s.input.actionRepository, s.input.actionRef), inBlock)) + '\n\n';
+  let md = '';
+  if (s.ctx.enforce) {
+    if (!all.length) return '';
+    md += '#### To allow what was blocked\n\n' + codeBlock('yaml', inputsFragment(all)) + '\n\n';
   } else {
-    const advisory = policyRows(s).some(r => r.verdict === 'advisory');
-    md += advisory
-      ? 'No input to change, but some rows above are ADVISORY or were not seen (⚠️).\n\n'
-      : 'Nothing to change: this job should run under `mode: enforce` as it is configured.\n\n';
+    const uses = usesLine(s.input.actionRepository, s.input.actionRef);
+    md += '#### For enforce\n\n' + codeBlock('yaml', suggestedBlock(uses, all, s.input.actionRef)) + '\n\n';
   }
+  const notes = parts.flatMap(x => x.notes);
   if (notes.length) md += `<sub>${notes.map(sentence).join(' ')}</sub>\n\n`;
-  for (const o of optional) {
-    md +=
-      `<details>\n<summary>Optional: narrow the allowed hosts further with <code>${o.input}</code>${o.label ? ` (${o.label})` : ''}</summary>\n\n` +
-      'Built from this job\'s allowed requests: reads collapse to one `"*"` line per host, write paths keep their ' +
-      'structure. A filter only narrows: each host must still be allowed. Add it under `with:`.\n\n' +
-      codeBlock('yaml', stringify({ [o.input]: o.value }, { blockQuote: 'literal', lineWidth: 0 }).trimEnd()) +
-      '\n\n</details>\n\n';
-  }
   return md;
 }
 
-// ---------------------------------------------------------------- detail
+// ---------------------------------------------------------------- collapsed
 
-/** A collapsed Runner System part: what the action did, its result in the summary line. */
-function runnerSystem(parts: RunnerSystem[]): string {
-  if (!parts.length) return '';
-  return (
-    `<details>\n<summary>🖥️ <b>Runner System</b>: ${parts.map(p => p.summary).join(' · ')}</summary>\n\n` +
-    parts.map(p => p.body).join('') +
-    '</details>\n\n'
-  );
+function collapsed(d: Details): string {
+  return `<details>\n<summary>${d.summary}</summary>\n\n${d.body}</details>\n\n`;
 }
 
-function detail(s: ReportSections): string {
-  let md = '# 🔎 Detail\n\n';
-  md += '## 🌐 Network\n\n' + s.proxy.body;
-  md += runnerSystem([...s.proxy.runnerSystem, ...s.dns.runnerSystem, ...s.firewall.runnerSystem]);
-  md += '## 🔑 Sudo\n\n' + s.sudo.body + runnerSystem(s.sudo.runnerSystem);
-  md += '## 🐳 Docker\n\n' + s.docker.body + runnerSystem(s.docker.runnerSystem);
-  md += runnerSystem([s.checks.runnerSystem]);
-  for (const x of s.input.extraSections ?? []) if (x) md += x + '\n\n';
-  return md;
+/** Safer Runner's own part: the setup checks, and what the action itself did. */
+function saferRunner(s: ReportSections): string {
+  const rows: CheckRow[] = [...s.checks.rows, ...s.sudo.checks, ...s.docker.checks];
+  const body =
+    table(
+      ['', 'Check', 'Detail'],
+      [':--', ':--', ':--'],
+      rows.map(r => [r.ok ? '✅' : '⚠️', r.check, r.detail])
+    ) +
+    '\n\n' +
+    (s.checks.body ? s.checks.body.trimEnd() + '\n\n' : '');
+  return collapsed({ summary: `Safer Runner: ${s.checks.summary}`, body });
 }
 
+/** The action as the workflow named it, `owner/repo@ref`, linked to the repository. */
 function footer(s: ReportSections): string {
   const now = (s.input.now ?? new Date()).toISOString().replace('T', ' ').slice(0, 16);
-  const repo = safeRepository(s.input.actionRepository) || ACTION_REPOSITORY;
-  return `<sub>${s.ctx.mode} · job ${code(s.input.job)} · ${now} UTC · [Safer Runner Action](https://github.com/${repo}) v2</sub>\n`;
+  const repo = safeRepository(s.input.actionRepository);
+  const ref = safeRef(s.input.actionRef);
+  const label = repo && ref ? `${repo}@${ref}` : 'Safer Runner';
+  return `<sub>${now} UTC · [${label}](${repoUrl(s.input.actionRepository)})</sub>\n`;
 }
 
 /** The summary from its parts. */
 export function compose(s: ReportSections): string {
   return [
     banner(s.input.actionRepository, s.input.actionRef),
-    '# 📋 Summary\n\n',
-    `${chips(s)}\n\n${headline(s)}\n\n`,
+    title(s),
+    numbers(s),
     alerts(s),
-    scorecard(s),
+    blocked(s),
     suggested(s),
-    detail(s),
+    ...services(s).flatMap(x => x.details.map(collapsed)),
+    saferRunner(s),
+    ...(s.input.extraSections ?? []).filter(Boolean).map(x => x + '\n\n'),
     footer(s)
   ].join('');
 }
@@ -396,11 +390,13 @@ export function buildReport(input: ReportInput): string {
   return compose(reportSections(input));
 }
 
-/** The suggested block, for the job log (the same text the summary shows); '' when none. */
+/** The suggested block, for the job log (the same text the summary shows); '' in enforce. */
 export function suggestedForLog(s: ReportSections): string {
   if (s.ctx.enforce) return '';
-  const inBlock = services(s)
-    .flatMap(x => x.suggestions)
-    .filter(x => !x.optional);
-  return inBlock.length ? suggestedBlock(usesLine(s.input.actionRepository, s.input.actionRef), inBlock) : '';
+  const uses = usesLine(s.input.actionRepository, s.input.actionRef);
+  return suggestedBlock(
+    uses,
+    services(s).flatMap(x => x.suggestions),
+    s.input.actionRef
+  );
 }

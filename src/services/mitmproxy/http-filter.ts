@@ -1,6 +1,6 @@
 /** The http-filter part of the report: refused requests, and the suggested filter as YAML. */
 
-import { Document, Pair, Scalar, YAMLMap, stringify } from 'yaml';
+import { Document, Pair, Scalar, YAMLMap } from 'yaml';
 import type { FlowRecord } from '../../flowlog';
 import { methodLabel } from '../../report/redact';
 import { DENIED, FILTER_REASONS, allowedRequests, blockedName, type AllowedRequest } from './flows';
@@ -96,9 +96,4 @@ export function httpFilterValue(s: HttpFilterSuggestion): string {
   const doc = new Document();
   doc.contents = hosts;
   return doc.toString({ lineWidth: 0 });
-}
-
-/** The suggestion as an `http-filter:` input block. */
-export function httpFilterYaml(s: HttpFilterSuggestion): string {
-  return stringify({ 'http-filter': httpFilterValue(s) }, { blockQuote: 'literal', lineWidth: 0 }).replace(/\n$/, '');
 }

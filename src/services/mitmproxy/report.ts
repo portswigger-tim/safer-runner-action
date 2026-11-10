@@ -1,150 +1,74 @@
 /**
- * The proxy's part of the job summary, from the flow log: what it blocked (or would block), worst
- * first, the http-filter refusals, and the job's allowed hosts; the GitHub baseline it trusts goes
- * under Runner System. In analyze it suggests `allowed-domains` (and `http-filter`). DENIED first
- * and in full; anything that has to be cut is said so explicitly (review M6).
+ * The proxy's part of the job summary, from the flow log: the hosts and requests it blocked (or
+ * would block), each with the reason code the flow log wrote, and the allowed hosts with their
+ * numbers. It suggests `allowed-domains` and `http-filter`: in analyze the job's whole value, in
+ * enforce only what would allow what was blocked. Nothing is cut silently (review M6).
  */
 
 import { compilePattern, expandPattern, matchesAny, validatePattern } from '../../policy';
-import {
-  DENIED,
-  DENYLISTED,
-  MAX_LIST,
-  NOT_LISTED,
-  blockedName,
-  categorize,
-  suggestedAllowlist,
-  type Category,
-  type HostSummary
-} from './flows';
-import { httpFilterValue, httpFilterYaml, type HttpFilterReport } from './http-filter';
+import { DENIED, blockedName, categorize, suggestedAllowlist, type HostSummary } from './flows';
+import { httpFilterValue, type HttpFilterReport } from './http-filter';
 import { PATH_HIDDEN, needsRedaction } from '../../report/redact';
-import { capped, code, codeBlock, humanBytes, plural, table } from '../../report/markdown';
-import {
-  VERDICT_ICON,
-  refusedVerdict,
-  type Alert,
-  type ReportContext,
-  type RunnerSystem,
-  type ScoreRow,
-  type Section,
-  type Suggestion
-} from '../../report/section';
+import { capped, code, humanBytes, plural, table } from '../../report/markdown';
+import type { BlockedRow, Details, ReportContext, Section, Suggestion } from '../../report/section';
 
 export interface ProxyObserved {
   hosts: HostSummary[];
   /**
    * The job's own `allowed-domains` + `passthrough-domains` patterns. Allowed traffic to
-   * anything else matched the GitHub list (allow = GitHub ∪ user), so it is shown as the GitHub
-   * baseline. Undefined: no split.
+   * anything else matched the GitHub list (allow = GitHub ∪ user), so it is shown as GitHub's.
+   * Undefined: no split.
    */
   userDomains?: string[];
   /** the job's `allowed-domains` entries alone: the suggested value keeps them */
   allowedDomains?: string[];
-  /** requests refused by `http-filter` and the suggested filter (summarizeHttpFilter); undefined: no http-filter section */
+  /** requests refused by `http-filter` and the suggested filter (summarizeHttpFilter) */
   httpFilter?: HttpFilterReport;
-  /** the job sets `http-filter`: a suggested one goes in the block, as its update */
-  httpFilterSet?: boolean;
-  /** GitHub platform endpoints the built-in list auto-allowed on filtered hosts (policy.json) */
+  /** GitHub platform endpoints the built-in list allowed on filtered hosts (policy.json) */
   platformEndpoints?: number;
 }
 
+/** The allowed traffic, for the row of numbers. */
+export interface ProxyTotals {
+  /** `3 + 3 GitHub`, or `6` with no split */
+  hosts: string;
+  requests: number;
+  out: number;
+  in: number;
+}
+
 export interface ProxySection extends Section {
-  /** refused names shown here (the DNS part leaves them out) */
+  /** blocked names shown here (the DNS part leaves them out) */
   deniedNames: string[];
+  totals: ProxyTotals;
 }
 
-// ---------------------------------------------------------------- words
+/**
+ * The flow log's refusal reasons, in the order the Blocked table lists them: the attempts to get
+ * round the proxy first (fronting, an internal address), so a cut table never drops them; then by
+ * layer (the TLS name, the HTTP request, the upstream). A reason not here comes last, as logged.
+ */
+const REASON_ORDER = [
+  'host-sni-mismatch',
+  'authority-host-mismatch',
+  'upstream-ip-forbidden',
+  'sni-not-allowed',
+  'sni-denied',
+  'no-sni',
+  'ip-literal-sni',
+  'invalid-clienthello',
+  'host-not-allowed',
+  'host-denied',
+  'no-host',
+  'ip-literal-host',
+  'connect-method',
+  'upstream-unresolved'
+];
 
-function inCidr4(ip: string, base: string, bits: number): boolean {
-  const n = (s: string) => s.split('.').reduce((a, o) => a * 256 + Number(o), 0);
-  const size = 2 ** (32 - bits);
-  return Math.floor(n(ip) / size) === Math.floor(n(base) / size);
-}
-
-/** Plain-words class of an internal address (mirrors FORBIDDEN_UPSTREAM_NETS in policy_core.py). */
-export function addressClass(ip: string): string {
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
-    if (ip === '169.254.169.254') return 'cloud metadata service';
-    if (ip === '168.63.129.16') return 'Azure wireserver';
-    const nets: [string, number, string][] = [
-      ['127.0.0.0', 8, 'loopback'],
-      ['169.254.0.0', 16, 'link-local'],
-      ['10.0.0.0', 8, 'private, RFC 1918'],
-      ['172.16.0.0', 12, 'private, RFC 1918'],
-      ['192.168.0.0', 16, 'private, RFC 1918'],
-      ['100.64.0.0', 10, 'CGNAT'],
-      ['0.0.0.0', 8, '"this network"'],
-      ['224.0.0.0', 4, 'multicast'],
-      ['240.0.0.0', 4, 'reserved']
-    ];
-    for (const [base, bits, label] of nets) if (inCidr4(ip, base, bits)) return label;
-    return 'internal';
-  }
-  const v6 = ip.toLowerCase();
-  if (v6 === '::1') return 'loopback';
-  if (/^fe[89ab]/.test(v6)) return 'link-local';
-  if (/^f[cd]/.test(v6)) return 'private, ULA';
-  if (v6.startsWith('ff')) return 'multicast';
-  return 'internal';
-}
-
-const FILTER_REASON_TEXT: Record<string, string> = {
-  'method-not-allowed': 'method not allowed on this path',
-  'path-not-allowed': 'path not allowed'
+const rank = (reason: string) => {
+  const i = REASON_ORDER.indexOf(reason);
+  return i < 0 ? REASON_ORDER.length : i;
 };
-
-const NO_NAME_TEXT: Record<string, string> = {
-  'no-sni': 'TLS with no SNI',
-  'ip-literal-sni': 'TLS with an IP address as SNI',
-  'ip-literal-host': 'HTTP request with an IP literal as the Host',
-  'no-host': 'HTTP request with no Host'
-};
-
-// ---------------------------------------------------------------- cells
-
-function displayName(h: HostSummary): string {
-  return h.name.replace(/^\(no name\) /, '');
-}
-
-function nameList(hosts: HostSummary[]): string {
-  const names = hosts.slice(0, MAX_LIST).map(h => code(blockedName(displayName(h))));
-  return names.join(', ') + (hosts.length > MAX_LIST ? `, +${hosts.length - MAX_LIST} more` : '');
-}
-
-function isPassthroughOnly(h: HostSummary): boolean {
-  return h.requests === 0 && h.kinds.includes('passthrough');
-}
-
-/** Passthrough is never decrypted: no request or byte counts exist, so never print 0. */
-function requestsCell(h: HostSummary): string {
-  return isPassthroughOnly(h) ? '—' : String(h.requests);
-}
-
-function dataCell(h: HostSummary): string {
-  if (isPassthroughOnly(h)) return 'n/a';
-  const parts = [];
-  if (h.reqBytes > 0) parts.push(`↑ ${humanBytes(h.reqBytes)}`);
-  if (h.respBytes > 0) parts.push(`↓ ${humanBytes(h.respBytes)}`);
-  return parts.join(' ') || '—';
-}
-
-/** Grouped by class, one per line: "2xx (45)<br>3xx (4)<br>5xx (1)". */
-export function statusSummary(h: HostSummary): string {
-  if (isPassthroughOnly(h)) return 'n/a';
-  const byClass = new Map<string, number>();
-  let answered = 0;
-  for (const [k, n] of Object.entries(h.statuses)) {
-    answered += n;
-    const cls = /^[1-5]\d\d$/.test(k) ? `${k[0]}xx` : k;
-    byClass.set(cls, (byClass.get(cls) ?? 0) + n);
-  }
-  const parts = [...byClass.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cls, n]) => `${cls} (${n})`);
-  if (h.requests > answered) parts.push(`no response (${h.requests - answered})`);
-  return parts.join('<br>') || '—';
-}
-
-// ---------------------------------------------------------------- allowed tables
 
 function compileUserPatterns(patterns: string[]): RegExp[] {
   const out: RegExp[] = [];
@@ -158,184 +82,56 @@ function compileUserPatterns(patterns: string[]): RegExp[] {
   return out;
 }
 
-function byData(a: HostSummary, b: HostSummary): number {
-  return (
-    b.reqBytes + b.respBytes - (a.reqBytes + a.respBytes) || b.requests - a.requests || a.name.localeCompare(b.name)
-  );
+function displayName(h: HostSummary): string {
+  return h.name.replace(/^\(no name\) /, '');
 }
 
-function totals(rows: HostSummary[]): { requests: number; bytes: number } {
-  return {
-    requests: rows.reduce((a, h) => a + h.requests, 0),
-    bytes: rows.reduce((a, h) => a + h.reqBytes + h.respBytes, 0)
-  };
+function isPassthroughOnly(h: HostSummary): boolean {
+  return h.requests === 0 && h.kinds.includes('passthrough');
 }
 
-// ---------------------------------------------------------------- report
+const plainHttp = (h: HostSummary) => (h.kinds.length === 1 && h.kinds[0] === 'http' ? ' <sub>plain HTTP</sub>' : '');
 
-/** Everything the parts share, worked out once from the observations. */
-interface Facts {
-  o: ProxyObserved;
-  ctx: ReportContext;
-  enforce: boolean;
-  blockedWord: string;
-  denied: HostSummary[];
-  allowed: HostSummary[];
-  groups: Record<Category, HostSummary[]>;
-  /** fronting + internal: the attacks */
-  bypass: HostSummary[];
-  jobHosts: HostSummary[];
-  platform: HostSummary[];
-  job: { requests: number; bytes: number };
-  plat: { requests: number; bytes: number };
-  /** names to suggest for `allowed-domains` */
-  suggest: string[];
-  filterBlocks: HttpFilterReport['blocks'];
-  /** requests the http-filter refused */
-  filtered: number;
+// ---------------------------------------------------------------- blocked
+
+/** A blocked host and its data: the TLS name that carried it, the address dialled or resolved. */
+function blockedWhat(h: HostSummary): string {
+  let c = code(blockedName(displayName(h))) + plainHttp(h);
+  const cat = categorize(h);
+  if (cat === 'fronting') {
+    if (h.snis.length) c += ` inside TLS for ${h.snis.map(n => code(blockedName(n))).join(', ')}`;
+    if (h.dsts.length) c += `, dialled ${h.dsts.map(code).join(', ')}`;
+  } else if (cat === 'internal' && h.upstreamIps.length) {
+    c += ` → ${h.upstreamIps.map(code).join(', ')}`;
+  }
+  return c;
 }
 
-function facts(o: ProxyObserved, ctx: ReportContext): Facts {
-  const { enforce } = ctx;
-  const denied = o.hosts.filter(h => DENIED.has(h.verdict));
-  const allowed = o.hosts.filter(h => !DENIED.has(h.verdict));
-  const groups: Record<Category, HostSummary[]> = {
-    fronting: [],
-    internal: [],
-    'not-allowed': [],
-    filtered: [],
-    unresolved: [],
-    'no-name': [],
-    other: []
-  };
-  for (const h of denied) groups[categorize(h)].push(h);
-  const byTries = (a: HostSummary, b: HostSummary) => b.tries - a.tries || a.name.localeCompare(b.name);
-  for (const g of Object.values(groups)) g.sort(byTries);
-
-  let jobHosts = allowed;
-  let platform: HostSummary[] = [];
-  if (o.userDomains) {
-    const user = compileUserPatterns(o.userDomains);
-    jobHosts = allowed.filter(h => matchesAny(h.name, user));
-    platform = allowed.filter(h => !jobHosts.includes(h));
-  }
-
-  const filterBlocks = o.httpFilter?.blocks ?? [];
-  return {
-    o,
-    ctx,
-    enforce,
-    blockedWord: enforce ? 'blocked' : 'would be blocked',
-    denied,
-    allowed,
-    groups,
-    bypass: [...groups.fronting, ...groups.internal],
-    jobHosts,
-    platform,
-    job: totals(jobHosts),
-    plat: totals(platform),
-    suggest: suggestedAllowlist(denied),
-    filterBlocks,
-    filtered: filterBlocks.reduce((a, b) => a + b.tries, 0)
-  };
+function blockedRows(denied: HostSummary[], filter: HttpFilterReport | undefined): BlockedRow[] {
+  const hosts = denied
+    // a request the http-filter blocked is listed with its method, below
+    .filter(h => categorize(h) !== 'filtered')
+    .map(h => ({ h, reasons: [...h.reasons].sort((a, b) => rank(a) - rank(b)) }))
+    .sort(
+      (a, b) =>
+        rank(a.reasons[0] ?? '') - rank(b.reasons[0] ?? '') || b.h.tries - a.h.tries || a.h.name.localeCompare(b.h.name)
+    )
+    .map(({ h, reasons }) => ({
+      reason: reasons.map(code).join(', '),
+      layer: h.layers.join(', '),
+      tries: h.tries,
+      what: blockedWhat(h)
+    }));
+  const requests = (filter?.blocks ?? []).map(b => ({
+    reason: code(b.reason),
+    layer: 'http-filter',
+    tries: b.tries,
+    what: `${code(b.host)} ${code(b.method)} ${PATH_HIDDEN}`
+  }));
+  return [...hosts, ...requests];
 }
 
-const OTHER_GROUPS: [Category, string][] = [
-  ['unresolved', 'did not resolve'],
-  ['no-name', 'no hostname'],
-  ['other', 'other']
-];
-
-function score(f: Facts): ScoreRow[] {
-  const { groups, bypass, blockedWord } = f;
-  const refused = refusedVerdict(f.ctx);
-  const rows: ScoreRow[] = [];
-  if (bypass.length) {
-    rows.push({
-      verdict: refused,
-      area: 'Network',
-      text: `**${plural(bypass.length, 'bypass attempt')} ${blockedWord}**`
-    });
-  }
-  if (groups['not-allowed'].length) {
-    const n = groups['not-allowed'].length;
-    rows.push({
-      verdict: refused,
-      area: 'Network',
-      text: `${plural(n, 'host')} not on the allowlist ${blockedWord}: ${nameList(groups['not-allowed'])}`
-    });
-  }
-  const others = OTHER_GROUPS.filter(([g]) => groups[g].length);
-  if (others.length) {
-    const n = others.reduce((a, [g]) => a + groups[g].length, 0);
-    // in the scorecard only when nothing more alarming is there (the Detail lists them all)
-    rows.push({
-      verdict: refused,
-      area: 'Network',
-      text: `${plural(n, 'host')} ${blockedWord} (${others.map(([, what]) => what).join(', ')})`,
-      minor: true
-    });
-  }
-  if (f.filterBlocks.length) {
-    rows.push({
-      verdict: refused,
-      area: 'HTTP filter',
-      text: `${plural(f.filtered, 'request')} ${blockedWord}: ${nameList(groups.filtered)}`
-    });
-  }
-  const hosts = f.o.userDomains
-    ? `${plural(f.jobHosts.length, 'host')} beyond GitHub allowed`
-    : `${plural(f.allowed.length, 'host')} allowed`;
-  rows.push(
-    f.jobHosts.length
-      ? {
-          verdict: 'allowed',
-          area: 'Network',
-          text: `${hosts} · ${plural(f.job.requests, 'request')} · ${humanBytes(f.job.bytes)}`
-        }
-      : {
-          verdict: 'allowed',
-          area: 'Network',
-          text: f.o.userDomains ? 'no hosts beyond GitHub' : 'no traffic',
-          minor: true
-        }
-  );
-  return rows;
-}
-
-function alerts(f: Facts): Alert[] {
-  const { enforce, groups, bypass, filtered } = f;
-  const out: Alert[] = [];
-  if (bypass.length) {
-    const kinds = [];
-    if (groups.fronting.length) kinds.push(plural(groups.fronting.length, 'Host/SNI spoof'));
-    if (groups.internal.length) {
-      kinds.push(
-        `${plural(groups.internal.length, 'name')} that point${groups.internal.length === 1 ? 's' : ''} at internal addresses`
-      );
-    }
-    out.push({
-      kind: 'CAUTION',
-      text: enforce
-        ? `**Bypass attempts to ${plural(bypass.length, 'host')} were blocked** (${kinds.join(', ')}). ` +
-          'A normal build does not do this: check the steps that ran.'
-        : `**Bypass attempts to ${plural(bypass.length, 'host')} were seen** (${kinds.join(', ')}). Enforce blocks ` +
-          'them. A normal build does not do this: check the steps that ran.'
-    });
-  }
-  if (enforce && !bypass.length && (groups['not-allowed'].length || filtered)) {
-    const n = groups['not-allowed'].length;
-    const what: string[] = [];
-    if (n) what.push(`${plural(n, 'host')} not on the allowlist ${n === 1 ? 'was' : 'were'} blocked`);
-    if (filtered)
-      what.push(`${plural(filtered, 'request')} ${filtered === 1 ? 'was' : 'were'} refused by \`http-filter\``);
-    out.push({
-      kind: 'IMPORTANT',
-      text: `**${what.join('; ')}.** If this job failed, this is probably why: see Network.`
-    });
-  }
-  return out;
-}
+// ---------------------------------------------------------------- suggestions
 
 const KEEP_ENTRIES = 'keep your existing allowed-domains entries too';
 
@@ -360,199 +156,100 @@ function keptEntries(entries: string[]): { kept: string[]; held: boolean } {
   return { kept, held };
 }
 
-function suggestions(f: Facts): Suggestion[] {
-  if (f.enforce) return [];
+function suggestions(o: ProxyObserved, ctx: ReportContext, suggest: string[]): Suggestion[] {
   const out: Suggestion[] = [];
-  if (f.suggest.length) {
-    // the job's entries as setup recorded them; when that record is missing, say to keep them
-    const { kept, held } = f.o.allowedDomains ? keptEntries(f.o.allowedDomains) : { kept: [], held: true };
-    const add = f.suggest.filter(n => !kept.includes(n));
-    out.push({
-      input: 'allowed-domains',
-      value: [...kept, ...add].join('\n') + '\n',
-      ...(held ? { comment: KEEP_ENTRIES } : {})
-    });
+  if (suggest.length) {
+    if (ctx.enforce) {
+      out.push({ input: 'allowed-domains', value: suggest.join('\n') + '\n' });
+    } else {
+      // the job's entries as setup recorded them; when that record is missing, say to keep them
+      const { kept, held } = o.allowedDomains ? keptEntries(o.allowedDomains) : { kept: [], held: true };
+      const add = suggest.filter(n => !kept.includes(n));
+      out.push({
+        input: 'allowed-domains',
+        value: [...kept, ...add].join('\n') + '\n',
+        ...(held ? { comment: KEEP_ENTRIES } : {})
+      });
+    }
   }
-  const sug = f.o.httpFilter?.suggestion;
-  if (sug?.hosts.length) {
-    out.push({
-      input: 'http-filter',
-      value: httpFilterValue(sug),
-      optional: !f.o.httpFilterSet,
-      label:
-        `${plural(sug.requests, 'request')} → ${plural(sug.rules, 'rule')}` +
-        (sug.specific ? `; ${plural(sug.specific, 'write endpoint')} kept specific` : '')
-    });
+  const sug = o.httpFilter?.suggestion;
+  // enforce: only when the filter blocked something, so the job may need it
+  if (sug?.hosts.length && (!ctx.enforce || o.httpFilter?.blocks.length)) {
+    out.push({ input: 'http-filter', value: httpFilterValue(sug) });
   }
   return out;
 }
 
-function notes(f: Facts): string[] {
-  if (f.enforce) return [];
+function notes(o: ProxyObserved, ctx: ReportContext, denied: HostSummary[], suggest: string[]): string[] {
+  if (ctx.enforce) return [];
   const out: string[] = [];
-  const left = f.groups['not-allowed'].length - f.suggest.length;
+  const left = denied.filter(h => categorize(h) === 'not-allowed').length - suggest.length;
   if (left > 0) {
-    out.push(
-      `${plural(left, 'blocked name')} not suggested (on the risky-subdomain denylist, or a name that looks like data)`
-    );
+    out.push(`${plural(left, 'blocked name')} not suggested (on the risky-subdomain denylist, or it looks like data)`);
   }
-  if (f.suggest.length) out.push("GitHub's own hosts are trusted automatically and are not listed");
-  if (f.o.httpFilter?.suggestion?.coarse) {
-    out.push(
-      'the suggested `http-filter` has a write rule that starts with `*`, so it allows that write on any path: review it'
-    );
+  if (o.httpFilter?.suggestion?.coarse) {
+    out.push('the suggested `http-filter` has a write rule that starts with `*`, so it allows that write on any path');
   }
   return out;
 }
 
-// ---------------------------------------------------------------- detail
+// ---------------------------------------------------------------- allowed
 
-function hostCell(h: HostSummary): string {
-  let c = code(blockedName(displayName(h)));
-  if (h.kinds.includes('passthrough')) c += ' <sub>SNI only</sub>';
-  else if (h.kinds.length === 1 && h.kinds[0] === 'http') c += ' <sub>plain HTTP</sub>';
-  return c;
+/** Each status code with its count: `200 ×45 · 304 ×4`, and requests with no response. */
+export function statusSummary(h: HostSummary): string {
+  if (isPassthroughOnly(h)) return '`passthrough`';
+  let answered = 0;
+  const parts = Object.entries(h.statuses)
+    .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+    .map(([status, n]) => {
+      answered += n;
+      return `${status.replace(/[^0-9A-Za-z-]/g, '')} ×${n}`;
+    });
+  if (h.requests > answered) parts.push(`no response ×${h.requests - answered}`);
+  return parts.join(' · ');
 }
 
-/** What happened to a refused host, in words; evidence in a <sub> line. */
-function whatHappened(h: HostSummary): string {
-  const cat = categorize(h);
-  if (cat === 'fronting') {
-    const what = h.reasons.includes('host-sni-mismatch')
-      ? 'Host/SNI mismatch (domain fronting)'
-      : 'Conflicting Host / authority';
-    const notes: string[] = [];
-    if (h.snis.length) notes.push(`inside TLS for ${h.snis.map(n => code(blockedName(n))).join(', ')}`);
-    if (h.reasons.some(r => NOT_LISTED.has(r))) notes.push('also not on the allowlist');
-    if (h.dsts.length) notes.push(`dialled ${h.dsts.map(code).join(', ')}`);
-    return what + (notes.length ? `<br><sub>${notes.join(' · ')}</sub>` : '');
-  }
-  if (cat === 'internal') {
-    const ips = h.upstreamIps.map(ip => `${code(ip)} (${addressClass(ip)})`).join(', ');
-    return `Internal address${ips ? ` → ${ips}` : ''}`;
-  }
-  if (cat === 'not-allowed') {
-    if (h.reasons.some(r => DENYLISTED.has(r))) return 'On the risky-subdomain denylist';
-    const plain = h.reasons.includes('host-not-allowed') && !h.reasons.includes('sni-not-allowed');
-    return `Not on the allowlist${plain ? ' (plain HTTP)' : ''}`;
-  }
-  if (cat === 'unresolved') return 'Did not resolve; nothing was sent';
-  if (cat === 'no-name') return h.reasons.map(r => NO_NAME_TEXT[r] ?? r).join(' · ');
-  // unknown reasons are never dropped: show the raw code
-  return `Refused: ${h.reasons.map(code).join(', ')}`;
-}
+const bytes = (n: number) => (n > 0 ? humanBytes(n) : '');
 
-function blockedTable(f: Facts): string {
-  const { groups } = f;
-  const rows = [
-    ...groups.fronting,
-    ...groups.internal,
-    ...groups['not-allowed'],
-    ...groups.unresolved,
-    ...groups['no-name'],
-    ...groups.other
-  ];
-  if (!rows.length) return '';
-  const icon = VERDICT_ICON[refusedVerdict(f.ctx)];
-  const { shown, note } = capped(rows);
+function byData(a: HostSummary, b: HostSummary): number {
   return (
-    `**${f.enforce ? 'Blocked' : 'Would be blocked'}**\n\n` +
-    table(
-      ['', 'Host', 'What happened', 'Tries'],
-      [':-:', ':--', ':--', '--:'],
-      shown.map(h => [icon, code(blockedName(displayName(h))), whatHappened(h), String(h.tries)])
-    ) +
-    note +
-    '\n\n'
+    b.reqBytes + b.respBytes - (a.reqBytes + a.respBytes) || b.requests - a.requests || a.name.localeCompare(b.name)
   );
 }
 
-function filterTable(f: Facts): string {
-  if (!f.filterBlocks.length) return '';
-  const icon = VERDICT_ICON[refusedVerdict(f.ctx)];
-  const { shown, note } = capped(f.filterBlocks);
-  return (
-    `**${f.enforce ? 'Refused' : 'Would be refused'} by \`http-filter\`**\n\n` +
-    table(
-      ['', 'Host', 'Request', 'Why', 'Tries'],
-      [':-:', ':--', ':--', ':--', '--:'],
-      shown.map(b => [
-        icon,
-        code(b.host),
-        `${code(b.method)} ${PATH_HIDDEN}`,
-        FILTER_REASON_TEXT[b.reason] ?? code(b.reason),
-        String(b.tries)
-      ])
-    ) +
-    note +
-    '\n\n<sub>The path of a refused request is never shown: whoever sent it chose it, and it can carry data. ' +
-    "If the job needs one of these requests, run it in analyze mode without that host's `http-filter` entry: " +
-    'the suggested `http-filter` then covers it. Review the rule before you add it: a write is how data ' +
-    'leaves.</sub>\n\n'
-  );
+function sum(rows: HostSummary[]): { requests: number; out: number; in: number } {
+  return {
+    requests: rows.reduce((a, h) => a + h.requests, 0),
+    out: rows.reduce((a, h) => a + h.reqBytes, 0),
+    in: rows.reduce((a, h) => a + h.respBytes, 0)
+  };
 }
 
-/** Enforce: what to add if the job needs it (the likely reason it failed). Review first. */
-function enforceFixes(f: Facts): string {
-  if (!f.enforce) return '';
-  let md = '';
-  if (f.suggest.length) {
-    md += `If the job needs ${f.suggest.length === 1 ? 'it' : 'them'}, add ${f.suggest.length === 1 ? 'it' : 'them'} (review first):\n\n`;
-    md += codeBlock('yaml', 'allowed-domains: |\n' + f.suggest.map(s => `  ${s}`).join('\n')) + '\n\n';
-  }
-  const sug = f.o.httpFilter?.suggestion;
-  if (f.filtered && sug?.hosts.length) {
-    md += `<details>\n<summary>A <code>http-filter</code> built from this job's allowed requests (${plural(sug.rules, 'rule')}; review first)</summary>\n\n`;
-    md += codeBlock('yaml', httpFilterYaml(sug)) + '\n\n</details>\n\n';
-  }
-  return md;
-}
-
-function allowedTable(rows: HostSummary[], title: string): string {
+function allowedDetails(rows: HostSummary[], title: string, extra = ''): Details {
+  const t = sum(rows);
   const { shown, note } = capped([...rows].sort(byData));
-  let md =
-    `${title}\n\n` +
-    table(
-      ['', 'Host', 'Requests', 'Data', 'Responses'],
-      [':-:', ':--', '--:', '--:', ':--'],
-      shown.map(h => [VERDICT_ICON.allowed, hostCell(h), requestsCell(h), dataCell(h), statusSummary(h)])
-    ) +
-    note +
-    '\n\n';
-  if (shown.some(h => h.kinds.includes('passthrough'))) {
-    md += '<sub>SNI only = checked by TLS name, not decrypted: no request or byte counts.</sub>\n\n';
-  }
-  return md;
+  return {
+    summary:
+      `${title}: ${plural(rows.length, 'host')} · ${plural(t.requests, 'request')} · ↑ ${humanBytes(t.out)} · ` +
+      `↓ ${humanBytes(t.in)}${extra}`,
+    body:
+      table(
+        ['Host', 'Requests', '↑ Out', '↓ In', 'Status'],
+        [':--', '--:', '--:', '--:', ':--'],
+        shown.map(h => [
+          code(blockedName(displayName(h))) + plainHttp(h),
+          isPassthroughOnly(h) ? '—' : String(h.requests),
+          bytes(h.reqBytes),
+          bytes(h.respBytes),
+          statusSummary(h)
+        ])
+      ) +
+      note +
+      '\n\n'
+  };
 }
 
-function body(f: Facts): string {
-  let md = blockedTable(f) + filterTable(f) + enforceFixes(f);
-  if (f.jobHosts.length)
-    md += allowedTable(f.jobHosts, f.o.userDomains ? "**Allowed: this job's hosts**" : '**Allowed**');
-  return md || 'No traffic went through the proxy.\n\n';
-}
-
-function runnerSystem(f: Facts): RunnerSystem[] {
-  const out: RunnerSystem[] = [];
-  if (f.platform.length) {
-    out.push({
-      summary: `GitHub baseline ${plural(f.platform.length, 'host')}`,
-      body: allowedTable(
-        f.platform,
-        `**GitHub baseline** (trusted automatically) · ${plural(f.plat.requests, 'request')} · ${humanBytes(f.plat.bytes)}`
-      )
-    });
-  }
-  if (f.o.platformEndpoints) {
-    out.push({
-      summary: `${plural(f.o.platformEndpoints, 'platform endpoint')} auto-allowed`,
-      body:
-        `**http-filter**: ${plural(f.o.platformEndpoints, 'GitHub platform endpoint')} auto-allowed on filtered ` +
-        'hosts by the built-in platform allowlist (`allow-github-platform: false` turns it off).\n\n'
-    });
-  }
-  return out;
-}
+// ---------------------------------------------------------------- report
 
 /** Full lists in the job log, so nothing is ever silently dropped from the summary (names redacted the same way). */
 export function jobLog(o: Pick<ProxyObserved, 'hosts' | 'httpFilter'>): string[] {
@@ -568,15 +265,39 @@ export function jobLog(o: Pick<ProxyObserved, 'hosts' | 'httpFilter'>): string[]
 }
 
 export function report(o: ProxyObserved, ctx: ReportContext): ProxySection {
-  const f = facts(o, ctx);
+  const denied = o.hosts.filter(h => DENIED.has(h.verdict));
+  const allowed = o.hosts.filter(h => !DENIED.has(h.verdict));
+  let jobHosts = allowed;
+  let platform: HostSummary[] = [];
+  if (o.userDomains) {
+    const user = compileUserPatterns(o.userDomains);
+    jobHosts = allowed.filter(h => matchesAny(h.name, user));
+    platform = allowed.filter(h => !jobHosts.includes(h));
+  }
+  const suggest = suggestedAllowlist(denied);
+
+  const details: Details[] = [];
+  if (jobHosts.length) details.push(allowedDetails(jobHosts, 'Allowed'));
+  if (platform.length || o.platformEndpoints) {
+    const endpoints = o.platformEndpoints ? ` · ${plural(o.platformEndpoints, 'platform endpoint')}` : '';
+    details.push(allowedDetails(platform, 'GitHub, always allowed', endpoints));
+  }
+
+  const all = sum(allowed);
   return {
-    score: score(f),
-    alerts: alerts(f),
-    suggestions: suggestions(f),
-    notes: notes(f),
+    blocked: blockedRows(denied, o.httpFilter),
+    alerts: [],
+    suggestions: suggestions(o, ctx, suggest),
+    notes: notes(o, ctx, denied, suggest),
     advisory: [],
-    body: body(f),
-    runnerSystem: runnerSystem(f),
-    deniedNames: f.denied.map(h => h.name)
+    details,
+    checks: [],
+    deniedNames: denied.map(h => h.name),
+    totals: {
+      hosts: o.userDomains ? `${jobHosts.length} + ${platform.length} GitHub` : String(allowed.length),
+      requests: all.requests,
+      out: all.out,
+      in: all.in
+    }
   };
 }

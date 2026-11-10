@@ -22,8 +22,6 @@ interface SetupMarker extends SudoMarker, DockerMarker {
   /** the job's own allowed-domains and passthrough-domains entries, as setup applied them */
   allowedDomains?: string[];
   passthroughDomains?: string[];
-  /** the job sets http-filter */
-  httpFilterSet?: boolean;
   /** resolved fail-on-tampering (mode-aware); kept in the root-owned marker, not re-read from inputs */
   failOnTampering?: boolean;
   /** flow-log byte range the setup self-tests wrote */
@@ -92,8 +90,7 @@ async function run(): Promise<void> {
     // sudo arguments redacted like the summary: the job log is just as public).
     const proxy = observeProxy(marker.selfTestWindow, {
       allowed: marker.allowedDomains,
-      passthrough: marker.passthroughDomains,
-      httpFilterSet: marker.httpFilterSet
+      passthrough: marker.passthroughDomains
     });
     log(proxyJobLog(proxy.observed));
     const firewall = observeFirewall();
