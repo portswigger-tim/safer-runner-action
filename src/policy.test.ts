@@ -68,6 +68,18 @@ describe('buildPolicyConfig', () => {
     blockRiskySubdomains: true
   };
 
+  // passthrough-domains defaults to the mandatory entry (action.yaml): with the input unset, the
+  // job's own entries are none, so the report counts the watchdog host as GitHub's, not the job's
+  it("the job's own entries never include the mandatory GitHub passthrough", () => {
+    const { config, user } = buildPolicyConfig({ ...base, passthroughDomains: 'hosted-compute-*.githubapp.com' });
+    expect(config.passthrough).toEqual(['hosted-compute-*.githubapp.com']);
+    expect(user.passthrough).toEqual([]);
+    expect(
+      buildPolicyConfig({ ...base, passthroughDomains: 'hosted-compute-*.githubapp.com\npinned.example.com' }).user
+        .passthrough
+    ).toEqual(['pinned.example.com']);
+  });
+
   it('writes policy.json the addon accepts (proxy/policy_core.py validate_config, fails closed otherwise)', () => {
     const { config } = buildPolicyConfig({
       ...base,

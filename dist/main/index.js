@@ -1571,7 +1571,9 @@ function buildPolicyConfig(opts) {
             http_filter: httpFilter
         },
         warnings,
-        user: { allowed: user, passthrough: userPassthrough }
+        // the job's own entries (the report splits the job's hosts from GitHub's by them): never the
+        // mandatory GitHub passthrough, which is also the input's action.yaml default
+        user: { allowed: user, passthrough: userPassthrough.filter(p => !exports.MANDATORY_PASSTHROUGH.includes(p)) }
     };
 }
 

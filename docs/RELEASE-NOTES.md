@@ -8,6 +8,8 @@
   `allowed-domains`, or run the job in `analyze` mode for a suggested configuration.
 - **The sudo Tries and Runs count every time a command ran.** The sudo log was de-duplicated
   before it was counted, so a command run twice showed 1.
+- **GitHub's `hosted-compute-*` host is counted as GitHub's.** It is the `passthrough-domains`
+  default, so with the input unset it was counted as one of the job's hosts on runners that use it.
 
 ## v2.5.1
 
