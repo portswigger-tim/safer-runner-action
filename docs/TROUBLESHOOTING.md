@@ -14,9 +14,10 @@ configuration.
 The host is not on the allowlist.
 
 1. Make sure that the job must connect to this host. An unknown host can be a sign of a
-   compromised dependency.
-2. Add the host to `allowed-domains`. The job summary shows the lines to add under **To allow
-   what was blocked**. An entry allows only that exact name: `example.com` does not allow
+   compromised dependency, or of a step trying to send data out. In `enforce` mode the job
+   summary does not suggest a configuration, because what it blocked needs this check first.
+2. Add the host to `allowed-domains`, or run the job in `analyze` mode and use the suggested
+   configuration. An entry allows only that exact name: `example.com` does not allow
    `www.example.com`. [Configuration](CONFIGURATION.md#allowed-domains) shows the wildcard forms.
 
 ### `BLOCK` in the `dns` layer

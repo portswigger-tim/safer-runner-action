@@ -259,7 +259,7 @@ describe('the row of numbers and the Blocked table', () => {
   });
 });
 
-describe('enforce: what would allow what was blocked, never the whole step', () => {
+describe('enforce: no suggested configuration', () => {
   it.each([
     ['sudo kept', { sudoRetained: true }],
     ['docker kept', { dockerRetained: true }],
@@ -270,10 +270,11 @@ describe('enforce: what would allow what was blocked, never the whole step', () 
     expect(md).not.toContain('#### For enforce');
   });
 
-  it('the inputs to add, indented to paste under with:', () => {
+  it('a blocked host is a row of the table, and nothing is offered to paste', () => {
     const records = [tls('pypi.org', 'BLOCK', 'sni-not-allowed', 'c:2')];
     const md = buildReport({ ...analyzeInput(), mode: 'enforce', hosts: summarizeFlows(records) });
-    expect(md).toContain('#### To allow what was blocked\n\n```yaml\n    allowed-domains: |\n      pypi.org\n```');
+    expect(md).toContain('| `sni-not-allowed` | sni | 1 | `pypi.org` |');
+    expect(md).not.toContain('```');
   });
 
   it('ADVISORY: in the title, and a warning with every reason', () => {

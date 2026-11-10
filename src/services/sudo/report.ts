@@ -79,13 +79,13 @@ function facts(o: SudoObserved, ctx: ReportContext): Facts {
   };
 }
 
-/** Each distinct command line once, with how many times it ran, in first-seen order. */
+/** Each distinct command line once, with how many times it ran (`runs` from the log), in first-seen order. */
 function counted(commands: SudoCommand[]): [SudoCommand, number][] {
   const by = new Map<string, [SudoCommand, number]>();
   for (const c of commands) {
     const row = by.get(key(c));
-    if (row) row[1]++;
-    else by.set(key(c), [c, 1]);
+    if (row) row[1] += c.runs ?? 1;
+    else by.set(key(c), [c, c.runs ?? 1]);
   }
   return [...by.values()];
 }

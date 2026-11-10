@@ -57,13 +57,13 @@ describe('proxy report (its Section)', () => {
     ).toBe('GitHub, always allowed: 1 host · 1 request · ↑ 0 B · ↓ 2.0 KiB');
   });
 
-  it("enforce: a host not on the allowlist is a row with the flow log's reason, and the line to add", () => {
+  it("enforce: a host not on the allowlist is a row with the flow log's reason, and nothing to paste", () => {
     const s = report({ hosts: summarizeFlows([allowed, notListed('BLOCK')]) }, ENFORCE);
     expect(s.blocked).toEqual([{ reason: '`sni-not-allowed`', layer: 'sni', tries: 1, what: '`pypi.example.com`' }]);
     expect(s.alerts).toEqual([]);
     expect(s.deniedNames).toEqual(['pypi.example.com']);
-    // only what would allow what was blocked
-    expect(s.suggestions).toEqual([{ input: 'allowed-domains', value: 'pypi.example.com\n' }]);
+    // what enforce blocked needs a look (a new dependency, or a step trying to get out), not a paste
+    expect(s.suggestions).toEqual([]);
   });
 
   it('analyze: suggests the whole allowed-domains value, the job’s own entries kept', () => {

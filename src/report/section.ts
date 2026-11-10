@@ -28,10 +28,7 @@ export interface Alert {
   text: string;
 }
 
-/**
- * One input of the suggested configuration. Analyze: the whole enforce step. Enforce: what to add
- * to allow what was blocked. Report only, never applied.
- */
+/** One input of the suggested enforce step (analyze only). Report only, never applied. */
 export interface Suggestion {
   input: 'allowed-domains' | 'http-filter' | 'sudo-config' | 'docker';
   /** the input's value, as the input reads it */

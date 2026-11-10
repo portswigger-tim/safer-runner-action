@@ -34,6 +34,9 @@ describe('sudo report (its Section)', () => {
     const id = cmd('/usr/bin/id', '');
     const s = report({ usage: usage([], [id, id]), policy, retained: false }, ENFORCE);
     expect(s.blocked).toEqual([{ reason: '`disable-sudo`', layer: 'sudo', tries: 2, what: '`/usr/bin/id`' }]);
+    // as the log reaches the report: de-duplicated, with the times it ran
+    const once = report({ usage: usage([], [{ ...id, runs: 3 }]), policy, retained: false }, ENFORCE);
+    expect(once.blocked[0].tries).toBe(3);
     expect(s.advisory).toEqual([]);
   });
 

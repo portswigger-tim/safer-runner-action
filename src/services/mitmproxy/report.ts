@@ -1,8 +1,8 @@
 /**
  * The proxy's part of the job summary, from the flow log: the hosts and requests it blocked (or
  * would block), each with the reason code the flow log wrote, and the allowed hosts with their
- * numbers. It suggests `allowed-domains` and `http-filter`: in analyze the job's whole value, in
- * enforce only what would allow what was blocked. Nothing is cut silently (review M6).
+ * numbers. In analyze it suggests `allowed-domains` and `http-filter` (the job's whole value).
+ * Nothing is cut silently (review M6).
  */
 
 import { compilePattern, expandPattern, matchesAny, validatePattern } from '../../policy';
@@ -156,25 +156,26 @@ function keptEntries(entries: string[]): { kept: string[]; held: boolean } {
   return { kept, held };
 }
 
+/**
+ * Analyze only. In enforce, what was blocked is what needs a look (a new dependency, or a step
+ * trying to get out, such as a `--resolve` to a shared address), so nothing is offered to paste:
+ * the Blocked table names it.
+ */
 function suggestions(o: ProxyObserved, ctx: ReportContext, suggest: string[]): Suggestion[] {
+  if (ctx.enforce) return [];
   const out: Suggestion[] = [];
   if (suggest.length) {
-    if (ctx.enforce) {
-      out.push({ input: 'allowed-domains', value: suggest.join('\n') + '\n' });
-    } else {
-      // the job's entries as setup recorded them; when that record is missing, say to keep them
-      const { kept, held } = o.allowedDomains ? keptEntries(o.allowedDomains) : { kept: [], held: true };
-      const add = suggest.filter(n => !kept.includes(n));
-      out.push({
-        input: 'allowed-domains',
-        value: [...kept, ...add].join('\n') + '\n',
-        ...(held ? { comment: KEEP_ENTRIES } : {})
-      });
-    }
+    // the job's entries as setup recorded them; when that record is missing, say to keep them
+    const { kept, held } = o.allowedDomains ? keptEntries(o.allowedDomains) : { kept: [], held: true };
+    const add = suggest.filter(n => !kept.includes(n));
+    out.push({
+      input: 'allowed-domains',
+      value: [...kept, ...add].join('\n') + '\n',
+      ...(held ? { comment: KEEP_ENTRIES } : {})
+    });
   }
-  // analyze only: built from the requests that were allowed, it never allows one that was blocked
   const sug = o.httpFilter?.suggestion;
-  if (sug?.hosts.length && !ctx.enforce) out.push({ input: 'http-filter', value: httpFilterValue(sug) });
+  if (sug?.hosts.length) out.push({ input: 'http-filter', value: httpFilterValue(sug) });
   return out;
 }
 

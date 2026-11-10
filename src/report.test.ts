@@ -14,7 +14,7 @@ import {
   containerDetails,
   humanBytes,
   httpFilterValue,
-  inputsFragment,
+  suggestedBlock,
   blockedName,
   type HostSummary,
   parseFirewallLog,
@@ -30,9 +30,13 @@ import {
 
 const PROXY_DIR = path.join(__dirname, '..', 'proxy');
 
-/** A suggested filter as the summary prints it (the block to add, here without its indent). */
+/** A suggested filter as the summary prints it: its lines of the uses: block, here without their indent. */
 const printedFilter = (s: HttpFilterSuggestion) =>
-  inputsFragment([{ input: 'http-filter', value: httpFilterValue(s) }]).replace(/^ {4}/gm, '');
+  suggestedBlock('o/r@v1', [{ input: 'http-filter', value: httpFilterValue(s) }])
+    .split('\n')
+    .slice(3)
+    .map(l => l.replace(/^ {4}/, ''))
+    .join('\n');
 /** proxy/test-vectors.json "suggest": allowed requests -> the suggestion (proxy/suggest.py) */
 interface SuggestVector {
   name: string;
@@ -301,11 +305,10 @@ describe('the layout, on a real flow log (beta.2)', () => {
     );
   });
 
-  it('puts the parts in order: numbers, Blocked, what to add, the collapsed parts, footer', () => {
+  it('puts the parts in order: numbers, Blocked, the collapsed parts, footer', () => {
     const order = [
       '| Blocked |',
       '#### Blocked',
-      '#### To allow what was blocked',
       '<summary>Allowed:',
       '<summary>GitHub',
       '<summary>Safer Runner:',
@@ -348,8 +351,9 @@ describe('the layout, on a real flow log (beta.2)', () => {
     expect(md).not.toContain('DNS-rebind');
   });
 
-  it('offers ready-to-paste allowed-domains YAML for allowlist misses only', () => {
-    expect(md).toContain('```yaml\n    allowed-domains: |\n      example.org\n      octocat.github.io\n```');
+  it('enforce offers nothing to paste: what it blocked needs a look, and the table names it', () => {
+    expect(md).not.toContain('```');
+    expect(md).toContain('| `sni-not-allowed` | sni | 1 | `octocat.github.io` |');
   });
 
   it("splits allowed traffic into the job's hosts and GitHub's, both collapsed", () => {
@@ -1108,7 +1112,18 @@ describe('blocked names and DNS refusals', () => {
     // the registrable domain is not exempt
     expect(md).toContain('`cdn.‹redacted›.com`');
     expect(md).not.toContain('a1b2c3d4e5');
-    expect(md).toContain('    allowed-domains: |\n      ok.attacker.com\n```');
+    // enforce suggests nothing; analyze suggests only the name that does not look like data
+    expect(md).not.toContain('allowed-domains: |');
+    const analyze = buildReport({
+      ...base,
+      mode: 'analyze',
+      hosts: [h(`${secret}.attacker.com`, 'sni-not-allowed'), h('ok.attacker.com', 'sni-not-allowed')],
+      dnsRefused: []
+    });
+    expect(analyze).toContain(
+      '    allowed-domains: | # keep your existing allowed-domains entries too\n      ok.attacker.com\n```'
+    );
+    expect(analyze).not.toContain(secret);
   });
 
   it('analyze: says what enforce would do', () => {

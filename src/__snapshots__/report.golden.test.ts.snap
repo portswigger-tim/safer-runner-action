@@ -390,13 +390,6 @@ exports[`job summary golden snapshots containers: SNI-only, refused, untrusted C
 | \`Drop\` | firewall | 1 | \`198.51.100.7:22\` TCP · SSH · uid 1001 |
 | \`CDrop\` | firewall | 1 | \`198.51.100.8:123\` UDP · NTP · from \`redis\` |
 
-#### To allow what was blocked
-
-\`\`\`yaml
-    allowed-domains: |
-      ctr-exfil.example.net
-\`\`\`
-
 <details>
 <summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
@@ -545,14 +538,6 @@ exports[`job summary golden snapshots enforce ADVISORY: sudo and docker retained
 | \`sni-denied\` | sni | 1 | \`gist.githubusercontent.com\` |
 | \`host-not-allowed\` | http | 1 | \`pypi.example.com\` <sub>plain HTTP</sub> |
 
-#### To allow what was blocked
-
-\`\`\`yaml
-    allowed-domains: |
-      exfil.example.net
-      pypi.example.com
-\`\`\`
-
 <details>
 <summary>Allowed: 2 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>
 
@@ -687,14 +672,6 @@ exports[`job summary golden snapshots enforce: bypass attempts, not-allowed host
 | \`BLOCK\` | dns | — | \`tunnel.example.com\` |
 | \`Drop\` | firewall | 2 | \`1.1.1.1:853\` TCP · DNS over TLS · uid 1001 |
 | \`Drop\` | firewall | 1 | \`198.51.100.7:22\` TCP · SSH · uid 1001 |
-
-#### To allow what was blocked
-
-\`\`\`yaml
-    allowed-domains: |
-      exfil.example.net
-      pypi.example.com
-\`\`\`
 
 <details>
 <summary>Allowed: 3 hosts · 3 requests · ↑ 800 B · ↓ 3.3 MiB</summary>

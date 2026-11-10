@@ -1701,7 +1701,9 @@ function buildPolicyConfig(opts) {
             http_filter: httpFilter
         },
         warnings,
-        user: { allowed: user, passthrough: userPassthrough }
+        // the job's own entries (the report splits the job's hosts from GitHub's by them): never the
+        // mandatory GitHub passthrough, which is also the input's action.yaml default
+        user: { allowed: user, passthrough: userPassthrough.filter(p => !exports.MANDATORY_PASSTHROUGH.includes(p)) }
     };
 }
 
@@ -1941,8 +1943,8 @@ function setupChecks(selfTests, integrity) {
  *   banner, linked to the repository
  *   ### Safer Runner · mode · job      the row of numbers, then any alert
  *   #### Blocked                       one row per reason, as the log writes it
- *   #### For enforce                   analyze: the step to paste; enforce: what would allow
- *                                      what was blocked
+ *   #### For enforce                   analyze only: the step to paste (enforce suggests nothing:
+ *                                      what it blocked needs a look, not a paste)
  *   collapsed: what was allowed (the job's hosts, GitHub's, sudo, docker, containers), and
  *   Safer Runner's own checks
  *
@@ -1959,7 +1961,6 @@ exports.repoUrl = repoUrl;
 exports.banner = banner;
 exports.reportSections = reportSections;
 exports.suggestedBlock = suggestedBlock;
-exports.inputsFragment = inputsFragment;
 exports.compose = compose;
 exports.buildReport = buildReport;
 exports.suggestedForLog = suggestedForLog;
@@ -2130,8 +2131,7 @@ function scalar(s) {
 /** The suggested inputs under `with:`, in their usual order. */
 function inputsMap(suggestions, mode) {
     const w = new yaml_1.YAMLMap();
-    if (mode)
-        w.add(new yaml_1.Pair(new yaml_1.Scalar('mode'), new yaml_1.Scalar(mode)));
+    w.add(new yaml_1.Pair(new yaml_1.Scalar('mode'), new yaml_1.Scalar(mode)));
     for (const input of INPUT_ORDER) {
         const s = suggestions.find(x => x.input === input);
         if (s)
@@ -2156,32 +2156,16 @@ function suggestedBlock(uses, suggestions, ref) {
     doc.contents.items.push(step);
     return doc.toString({ lineWidth: 0 }).trimEnd();
 }
-/** Enforce: the inputs to add under the step's `with:`, indented to paste there. */
-function inputsFragment(suggestions) {
-    const doc = new yaml_1.Document();
-    doc.contents = inputsMap(suggestions);
-    return doc
-        .toString({ lineWidth: 0 })
-        .trimEnd()
-        .split('\n')
-        .map(l => (l ? `    ${l}` : l))
-        .join('\n');
-}
 /** A sentence for the notes line: capitalised, with a full stop. */
 const sentence = (n) => n[0].toUpperCase() + n.slice(1) + (/[.!?]$/.test(n) ? '' : '.');
+/** Analyze: the enforce step to paste. Enforce suggests nothing (see the proxy part's suggestions). */
 function suggested(s) {
+    if (s.ctx.enforce)
+        return '';
     const parts = services(s);
+    const uses = usesLine(s.input.actionRepository, s.input.actionRef);
     const all = parts.flatMap(x => x.suggestions);
-    let md = '';
-    if (s.ctx.enforce) {
-        if (!all.length)
-            return '';
-        md += '#### To allow what was blocked\n\n' + (0, markdown_1.codeBlock)('yaml', inputsFragment(all)) + '\n\n';
-    }
-    else {
-        const uses = usesLine(s.input.actionRepository, s.input.actionRef);
-        md += '#### For enforce\n\n' + (0, markdown_1.codeBlock)('yaml', suggestedBlock(uses, all, s.input.actionRef)) + '\n\n';
-    }
+    let md = '#### For enforce\n\n' + (0, markdown_1.codeBlock)('yaml', suggestedBlock(uses, all, s.input.actionRef)) + '\n\n';
     const notes = parts.flatMap(x => x.notes);
     if (notes.length)
         md += `<sub>${notes.map(sentence).join(' ')}</sub>\n\n`;
@@ -5642,8 +5626,8 @@ function observeProxy(selfTestWindow, applied) {
 /**
  * The proxy's part of the job summary, from the flow log: the hosts and requests it blocked (or
  * would block), each with the reason code the flow log wrote, and the allowed hosts with their
- * numbers. It suggests `allowed-domains` and `http-filter`: in analyze the job's whole value, in
- * enforce only what would allow what was blocked. Nothing is cut silently (review M6).
+ * numbers. In analyze it suggests `allowed-domains` and `http-filter` (the job's whole value).
+ * Nothing is cut silently (review M6).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.statusSummary = statusSummary;
@@ -5758,26 +5742,27 @@ function keptEntries(entries) {
     }
     return { kept, held };
 }
+/**
+ * Analyze only. In enforce, what was blocked is what needs a look (a new dependency, or a step
+ * trying to get out, such as a `--resolve` to a shared address), so nothing is offered to paste:
+ * the Blocked table names it.
+ */
 function suggestions(o, ctx, suggest) {
+    if (ctx.enforce)
+        return [];
     const out = [];
     if (suggest.length) {
-        if (ctx.enforce) {
-            out.push({ input: 'allowed-domains', value: suggest.join('\n') + '\n' });
-        }
-        else {
-            // the job's entries as setup recorded them; when that record is missing, say to keep them
-            const { kept, held } = o.allowedDomains ? keptEntries(o.allowedDomains) : { kept: [], held: true };
-            const add = suggest.filter(n => !kept.includes(n));
-            out.push({
-                input: 'allowed-domains',
-                value: [...kept, ...add].join('\n') + '\n',
-                ...(held ? { comment: KEEP_ENTRIES } : {})
-            });
-        }
+        // the job's entries as setup recorded them; when that record is missing, say to keep them
+        const { kept, held } = o.allowedDomains ? keptEntries(o.allowedDomains) : { kept: [], held: true };
+        const add = suggest.filter(n => !kept.includes(n));
+        out.push({
+            input: 'allowed-domains',
+            value: [...kept, ...add].join('\n') + '\n',
+            ...(held ? { comment: KEEP_ENTRIES } : {})
+        });
     }
-    // analyze only: built from the requests that were allowed, it never allows one that was blocked
     const sug = o.httpFilter?.suggestion;
-    if (sug?.hosts.length && !ctx.enforce)
+    if (sug?.hosts.length)
         out.push({ input: 'http-filter', value: (0, http_filter_1.httpFilterValue)(sug) });
     return out;
 }
@@ -6610,19 +6595,20 @@ function parseSudoLogLine(line) {
     };
 }
 /**
- * Deduplicate sudo commands by command+args combination
+ * Deduplicate sudo commands by command+args combination, keeping the first entry of each with
+ * the number of times the line was logged (`runs`), so the report can count runs and tries.
  */
 function deduplicateSudoCommands(commands) {
-    const seen = new Set();
-    const deduplicated = [];
+    const seen = new Map();
     for (const cmd of commands) {
         const key = `${cmd.command} ${cmd.args}`;
-        if (!seen.has(key)) {
-            seen.add(key);
-            deduplicated.push(cmd);
-        }
+        const first = seen.get(key);
+        if (first)
+            first.runs = (first.runs ?? 1) + (cmd.runs ?? 1);
+        else
+            seen.set(key, { ...cmd, runs: cmd.runs ?? 1 });
     }
-    return deduplicated;
+    return [...seen.values()];
 }
 /**
  * Join wrapped log entries back into single lines
@@ -6853,15 +6839,15 @@ function facts(o, ctx) {
         kept: o.retained || o.policy?.kept === true
     };
 }
-/** Each distinct command line once, with how many times it ran, in first-seen order. */
+/** Each distinct command line once, with how many times it ran (`runs` from the log), in first-seen order. */
 function counted(commands) {
     const by = new Map();
     for (const c of commands) {
         const row = by.get(key(c));
         if (row)
-            row[1]++;
+            row[1] += c.runs ?? 1;
         else
-            by.set(key(c), [c, 1]);
+            by.set(key(c), [c, c.runs ?? 1]);
     }
     return [...by.values()];
 }

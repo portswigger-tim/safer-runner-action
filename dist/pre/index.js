@@ -1507,7 +1507,9 @@ function buildPolicyConfig(opts) {
             http_filter: httpFilter
         },
         warnings,
-        user: { allowed: user, passthrough: userPassthrough }
+        // the job's own entries (the report splits the job's hosts from GitHub's by them): never the
+        // mandatory GitHub passthrough, which is also the input's action.yaml default
+        user: { allowed: user, passthrough: userPassthrough.filter(p => !exports.MANDATORY_PASSTHROUGH.includes(p)) }
     };
 }
 
@@ -4252,19 +4254,20 @@ function parseSudoLogLine(line) {
     };
 }
 /**
- * Deduplicate sudo commands by command+args combination
+ * Deduplicate sudo commands by command+args combination, keeping the first entry of each with
+ * the number of times the line was logged (`runs`), so the report can count runs and tries.
  */
 function deduplicateSudoCommands(commands) {
-    const seen = new Set();
-    const deduplicated = [];
+    const seen = new Map();
     for (const cmd of commands) {
         const key = `${cmd.command} ${cmd.args}`;
-        if (!seen.has(key)) {
-            seen.add(key);
-            deduplicated.push(cmd);
-        }
+        const first = seen.get(key);
+        if (first)
+            first.runs = (first.runs ?? 1) + (cmd.runs ?? 1);
+        else
+            seen.set(key, { ...cmd, runs: cmd.runs ?? 1 });
     }
-    return deduplicated;
+    return [...seen.values()];
 }
 /**
  * Join wrapped log entries back into single lines
