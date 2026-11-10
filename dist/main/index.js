@@ -702,7 +702,7 @@ function parseMethods(value, where = 'http-filter') {
  * Input is YAML or JSON, read by the `yaml` library (parseFilterYaml): host keys; under each,
  * `"path": METHODS` lines or an inline `{ "path": METHODS, ... }`. Host keys are domain patterns
  * as in allowed-domains (`.example.com` shorthand included). The report prints its suggestion
- * with the same library (report.ts httpFilterYaml), so a pasted suggestion reads back as printed.
+ * with the same library (http-filter.ts httpFilterValue), so a pasted suggestion reads back as printed.
  * Anything invalid throws: a filter that silently didn't apply would leave the host fully open.
  */
 function parseHttpFilter(raw) {
@@ -4604,11 +4604,10 @@ async function runSetup(inputs, h = host_1.realHost) {
             // the sudo policy the post step evaluates (analyze) or reports (enforce)
             ...(inputs.sudoConfig.length ? { sudoConfig: inputs.sudoConfig.map(sudo.ruleText) } : {}),
             ...(mode === 'analyze' && !inputs.disableSudo ? { sudoKept: true } : {}),
-            // the job's own allowlist and http-filter as applied: the post step suggests from these,
-            // never from inputs read again at post time
+            // the job's own allowlist as applied: the post step suggests from it, never from inputs
+            // read again at post time
             allowedDomains: user.allowed,
             passthroughDomains: user.passthrough,
-            httpFilterSet: inputs.httpFilter.length > 0,
             dockerRetained: dockerAccess.access === 'retained',
             // the summary shows the dockerd restart for CA trust (F1) as the action's own docker change
             docker: { ...dockerAccess, caRestart: dockerd.restarted },

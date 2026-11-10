@@ -12,11 +12,9 @@ export * from '../services/sudo/log';
 export * from '../services/docker/log';
 export * from '../services/mitmproxy/flows';
 export * from '../services/mitmproxy/http-filter';
-export { addressClass, statusSummary, type ProxyObserved, type ProxySection } from '../services/mitmproxy/report';
+export { statusSummary, type ProxyObserved, type ProxySection, type ProxyTotals } from '../services/mitmproxy/report';
 export * from '../services/docker/containers';
 export {
-  DOCKER_BEST_EFFORT,
-  DOCKER_KEEP_CAVEAT,
   DOCKER_PARTIAL,
   dockerUseCount,
   dockerUseText,
@@ -25,8 +23,6 @@ export {
   type DockerReportObserved
 } from '../services/docker/report';
 export {
-  SUDO_BEST_EFFORT,
-  SUDO_CONFIG_CAVEAT,
   sudoConfigYaml,
   type SudoConfigSuggestion,
   type SudoObserved,

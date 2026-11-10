@@ -87,9 +87,9 @@ src/
 ├── system/          # the Host port (host.ts), writeFiles, transient units, pinned installs,
 │                    #   shared types and readiness tokens (tokens.test.ts)
 └── report/          # the job summary: each service renders its own part (below), this composes them
-    ├── section.ts   # Section: what each service's report() returns (chips, alerts, score, body, ...)
+    ├── section.ts   # Section: what each service's report() returns (blocked rows, suggestions, details, ...)
     ├── compose.ts   # ReportInput, reportSections (each service's part), compose (the layout), buildReport
-    ├── checks.ts    # the setup checks' part: self-tests and the tamper check
+    ├── checks.ts    # the setup checks' rows: self-tests and the tamper check
     ├── markdown.ts  # Markdown helpers (code spans and fences for untrusted text)
     ├── redact.ts    # redaction of encoded-looking names, hidden paths and sudo arguments in the summary
     └── suggest.ts   # runs proxy/suggest.py and proxy/sudo_suggest.py (python3 -I)
@@ -325,29 +325,38 @@ The raw logs are **not redacted**. Never upload them from a public repository.
 `post.ts` runs each service's `observe.ts` (its own log, and its policy where it has one; the
 setup self-test traffic dropped), then `reportSections` (each service's pure `report()`, returning
 a `Section`) and `compose`. Each service owns its part: the proxy (blocked and allowed hosts,
-`http-filter`), the firewall and the resolver (diagnostics), sudo and docker (with containers).
-The only join is the DNS part leaving out names the proxy part already shows. Each part's full
-lists go to the job log as soon as it has them (`jobLog` in each `report.ts`).
+`http-filter`), the resolver and the firewall (their blocked names and connections), sudo and
+docker (with containers). A `Section` is its rows of the Blocked table (`BlockedRow`: the reason
+as its log writes it, the layer, the tries, the name and its data), its suggestions, its
+collapsed `details`, its rows of the Safer Runner table (`checks`) and its cell in the row of
+numbers (`stat`). The only join is the DNS part leaving out names the proxy part already shows.
+Each part's full lists go to the job log as soon as it has them (`jobLog` in each `report.ts`).
 
-Layout (`compose.ts`): a banner (`docs/assets/banner.svg` from the repository and ref the
-workflow used, `GITHUB_ACTION_REPOSITORY`/`GITHUB_ACTION_REF`, both validated; none for `uses: ./`);
-`# 📋 Summary` (mode and ADVISORY chips, a verdict line, CAUTION/IMPORTANT alerts, a scorecard
-with a verdict column ✅ 🟠 ⛔ ⚠️), `## 🔧 Suggested Enforce Configuration` (analyze: ONE `uses:`
-block with every service's `Suggestion`, written by the `yaml` library and round-trip tested
-through `readInputs`; an ADVISORY input carries a `# ⚠️` comment; `http-filter` is in the block
-only when the job sets it, else an option below; enforce: one line, with the ADVISORY reasons);
-`# 🔎 Detail` with `## 🌐 Network`, `## 🔑 Sudo`, `## 🐳 Docker`, each with a collapsed
-`🖥️ Runner System` for what the ACTION did (its own sudo, docker change, dockerd CA restart),
-the GitHub baseline it trusts, and the DNS and firewall layers; the setup checks last. Emoji are
-functional only (`SUMMARY_EMOJI`, checked on every golden). The `uses:` line echoes the
-workflow's own repository and ref (a fork or mirror stays itself), else a placeholder.
+Layout (`compose.ts`, issue #56 design 14): a banner (`docs/assets/banner.svg` from the
+repository and ref the workflow used, `GITHUB_ACTION_REPOSITORY`/`GITHUB_ACTION_REF`, both
+validated, linked to the repository; none for `uses: ./`); `### Safer Runner · mode · job` (with
+`ADVISORY` in enforce when sudo or docker was kept); one row of numbers (Blocked or Enforce would
+block, hosts, requests, ↑ out, ↓ in, sudo, docker); CAUTION (self-test failed, tamper) and WARNING
+(ADVISORY, with every reason) alerts; `#### Blocked` / `#### Enforce would block`, ONE table of
+every part's rows, attempts round the proxy first (so a cut table keeps them); analyze:
+`#### For enforce`, ONE `uses:` block with every service's `Suggestion` (the suggested
+`http-filter` always in it), written by the `yaml` library and round-trip tested through
+`readInputs`, an ADVISORY input with a `# ⚠️ ADVISORY` comment; enforce: `#### To allow what was
+blocked`, only the inputs to add, indented to paste under `with:`; then collapsed parts (allowed
+hosts, GitHub's, sudo allowed, docker use, containers) and the Safer Runner part (self-tests,
+tamper check, the action's own sudo and docker change); a footer with the time and
+`owner/repo@ref`, linked to the repository. A clean run is the row of numbers and nothing else.
+One verb: blocked (and would block); the golden test fails on refused, rejected or denied outside
+a code span. Emoji are functional only (`SUMMARY_EMOJI`: ✅ ⚠️, checked on every golden). The
+`uses:` line echoes the workflow's own repository and ref (a fork or mirror stays itself), else a
+placeholder; a moving ref gets a reminder to pin, a SHA or exact version none.
 
 The action's own sudo is told from the job's by command line AND place in the sudo log
 (`readSudoUsage`, `classifySudoCommands`): up to setup's own last sudo command (`SETUP_FINAL_SUDO`,
 its first entry, near the marker's time) and from the log's size when the post step started. The
 same line run by a job step counts as the job's. The post step suggests from what setup recorded in
-the root-owned setup marker (the applied `allowed-domains` / `passthrough-domains` entries and
-whether `http-filter` is set), never from inputs read again at post time.
+the root-owned setup marker (the applied `allowed-domains` / `passthrough-domains` entries),
+never from inputs read again at post time.
 
 - Names go through `src/report/redact.ts`: labels that look encoded are shown as `‹redacted›`; refused
   request paths are shown as `‹path hidden›`. This is best effort, not a guarantee.
@@ -356,12 +365,12 @@ whether `http-filter` is set), never from inputs read again at post time.
   (`secret_mask` / `path_secret` in `proxy/sudo_suggest.py`, shared vectors `"sudo_secret"`)
   keeps such lines out of the suggested `sudo-config`.
 - Full lists also go to the job log, redacted the same way.
-- The `http-filter` section lists requests the filter refused and suggests a filter built from
+- The Blocked table lists requests the filter blocked, and the suggestion is a filter built from
   observed traffic (it splits reads from writes, templates variable path segments, and keeps
   sensitive write endpoints path-specific). The suggestion is advisory and never applied
   automatically. Python owns the content: `proxy/suggest.py` (next to the matcher it must agree
   with) produces structured rules (host to a list of path and methods), and `src/report/suggest.ts`
-  runs it with `python3 -I`. TypeScript owns the YAML: `httpFilterYaml`
+  runs it with `python3 -I`. TypeScript owns the YAML: `httpFilterValue`
   (`src/services/mitmproxy/http-filter.ts`) writes
   the rules with the same `yaml` library that parses the input (double-quoted path keys, block
   literal), so a pasted suggestion reads back as printed. If the Python run fails, the report

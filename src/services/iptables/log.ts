@@ -7,6 +7,8 @@ export interface FirewallEvent {
   src: string;
   dst: string;
   dport: string;
+  /** source port: a resent SYN keeps it, so it tells one connection attempt from the next */
+  sport?: string;
   uid: string;
 }
 
@@ -27,6 +29,7 @@ export function parseFirewallLog(text: string): FirewallEvent[] {
       src: field('SRC'),
       dst: field('DST'),
       dport: field('DPT'),
+      sport: field('SPT'),
       uid: field('UID')
     });
   }
@@ -34,19 +37,33 @@ export function parseFirewallLog(text: string): FirewallEvent[] {
 }
 
 export interface FirewallSummary {
-  /** one row per (prefix, proto, destination, uid), with its packet count */
+  /** one row per (prefix, proto, destination, uid), with its connection attempts */
   rows: { e: FirewallEvent; n: number }[];
   rejected: number;
   logged: number;
 }
 
+/**
+ * Connection attempts in some LOG lines: one per source port. An unanswered SYN (analyze lets it
+ * through) is resent from the same port and logged each time; a line with no port counts once.
+ */
+export function attempts(events: FirewallEvent[]): number {
+  const ports = new Set<string>();
+  let unknown = 0;
+  for (const e of events) {
+    if (e.sport) ports.add(e.sport);
+    else unknown++;
+  }
+  return ports.size + unknown;
+}
+
 export function firewallSummary(events: FirewallEvent[]): FirewallSummary {
-  const seen = new Map<string, { e: FirewallEvent; n: number }>();
+  const seen = new Map<string, FirewallEvent[]>();
   for (const e of events) {
     const k = `${e.prefix} ${e.proto} ${e.dst}:${e.dport} uid ${e.uid}`;
-    seen.set(k, { e, n: (seen.get(k)?.n ?? 0) + 1 });
+    seen.set(k, [...(seen.get(k) ?? []), e]);
   }
-  const rows = Array.from(seen.values());
+  const rows = Array.from(seen.values(), es => ({ e: es[0], n: attempts(es) }));
   const rejected = rows.filter(r => REJECT_PREFIXES.has(r.e.prefix)).length;
   return { rows, rejected, logged: rows.length - rejected };
 }

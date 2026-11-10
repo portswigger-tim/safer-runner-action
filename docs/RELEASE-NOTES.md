@@ -1,5 +1,33 @@
 # v2 release notes
 
+## v2.5.0
+
+A job summary that shows the data and explains less. No input changes.
+
+- **One row of numbers, then what was blocked.** The summary opens with the mode and job, and
+  one row: what was blocked (in `analyze`, what `enforce` would block), the allowed hosts,
+  requests, bytes out and in, and the state of sudo and docker. A clean run is that row and
+  nothing else.
+- **One Blocked table, by reason.** Every host, request, DNS name, connection, sudo command and
+  docker use that was blocked is one row, with the reason the action's log wrote
+  (`sni-not-allowed`, `path-not-allowed`, `BLOCK`, `Drop` and so on), where it was decided, the
+  tries, and its data: the TLS name and the address dialled for domain fronting, the internal
+  address for an upstream refusal. Search the logs for the same word.
+  [Troubleshooting](TROUBLESHOOTING.md) is now organised by these reasons. Attempts to get round
+  the proxy are the first rows, so a long table never cuts them; they no longer raise an alert of
+  their own. Alerts are left for a failed self-test, a changed configuration and ADVISORY.
+- **The suggested `http-filter` is in the suggested block.** In `analyze`, the one `uses:` block
+  under **For enforce** now always includes the suggested `http-filter`, not only when the job
+  already set one. In `enforce`, **To allow what was blocked** shows only the inputs to add.
+- **What went as expected is collapsed:** the allowed hosts, GitHub's own hosts, the sudo
+  commands that were allowed, the docker use, the containers, and Safer Runner's own checks (the
+  self-tests, the tamper check, its own sudo and docker change).
+- **The banner and the footer link to the repository the workflow used**, and the footer names
+  it as `owner/repo@ref`.
+- **One word for it.** The summary says blocked (or would block) throughout.
+- A `sudo-config` or `docker: keep` in `analyze` now marks the sudo or docker number with ⚠️:
+  `enforce` with it would be ADVISORY.
+
 ## v2.4.0
 
 Sudo and docker get the analyze-then-enforce flow the egress allowlist and `http-filter` already

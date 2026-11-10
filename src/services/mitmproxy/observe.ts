@@ -35,11 +35,10 @@ function suggestion(requests: AllowedRequest[]): HttpFilterSuggestion | undefine
   }
 }
 
-/** The job's allowlist and http-filter as setup applied them (the setup marker); undefined: not recorded. */
+/** The job's allowlist as setup applied it (the setup marker); undefined: not recorded. */
 export interface AppliedInputs {
   allowed?: string[];
   passthrough?: string[];
-  httpFilterSet?: boolean;
 }
 
 /**
@@ -64,7 +63,6 @@ export function observeProxy(
       ...(applied.allowed && applied.passthrough
         ? { userDomains: [...applied.allowed, ...applied.passthrough], allowedDomains: applied.allowed }
         : {}),
-      httpFilterSet: applied.httpFilterSet === true,
       platformEndpoints: readPlatformAutoAllowed()
     }
   };

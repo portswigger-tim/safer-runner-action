@@ -243,7 +243,7 @@ export function parseMethods(value: string | string[] | null, where = 'http-filt
  * Input is YAML or JSON, read by the `yaml` library (parseFilterYaml): host keys; under each,
  * `"path": METHODS` lines or an inline `{ "path": METHODS, ... }`. Host keys are domain patterns
  * as in allowed-domains (`.example.com` shorthand included). The report prints its suggestion
- * with the same library (report.ts httpFilterYaml), so a pasted suggestion reads back as printed.
+ * with the same library (http-filter.ts httpFilterValue), so a pasted suggestion reads back as printed.
  * Anything invalid throws: a filter that silently didn't apply would leave the host fully open.
  */
 export function parseHttpFilter(raw: string): HttpFilterHost[] {

@@ -1,10 +1,11 @@
 /** Per-container egress (P2): the container listener's flow records and the container firewall chain. */
 
 import { ipOf, type FlowRecord } from '../../flowlog';
-import { CONTAINER_PREFIXES, type FirewallEvent } from '../iptables/log';
-import { capped, code, table } from '../../report/markdown';
-import { VERDICT_ICON, refusedVerdict, type ReportContext } from '../../report/section';
+import { CONTAINER_PREFIXES, attempts, type FirewallEvent } from '../iptables/log';
+import { capped, code, plural, table } from '../../report/markdown';
+import type { BlockedRow, Details } from '../../report/section';
 import { DECISIONS, DENIED, MAX_LIST, addUnique, blockedName, nameOf } from '../mitmproxy/flows';
+import { destination, prefixWord } from '../iptables/report';
 
 export interface ContainerSummary {
   /** container address (the proxy / firewall source) */
@@ -18,7 +19,7 @@ export interface ContainerSummary {
   /** names whose intercepted TLS the container refused (it does not trust the runtime CA) */
   untrusted: string[];
   /** firewall: off-host egress outside the proxy and DNS (rejected in enforce, logged in analyze) */
-  firewall: { dst: string; proto: string; n: number; rejected: boolean }[];
+  firewall: { dst: string; dport: string; proto: string; n: number; rejected: boolean }[];
 }
 
 /**
@@ -53,13 +54,18 @@ export function summarizeContainers(
     else if (r.ev !== 'upstream') addUnique(c.allowed, name);
     if (r.reason === 'container-sni-only') addUnique(c.sniOnly, name);
   }
+  const lines = new Map<ContainerSummary['firewall'][number], FirewallEvent[]>();
   for (const e of firewall) {
     if (!CONTAINER_PREFIXES.has(e.prefix) || !e.src) continue;
     const c = get(e.src);
     const dst = `${e.dst}:${e.dport}`;
-    const row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
-    if (row) row.n++;
-    else c.firewall.push({ dst, proto: e.proto, n: 1, rejected: e.prefix === 'SaferRunner-CDrop' });
+    let row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
+    if (!row)
+      c.firewall.push(
+        (row = { dst, dport: e.dport, proto: e.proto, n: 0, rejected: e.prefix === 'SaferRunner-CDrop' })
+      );
+    lines.set(row, [...(lines.get(row) ?? []), e]);
+    row.n = attempts(lines.get(row)!);
   }
   // a name both allowed and refused (e.g. an upstream refusal) is listed as refused only
   for (const c of by.values()) c.allowed = c.allowed.filter(n => !c.denied.includes(n));
@@ -67,7 +73,6 @@ export function summarizeContainers(
 }
 
 function listCell(names: string[]): string {
-  if (!names.length) return '';
   const shown = names
     .slice(0, MAX_LIST)
     .map(n => code(blockedName(n)))
@@ -75,39 +80,46 @@ function listCell(names: string[]): string {
   return names.length > MAX_LIST ? `${shown} +${names.length - MAX_LIST} more` : shown;
 }
 
-/** The containers' egress: one row per container. '' when no container sent anything. */
-export function containerSection(containers: ContainerSummary[], ctx: ReportContext): string {
-  if (!containers.length) return '';
-  const { enforce } = ctx;
+const containerName = (c: ContainerSummary) => code(c.name ?? c.ip);
+
+/**
+ * What the container firewall chain blocked, with the container that sent it. Names the proxy
+ * blocked for a container are already in the proxy's rows (one flow log), so they are not repeated.
+ */
+export function containerBlocked(containers: ContainerSummary[]): BlockedRow[] {
+  return containers.flatMap(c =>
+    c.firewall.map(f => ({
+      reason: code(prefixWord(f.rejected ? 'SaferRunner-CDrop' : 'SaferRunner-CEgress')),
+      layer: 'firewall',
+      tries: f.n,
+      what: destination(f.dst, f.dport, f.proto, `from ${containerName(c)}`)
+    }))
+  );
+}
+
+/** The containers and what each one reached. Undefined when no container sent anything. */
+export function containerDetails(containers: ContainerSummary[]): Details | undefined {
+  if (!containers.length) return undefined;
   const untrusted = containers.filter(c => c.untrusted.length);
   const { shown, note } = capped(containers);
-  let md =
-    '**Container egress** <sub>(through the same proxy and DNS filter; SNI only = checked by TLS name, no CA needed)</sub>\n\n';
-  md += table(
-    ['', 'Container', 'Allowed', enforce ? 'Blocked' : 'Would be blocked', 'Outside the proxy'],
-    [':-:', ':--', ':--', ':--', ':--'],
+  let body = table(
+    ['Container', 'Allowed', 'Blocked'],
+    [':--', ':--', ':--'],
     shown.map(c => [
-      VERDICT_ICON[c.denied.length || c.firewall.length ? refusedVerdict(ctx) : 'allowed'],
-      c.name ? `${code(c.name)}<br><sub>${c.ip}</sub>` : code(c.ip),
-      c.allowed.map(n => `${code(blockedName(n))}${c.sniOnly.includes(n) ? ' <sub>SNI only</sub>' : ''}`).join(', ') ||
-        '—',
-      listCell(c.denied) || '—',
-      c.firewall
-        .slice(0, MAX_LIST)
-        .map(
-          f => `${code(f.dst)} ${f.proto}${f.n > 1 ? ` ×${f.n}` : ''} ${f.rejected ? 'rejected' : 'allowed (analyze)'}`
-        )
-        .join('<br>') || '—'
+      c.name ? `${code(c.name)} <sub>${c.ip}</sub>` : code(c.ip),
+      c.allowed
+        .map(n => `${code(blockedName(n))}${c.sniOnly.includes(n) ? ' <sub>`container-sni-only`</sub>' : ''}`)
+        .join(', ') || '—',
+      listCell(c.denied) || '—'
     ])
   );
-  md += note + '\n\n';
+  body += note + '\n\n';
   if (untrusted.length) {
-    md +=
-      '⚠️ **TLS failed because the container did not trust the runtime CA:** ' +
-      untrusted.map(c => `${code(c.name ?? c.ip)} → ${listCell(c.untrusted)}`).join('; ') +
-      '. Containers need no CA, except for multi-tenant front doors (Azure ' +
-      'Storage): those stay intercepted so the Host check still stops fronting to another tenant. Reach them ' +
-      'from a step on the runner, or give the container the CA (`/etc/safer-runner/ca.pem`).\n\n';
+    body +=
+      '⚠️ **TLS failed: the container does not trust the proxy CA:** ' +
+      untrusted.map(c => `${containerName(c)} → ${listCell(c.untrusted)}`).join('; ') +
+      '. Azure Storage front doors stay intercepted for containers: reach them from a step on the runner, or give ' +
+      'the container the CA (`/etc/safer-runner/ca.pem`).\n\n';
   }
-  return md;
+  return { summary: `Containers: ${plural(containers.length, 'container')}`, body };
 }
