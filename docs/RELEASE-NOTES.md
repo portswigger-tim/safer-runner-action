@@ -1,5 +1,13 @@
 # v2 release notes
 
+## v2.5.1
+
+- **`analyze` no longer says `enforce` would block the action's own read-only check commands.**
+  With sudo removed, `enforce` still allows every step the exact `cat` and `iptables -L` lines the
+  post step uses for its tamper check. `analyze` listed them as blocked when a step ran one, and
+  suggested them as `sudo-config`, which made `enforce` ADVISORY for nothing. They are now
+  evaluated as allowed and never suggested.
+
 ## v2.5.0
 
 A job summary that shows the data and explains less. No input changes.
