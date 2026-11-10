@@ -3196,9 +3196,12 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.observeDns = observeDns;
 const constants_1 = __nccwpck_require__(8729);
 const log_1 = __nccwpck_require__(822);
-/** Refused names, less the one the DNS self-test looked up (refused by design; not the job's traffic). */
+/**
+ * Refused names, less the ones the setup self-tests looked up (refused by design; not the job's
+ * traffic): the DNS self-test's name, and the SNI self-test's host, which analyze resolves.
+ */
 function observeDns(dnsSelfTestName) {
-    return (0, log_1.readRefusedNames)(constants_1.DNS_LOG).filter(n => n !== dnsSelfTestName);
+    return (0, log_1.readRefusedNames)(constants_1.DNS_LOG).filter(n => n !== dnsSelfTestName && n !== constants_1.SELFTEST_HOST);
 }
 
 
@@ -3468,16 +3471,17 @@ function summarizeContainers(records, firewall, names = new Map()) {
         if (r.reason === 'container-sni-only')
             (0, flows_1.addUnique)(c.sniOnly, name);
     }
+    const lines = new Map();
     for (const e of firewall) {
         if (!log_1.CONTAINER_PREFIXES.has(e.prefix) || !e.src)
             continue;
         const c = get(e.src);
         const dst = `${e.dst}:${e.dport}`;
-        const row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
-        if (row)
-            row.n++;
-        else
-            c.firewall.push({ dst, dport: e.dport, proto: e.proto, n: 1, rejected: e.prefix === 'SaferRunner-CDrop' });
+        let row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
+        if (!row)
+            c.firewall.push((row = { dst, dport: e.dport, proto: e.proto, n: 0, rejected: e.prefix === 'SaferRunner-CDrop' }));
+        lines.set(row, [...(lines.get(row) ?? []), e]);
+        row.n = (0, log_1.attempts)(lines.get(row));
     }
     // a name both allowed and refused (e.g. an upstream refusal) is listed as refused only
     for (const c of by.values())
@@ -4749,6 +4753,7 @@ async function configure(h, o, _after) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.CONTAINER_PREFIXES = void 0;
 exports.parseFirewallLog = parseFirewallLog;
+exports.attempts = attempts;
 exports.firewallSummary = firewallSummary;
 /** Container egress (FORWARD via DOCKER-USER) firewall prefixes. */
 exports.CONTAINER_PREFIXES = new Set(['SaferRunner-CDrop', 'SaferRunner-CEgress']);
@@ -4767,18 +4772,34 @@ function parseFirewallLog(text) {
             src: field('SRC'),
             dst: field('DST'),
             dport: field('DPT'),
+            sport: field('SPT'),
             uid: field('UID')
         });
     }
     return out;
 }
+/**
+ * Connection attempts in some LOG lines: one per source port. An unanswered SYN (analyze lets it
+ * through) is resent from the same port and logged each time; a line with no port counts once.
+ */
+function attempts(events) {
+    const ports = new Set();
+    let unknown = 0;
+    for (const e of events) {
+        if (e.sport)
+            ports.add(e.sport);
+        else
+            unknown++;
+    }
+    return ports.size + unknown;
+}
 function firewallSummary(events) {
     const seen = new Map();
     for (const e of events) {
         const k = `${e.prefix} ${e.proto} ${e.dst}:${e.dport} uid ${e.uid}`;
-        seen.set(k, { e, n: (seen.get(k)?.n ?? 0) + 1 });
+        seen.set(k, [...(seen.get(k) ?? []), e]);
     }
-    const rows = Array.from(seen.values());
+    const rows = Array.from(seen.values(), es => ({ e: es[0], n: attempts(es) }));
     const rejected = rows.filter(r => REJECT_PREFIXES.has(r.e.prefix)).length;
     return { rows, rejected, logged: rows.length - rejected };
 }
@@ -5754,11 +5775,10 @@ function suggestions(o, ctx, suggest) {
             });
         }
     }
+    // analyze only: built from the requests that were allowed, it never allows one that was blocked
     const sug = o.httpFilter?.suggestion;
-    // enforce: only when the filter blocked something, so the job may need it
-    if (sug?.hosts.length && (!ctx.enforce || o.httpFilter?.blocks.length)) {
+    if (sug?.hosts.length && !ctx.enforce)
         out.push({ input: 'http-filter', value: (0, http_filter_1.httpFilterValue)(sug) });
-    }
     return out;
 }
 function notes(o, ctx, denied, suggest) {

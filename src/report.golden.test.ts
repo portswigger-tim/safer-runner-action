@@ -40,8 +40,8 @@ const SUDO_CANARY = 'hunter2sudo';
 /** Encoded-looking pieces of a dotted image tag (each piece is checked on its own). */
 const TAG_CANARIES = ['k3j9x8q2', 'a1b2c3'];
 
-const fw = (prefix: string, src: string, dst: string, proto: string, dport: string, uid = '1001') =>
-  `Nov  7 12:00:00 vm kernel: [1.2] ${prefix}: IN= OUT=eth0 SRC=${src} DST=${dst} LEN=60 PROTO=${proto} SPT=4 DPT=${dport} UID=${uid} GID=${uid}`;
+const fw = (prefix: string, src: string, dst: string, proto: string, dport: string, sport = '40000', uid = '1001') =>
+  `Nov  7 12:00:00 vm kernel: [1.2] ${prefix}: IN= OUT=eth0 SRC=${src} DST=${dst} LEN=60 PROTO=${proto} SPT=${sport} DPT=${dport} UID=${uid} GID=${uid}`;
 
 const SUGGESTION: HttpFilterSuggestion = {
   hosts: [
@@ -426,8 +426,8 @@ function containerTraffic(v: 'BLOCK' | 'WOULD_BLOCK', name: (x: string) => strin
 }
 
 const FIREWALL = [
-  fw('SaferRunner-Drop', '10.1.0.4', '1.1.1.1', 'TCP', '853'),
-  fw('SaferRunner-Drop', '10.1.0.4', '1.1.1.1', 'TCP', '853'),
+  fw('SaferRunner-Drop', '10.1.0.4', '1.1.1.1', 'TCP', '853', '40001'),
+  fw('SaferRunner-Drop', '10.1.0.4', '1.1.1.1', 'TCP', '853', '40002'),
   fw('SaferRunner-Drop', '10.1.0.4', '198.51.100.7', 'TCP', '22'),
   fw('SaferRunner-CDrop', '172.17.0.2', '198.51.100.8', 'UDP', '123')
 ].join('\n');

@@ -134,7 +134,15 @@ describe('parseFirewallLog', () => {
         'Nov  4 18:00:01 vm kernel: unrelated\n'
     );
     expect(ev).toEqual([
-      { prefix: 'SaferRunner-Drop', proto: 'TCP', src: '10.1.0.4', dst: '1.1.1.1', dport: '853', uid: '1001' }
+      {
+        prefix: 'SaferRunner-Drop',
+        proto: 'TCP',
+        src: '10.1.0.4',
+        dst: '1.1.1.1',
+        dport: '853',
+        sport: '4',
+        uid: '1001'
+      }
     ]);
   });
 });
@@ -1260,16 +1268,15 @@ describe('http-filter', () => {
       expect(rulesFor(hf.suggestion, 'registry.npmjs.org')).toEqual({ '*': 'GET, HEAD' });
     });
 
-    it('enforce: lists refusals without their path, then the suggested filter', () => {
+    it('enforce: lists refusals without their path, and suggests no filter', () => {
       const md = buildReport({ ...base, mode: 'enforce', hosts: summarizeFlows(recs), httpFilter: hf });
       expect(md).not.toContain(secret);
       expect(md).not.toContain(secret);
       expect(md).not.toContain('evil');
       expect(md).toContain('| `path-not-allowed` | http-filter | 2 | `github.com` `POST` ‹path hidden› |');
       expect(md).toContain('| `method-not-allowed` | http-filter | 1 | `registry.npmjs.org` `PUT` ‹path hidden› |');
-      // the filter built from this job's allowed requests, in the block to add, after the table
-      expect(md).toContain('#### To allow what was blocked\n\n```yaml\n    http-filter: |\n');
-      expect(md.indexOf('| http-filter |')).toBeLessThan(md.indexOf('#### To allow what was blocked'));
+      // a filter built from the allowed requests can never allow a blocked one: none in enforce
+      expect(md).not.toContain('http-filter: |');
     });
 
     it('analyze: says the filter would refuse them, not that hosts would be blocked', () => {

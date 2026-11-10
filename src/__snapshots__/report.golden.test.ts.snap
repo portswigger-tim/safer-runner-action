@@ -694,10 +694,6 @@ exports[`job summary golden snapshots enforce: bypass attempts, not-allowed host
     allowed-domains: |
       exfil.example.net
       pypi.example.com
-    http-filter: |
-      api.github.com:
-        "*": GET, HEAD
-        "repos/*/*/issues/*/comments": POST
 \`\`\`
 
 <details>

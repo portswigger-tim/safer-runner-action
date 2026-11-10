@@ -1,7 +1,7 @@
 /** Per-container egress (P2): the container listener's flow records and the container firewall chain. */
 
 import { ipOf, type FlowRecord } from '../../flowlog';
-import { CONTAINER_PREFIXES, type FirewallEvent } from '../iptables/log';
+import { CONTAINER_PREFIXES, attempts, type FirewallEvent } from '../iptables/log';
 import { capped, code, plural, table } from '../../report/markdown';
 import type { BlockedRow, Details } from '../../report/section';
 import { DECISIONS, DENIED, MAX_LIST, addUnique, blockedName, nameOf } from '../mitmproxy/flows';
@@ -54,13 +54,18 @@ export function summarizeContainers(
     else if (r.ev !== 'upstream') addUnique(c.allowed, name);
     if (r.reason === 'container-sni-only') addUnique(c.sniOnly, name);
   }
+  const lines = new Map<ContainerSummary['firewall'][number], FirewallEvent[]>();
   for (const e of firewall) {
     if (!CONTAINER_PREFIXES.has(e.prefix) || !e.src) continue;
     const c = get(e.src);
     const dst = `${e.dst}:${e.dport}`;
-    const row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
-    if (row) row.n++;
-    else c.firewall.push({ dst, dport: e.dport, proto: e.proto, n: 1, rejected: e.prefix === 'SaferRunner-CDrop' });
+    let row = c.firewall.find(f => f.dst === dst && f.proto === e.proto);
+    if (!row)
+      c.firewall.push(
+        (row = { dst, dport: e.dport, proto: e.proto, n: 0, rejected: e.prefix === 'SaferRunner-CDrop' })
+      );
+    lines.set(row, [...(lines.get(row) ?? []), e]);
+    row.n = attempts(lines.get(row)!);
   }
   // a name both allowed and refused (e.g. an upstream refusal) is listed as refused only
   for (const c of by.values()) c.allowed = c.allowed.filter(n => !c.denied.includes(n));

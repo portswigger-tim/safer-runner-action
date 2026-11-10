@@ -172,11 +172,9 @@ function suggestions(o: ProxyObserved, ctx: ReportContext, suggest: string[]): S
       });
     }
   }
+  // analyze only: built from the requests that were allowed, it never allows one that was blocked
   const sug = o.httpFilter?.suggestion;
-  // enforce: only when the filter blocked something, so the job may need it
-  if (sug?.hosts.length && (!ctx.enforce || o.httpFilter?.blocks.length)) {
-    out.push({ input: 'http-filter', value: httpFilterValue(sug) });
-  }
+  if (sug?.hosts.length && !ctx.enforce) out.push({ input: 'http-filter', value: httpFilterValue(sug) });
   return out;
 }
 
