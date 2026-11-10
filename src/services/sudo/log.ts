@@ -13,6 +13,8 @@ export interface SudoCommand {
   denied?: boolean;
   /** Set when the command was given environment variables (`sudo FOO=bar cmd`; values not kept) */
   env?: boolean;
+  /** After deduplication: how many times the log had this command line (unset: once) */
+  runs?: number;
 }
 
 /**
@@ -55,21 +57,20 @@ export function parseSudoLogLine(line: string): SudoCommand | null {
 }
 
 /**
- * Deduplicate sudo commands by command+args combination
+ * Deduplicate sudo commands by command+args combination, keeping the first entry of each with
+ * the number of times the line was logged (`runs`), so the report can count runs and tries.
  */
 export function deduplicateSudoCommands(commands: SudoCommand[]): SudoCommand[] {
-  const seen = new Set<string>();
-  const deduplicated: SudoCommand[] = [];
+  const seen = new Map<string, SudoCommand>();
 
   for (const cmd of commands) {
     const key = `${cmd.command} ${cmd.args}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      deduplicated.push(cmd);
-    }
+    const first = seen.get(key);
+    if (first) first.runs = (first.runs ?? 1) + (cmd.runs ?? 1);
+    else seen.set(key, { ...cmd, runs: cmd.runs ?? 1 });
   }
 
-  return deduplicated;
+  return [...seen.values()];
 }
 
 /**

@@ -6,8 +6,8 @@
  *   banner, linked to the repository
  *   ### Safer Runner · mode · job      the row of numbers, then any alert
  *   #### Blocked                       one row per reason, as the log writes it
- *   #### For enforce                   analyze: the step to paste; enforce: what would allow
- *                                      what was blocked
+ *   #### For enforce                   analyze only: the step to paste (enforce suggests nothing:
+ *                                      what it blocked needs a look, not a paste)
  *   collapsed: what was allowed (the job's hosts, GitHub's, sudo, docker, containers), and
  *   Safer Runner's own checks
  *
@@ -283,9 +283,9 @@ function scalar(s: Suggestion): Scalar {
 }
 
 /** The suggested inputs under `with:`, in their usual order. */
-function inputsMap(suggestions: Suggestion[], mode?: string): YAMLMap {
+function inputsMap(suggestions: Suggestion[], mode: string): YAMLMap {
   const w = new YAMLMap();
-  if (mode) w.add(new Pair(new Scalar('mode'), new Scalar(mode)));
+  w.add(new Pair(new Scalar('mode'), new Scalar(mode)));
   for (const input of INPUT_ORDER) {
     const s = suggestions.find(x => x.input === input);
     if (s) w.add(new Pair(new Scalar(s.input), scalar(s)));
@@ -310,32 +310,16 @@ export function suggestedBlock(uses: string, suggestions: Suggestion[], ref?: st
   return doc.toString({ lineWidth: 0 }).trimEnd();
 }
 
-/** Enforce: the inputs to add under the step's `with:`, indented to paste there. */
-export function inputsFragment(suggestions: Suggestion[]): string {
-  const doc = new Document();
-  doc.contents = inputsMap(suggestions);
-  return doc
-    .toString({ lineWidth: 0 })
-    .trimEnd()
-    .split('\n')
-    .map(l => (l ? `    ${l}` : l))
-    .join('\n');
-}
-
 /** A sentence for the notes line: capitalised, with a full stop. */
 const sentence = (n: string) => n[0].toUpperCase() + n.slice(1) + (/[.!?]$/.test(n) ? '' : '.');
 
+/** Analyze: the enforce step to paste. Enforce suggests nothing (see the proxy part's suggestions). */
 function suggested(s: ReportSections): string {
+  if (s.ctx.enforce) return '';
   const parts = services(s);
+  const uses = usesLine(s.input.actionRepository, s.input.actionRef);
   const all = parts.flatMap(x => x.suggestions);
-  let md = '';
-  if (s.ctx.enforce) {
-    if (!all.length) return '';
-    md += '#### To allow what was blocked\n\n' + codeBlock('yaml', inputsFragment(all)) + '\n\n';
-  } else {
-    const uses = usesLine(s.input.actionRepository, s.input.actionRef);
-    md += '#### For enforce\n\n' + codeBlock('yaml', suggestedBlock(uses, all, s.input.actionRef)) + '\n\n';
-  }
+  let md = '#### For enforce\n\n' + codeBlock('yaml', suggestedBlock(uses, all, s.input.actionRef)) + '\n\n';
   const notes = parts.flatMap(x => x.notes);
   if (notes.length) md += `<sub>${notes.map(sentence).join(' ')}</sub>\n\n`;
   return md;

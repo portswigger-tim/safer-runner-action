@@ -341,8 +341,8 @@ block, hosts, requests, ↑ out, ↓ in, sudo, docker); CAUTION (self-test faile
 every part's rows, attempts round the proxy first (so a cut table keeps them); analyze:
 `#### For enforce`, ONE `uses:` block with every service's `Suggestion` (the suggested
 `http-filter` always in it), written by the `yaml` library and round-trip tested through
-`readInputs`, an ADVISORY input with a `# ⚠️ ADVISORY` comment; enforce: `#### To allow what was
-blocked`, only the inputs to add, indented to paste under `with:`; then collapsed parts (allowed
+`readInputs`, an ADVISORY input with a `# ⚠️ ADVISORY` comment; enforce suggests nothing (what it
+blocked needs a look, not a paste: a blocked host can be a step trying to get out); then collapsed parts (allowed
 hosts, GitHub's, sudo allowed, docker use, containers) and the Safer Runner part (self-tests,
 tamper check, the action's own sudo and docker change); a footer with the time and
 `owner/repo@ref`, linked to the repository. A clean run is the row of numbers and nothing else.

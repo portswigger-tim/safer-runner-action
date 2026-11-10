@@ -1,5 +1,14 @@
 # v2 release notes
 
+## v2.5.2
+
+- **`enforce` no longer suggests a configuration.** What `enforce` blocked is what needs a look: a
+  new dependency, or a step trying to send data out (a `--resolve` to a shared address showed up
+  as a host to add). The **Blocked** table names each one; add a host you have checked to
+  `allowed-domains`, or run the job in `analyze` mode for a suggested configuration.
+- **The sudo Tries and Runs count every time a command ran.** The sudo log was de-duplicated
+  before it was counted, so a command run twice showed 1.
+
 ## v2.5.1
 
 - **`analyze` no longer says `enforce` would block the action's own read-only check commands.**

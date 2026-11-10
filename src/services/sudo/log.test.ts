@@ -109,6 +109,9 @@ describe('Sudo Parser', () => {
       expect(result).toHaveLength(2);
       expect(result[0].command).toBe('/usr/bin/tee');
       expect(result[1].command).toBe('/usr/bin/chmod');
+      // the report counts runs and tries from these
+      expect(result.map(c => c.runs)).toEqual([2, 1]);
+      expect(commands.some(c => c.runs)).toBe(false);
     });
 
     it('should keep commands with same executable but different args', () => {
@@ -187,9 +190,17 @@ Nov  3 16:23:51 : runner :  PWD=/ ; USER=nobody ; COMMAND=/usr/bin/true `;
           user: 'runner',
           targetUser: 'root',
           command: '/usr/bin/echo',
-          args: 'hello world'
+          args: 'hello world',
+          runs: 1
         },
-        { timestamp: 'Nov  3 16:23:51', user: 'runner', targetUser: 'nobody', command: '/usr/bin/true', args: '' }
+        {
+          timestamp: 'Nov  3 16:23:51',
+          user: 'runner',
+          targetUser: 'nobody',
+          command: '/usr/bin/true',
+          args: '',
+          runs: 1
+        }
       ]);
     });
   });
