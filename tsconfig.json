@@ -3,6 +3,8 @@
     "target": "ES2022",
     "lib": ["ES2022"],
     "module": "CommonJS",
+    "moduleResolution": "bundler",
+    "types": ["node"],
     "outDir": "./lib",
     "rootDir": "./src",
     "strict": true,
@@ -11,5 +13,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "exclude": ["node_modules", "**/*.test.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.spec.ts"]
 }

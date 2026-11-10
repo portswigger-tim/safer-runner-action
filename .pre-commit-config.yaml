@@ -28,13 +28,13 @@ repos:
         language: system
         files: ^src/.*\.ts$
 
-      # 2. Types — fast type check across the project (no emit).
+      # 2. Types — native TS7 checks production and test code (no emit).
       - id: typecheck
-        name: tsc --noEmit
-        entry: npx tsc --noEmit
+        name: typecheck production and tests
+        entry: npm run typecheck
         language: system
         pass_filenames: false
-        files: \.ts$
+        files: ^(src/.*\.ts|package\.json|package-lock\.json|tsconfig(\.[^/]+)?\.json)$
 
       # 3. Tests — jest + the Python proxy-policy tests.
       - id: tests
@@ -64,4 +64,4 @@ repos:
           '
         language: system
         pass_filenames: false
-        files: ^(src/.*\.ts|package\.json|package-lock\.json|tsconfig\.json)$
+        files: ^(src/.*\.ts|package\.json|package-lock\.json|tsconfig(\.[^/]+)?\.json)$
