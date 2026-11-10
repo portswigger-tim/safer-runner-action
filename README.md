@@ -32,7 +32,7 @@ change to `enforce` mode, which blocks everything that the configuration does no
      build:
        runs-on: ubuntu-latest
        steps:
-         - uses: portswigger-tim/safer-runner-action@9874c0f024d1dff1e137c2c687c04b954287b498 # v2.4.0
+         - uses: portswigger-tim/safer-runner-action@49cbc1c6f14c324aa1797899050a9491795b1974 # v2.5.0
          - uses: actions/checkout@v5 # pin this by SHA too
          - run: npm ci
    ```
@@ -52,7 +52,7 @@ change to `enforce` mode, which blocks everything that the configuration does no
    the job does not need. The step then looks like this:
 
    ```yaml
-         - uses: portswigger-tim/safer-runner-action@9874c0f024d1dff1e137c2c687c04b954287b498 # v2.4.0
+         - uses: portswigger-tim/safer-runner-action@49cbc1c6f14c324aa1797899050a9491795b1974 # v2.5.0
            with:
              mode: enforce
              allowed-domains: |
