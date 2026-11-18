@@ -11,9 +11,9 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
-import { CA_BUNDLE, CA_CERT_FILE, SYSTEM_CA_FILE } from '../../constants';
-import { sudo, type Host } from '../../system/host';
-import type { ProxyReady } from '.';
+import { CA_BUNDLE, CA_CERT_FILE, SYSTEM_CA_FILE } from '../../constants.js';
+import { sudo, type Host } from '../../system/host.js';
+import type { ProxyReady } from './index.js';
 
 declare const trustInstalled: unique symbol;
 /** Clients on the runner trust the proxy's CA. Minted only by distributeTrust(). */

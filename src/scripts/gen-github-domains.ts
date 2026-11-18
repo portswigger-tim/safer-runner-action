@@ -9,7 +9,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { metaDomainGroups } from '../config/github-domains';
+import { pathToFileURL } from 'url';
+import { metaDomainGroups } from '../config/github-domains.js';
 
 export const GENERATED_FILE = path.join('src', 'config', 'github-domains.generated.ts');
 
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
   console.log(`${GENERATED_FILE}: ${domains.length} domains`);
 }
 
-if (require.main === module) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main().catch(e => {
     console.error(e);
     process.exit(1);

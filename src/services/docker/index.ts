@@ -5,13 +5,13 @@
 
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import type { DockerPolicy } from '../../config/inputs';
-import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants';
-import type { SelfTestsRun } from '../../setup/selftest';
-import { realHost, sleep, sudo, timed, type Host } from '../../system/host';
-import { startUnit } from '../../system/unit';
-import { parseDockerEvents } from './log';
-import type { TrustInstalled } from '../mitmproxy/trust';
+import type { DockerPolicy } from '../../config/inputs.js';
+import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants.js';
+import type { SelfTestsRun } from '../../setup/selftest.js';
+import { realHost, sleep, sudo, timed, type Host } from '../../system/host.js';
+import { startUnit } from '../../system/unit.js';
+import { parseDockerEvents } from './log.js';
+import type { TrustInstalled } from '../mitmproxy/trust.js';
 import {
   DOCKER_GROUP,
   DOCKER_SOCKET,
@@ -27,9 +27,9 @@ import {
   type DockerObserved,
   type DockerPlan,
   type DockerState
-} from './config';
+} from './config.js';
 
-export * from './config';
+export * from './config.js';
 
 declare const dockerPrepared: unique symbol;
 /**

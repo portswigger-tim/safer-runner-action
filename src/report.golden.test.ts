@@ -12,12 +12,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { FlowRecord } from './flowlog';
-import { evaluateDocker, type DockerObserved } from './services/docker/config';
-import type { DockerPolicy } from './config/inputs';
-import type { SudoUsage } from './services/sudo/log';
-import { jobLog as proxyJobLog } from './services/mitmproxy/report';
-import { jobLog as sudoJobLog } from './services/sudo/report';
+import type { FlowRecord } from './flowlog.js';
+import { evaluateDocker, type DockerObserved } from './services/docker/config.js';
+import type { DockerPolicy } from './config/inputs.js';
+import type { SudoUsage } from './services/sudo/log.js';
+import { jobLog as proxyJobLog } from './services/mitmproxy/report.js';
+import { jobLog as sudoJobLog } from './services/sudo/report.js';
 import {
   buildReport,
   emojiOutsideAllowlist,
@@ -27,7 +27,7 @@ import {
   summarizeHttpFilter,
   type HttpFilterSuggestion,
   type ReportInput
-} from './report';
+} from './report/index.js';
 
 const NOW = new Date('2026-11-07T12:34:56Z');
 
@@ -816,7 +816,7 @@ describe('redaction canary (C5)', () => {
 });
 
 describe('the docs quote the summary as it is', () => {
-  const root = path.join(__dirname, '..');
+  const root = path.join(import.meta.dirname, '..');
   const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
   const goldens = read('src/__snapshots__/report.golden.test.ts.snap').replace(/\\`/g, '`');
   const flat = (s: string) => s.replace(/\s+/g, ' ');

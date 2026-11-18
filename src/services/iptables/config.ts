@@ -18,8 +18,8 @@ import {
   LOG_PREFIX_CEGRESS,
   LOG_PREFIX_DROP,
   NAT_CHAIN
-} from '../../constants';
-import type { Mode } from '../../policy';
+} from '../../constants.js';
+import type { Mode } from '../../policy.js';
 
 export interface FirewallOptions {
   mode: Mode;

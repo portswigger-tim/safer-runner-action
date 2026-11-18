@@ -1,3 +1,5 @@
+import { jest } from '@jest/globals';
+import { automock } from '../../testing/automock.js';
 /**
  * Tests for the sudo service - covers both classic sudo (Ubuntu 24.04) and sudo-rs (Ubuntu 25.10+ / 26.04)
  */
@@ -5,9 +7,13 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { BaselineCaptured } from '../../integrity/baseline';
-import { recordingHost } from '../../system/testing';
-import {
+import type { BaselineCaptured } from '../../integrity/baseline.js';
+import type { RestrictingSudo, SudoFlavour } from './index.js';
+
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+const { recordingHost } = await import('../../system/testing.js');
+const {
   parseSudoFlavour,
   detectSudoFlavour,
   getRequiredSudoCommands,
@@ -21,12 +27,8 @@ import {
   readSudoUsage,
   INTERNAL_SUDO_COMMANDS,
   SUDO_LOGGING_SUDOERS_FILE,
-  SUDO_LOGGING_RSYSLOG_FILE,
-  type RestrictingSudo,
-  type SudoFlavour
-} from '.';
-
-jest.mock('@actions/core');
+  SUDO_LOGGING_RSYSLOG_FILE
+} = await import('./index.js');
 
 /** the baseline's token (a test stands in for captureBaseline) */
 const BASELINE = Object.freeze({}) as BaselineCaptured;

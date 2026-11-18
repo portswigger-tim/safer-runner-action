@@ -6,10 +6,18 @@
  */
 
 import { stringify } from 'yaml';
-import type { SudoCommand, SudoUsage } from './log';
-import { sudoCommandShown } from '../../report/redact';
-import { code, plural, table } from '../../report/markdown';
-import type { Advisory, BlockedRow, CheckRow, Details, ReportContext, Section, Suggestion } from '../../report/section';
+import type { SudoCommand, SudoUsage } from './log.js';
+import { sudoCommandShown } from '../../report/redact.js';
+import { code, plural, table } from '../../report/markdown.js';
+import type {
+  Advisory,
+  BlockedRow,
+  CheckRow,
+  Details,
+  ReportContext,
+  Section,
+  Suggestion
+} from '../../report/section.js';
 
 export interface SudoConfigSuggestion {
   /** exact command lines, sorted; never a `*` */

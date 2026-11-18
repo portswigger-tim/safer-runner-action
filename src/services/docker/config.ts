@@ -4,12 +4,12 @@
  * container address parser for the report. No I/O.
  */
 
-import type { DockerPolicy } from '../../config/inputs';
-import { DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT, LOG_DIR } from '../../constants';
-import type { Mode } from '../../policy';
-import type { DockerEvent } from './log';
-import type { UnitSpec } from '../../system/types';
-import { HARDENING } from '../../system/unit';
+import type { DockerPolicy } from '../../config/inputs.js';
+import { DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT, LOG_DIR } from '../../constants.js';
+import type { Mode } from '../../policy.js';
+import type { DockerEvent } from './log.js';
+import type { UnitSpec } from '../../system/types.js';
+import { HARDENING } from '../../system/unit.js';
 
 export const RUNNER_USERNAME = 'runner';
 export const DOCKER_GROUP = 'docker';

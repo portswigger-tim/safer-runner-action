@@ -16,11 +16,11 @@ import {
   FILTER_CHAIN,
   FIREWALL_LOG,
   NAT_CHAIN
-} from '../../constants';
-import { sudo, type Host } from '../../system/host';
-import type { ResolverOn } from '../coredns';
-import type { DockerPrepared } from '../docker';
-import type { TrustInstalled } from '../mitmproxy/trust';
+} from '../../constants.js';
+import { sudo, type Host } from '../../system/host.js';
+import type { ResolverOn } from '../coredns/index.js';
+import type { DockerPrepared } from '../docker/index.js';
+import type { TrustInstalled } from '../mitmproxy/trust.js';
 import {
   LOCAL_BRIDGES,
   LOGGING_RULE_FILE,
@@ -34,9 +34,9 @@ import {
   loggingRule,
   parseDockerSubnets,
   type FirewallOptions
-} from './config';
+} from './config.js';
 
-export * from './config';
+export * from './config.js';
 
 declare const firewallOn: unique symbol;
 /** The rules are in place: 80/443 to the proxy, :53 to CoreDNS, the rest rejected (enforce). Minted only by configure(). */

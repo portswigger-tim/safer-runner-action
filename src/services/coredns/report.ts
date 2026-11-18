@@ -1,8 +1,8 @@
 /** The resolver's part of the job summary: names it blocked (enforce) or would block (analyze). */
 
-import { blockedName } from '../mitmproxy/flows';
-import { code } from '../../report/markdown';
-import { emptySection, type ReportContext, type Section } from '../../report/section';
+import { blockedName } from '../mitmproxy/flows.js';
+import { code } from '../../report/markdown.js';
+import { emptySection, type ReportContext, type Section } from '../../report/section.js';
 
 export interface DnsObserved {
   /** blocked names, the setup self-test excluded */

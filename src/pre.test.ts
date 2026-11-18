@@ -1,14 +1,20 @@
-import * as core from '@actions/core';
-import { runSetup } from './setup/run';
+import { jest } from '@jest/globals';
+import { automock } from './testing/automock.js';
 
-jest.mock('@actions/core');
-jest.mock('./setup/run', () => ({ runSetup: jest.fn(), setupCompleted: jest.fn(() => false) }));
+const realCore = await import('@actions/core');
+const core = automock(realCore);
+const runSetup = jest.fn<(...a: unknown[]) => Promise<void>>();
+jest.unstable_mockModule('@actions/core', () => core);
+jest.unstable_mockModule('./setup/run.js', () => ({
+  runSetup,
+  setupCompleted: jest.fn<(...a: any[]) => any>(() => false)
+}));
 
 /** Load pre.ts (it runs on import) with these inputs and wait for it to finish. */
 async function runPre(values: Record<string, string>): Promise<void> {
-  (core.getInput as jest.Mock).mockImplementation((name: string) => values[name] ?? '');
-  jest.isolateModules(() => {
-    require('./pre');
+  (core.getInput as jest.Mock<(...a: any[]) => any>).mockImplementation((name: string) => values[name] ?? '');
+  await jest.isolateModulesAsync(async () => {
+    await import('./pre.js');
   });
   await new Promise(r => setImmediate(r));
 }
@@ -16,7 +22,7 @@ async function runPre(values: Record<string, string>): Promise<void> {
 describe('pre step', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (runSetup as jest.Mock).mockResolvedValue(undefined);
+    runSetup.mockResolvedValue(undefined);
   });
 
   it('runs setup', async () => {
@@ -33,7 +39,7 @@ describe('pre step', () => {
   });
 
   it('fails closed in enforce when setup throws', async () => {
-    (runSetup as jest.Mock).mockRejectedValue(new Error('boom'));
+    runSetup.mockRejectedValue(new Error('boom'));
     await runPre({ mode: 'enforce' });
     expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('boom'));
   });

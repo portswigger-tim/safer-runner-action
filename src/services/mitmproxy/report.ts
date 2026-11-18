@@ -5,12 +5,12 @@
  * Nothing is cut silently (review M6).
  */
 
-import { compilePattern, expandPattern, matchesAny, validatePattern } from '../../policy';
-import { DENIED, blockedName, categorize, suggestedAllowlist, type HostSummary } from './flows';
-import { httpFilterValue, type HttpFilterReport } from './http-filter';
-import { PATH_HIDDEN, needsRedaction } from '../../report/redact';
-import { capped, code, humanBytes, plural, table } from '../../report/markdown';
-import type { BlockedRow, Details, ReportContext, Section, Suggestion } from '../../report/section';
+import { compilePattern, expandPattern, matchesAny, validatePattern } from '../../policy.js';
+import { DENIED, blockedName, categorize, suggestedAllowlist, type HostSummary } from './flows.js';
+import { httpFilterValue, type HttpFilterReport } from './http-filter.js';
+import { PATH_HIDDEN, needsRedaction } from '../../report/redact.js';
+import { capped, code, humanBytes, plural, table } from '../../report/markdown.js';
+import type { BlockedRow, Details, ReportContext, Section, Suggestion } from '../../report/section.js';
 
 export interface ProxyObserved {
   hosts: HostSummary[];

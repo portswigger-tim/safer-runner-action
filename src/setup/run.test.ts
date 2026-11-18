@@ -1,7 +1,11 @@
-import { JOB_CONTAINER_MESSAGE, inJobContainer } from './run';
+import { jest } from '@jest/globals';
+import { automock } from '../testing/automock.js';
 
-jest.mock('@actions/core');
-jest.mock('@actions/exec');
+const realCore = await import('@actions/core');
+const realExec = await import('@actions/exec');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+jest.unstable_mockModule('@actions/exec', () => automock(realExec));
+const { JOB_CONTAINER_MESSAGE, inJobContainer } = await import('./run.js');
 
 describe('inJobContainer (F3)', () => {
   it('detects Docker and Podman container markers', () => {

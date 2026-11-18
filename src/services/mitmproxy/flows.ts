@@ -3,9 +3,9 @@
  * denied?), and why each refused host was blocked.
  */
 
-import { ipOf, type FlowRecord } from '../../flowlog';
-import { isIpLiteral } from '../../policy';
-import { needsRedaction, redactName } from '../../report/redact';
+import { ipOf, type FlowRecord } from '../../flowlog.js';
+import { isIpLiteral } from '../../policy.js';
+import { needsRedaction, redactName } from '../../report/redact.js';
 
 export interface HostSummary {
   name: string;

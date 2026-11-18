@@ -6,14 +6,19 @@
  * proxy/sudo_suggest.py for the suggested http-filter and sudo-config.
  */
 
-export * from '../services/coredns/log';
-export * from '../services/iptables/log';
-export * from '../services/sudo/log';
-export * from '../services/docker/log';
-export * from '../services/mitmproxy/flows';
-export * from '../services/mitmproxy/http-filter';
-export { statusSummary, type ProxyObserved, type ProxySection, type ProxyTotals } from '../services/mitmproxy/report';
-export * from '../services/docker/containers';
+export * from '../services/coredns/log.js';
+export * from '../services/iptables/log.js';
+export * from '../services/sudo/log.js';
+export * from '../services/docker/log.js';
+export * from '../services/mitmproxy/flows.js';
+export * from '../services/mitmproxy/http-filter.js';
+export {
+  statusSummary,
+  type ProxyObserved,
+  type ProxySection,
+  type ProxyTotals
+} from '../services/mitmproxy/report.js';
+export * from '../services/docker/containers.js';
 export {
   DOCKER_PARTIAL,
   dockerUseCount,
@@ -21,16 +26,16 @@ export {
   imageLabel,
   type DockerPolicyReport,
   type DockerReportObserved
-} from '../services/docker/report';
+} from '../services/docker/report.js';
 export {
   sudoConfigYaml,
   type SudoConfigSuggestion,
   type SudoObserved,
   type SudoPolicyReport
-} from '../services/sudo/report';
-export * from './checks';
-export * from './compose';
-export * from './markdown';
-export * from './redact';
-export * from './section';
-export * from './suggest';
+} from '../services/sudo/report.js';
+export * from './checks.js';
+export * from './compose.js';
+export * from './markdown.js';
+export * from './redact.js';
+export * from './section.js';
+export * from './suggest.js';

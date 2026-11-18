@@ -16,9 +16,9 @@ import {
   type ActionSudoBounds,
   type SudoCommand,
   type SudoUsage
-} from './log';
-import type { BaselineCaptured } from '../../integrity/baseline';
-import { sudo, type Host } from '../../system/host';
+} from './log.js';
+import type { BaselineCaptured } from '../../integrity/baseline.js';
+import { sudo, type Host } from '../../system/host.js';
 import {
   INTERNAL_SUDO_COMMANDS,
   RUNNER_SUDOERS_FILE,
@@ -29,11 +29,11 @@ import {
   type RestrictingSudo,
   type SudoFlavour,
   type SudoRendered
-} from './config';
+} from './config.js';
 
-export * from './config';
+export * from './config.js';
 // Re-export SudoCommand type for convenience
-export type { SudoCommand, SudoUsage } from './log';
+export type { SudoCommand, SudoUsage } from './log.js';
 
 declare const sudoLogging: unique symbol;
 /**

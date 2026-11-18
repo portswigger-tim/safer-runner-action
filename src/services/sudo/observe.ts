@@ -2,9 +2,9 @@
 
 import * as core from '@actions/core';
 import * as path from 'path';
-import type { Mode } from '../../policy';
-import { suggestSudoConfig } from '../../report/suggest';
-import { actionRoot } from '../mitmproxy/index';
+import type { Mode } from '../../policy.js';
+import { suggestSudoConfig } from '../../report/suggest.js';
+import { actionRoot } from '../mitmproxy/index.js';
 import {
   evaluateSudo,
   isBuiltinSudoCommand,
@@ -12,9 +12,9 @@ import {
   runnerWritableDirs,
   sudoRuleWarning,
   type SudoRule
-} from './config';
-import type { SudoCommand } from './log';
-import type { SudoPolicyReport } from './report';
+} from './config.js';
+import type { SudoCommand } from './log.js';
+import type { SudoPolicyReport } from './report.js';
 
 /** What the setup marker recorded about sudo (root-owned, not re-read from the inputs). */
 export interface SudoMarker {

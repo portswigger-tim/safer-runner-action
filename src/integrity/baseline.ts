@@ -12,9 +12,9 @@
 
 import * as core from '@actions/core';
 import * as crypto from 'crypto';
-import { VALIDATION_STATE_FILE } from '../constants';
-import type { SudoLogging } from '../services/sudo';
-import { sudo, type Host } from '../system/host';
+import { VALIDATION_STATE_FILE } from '../constants.js';
+import type { SudoLogging } from '../services/sudo/index.js';
+import { sudo, type Host } from '../system/host.js';
 
 export interface FileChecksum {
   path: string;

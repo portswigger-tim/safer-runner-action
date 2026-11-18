@@ -1,13 +1,13 @@
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseFlowLog, parseFlowLogWithOffsets, type FlowRecord } from './flowlog';
-import { parseHttpFilter } from './config/inputs';
+import { parseFlowLog, parseFlowLogWithOffsets, type FlowRecord } from './flowlog.js';
+import { parseHttpFilter } from './config/inputs.js';
 import { parse as parseYaml } from 'yaml';
-import { buildPolicyConfig, type PolicyConfig } from './policy';
-import { withoutSelfTests } from './setup/selftest';
-import { suggestHttpFilter, suggestSudoConfig } from './report';
-import { evaluateSudo, parseSudoConfig, ruleText } from './services/sudo/config';
+import { buildPolicyConfig, type PolicyConfig } from './policy.js';
+import { withoutSelfTests } from './setup/selftest.js';
+import { suggestHttpFilter, suggestSudoConfig } from './report/index.js';
+import { evaluateSudo, parseSudoConfig, ruleText } from './services/sudo/config.js';
 import {
   allowedRequests,
   buildReport,
@@ -26,9 +26,9 @@ import {
   type FirewallEvent,
   type HttpFilterSuggestion,
   type Suggester
-} from './report';
+} from './report/index.js';
 
-const PROXY_DIR = path.join(__dirname, '..', 'proxy');
+const PROXY_DIR = path.join(import.meta.dirname, '..', 'proxy');
 
 /** A suggested filter as the summary prints it: its lines of the uses: block, here without their indent. */
 const printedFilter = (s: HttpFilterSuggestion) =>
@@ -265,7 +265,7 @@ describe('buildReport', () => {
 
 describe('the layout, on a real flow log (beta.2)', () => {
   const real = parseFlowLogWithOffsets(
-    fs.readFileSync(path.join(__dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8')
+    fs.readFileSync(path.join(import.meta.dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8')
   );
   const hosts = summarizeFlows(withoutSelfTests(real.records, real.offsets));
   const userDomains = [
@@ -553,7 +553,7 @@ describe('upstream IP guard records (H1)', () => {
 
 describe('reconciling refused connections (no host is both allowed and blocked)', () => {
   const real = summarizeFlows(
-    parseFlowLog(fs.readFileSync(path.join(__dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8'))
+    parseFlowLog(fs.readFileSync(path.join(import.meta.dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8'))
   );
   const allowedRows = real.filter(h => !['BLOCK', 'WOULD_BLOCK'].includes(h.verdict));
   const blockedRows = real.filter(h => ['BLOCK', 'WOULD_BLOCK'].includes(h.verdict));
@@ -956,7 +956,7 @@ describe('self-test probes are not the job traffic', () => {
 
   it('the beta.2 report listed selftest.safer-runner.invalid as Blocked; it is gone', () => {
     const real = parseFlowLogWithOffsets(
-      fs.readFileSync(path.join(__dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8')
+      fs.readFileSync(path.join(import.meta.dirname, '__fixtures__', 'beta2-enforce-flows.jsonl'), 'utf8')
     );
     const names = summarizeFlows(withoutSelfTests(real.records, real.offsets)).map(h => h.name);
     expect(names).not.toContain('selftest.safer-runner.invalid');

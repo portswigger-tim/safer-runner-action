@@ -18,16 +18,16 @@ import {
   PROXY_LISTEN_HOST,
   PROXY_UNIT,
   PROXY_USER
-} from '../../constants';
-import { writeFiles } from '../../system/files';
-import { realHost, sudo, type Host } from '../../system/host';
-import { installPinnedBinary } from '../../system/install';
-import type { Rendered } from '../../system/types';
-import { startUnit } from '../../system/unit';
-import type { CaReady } from './ca';
-import type { ProxyPorts } from './config';
+} from '../../constants.js';
+import { writeFiles } from '../../system/files.js';
+import { realHost, sudo, type Host } from '../../system/host.js';
+import { installPinnedBinary } from '../../system/install.js';
+import type { Rendered } from '../../system/types.js';
+import { startUnit } from '../../system/unit.js';
+import type { CaReady } from './ca.js';
+import type { ProxyPorts } from './config.js';
 
-export { mitmdumpArgs, render, type ProxyFacts, type ProxyPorts } from './config';
+export { mitmdumpArgs, render, type ProxyFacts, type ProxyPorts } from './config.js';
 
 declare const configWritten: unique symbol;
 /** The addon and the proxy's rendered files are in place. Minted only by writeConfig(). */

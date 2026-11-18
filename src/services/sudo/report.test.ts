@@ -1,6 +1,6 @@
-import type { ReportContext } from '../../report/section';
-import type { SudoCommand } from './log';
-import { jobLog, report } from './report';
+import type { ReportContext } from '../../report/section.js';
+import type { SudoCommand } from './log.js';
+import { jobLog, report } from './report.js';
 
 const ENFORCE: ReportContext = { mode: 'enforce', enforce: true };
 const ANALYZE: ReportContext = { mode: 'analyze', enforce: false };

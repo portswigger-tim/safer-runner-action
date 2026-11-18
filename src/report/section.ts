@@ -3,7 +3,7 @@
  * The composer (compose.ts) only places the parts; it never reads a log or decides a verdict.
  */
 
-import type { Mode } from '../policy';
+import type { Mode } from '../policy.js';
 
 export interface ReportContext {
   mode: Mode;

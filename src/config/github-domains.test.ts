@@ -1,5 +1,6 @@
-import { compilePattern, matchesAny } from '../policy';
-import { GITHUB_ACTIONS_DOMAINS } from './github-domains.generated';
+import { jest } from '@jest/globals';
+import { compilePattern, matchesAny } from '../policy.js';
+import { GITHUB_ACTIONS_DOMAINS } from './github-domains.generated.js';
 import {
   DANGEROUS_BROAD_DOMAINS,
   GITHUB_EXTRAS,
@@ -8,7 +9,7 @@ import {
   normalizeMetaDomain,
   fetchGitHubActionsDomains,
   resolveGitHubDomains
-} from './github-domains';
+} from './github-domains.js';
 
 describe('GitHub Parser', () => {
   describe('getGitHubRequiredDomains (generated meta snapshot + extras)', () => {
@@ -175,7 +176,7 @@ describe('GitHub Parser', () => {
     });
 
     it('returns normalised domains from .domains.actions on success', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
+      global.fetch = jest.fn<(...a: any[]) => any>().mockResolvedValue({
         ok: true,
         json: async () => ({
           domains: {
@@ -199,17 +200,21 @@ describe('GitHub Parser', () => {
     });
 
     it('returns null on a non-OK response', async () => {
-      global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => ({}) }) as unknown as typeof fetch;
+      global.fetch = jest
+        .fn<(...a: any[]) => any>()
+        .mockResolvedValue({ ok: false, json: async () => ({}) }) as unknown as typeof fetch;
       expect(await fetchGitHubActionsDomains()).toBeNull();
     });
 
     it('returns null when the fetch throws (network/timeout)', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('network down')) as unknown as typeof fetch;
+      global.fetch = jest
+        .fn<(...a: any[]) => any>()
+        .mockRejectedValue(new Error('network down')) as unknown as typeof fetch;
       expect(await fetchGitHubActionsDomains()).toBeNull();
     });
 
     it('returns null when .domains.actions is missing or empty', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
+      global.fetch = jest.fn<(...a: any[]) => any>().mockResolvedValue({
         ok: true,
         json: async () => ({ domains: { actions: [] } })
       }) as unknown as typeof fetch;
@@ -224,7 +229,7 @@ describe('GitHub Parser', () => {
     });
 
     it('prefers the live meta list and unions it with the core domains', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
+      global.fetch = jest.fn<(...a: any[]) => any>().mockResolvedValue({
         ok: true,
         json: async () => ({ domains: { actions: ['productionresultssa200.blob.core.windows.net'] } })
       }) as unknown as typeof fetch;
@@ -240,7 +245,7 @@ describe('GitHub Parser', () => {
     });
 
     it('falls back to the static list when the fetch fails', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as unknown as typeof fetch;
+      global.fetch = jest.fn<(...a: any[]) => any>().mockRejectedValue(new Error('offline')) as unknown as typeof fetch;
       const { domains, source } = await resolveGitHubDomains();
       expect(source).toBe('static');
       expect(domains).toEqual(getGitHubRequiredDomains());

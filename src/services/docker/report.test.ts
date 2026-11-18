@@ -1,6 +1,6 @@
-import { REDACTED } from '../../report/redact';
-import { evaluateDocker } from './config';
-import { dockerUseCount, dockerUseText, imageLabel, jobLog, report } from './report';
+import { REDACTED } from '../../report/redact.js';
+import { evaluateDocker } from './config.js';
+import { dockerUseCount, dockerUseText, imageLabel, jobLog, report } from './report.js';
 
 describe('imageLabel (an image name in the summary)', () => {
   it('shows ordinary names whole', () => {

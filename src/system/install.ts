@@ -6,7 +6,7 @@ import * as core from '@actions/core';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { realHost, sleep, sudo, timed, type Host } from './host';
+import { realHost, sleep, sudo, timed, type Host } from './host.js';
 
 export const DOWNLOAD_ATTEMPTS = 5;
 /** per attempt, the response body included */

@@ -1,15 +1,30 @@
+import { jest } from '@jest/globals';
+import { automock } from '../../testing/automock.js';
 /**
  * Tests for the docker service, on a simulated runner (group membership, socket, units) driven
  * through a recording Host.
  */
 
-import * as core from '@actions/core';
-import * as fs from 'fs';
-import { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } from '../../constants';
-import type { SelfTestsRun } from '../../setup/selftest';
-import { recordingHost } from '../../system/testing';
-import type { TrustInstalled } from '../mitmproxy/trust';
-import {
+import type { SelfTestsRun } from '../../setup/selftest.js';
+import type { TrustInstalled } from '../mitmproxy/trust.js';
+import type { ApplyingDocker, DockerPlan, DockerPrepared } from './index.js';
+
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+jest.unstable_mockModule('fs', () => {
+  const actual = jest.requireActual<Record<string, any>>('fs');
+  return {
+    ...actual,
+    existsSync: jest.fn<(...a: any[]) => any>(actual.existsSync),
+    accessSync: jest.fn<(...a: any[]) => any>(actual.accessSync),
+    readFileSync: jest.fn<(...a: any[]) => any>(actual.readFileSync)
+  };
+});
+const core = await import('@actions/core');
+const fs = await import('fs');
+const { DOCKER_DAEMON_JSON, DOCKER_EVENTS_LOG, DOCKER_EVENTS_UNIT } = await import('../../constants.js');
+const { recordingHost } = await import('../../system/testing.js');
+const {
   DOCKER_GROUP,
   DOCKER_SOCKET,
   RUNNER_USERNAME,
@@ -25,26 +40,13 @@ import {
   readDockerState,
   observeDocker,
   startEventRecorder,
-  stopDockerService,
-  type ApplyingDocker,
-  type DockerPlan,
-  type DockerPrepared
-} from '.';
+  stopDockerService
+} = await import('./index.js');
 
-jest.mock('@actions/core');
-jest.mock('fs', () => {
-  const actual = jest.requireActual('fs');
-  return {
-    ...actual,
-    existsSync: jest.fn(actual.existsSync),
-    accessSync: jest.fn(actual.accessSync),
-    readFileSync: jest.fn(actual.readFileSync)
-  };
-});
-const mockRead = fs.readFileSync as unknown as jest.Mock;
-const mockExists = fs.existsSync as unknown as jest.Mock;
-const mockAccess = fs.accessSync as unknown as jest.Mock;
-const actualFs = jest.requireActual('fs');
+const mockRead = fs.readFileSync as unknown as jest.Mock<(...a: any[]) => any>;
+const mockExists = fs.existsSync as unknown as jest.Mock<(...a: any[]) => any>;
+const mockAccess = fs.accessSync as unknown as jest.Mock<(...a: any[]) => any>;
+const actualFs = jest.requireActual<Record<string, any>>('fs');
 
 /** tokens for tests that call a step directly */
 const TRUST = Object.freeze({}) as TrustInstalled;

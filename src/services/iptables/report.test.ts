@@ -1,6 +1,6 @@
-import type { ReportContext } from '../../report/section';
-import { parseFirewallLog } from './log';
-import { report } from './report';
+import type { ReportContext } from '../../report/section.js';
+import { parseFirewallLog } from './log.js';
+import { report } from './report.js';
 
 const ENFORCE: ReportContext = { mode: 'enforce', enforce: true };
 const ANALYZE: ReportContext = { mode: 'analyze', enforce: false };

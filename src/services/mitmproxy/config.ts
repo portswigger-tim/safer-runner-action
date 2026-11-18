@@ -13,10 +13,10 @@ import {
   PROXY_STREAM_LARGE_BODIES,
   PROXY_UNIT,
   PROXY_USER
-} from '../../constants';
-import type { PolicyConfig } from '../../policy';
-import type { Rendered } from '../../system/types';
-import { HARDENING } from '../../system/unit';
+} from '../../constants.js';
+import type { PolicyConfig } from '../../policy.js';
+import type { Rendered } from '../../system/types.js';
+import { HARDENING } from '../../system/unit.js';
 
 export interface ProxyPorts {
   /** host listener (nat OUTPUT REDIRECT) */

@@ -3,8 +3,8 @@
  * post-run tamper check (src/integrity/check.ts). Neither is a service: they check all of them.
  */
 
-import { code } from './markdown';
-import type { Alert, CheckRow } from './section';
+import { code } from './markdown.js';
+import type { Alert, CheckRow } from './section.js';
 
 export type SelfTest = { name: string; ok: boolean; detail: string };
 export type IntegrityDetails = { status: 'verified' | 'tampered' | 'unavailable'; body: string };

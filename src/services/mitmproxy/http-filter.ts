@@ -1,9 +1,9 @@
 /** The http-filter part of the report: refused requests, and the suggested filter as YAML. */
 
 import { Document, Pair, Scalar, YAMLMap } from 'yaml';
-import type { FlowRecord } from '../../flowlog';
-import { methodLabel } from '../../report/redact';
-import { DENIED, FILTER_REASONS, allowedRequests, blockedName, type AllowedRequest } from './flows';
+import type { FlowRecord } from '../../flowlog.js';
+import { methodLabel } from '../../report/redact.js';
+import { DENIED, FILTER_REASONS, allowedRequests, blockedName, type AllowedRequest } from './flows.js';
 
 export interface FilterBlock {
   /** redacted like any refused name */

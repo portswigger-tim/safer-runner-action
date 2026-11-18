@@ -1,8 +1,8 @@
-import type { FlowRecord } from '../../flowlog';
-import { parseAllowedDomains } from '../../policy';
-import type { ReportContext } from '../../report/section';
-import { summarizeFlows } from './flows';
-import { jobLog, report } from './report';
+import type { FlowRecord } from '../../flowlog.js';
+import { parseAllowedDomains } from '../../policy.js';
+import type { ReportContext } from '../../report/section.js';
+import { summarizeFlows } from './flows.js';
+import { jobLog, report } from './report.js';
 
 const ENFORCE: ReportContext = { mode: 'enforce', enforce: true };
 const ANALYZE: ReportContext = { mode: 'analyze', enforce: false };

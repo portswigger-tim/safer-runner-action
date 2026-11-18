@@ -1,19 +1,30 @@
-import * as fs from 'fs';
-import { FLOW_LOG, MITMDUMP_BIN, POLICY_FILE, PROXY_CA_KEY_FILE, PROXY_CONF_DIR, PROXY_UNIT } from '../../constants';
-import type { PolicyConfig } from '../../policy';
-import { recordingHost } from '../../system/testing';
-import { transientUnitArgs } from '../../system/unit';
-import { PROXY_PORT_BAND, allocateProxyPorts, ensureUser, mitmdumpArgs, render, start, writeConfig } from '.';
-import { generateCa, type CaReady } from './ca';
-import type { ProxyConfigWritten } from '.';
+import { jest } from '@jest/globals';
+import { automock } from '../../testing/automock.js';
+import type { PolicyConfig } from '../../policy.js';
+import type { CaReady } from './ca.js';
+import type { ProxyConfigWritten } from './index.js';
 
-jest.mock('@actions/core');
-jest.mock('fs', () => {
-  const actual = jest.requireActual('fs');
-  return { ...actual, existsSync: jest.fn(actual.existsSync), readFileSync: jest.fn(actual.readFileSync) };
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+jest.unstable_mockModule('fs', () => {
+  const actual = jest.requireActual<Record<string, any>>('fs');
+  return {
+    ...actual,
+    existsSync: jest.fn<(...a: any[]) => any>(actual.existsSync),
+    readFileSync: jest.fn<(...a: any[]) => any>(actual.readFileSync)
+  };
 });
-const mockExists = fs.existsSync as unknown as jest.Mock;
-const mockRead = fs.readFileSync as unknown as jest.Mock;
+const fs = await import('fs');
+const { FLOW_LOG, MITMDUMP_BIN, POLICY_FILE, PROXY_CA_KEY_FILE, PROXY_CONF_DIR, PROXY_UNIT } =
+  await import('../../constants.js');
+const { recordingHost } = await import('../../system/testing.js');
+const { transientUnitArgs } = await import('../../system/unit.js');
+const { PROXY_PORT_BAND, allocateProxyPorts, ensureUser, mitmdumpArgs, render, start, writeConfig } =
+  await import('./index.js');
+const { generateCa } = await import('./ca.js');
+
+const mockExists = fs.existsSync as unknown as jest.Mock<(...a: any[]) => any>;
+const mockRead = fs.readFileSync as unknown as jest.Mock<(...a: any[]) => any>;
 
 const PORTS = { port: 26383, containerPort: 26384 };
 const POLICY = { version: 1, mode: 'enforce' } as unknown as PolicyConfig;
@@ -114,8 +125,8 @@ describe('mitmproxy render', () => {
 
 describe('mitmproxy effects', () => {
   beforeEach(() => {
-    mockExists.mockReset().mockImplementation(jest.requireActual('fs').existsSync);
-    mockRead.mockReset().mockImplementation(jest.requireActual('fs').readFileSync);
+    mockExists.mockReset().mockImplementation(jest.requireActual<Record<string, any>>('fs').existsSync);
+    mockRead.mockReset().mockImplementation(jest.requireActual<Record<string, any>>('fs').readFileSync);
   });
 
   it('ensureUser: creates the proxy user only when missing', async () => {
@@ -159,13 +170,15 @@ describe('mitmproxy effects', () => {
 
   it('start: ready once the addon logged a good start and both listeners are up', async () => {
     let polls = 0;
-    mockExists.mockImplementation(p => (p === FLOW_LOG ? true : jest.requireActual('fs').existsSync(p)));
+    mockExists.mockImplementation(p =>
+      p === FLOW_LOG ? true : jest.requireActual<Record<string, any>>('fs').existsSync(p)
+    );
     mockRead.mockImplementation((p, enc) =>
       p === FLOW_LOG
         ? ++polls < 2
           ? ''
           : '{"ev": "start", "ok": true, "pid": 42, "mode": "enforce"}\n'
-        : jest.requireActual('fs').readFileSync(p, enc)
+        : jest.requireActual<Record<string, any>>('fs').readFileSync(p, enc)
     );
     const { host, calls } = recordingHost(
       () => 0,
@@ -184,7 +197,9 @@ describe('mitmproxy effects', () => {
   it('start: fails with diagnostics when the addon never reports a good start', async () => {
     jest.useFakeTimers();
     try {
-      mockExists.mockImplementation(p => (p === FLOW_LOG ? false : jest.requireActual('fs').existsSync(p)));
+      mockExists.mockImplementation(p =>
+        p === FLOW_LOG ? false : jest.requireActual<Record<string, any>>('fs').existsSync(p)
+      );
       const { host, calls } = recordingHost();
       const started = start(host, render({ policy: POLICY, ports: PORTS }), PORTS, CONFIG, CA);
       const failed = expect(started).rejects.toThrow('proxy did not become ready within 90s');

@@ -1,4 +1,4 @@
-import { setupChecks } from './checks';
+import { setupChecks } from './checks.js';
 
 const OK = [{ name: 'repoint', ok: true, detail: 'x' }];
 

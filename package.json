@@ -3,6 +3,7 @@
   "version": "2.5.3",
   "description": "L7 egress control for GitHub Actions runners: hostname allowlisting through a TLS-terminating proxy",
   "main": "dist/main/index.js",
+  "type": "module",
   "scripts": {
     "build": "tsc && ncc build lib/main.js -o dist/main --license licenses.txt",
     "build:pre": "ncc build lib/pre.js -o dist/pre --license licenses.txt",
@@ -12,7 +13,7 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json",
     "package": "npm run clean && npm run format && npm run typecheck && npm test && npm run build && npm run build:pre && npm run build:post",
-    "test": "jest && npm run test:py",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest && npm run test:py",
     "all": "npm run package",
     "gen:domains": "tsc && node lib/scripts/gen-github-domains.js && prettier --write src/config/github-domains.generated.ts",
     "test:py": "python3 -m unittest discover -s proxy -p '*_test.py'"
@@ -27,8 +28,8 @@
   "author": "PortSwigger",
   "license": "MIT",
   "dependencies": {
-    "@actions/core": "^1.10.1",
-    "@actions/exec": "^1.1.1",
+    "@actions/core": "^3.0.1",
+    "@actions/exec": "^3.0.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {

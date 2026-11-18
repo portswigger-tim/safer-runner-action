@@ -11,12 +11,12 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import { DNS_LOG, FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from '../constants';
-import { FlowRecord, flowLogSize, ipOf, readFlowLog } from '../flowlog';
-import { probe } from '../services/coredns';
-import type { FirewallOn } from '../services/iptables';
-import { parseDnsLog } from '../services/coredns/log';
-import { compilePattern, matchesAny, type Mode } from '../policy';
+import { DNS_LOG, FLOW_LOG, SELFTEST_BOGUS_IP, SELFTEST_HOST } from '../constants.js';
+import { FlowRecord, flowLogSize, ipOf, readFlowLog } from '../flowlog.js';
+import { probe } from '../services/coredns/index.js';
+import type { FirewallOn } from '../services/iptables/index.js';
+import { parseDnsLog } from '../services/coredns/log.js';
+import { compilePattern, matchesAny, type Mode } from '../policy.js';
 
 export interface SelfTestResult {
   name: string;
