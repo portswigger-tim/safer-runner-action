@@ -231,16 +231,6 @@ export function buildIp6ContainerForwardRules(o: FirewallOptions, hook: string =
   ].join('\n');
 }
 
-/** Parse `ip -4 route show default` output into the interface names carrying the default route. */
-export function parseDefaultRouteInterfaces(output: string): string[] {
-  const out: string[] = [];
-  for (const line of output.split('\n')) {
-    const m = line.match(/^default\b.*\bdev\s+(\S+)/);
-    if (m) out.push(m[1]);
-  }
-  return Array.from(new Set(out));
-}
-
 /** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
 export function parseDockerSubnets(json: string): string[] {
   const out: string[] = [];

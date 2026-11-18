@@ -1,5 +1,12 @@
 # v2 release notes
 
+## v2.5.3
+
+- **Removed an unused diagnostic.** The job log no longer reports which NIC carries the default
+  route. It never affected the firewall - the egress rules are interface-agnostic by design (allow
+  loopback + the proxy path, reject the rest) - and the warning had become a false alarm on runner
+  images that name the NIC something other than `eth0`.
+
 ## v2.5.2
 
 - **`enforce` no longer suggests a configuration.** What `enforce` blocked is what needs a look: a

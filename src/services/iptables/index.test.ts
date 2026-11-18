@@ -16,7 +16,6 @@ import {
   buildIp6ContainerForwardRules,
   buildIp6FilterRules,
   buildNatRules,
-  parseDefaultRouteInterfaces,
   parseDockerSubnets
 } from '.';
 
@@ -139,20 +138,6 @@ describe('buildIp6FilterRules', () => {
     const text = buildIp6FilterRules({ ...base, mode: 'analyze' });
     expect(text).toContain('--dports 80,443 -j REJECT');
     expect(text).not.toContain('-A SAFER_RUNNER_OUT -j REJECT');
-  });
-});
-
-describe('parseDefaultRouteInterfaces', () => {
-  it('extracts the default route device', () => {
-    expect(parseDefaultRouteInterfaces('default via 10.1.0.1 dev eth0 proto dhcp src 10.1.0.4 metric 100\n')).toEqual([
-      'eth0'
-    ]);
-  });
-  it('handles multiple and no defaults', () => {
-    expect(
-      parseDefaultRouteInterfaces('default via 1.1.1.1 dev ens5\ndefault via 2.2.2.2 dev eth1 metric 200')
-    ).toEqual(['ens5', 'eth1']);
-    expect(parseDefaultRouteInterfaces('')).toEqual([]);
   });
 });
 
