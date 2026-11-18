@@ -11,7 +11,7 @@ moves to new releases. Put the version in a comment, so that Dependabot or Renov
 the SHA:
 
 ```yaml
-- uses: portswigger-tim/safer-runner-action@2be7ca7d730f0c724213815cb9ea1a86cb879f26 # v2.5.3
+- uses: portswigger-tim/safer-runner-action@4462cc2f8df82dde6975f0e07dfc3a7ef4830237 # v2.5.4
 ```
 
 ## Check the build provenance
