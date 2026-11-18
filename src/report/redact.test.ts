@@ -14,10 +14,12 @@ import {
   sudoArgsShown,
   sudoCommandShown,
   sudoPathShown
-} from './redact';
+} from './redact.js';
 
 /** proxy/test-vectors.json "redact": also run by proxy/suggest_test.py (suggest.looks_encoded) */
-const ALL_VECTORS = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8'));
+const ALL_VECTORS = JSON.parse(
+  fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
+);
 const VECTORS = ALL_VECTORS.redact;
 /** proxy/test-vectors.json "sudo_secret": also run by proxy/sudo_suggest_test.py (secret_mask, path_secret) */
 const SUDO_VECTORS = ALL_VECTORS.sudo_secret;

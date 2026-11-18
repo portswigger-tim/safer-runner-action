@@ -3,14 +3,14 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FLOW_LOG, POLICY_FILE } from '../../constants';
-import { parseFlowLogWithOffsets, type FlowRecord } from '../../flowlog';
-import { suggestHttpFilter } from '../../report/suggest';
-import { type SelfTestWindow, withoutSelfTests } from '../../setup/selftest';
-import { summarizeFlows, type AllowedRequest } from './flows';
-import { summarizeHttpFilter, type HttpFilterSuggestion } from './http-filter';
-import { actionRoot } from './index';
-import type { ProxyObserved } from './report';
+import { FLOW_LOG, POLICY_FILE } from '../../constants.js';
+import { parseFlowLogWithOffsets, type FlowRecord } from '../../flowlog.js';
+import { suggestHttpFilter } from '../../report/suggest.js';
+import { type SelfTestWindow, withoutSelfTests } from '../../setup/selftest.js';
+import { summarizeFlows, type AllowedRequest } from './flows.js';
+import { summarizeHttpFilter, type HttpFilterSuggestion } from './http-filter.js';
+import { actionRoot } from './index.js';
+import type { ProxyObserved } from './report.js';
 
 /** GitHub platform endpoints the built-in list allowed on filtered hosts (policy.json, 0644). */
 function readPlatformAutoAllowed(): number | undefined {

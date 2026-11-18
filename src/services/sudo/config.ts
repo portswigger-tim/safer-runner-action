@@ -7,10 +7,15 @@
  */
 
 import { isScalar, isSeq } from 'yaml';
-import { strictYaml } from '../../config/yaml';
-import type { SudoCommand } from './log';
-import { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, iptablesListArgs } from '../../integrity/baseline';
-import { DOCKER_DAEMON_JSON, VALIDATION_STATE_FILE } from '../../constants';
+import { strictYaml } from '../../config/yaml.js';
+import type { SudoCommand } from './log.js';
+import {
+  BASELINE_WRITE_COMMANDS,
+  CRITICAL_FILES,
+  IPTABLES_CHAINS,
+  iptablesListArgs
+} from '../../integrity/baseline.js';
+import { DOCKER_DAEMON_JSON, VALIDATION_STATE_FILE } from '../../constants.js';
 
 export const RUNNER_USERNAME = 'runner';
 

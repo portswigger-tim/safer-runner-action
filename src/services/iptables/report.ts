@@ -4,9 +4,9 @@
  * with their container (services/docker/containers.ts).
  */
 
-import { CONTAINER_PREFIXES, firewallSummary, type FirewallEvent } from './log';
-import { code } from '../../report/markdown';
-import { emptySection, type BlockedRow, type ReportContext, type Section } from '../../report/section';
+import { CONTAINER_PREFIXES, firewallSummary, type FirewallEvent } from './log.js';
+import { code } from '../../report/markdown.js';
+import { emptySection, type BlockedRow, type ReportContext, type Section } from '../../report/section.js';
 
 export interface FirewallObserved {
   events: FirewallEvent[];

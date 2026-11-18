@@ -1,9 +1,12 @@
-import { writeFiles } from './files';
-import { recordingHost } from './testing';
-import { HARDENING, startUnit, transientUnitArgs } from './unit';
-import type { UnitSpec } from './types';
+import { jest } from '@jest/globals';
+import { automock } from '../testing/automock.js';
+import type { UnitSpec } from './types.js';
 
-jest.mock('@actions/core');
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+const { writeFiles } = await import('./files.js');
+const { recordingHost } = await import('./testing.js');
+const { HARDENING, startUnit, transientUnitArgs } = await import('./unit.js');
 
 const UNIT: UnitSpec = {
   unit: 'svc',

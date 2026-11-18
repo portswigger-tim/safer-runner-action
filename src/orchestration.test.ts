@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 /**
  * Orchestration nets: runSetup() and the post step against a recording fake runner.
  *
@@ -11,36 +12,11 @@
  * invariants, and a mutation check proves each rule fails when its order is broken.
  */
 
-import { createHash } from 'crypto';
-import * as constants from './constants';
-import {
-  CA_BUNDLE,
-  CA_CERT_FILE,
-  COREDNS_BIN,
-  DNS_LOG,
-  FLOW_LOG,
-  MITMDUMP_BIN,
-  PROXY_CA_KEY_FILE,
-  SELFTEST_BOGUS_IP,
-  SELFTEST_HOST,
-  SUDO_LOG,
-  SYSTEM_CA_FILE,
-  VALIDATION_STATE_FILE
-} from './constants';
-import { runSetup, SETUP_MARKER } from './setup/run';
-import { readInputs } from './config/inputs';
-import { classifySudoCommands, type SudoCommand } from './services/sudo/log';
-import {
-  INTERNAL_SUDO_COMMANDS,
-  SUDO_LOGGING_RSYSLOG_FILE,
-  SUDO_LOGGING_SUDOERS_FILE,
-  getValidationSudoCommands,
-  ruleAllows
-} from './services/sudo';
+import type { SudoCommand } from './services/sudo/log.js';
 
 // ------------------------------------------------------------------ external boundaries
 
-jest.mock('@actions/core', () => ({
+jest.unstable_mockModule('@actions/core', () => ({
   getInput: (name: string) => mockHost.inputs[name] ?? '',
   getBooleanInput: (name: string) => (mockHost.inputs[name] ?? '').trim().toLowerCase() === 'true',
   info: (m: string) => mockHost.log.push(`info: ${m}`),
@@ -72,14 +48,14 @@ jest.mock('@actions/core', () => ({
   }
 }));
 
-jest.mock('@actions/exec', () => ({
+jest.unstable_mockModule('@actions/exec', () => ({
   exec: (cmd: string, args: string[] = [], opts: MockExecOptions = {}) => mockHost.exec(cmd, args, opts),
   getExecOutput: (cmd: string, args: string[] = [], opts: MockExecOptions = {}) =>
     mockHost.getExecOutput(cmd, args, opts)
 }));
 
-jest.mock('fs', () => {
-  const actual = jest.requireActual('fs');
+jest.unstable_mockModule('fs', () => {
+  const actual = jest.requireActual<Record<string, any>>('fs');
   const sys = (p: unknown) => typeof p === 'string' && mockHost.owns(p);
   return {
     ...actual,
@@ -91,15 +67,18 @@ jest.mock('fs', () => {
   };
 });
 
-jest.mock('os', () => ({ ...jest.requireActual('os'), hostname: () => 'fv-az123-456' }));
+jest.unstable_mockModule('os', () => ({
+  ...jest.requireActual<Record<string, any>>('os'),
+  hostname: () => 'fv-az123-456'
+}));
 
-jest.mock('crypto', () => ({
-  ...jest.requireActual('crypto'),
+jest.unstable_mockModule('crypto', () => ({
+  ...jest.requireActual<Record<string, any>>('crypto'),
   randomBytes: (n: number) => Buffer.alloc(n, 0xab)
 }));
 
-jest.mock('net', () => ({
-  ...jest.requireActual('net'),
+jest.unstable_mockModule('net', () => ({
+  ...jest.requireActual<Record<string, any>>('net'),
   createServer: () => {
     const srv = {
       once: () => srv,
@@ -114,8 +93,8 @@ jest.mock('net', () => ({
   }
 }));
 
-jest.mock('dns', () => {
-  const actual = jest.requireActual('dns');
+jest.unstable_mockModule('dns', () => {
+  const actual = jest.requireActual<Record<string, any>>('dns');
   class Resolver {
     setServers(): void {
       // the resolver address is fixed (DNS_LISTEN)
@@ -136,6 +115,32 @@ jest.mock('dns', () => {
     }
   };
 });
+const { createHash } = await import('crypto');
+const constants = await import('./constants.js');
+const {
+  CA_BUNDLE,
+  CA_CERT_FILE,
+  COREDNS_BIN,
+  DNS_LOG,
+  FLOW_LOG,
+  MITMDUMP_BIN,
+  PROXY_CA_KEY_FILE,
+  SELFTEST_BOGUS_IP,
+  SELFTEST_HOST,
+  SUDO_LOG,
+  SYSTEM_CA_FILE,
+  VALIDATION_STATE_FILE
+} = await import('./constants.js');
+const { runSetup, SETUP_MARKER } = await import('./setup/run.js');
+const { readInputs } = await import('./config/inputs.js');
+const { classifySudoCommands } = await import('./services/sudo/log.js');
+const {
+  INTERNAL_SUDO_COMMANDS,
+  SUDO_LOGGING_RSYSLOG_FILE,
+  SUDO_LOGGING_SUDOERS_FILE,
+  getValidationSudoCommands,
+  ruleAllows
+} = await import('./services/sudo/index.js');
 
 // ------------------------------------------------------------------ the fake runner
 
@@ -611,8 +616,8 @@ async function setup(s: Scenario): Promise<FakeHost> {
 async function post(h: FakeHost): Promise<void> {
   h.transcript = [];
   h.log = [];
-  jest.isolateModules(() => {
-    require('./post');
+  await jest.isolateModulesAsync(async () => {
+    await import('./post.js');
   });
   for (let i = 0; i < 400 && !(h.summaryWritten && jest.getTimerCount() === 0); i++) {
     await jest.advanceTimersByTimeAsync(100);
@@ -1041,7 +1046,7 @@ const SCENARIOS: { s: Scenario; x: Omit<Expect, 'mode' | 'flavour'> }[] = [
 beforeAll(() => {
   jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
   jest.spyOn(Math, 'random').mockReturnValue(0.5);
-  global.fetch = jest.fn(async (url: string | URL | Request) => {
+  global.fetch = jest.fn<(...a: any[]) => any>(async (url: string | URL | Request) => {
     mockHost.record({ argv: ['<fetch>', String(url)] });
     return new Response(JSON.stringify(META), { status: 200, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
@@ -1214,8 +1219,8 @@ async function runStep(h: FakeHost, entry: './pre' | './main'): Promise<void> {
       .some(l =>
         /^(setFailed: |warning: safer-runner setup failed|info: ✅ safer-runner v2 (active|already active))/.test(l)
       );
-  jest.isolateModules(() => {
-    require(entry);
+  await jest.isolateModulesAsync(async () => {
+    await import(entry === './pre' ? './pre.js' : './main.js');
   });
   for (let i = 0; i < 2000 && !done(); i++) await jest.advanceTimersByTimeAsync(100);
   expect(done()).toBe(true);

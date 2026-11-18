@@ -1,11 +1,11 @@
 /** Per-container egress (P2): the container listener's flow records and the container firewall chain. */
 
-import { ipOf, type FlowRecord } from '../../flowlog';
-import { CONTAINER_PREFIXES, attempts, type FirewallEvent } from '../iptables/log';
-import { capped, code, plural, table } from '../../report/markdown';
-import type { BlockedRow, Details } from '../../report/section';
-import { DECISIONS, DENIED, MAX_LIST, addUnique, blockedName, nameOf } from '../mitmproxy/flows';
-import { destination, prefixWord } from '../iptables/report';
+import { ipOf, type FlowRecord } from '../../flowlog.js';
+import { CONTAINER_PREFIXES, attempts, type FirewallEvent } from '../iptables/log.js';
+import { capped, code, plural, table } from '../../report/markdown.js';
+import type { BlockedRow, Details } from '../../report/section.js';
+import { DECISIONS, DENIED, MAX_LIST, addUnique, blockedName, nameOf } from '../mitmproxy/flows.js';
+import { destination, prefixWord } from '../iptables/report.js';
 
 export interface ContainerSummary {
   /** container address (the proxy / firewall source) */

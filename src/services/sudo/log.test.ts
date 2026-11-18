@@ -6,7 +6,7 @@ import {
   setupEndIndex,
   sudoLogSeconds,
   type SudoCommand
-} from './log';
+} from './log.js';
 
 describe('Sudo Parser', () => {
   describe('parseSudoLogLine', () => {

@@ -1,7 +1,7 @@
 import * as path from 'path';
-import { parseSuggestion, suggestHttpFilter } from './suggest';
+import { parseSuggestion, suggestHttpFilter } from './suggest.js';
 
-const PROXY_DIR = path.join(__dirname, '..', '..', 'proxy');
+const PROXY_DIR = path.join(import.meta.dirname, '..', '..', 'proxy');
 const ok = {
   hosts: [{ host: 'github.com', rules: [{ path: 'myorg/app/git-receive-pack', methods: ['POST'] }] }],
   requests: 1,
@@ -30,7 +30,7 @@ describe('suggestHttpFilter', () => {
   it('throws when the suggester cannot run, without passing its output on', () => {
     const r = [{ host: 'pypi.org', method: 'GET', path: '/simple/' }];
     expect(() => suggestHttpFilter(r, PROXY_DIR, '/nonexistent/python3')).toThrow();
-    expect(() => suggestHttpFilter(r, path.join(__dirname, 'no-such-dir'))).toThrow(/^suggest\.py exited 1$/);
+    expect(() => suggestHttpFilter(r, path.join(import.meta.dirname, 'no-such-dir'))).toThrow(/^suggest\.py exited 1$/);
   });
 });
 

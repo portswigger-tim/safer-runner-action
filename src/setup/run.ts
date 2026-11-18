@@ -16,21 +16,21 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
-import { FLOW_LOG, DOCKER_DAEMON_JSON, SELFTEST_FILE, SUDO_LOG } from '../constants';
-import { flowLogSize } from '../flowlog';
-import * as iptables from '../services/iptables';
-import type { Inputs } from '../config/inputs';
-import { CONTAINER_TLS, buildPolicyConfig } from '../policy';
-import * as mitmproxy from '../services/mitmproxy';
-import { generateCa } from '../services/mitmproxy/ca';
-import { distributeTrust } from '../services/mitmproxy/trust';
-import { dnsProbeName, runSelfTests } from './selftest';
-import * as coredns from '../services/coredns';
-import { realHost, type Host } from '../system/host';
-import { resolveGitHubDomains } from '../config/github-domains';
-import * as sudo from '../services/sudo';
-import * as docker from '../services/docker';
-import { CRITICAL_FILES, captureBaseline } from '../integrity/baseline';
+import { FLOW_LOG, DOCKER_DAEMON_JSON, SELFTEST_FILE, SUDO_LOG } from '../constants.js';
+import { flowLogSize } from '../flowlog.js';
+import * as iptables from '../services/iptables/index.js';
+import type { Inputs } from '../config/inputs.js';
+import { CONTAINER_TLS, buildPolicyConfig } from '../policy.js';
+import * as mitmproxy from '../services/mitmproxy/index.js';
+import { generateCa } from '../services/mitmproxy/ca.js';
+import { distributeTrust } from '../services/mitmproxy/trust.js';
+import { dnsProbeName, runSelfTests } from './selftest.js';
+import * as coredns from '../services/coredns/index.js';
+import { realHost, type Host } from '../system/host.js';
+import { resolveGitHubDomains } from '../config/github-domains.js';
+import * as sudo from '../services/sudo/index.js';
+import * as docker from '../services/docker/index.js';
+import { CRITICAL_FILES, captureBaseline } from '../integrity/baseline.js';
 
 /** Root-owned marker written when setup completed; checked by main (pre may not have run). */
 export const SETUP_MARKER = '/etc/safer-runner/setup-complete';

@@ -1,5 +1,5 @@
-import type { ReportContext } from '../../report/section';
-import { report } from './report';
+import type { ReportContext } from '../../report/section.js';
+import { report } from './report.js';
 
 const ENFORCE: ReportContext = { mode: 'enforce', enforce: true };
 const ANALYZE: ReportContext = { mode: 'analyze', enforce: false };

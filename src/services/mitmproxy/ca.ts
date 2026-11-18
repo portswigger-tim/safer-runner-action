@@ -8,8 +8,8 @@
  */
 
 import * as path from 'path';
-import { CA_CERT_FILE, PROXY_CA_KEY_FILE, PROXY_CONF_DIR, PROXY_USER } from '../../constants';
-import { sudo, type Host } from '../../system/host';
+import { CA_CERT_FILE, PROXY_CA_KEY_FILE, PROXY_CONF_DIR, PROXY_USER } from '../../constants.js';
+import { sudo, type Host } from '../../system/host.js';
 
 declare const caReady: unique symbol;
 /** The CA exists: key + cert in the proxy's confdir, the public cert at CA_CERT_FILE. Minted only by generateCa(). */

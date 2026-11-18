@@ -15,10 +15,10 @@ import {
   patternsOverlap,
   validatePathPattern,
   validatePattern
-} from './policy';
-import { GITHUB_PLATFORM_ENDPOINTS } from './config/github-domains';
+} from './policy.js';
+import { GITHUB_PLATFORM_ENDPOINTS } from './config/github-domains.js';
 
-const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'proxy', 'test-vectors.json'), 'utf8'));
+const vectors = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'proxy', 'test-vectors.json'), 'utf8'));
 
 describe('pattern matching (shared vectors with proxy/policy_core.py)', () => {
   it.each(vectors.match as { pattern: string; host: string; expect: boolean }[])(
@@ -99,7 +99,7 @@ describe('buildPolicyConfig', () => {
           '-c',
           'import json, sys; sys.path.insert(0, sys.argv[1]); import policy_core as pc; ' +
             'c = json.load(sys.stdin); pc.validate_config(c); pc.selftest(pc.Policy.from_config(c))',
-          path.join(__dirname, '..', 'proxy')
+          path.join(import.meta.dirname, '..', 'proxy')
         ],
         { input: JSON.stringify(cfg), encoding: 'utf8' }
       );

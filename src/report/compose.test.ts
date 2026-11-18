@@ -1,11 +1,11 @@
 import { parse as parseYaml } from 'yaml';
-import type { FlowRecord } from '../flowlog';
-import { readInputs } from '../config/inputs';
-import { buildPolicyConfig, parseAllowedDomains, validatePattern } from '../policy';
-import { ruleText } from '../services/sudo/config';
-import { evaluateDocker } from '../services/docker/config';
-import { summarizeFlows } from '../services/mitmproxy/flows';
-import { summarizeHttpFilter, type HttpFilterSuggestion } from '../services/mitmproxy/http-filter';
+import type { FlowRecord } from '../flowlog.js';
+import { readInputs } from '../config/inputs.js';
+import { buildPolicyConfig, parseAllowedDomains, validatePattern } from '../policy.js';
+import { ruleText } from '../services/sudo/config.js';
+import { evaluateDocker } from '../services/docker/config.js';
+import { summarizeFlows } from '../services/mitmproxy/flows.js';
+import { summarizeHttpFilter, type HttpFilterSuggestion } from '../services/mitmproxy/http-filter.js';
 import {
   banner,
   buildReport,
@@ -14,7 +14,7 @@ import {
   safeRef,
   suggestedForLog,
   type ReportInput
-} from './compose';
+} from './compose.js';
 
 const tls = (sni: string, verdict: string, reason: string, client: string): FlowRecord => ({
   ts: 1,

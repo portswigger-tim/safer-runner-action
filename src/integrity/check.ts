@@ -5,9 +5,9 @@
  */
 
 import * as core from '@actions/core';
-import { VALIDATION_STATE_FILE } from '../constants';
-import type { Host } from '../system/host';
-import { IPTABLES_CHAINS, chainListing, fileChecksum, sha256, type ValidationState } from './baseline';
+import { VALIDATION_STATE_FILE } from '../constants.js';
+import type { Host } from '../system/host.js';
+import { IPTABLES_CHAINS, chainListing, fileChecksum, sha256, type ValidationState } from './baseline.js';
 
 export type IntegrityStatus = 'verified' | 'tampered' | 'unavailable';
 

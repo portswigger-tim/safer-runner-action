@@ -128,7 +128,14 @@ TypeScript uses the [upstream-supported side-by-side setup](https://github.com/k
 `typescript` aliases `@typescript/typescript6`, whose JavaScript compiler API `ts-jest` uses
 for transforms and diagnostics. `npx tsc6` runs that compatibility compiler for comparison.
 `tsconfig.json` checks production code with Node types; `tsconfig.test.json` includes tests
-and Jest globals. Both keep CommonJS/ES2022 output and use the modern `bundler` resolver.
+and Jest globals. Both emit ES2022 ES modules (`"type": "module"`) and use the `bundler` resolver; relative imports
+carry an explicit `.js` extension (ncc, webpack in ESM mode, cannot resolve extensionless ones). The
+bundles in `dist/` are ESM (ncc writes `dist/<entry>/package.json` with `"type": "module"`), as
+`@actions/core` and `@actions/exec` v3 are ESM-only. Jest runs in ESM mode (`NODE_OPTIONS=--experimental-vm-modules`,
+set by `npm test`; config in `jest.config.cjs`): test files `import { jest } from '@jest/globals'`,
+register mocks with `jest.unstable_mockModule` BEFORE a dynamic `await import()` of the code under test
+(`src/testing/automock.ts` stands in for `jest.mock('@actions/core')`), and use `jest.isolateModulesAsync`
+for the entry points that run on import.
 `npm run typecheck` checks both with TS7 so tests' compile-time guards are checked by the
 compiler that builds the action. For native editor tooling in VS Code, use Microsoft's
 [TypeScript 7 extension](https://marketplace.visualstudio.com/items?itemName=TypeScriptTeam.native-preview);

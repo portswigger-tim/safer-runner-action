@@ -20,10 +20,10 @@
  */
 
 import * as net from 'net';
-import { COREDNS_BIN, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from '../../constants';
-import { validatePattern, type Mode } from '../../policy';
-import type { Rendered } from '../../system/types';
-import { HARDENING } from '../../system/unit';
+import { COREDNS_BIN, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from '../../constants.js';
+import { validatePattern, type Mode } from '../../policy.js';
+import type { Rendered } from '../../system/types.js';
+import { HARDENING } from '../../system/unit.js';
 
 export const DNS_LISTEN = '127.0.0.1';
 /** Upper bound on positive-answer cache TTL (same as dnsmasq's max-cache-ttl before). */

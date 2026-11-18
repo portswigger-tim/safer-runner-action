@@ -1,12 +1,16 @@
-import * as core from '@actions/core';
+import { jest } from '@jest/globals';
+import { automock } from '../testing/automock.js';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { COREDNS_SHA256, COREDNS_SOURCES, COREDNS_URL } from '../constants';
-import { DOWNLOAD_ATTEMPTS, DOWNLOAD_TIMEOUT_MS, backoffMs, downloadVerified, type DownloadSource } from './install';
+import type { DownloadSource } from './install.js';
 
-jest.mock('@actions/core');
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+const core = await import('@actions/core');
+const { COREDNS_SHA256, COREDNS_SOURCES, COREDNS_URL } = await import('../constants.js');
+const { DOWNLOAD_ATTEMPTS, DOWNLOAD_TIMEOUT_MS, backoffMs, downloadVerified } = await import('./install.js');
 
 const BODY = Buffer.from('pinned tarball');
 const SHA = crypto.createHash('sha256').update(BODY).digest('hex');
@@ -24,7 +28,7 @@ function fetchReplies(byHost: Record<string, Reply[]>): {
 } {
   const requests: { host: string; headers: Record<string, string> }[] = [];
   const next: Record<string, number> = {};
-  global.fetch = jest.fn(async (url: string, init?: RequestInit): Promise<Response> => {
+  global.fetch = jest.fn<(...a: any[]) => any>(async (url: string, init?: RequestInit): Promise<Response> => {
     const host = new URL(url).host;
     requests.push({ host, headers: { ...(init?.headers as Record<string, string>) } });
     const r = byHost[host]?.[(next[host] = (next[host] ?? 0) + 1) - 1];

@@ -1,10 +1,15 @@
-import * as core from '@actions/core';
-import { FIREWALL_LOG } from '../../constants';
-import { recordingHost } from '../../system/testing';
-import type { ResolverOn } from '../coredns';
-import type { DockerPrepared } from '../docker';
-import type { TrustInstalled } from '../mitmproxy/trust';
-import {
+import { jest } from '@jest/globals';
+import { automock } from '../../testing/automock.js';
+import type { ResolverOn } from '../coredns/index.js';
+import type { DockerPrepared } from '../docker/index.js';
+import type { TrustInstalled } from '../mitmproxy/trust.js';
+
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+const core = await import('@actions/core');
+const { FIREWALL_LOG } = await import('../../constants.js');
+const { recordingHost } = await import('../../system/testing.js');
+const {
   LOGGING_RULE_FILE,
   LOG_PREFIXES,
   MISSING_DOCKER_USER_MESSAGE,
@@ -17,9 +22,7 @@ import {
   buildIp6FilterRules,
   buildNatRules,
   parseDockerSubnets
-} from '.';
-
-jest.mock('@actions/core');
+} = await import('./index.js');
 
 /** tokens for tests that call the step directly */
 const AFTER = {

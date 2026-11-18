@@ -1,5 +1,10 @@
 # v2 release notes
 
+## v2.5.4
+
+- **Updated to `@actions/core` and `@actions/exec` v3.** Both are ESM-only, so the action's code
+  and its `dist/` bundles are now ES modules. There is no change to inputs or behaviour.
+
 ## v2.5.3
 
 - **Removed an unused diagnostic.** The job log no longer reports which NIC carries the default

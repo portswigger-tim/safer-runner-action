@@ -9,12 +9,12 @@
 
 import * as core from '@actions/core';
 import * as net from 'net';
-import { GIT_HOSTS, expandPattern, gitPatternKey, validatePathPattern, validatePattern } from '../policy';
-import type { HttpFilterHost, Mode } from '../policy';
+import { GIT_HOSTS, expandPattern, gitPatternKey, validatePathPattern, validatePattern } from '../policy.js';
+import type { HttpFilterHost, Mode } from '../policy.js';
 import { isMap, isScalar, isSeq } from 'yaml';
 import type { Node, Pair, Scalar, YAMLMap } from 'yaml';
-import { strictYaml } from './yaml';
-import { parseSudoConfig, type SudoRule } from '../services/sudo/config';
+import { strictYaml } from './yaml.js';
+import { parseSudoConfig, type SudoRule } from '../services/sudo/config.js';
 
 /**
  * What happens to docker access. Docker group membership is root-equivalent (a step can use

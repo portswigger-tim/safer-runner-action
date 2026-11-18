@@ -1,21 +1,21 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
-import { SELFTEST_FILE, SUDO_LOG } from './constants';
-import { SETUP_MARKER } from './setup/run';
-import { compose, reportSections, suggestedForLog } from './report/compose';
-import { jobLog as proxyJobLog } from './services/mitmproxy/report';
-import { jobLog as sudoJobLog } from './services/sudo/report';
-import { jobLog as dockerJobLog } from './services/docker/report';
-import { observeProxy } from './services/mitmproxy/observe';
-import { observeFirewall } from './services/iptables/observe';
-import { observeDns } from './services/coredns/observe';
-import { observeSudoPolicy, type SudoMarker } from './services/sudo/observe';
-import { SETUP_FINAL_SUDO, readSudoUsage } from './services/sudo';
-import { observeContainers, observeDockerPolicy, type DockerMarker } from './services/docker/observe';
-import { type SelfTestWindow } from './setup/selftest';
-import { checkIntegrity, type IntegrityResult } from './integrity/check';
-import { realHost } from './system/host';
-import { effectiveFailOnTampering } from './config/inputs';
+import { SELFTEST_FILE, SUDO_LOG } from './constants.js';
+import { SETUP_MARKER } from './setup/run.js';
+import { compose, reportSections, suggestedForLog } from './report/compose.js';
+import { jobLog as proxyJobLog } from './services/mitmproxy/report.js';
+import { jobLog as sudoJobLog } from './services/sudo/report.js';
+import { jobLog as dockerJobLog } from './services/docker/report.js';
+import { observeProxy } from './services/mitmproxy/observe.js';
+import { observeFirewall } from './services/iptables/observe.js';
+import { observeDns } from './services/coredns/observe.js';
+import { observeSudoPolicy, type SudoMarker } from './services/sudo/observe.js';
+import { SETUP_FINAL_SUDO, readSudoUsage } from './services/sudo/index.js';
+import { observeContainers, observeDockerPolicy, type DockerMarker } from './services/docker/observe.js';
+import { type SelfTestWindow } from './setup/selftest.js';
+import { checkIntegrity, type IntegrityResult } from './integrity/check.js';
+import { realHost } from './system/host.js';
+import { effectiveFailOnTampering } from './config/inputs.js';
 
 interface SetupMarker extends SudoMarker, DockerMarker {
   dockerRetained?: boolean;

@@ -16,20 +16,24 @@
  */
 
 import { Document, Pair, Scalar, YAMLMap, YAMLSeq } from 'yaml';
-import type { Mode } from '../policy';
-import { report as proxyReport, type ProxySection } from '../services/mitmproxy/report';
-import type { HostSummary } from '../services/mitmproxy/flows';
-import type { HttpFilterReport } from '../services/mitmproxy/http-filter';
-import { report as dnsReport } from '../services/coredns/report';
-import { report as firewallReport } from '../services/iptables/report';
-import type { FirewallEvent } from '../services/iptables/log';
-import { report as sudoReport, type SudoPolicyReport } from '../services/sudo/report';
-import type { SudoUsage } from '../services/sudo/log';
-import { report as dockerReport, type DockerPolicyReport, type DockerReportObserved } from '../services/docker/report';
-import type { ContainerSummary } from '../services/docker/containers';
-import { setupChecks, type Checks, type IntegrityDetails, type SelfTest } from './checks';
-import { capped, code, codeBlock, humanBytes, table } from './markdown';
-import type { BlockedRow, CheckRow, Details, ReportContext, Section, Suggestion } from './section';
+import type { Mode } from '../policy.js';
+import { report as proxyReport, type ProxySection } from '../services/mitmproxy/report.js';
+import type { HostSummary } from '../services/mitmproxy/flows.js';
+import type { HttpFilterReport } from '../services/mitmproxy/http-filter.js';
+import { report as dnsReport } from '../services/coredns/report.js';
+import { report as firewallReport } from '../services/iptables/report.js';
+import type { FirewallEvent } from '../services/iptables/log.js';
+import { report as sudoReport, type SudoPolicyReport } from '../services/sudo/report.js';
+import type { SudoUsage } from '../services/sudo/log.js';
+import {
+  report as dockerReport,
+  type DockerPolicyReport,
+  type DockerReportObserved
+} from '../services/docker/report.js';
+import type { ContainerSummary } from '../services/docker/containers.js';
+import { setupChecks, type Checks, type IntegrityDetails, type SelfTest } from './checks.js';
+import { capped, code, codeBlock, humanBytes, table } from './markdown.js';
+import type { BlockedRow, CheckRow, Details, ReportContext, Section, Suggestion } from './section.js';
 
 export interface ReportInput {
   mode: Mode;

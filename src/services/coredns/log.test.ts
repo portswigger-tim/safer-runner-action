@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseDnsLog, readRefusedNames, refusedNames } from './log';
+import { parseDnsLog, readRefusedNames, refusedNames } from './log.js';
 
-const fixture = path.join(__dirname, '__fixtures__', 'coredns.log');
+const fixture = path.join(import.meta.dirname, '__fixtures__', 'coredns.log');
 
 describe('parseDnsLog (CoreDNS log plugin, self-labelled lines)', () => {
   const queries = parseDnsLog(fs.readFileSync(fixture, 'utf8'));

@@ -1,7 +1,7 @@
 /** Post step: the names the resolver refused, for its part of the summary. */
 
-import { DNS_LOG, SELFTEST_HOST } from '../../constants';
-import { readRefusedNames } from './log';
+import { DNS_LOG, SELFTEST_HOST } from '../../constants.js';
+import { readRefusedNames } from './log.js';
 
 /**
  * Refused names, less the ones the setup self-tests looked up (refused by design; not the job's

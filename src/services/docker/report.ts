@@ -5,13 +5,21 @@
  * container name, a label or the environment (free-form, and they can hold secrets).
  */
 
-import type { DockerEvaluation, DockerObserved, DockerUse } from './config';
-import { DOCKER_USES } from './config';
-import { containerBlocked, containerDetails, type ContainerSummary } from './containers';
-import { MAX_LIST } from '../mitmproxy/flows';
-import { REDACTED, looksEncoded } from '../../report/redact';
-import { code, plural, table } from '../../report/markdown';
-import type { Advisory, BlockedRow, CheckRow, Details, ReportContext, Section, Suggestion } from '../../report/section';
+import type { DockerEvaluation, DockerObserved, DockerUse } from './config.js';
+import { DOCKER_USES } from './config.js';
+import { containerBlocked, containerDetails, type ContainerSummary } from './containers.js';
+import { MAX_LIST } from '../mitmproxy/flows.js';
+import { REDACTED, looksEncoded } from '../../report/redact.js';
+import { code, plural, table } from '../../report/markdown.js';
+import type {
+  Advisory,
+  BlockedRow,
+  CheckRow,
+  Details,
+  ReportContext,
+  Section,
+  Suggestion
+} from '../../report/section.js';
 
 export interface DockerPolicyReport {
   /** the docker policy setup recorded (the input, or remove-group when unset) */

@@ -5,7 +5,7 @@
  */
 
 import type { ExecOptions } from '@actions/exec';
-import type { Host } from './host';
+import type { Host } from './host.js';
 
 export function recordingHost(
   exitCode: (line: string) => number = () => 0,

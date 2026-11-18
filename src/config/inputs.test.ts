@@ -1,5 +1,12 @@
-import * as core from '@actions/core';
-import {
+import { jest } from '@jest/globals';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { automock } from '../testing/automock.js';
+
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+const core = await import('@actions/core');
+const {
   DEFAULT_DNS_SERVERS,
   effectiveFailOnTampering,
   parseDnsServers,
@@ -9,9 +16,7 @@ import {
   resolveDisableSudo,
   resolveDocker,
   resolveFailOnTampering
-} from './inputs';
-
-jest.mock('@actions/core');
+} = await import('./inputs.js');
 
 describe('resolveDisableSudo (review H2: the policy removes sudo by default; the mode applies or evaluates it)', () => {
   it('defaults to removing sudo when disable-sudo is unset, in either mode', () => {
@@ -102,7 +107,7 @@ describe('parseDnsServers', () => {
 
 describe('readInputs', () => {
   const inputs = (values: Record<string, string>) =>
-    (core.getInput as jest.Mock).mockImplementation((name: string) => values[name] ?? '');
+    (core.getInput as jest.Mock<(...a: any[]) => any>).mockImplementation((name: string) => values[name] ?? '');
 
   it('enforce with nothing set: sudo removed, docker remove-group, fail-on-tampering on, Quad9', () => {
     inputs({ mode: 'enforce' });
@@ -140,7 +145,7 @@ describe('readInputs', () => {
 
 describe('readInputs: sudo-config', () => {
   const inputs = (values: Record<string, string>) =>
-    (core.getInput as jest.Mock).mockImplementation((name: string) => values[name] ?? '');
+    (core.getInput as jest.Mock<(...a: any[]) => any>).mockImplementation((name: string) => values[name] ?? '');
 
   it('is empty when unset', () => {
     inputs({ mode: 'enforce' });
@@ -396,9 +401,7 @@ describe('parseHttpFilter: strict YAML (fails closed)', () => {
 });
 
 describe('path pattern validation (shared vectors with proxy/policy_core.py)', () => {
-  const vectors = JSON.parse(
-    require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
-  );
+  const vectors = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'proxy', 'test-vectors.json'), 'utf8'));
   it.each(vectors.invalid_path_patterns as string[])('rejects %p', p => {
     expect(() => parseHttpFilter(JSON.stringify({ 'example.org': { [p]: 'GET' } }))).toThrow();
   });
@@ -409,7 +412,7 @@ describe('path pattern validation (shared vectors with proxy/policy_core.py)', (
 
 describe('readInputs: http-filter', () => {
   const inputs = (values: Record<string, string>) =>
-    (core.getInput as jest.Mock).mockImplementation((name: string) => values[name] ?? '');
+    (core.getInput as jest.Mock<(...a: any[]) => any>).mockImplementation((name: string) => values[name] ?? '');
 
   it('defaults: nothing filtered, platform endpoints on', () => {
     inputs({});

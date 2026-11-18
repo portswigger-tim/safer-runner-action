@@ -1,10 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { allowExpr, buildCorefile, parseHostsNames, patternsExpr } from './config';
-import { compilePattern, matchesAny, normHost } from '../../policy';
+import { allowExpr, buildCorefile, parseHostsNames, patternsExpr } from './config.js';
+import { compilePattern, matchesAny, normHost } from '../../policy.js';
 
 const vectors = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
+  fs.readFileSync(path.join(import.meta.dirname, '..', '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
 );
 
 /**

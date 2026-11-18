@@ -13,11 +13,11 @@ import {
   sudoConfigWarnings,
   sudoRuleWarning,
   type SudoRule
-} from './config';
+} from './config.js';
 
 /** proxy/test-vectors.json "sudo": also run by proxy/sudo_suggest_test.py */
 const VECTORS = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
+  fs.readFileSync(path.join(import.meta.dirname, '..', '..', '..', 'proxy', 'test-vectors.json'), 'utf8')
 ).sudo as {
   valid: { line: string; path: string; args: string[]; anyRest: boolean }[];
   invalid: string[];

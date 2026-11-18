@@ -4,7 +4,7 @@
  * widening it into a shared namespace.
  */
 
-import { GITHUB_ACTIONS_DOMAINS } from './github-domains.generated';
+import { GITHUB_ACTIONS_DOMAINS } from './github-domains.generated.js';
 
 /**
  * Hosts the runner needs that api.github.com/meta .domains.actions does not list. Hand-curated

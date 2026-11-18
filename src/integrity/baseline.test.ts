@@ -1,17 +1,16 @@
+import { jest } from '@jest/globals';
+import { automock } from '../testing/automock.js';
 import * as crypto from 'crypto';
-import { VALIDATION_STATE_FILE } from '../constants';
-import { INTERNAL_SUDO_COMMANDS, type SudoLogging } from '../services/sudo';
-import type { Host } from '../system/host';
-import {
-  BASELINE_WRITE_COMMANDS,
-  CRITICAL_FILES,
-  IPTABLES_CHAINS,
-  captureBaseline,
-  iptablesListArgs
-} from './baseline';
-import { checkIntegrity, compare, parseBaseline, renderDetails } from './check';
+import type { SudoLogging } from '../services/sudo/index.js';
+import type { Host } from '../system/host.js';
 
-jest.mock('@actions/core');
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+const { VALIDATION_STATE_FILE } = await import('../constants.js');
+const { INTERNAL_SUDO_COMMANDS } = await import('../services/sudo/index.js');
+const { BASELINE_WRITE_COMMANDS, CRITICAL_FILES, IPTABLES_CHAINS, captureBaseline, iptablesListArgs } =
+  await import('./baseline.js');
+const { checkIntegrity, compare, parseBaseline, renderDetails } = await import('./check.js');
 
 /** sudo logging's token (a test stands in for setupSudoLogging) */
 const LOGGING = Object.freeze({}) as SudoLogging;

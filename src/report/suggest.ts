@@ -10,12 +10,12 @@
 
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
-import type { AllowedRequest } from '../services/mitmproxy/flows';
-import type { HttpFilterSuggestion } from '../services/mitmproxy/http-filter';
-import type { SudoConfigSuggestion } from '../services/sudo/report';
-import { parseSudoLine } from '../services/sudo/config';
-import type { SudoCommand } from '../services/sudo/log';
-import { STANDARD_METHODS } from './redact';
+import type { AllowedRequest } from '../services/mitmproxy/flows.js';
+import type { HttpFilterSuggestion } from '../services/mitmproxy/http-filter.js';
+import type { SudoConfigSuggestion } from '../services/sudo/report.js';
+import { parseSudoLine } from '../services/sudo/config.js';
+import type { SudoCommand } from '../services/sudo/log.js';
+import { STANDARD_METHODS } from './redact.js';
 
 /** The system interpreter when there is one: a job's own PATH (setup-python, GITHUB_PATH) can't swap it. */
 export function defaultPython(): string {

@@ -1,18 +1,27 @@
-import * as core from '@actions/core';
-import * as fs from 'fs';
-import { CA_BUNDLE, CA_CERT_FILE, SYSTEM_CA_FILE } from '../../constants';
-import { recordingHost } from '../../system/testing';
-import type { ProxyReady } from '.';
-import { cacertsPath, distributeTrust, javaHomes, trustEnv } from './trust';
+import { jest } from '@jest/globals';
+import { automock } from '../../testing/automock.js';
+import type { ProxyReady } from './index.js';
 
-jest.mock('@actions/core');
-jest.mock('fs', () => {
-  const actual = jest.requireActual('fs');
-  return { ...actual, existsSync: jest.fn(), readFileSync: jest.fn(), realpathSync: jest.fn() };
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+jest.unstable_mockModule('fs', () => {
+  const actual = jest.requireActual<Record<string, any>>('fs');
+  return {
+    ...actual,
+    existsSync: jest.fn<(...a: any[]) => any>(),
+    readFileSync: jest.fn<(...a: any[]) => any>(),
+    realpathSync: jest.fn<(...a: any[]) => any>()
+  };
 });
-const mockExists = fs.existsSync as unknown as jest.Mock;
-const mockRead = fs.readFileSync as unknown as jest.Mock;
-const mockRealpath = fs.realpathSync as unknown as jest.Mock;
+const core = await import('@actions/core');
+const fs = await import('fs');
+const { CA_BUNDLE, CA_CERT_FILE, SYSTEM_CA_FILE } = await import('../../constants.js');
+const { recordingHost } = await import('../../system/testing.js');
+const { cacertsPath, distributeTrust, javaHomes, trustEnv } = await import('./trust.js');
+
+const mockExists = fs.existsSync as unknown as jest.Mock<(...a: any[]) => any>;
+const mockRead = fs.readFileSync as unknown as jest.Mock<(...a: any[]) => any>;
+const mockRealpath = fs.realpathSync as unknown as jest.Mock<(...a: any[]) => any>;
 
 const CERT = '-----BEGIN CERTIFICATE-----\nAAA1\nAAA2\nAAA3\n-----END CERTIFICATE-----\n';
 const PROXY = Object.freeze({}) as ProxyReady;
@@ -61,7 +70,7 @@ describe('distributeTrust', () => {
       `sudo ${JDK21}/bin/keytool -delete -noprompt -keystore ${JDK21}/lib/security/cacerts -storepass changeit -alias safer-runner-ca [ignore-rc] [silent]`,
       `sudo ${JDK21}/bin/keytool -importcert -noprompt -keystore ${JDK21}/lib/security/cacerts -storepass changeit -alias safer-runner-ca -file ${CA_CERT_FILE} [ignore-rc] [silent]`
     ]);
-    expect((core.exportVariable as jest.Mock).mock.calls).toEqual(Object.entries(trustEnv()));
+    expect((core.exportVariable as jest.Mock<(...a: any[]) => any>).mock.calls).toEqual(Object.entries(trustEnv()));
   });
 
   it('fails when update-ca-certificates did not add the CA (nothing exported, no JDK touched)', async () => {

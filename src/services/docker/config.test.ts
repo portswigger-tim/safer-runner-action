@@ -1,8 +1,14 @@
 /** The docker policy evaluation (analyze): pure, no runner. */
 
-import type { DockerPolicy } from '../../config/inputs';
-import { parseDockerEvents } from './log';
-import { classifyDockerEvents, evaluateDocker, healthcheckCommands, planDocker, type DockerObserved } from './config';
+import type { DockerPolicy } from '../../config/inputs.js';
+import { parseDockerEvents } from './log.js';
+import {
+  classifyDockerEvents,
+  evaluateDocker,
+  healthcheckCommands,
+  planDocker,
+  type DockerObserved
+} from './config.js';
 
 /** one line as `docker events --format '{{json .}}'` writes it */
 const ev = (Type: string, Action: string, ID: string, Attributes: Record<string, string> = {}) =>

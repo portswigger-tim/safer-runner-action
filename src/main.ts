@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
-import { readInputs } from './config/inputs';
-import { runSetup, setupCompleted } from './setup/run';
+import { readInputs } from './config/inputs.js';
+import { runSetup, setupCompleted } from './setup/run.js';
 
 /**
  * Main step: normally a no-op because the pre step already applied everything. If pre did

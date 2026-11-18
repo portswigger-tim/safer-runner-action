@@ -2,8 +2,8 @@
  * Writes the paths a service renders (FileSpec), as root, in the order given.
  */
 
-import { realHost, sudo, type Host } from './host';
-import type { FileSpec, Owner } from './types';
+import { realHost, sudo, type Host } from './host.js';
+import type { FileSpec, Owner } from './types.js';
 
 /**
  * Content goes in before owner and mode are set, so a file written here is briefly readable as

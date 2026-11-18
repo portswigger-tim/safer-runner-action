@@ -1,15 +1,15 @@
 /** Post step: the containers' egress and (analyze) the job's use of docker, for docker's part of the summary. */
 
 import * as core from '@actions/core';
-import type { DockerPolicy } from '../../config/inputs';
-import type { FlowRecord } from '../../flowlog';
-import type { Mode } from '../../policy';
-import { realHost } from '../../system/host';
-import type { FirewallEvent } from '../iptables/log';
-import { evaluateDocker } from './config';
-import { summarizeContainers, type ContainerSummary } from './containers';
-import { containerAddresses, observeDocker, type DockerEventsStart } from './index';
-import type { DockerPolicyReport } from './report';
+import type { DockerPolicy } from '../../config/inputs.js';
+import type { FlowRecord } from '../../flowlog.js';
+import type { Mode } from '../../policy.js';
+import { realHost } from '../../system/host.js';
+import type { FirewallEvent } from '../iptables/log.js';
+import { evaluateDocker } from './config.js';
+import { summarizeContainers, type ContainerSummary } from './containers.js';
+import { containerAddresses, observeDocker, type DockerEventsStart } from './index.js';
+import type { DockerPolicyReport } from './report.js';
 
 /** What the setup marker recorded about docker. */
 export interface DockerMarker {

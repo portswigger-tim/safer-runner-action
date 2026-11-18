@@ -4,8 +4,8 @@
  * otherwise, sandboxed.
  */
 
-import { sleep, sudo, type Host } from './host';
-import type { UnitSpec } from './types';
+import { sleep, sudo, type Host } from './host.js';
+import type { UnitSpec } from './types.js';
 
 /** Sandboxing every unit gets; a service puts it among its own props. */
 export const HARDENING = ['NoNewPrivileges=yes', 'PrivateTmp=yes', 'ProtectHome=yes', 'ProtectSystem=strict'];

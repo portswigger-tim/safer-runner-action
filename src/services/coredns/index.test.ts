@@ -1,11 +1,10 @@
-import { COREDNS_BIN, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } from '../../constants';
-import { recordingHost } from '../../system/testing';
-import { transientUnitArgs } from '../../system/unit';
-import * as coredns from '.';
+import { jest } from '@jest/globals';
+import { automock } from '../../testing/automock.js';
 
-jest.mock('@actions/core');
-jest.mock('dns', () => {
-  const actual = jest.requireActual('dns');
+const realCore = await import('@actions/core');
+jest.unstable_mockModule('@actions/core', () => automock(realCore));
+jest.unstable_mockModule('dns', () => {
+  const actual = jest.requireActual<Record<string, any>>('dns');
   class Resolver {
     setServers(): void {}
     resolve4(): Promise<string[]> {
@@ -14,7 +13,12 @@ jest.mock('dns', () => {
   }
   return { ...actual, promises: { ...actual.promises, Resolver } };
 });
-const mockResolve = jest.fn();
+const { COREDNS_BIN, COREFILE, DNS_LOG, DNS_UNIT, ETC_DIR } = await import('../../constants.js');
+const { recordingHost } = await import('../../system/testing.js');
+const { transientUnitArgs } = await import('../../system/unit.js');
+const coredns = await import('./index.js');
+
+const mockResolve = jest.fn<(...a: any[]) => any>();
 
 const FACTS = {
   mode: 'enforce' as const,

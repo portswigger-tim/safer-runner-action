@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const SRC = path.join(__dirname, '..');
+const SRC = path.join(import.meta.dirname, '..');
 
 /** token -> the file that declares and mints it, and the orchestration invariants that check its order */
 const TOKENS: Record<string, { owner: string; invariants: string[] }> = {

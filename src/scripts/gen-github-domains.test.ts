@@ -1,6 +1,6 @@
 import * as fs from 'fs';
-import { GENERATED_FILE, generatedDomains, renderGeneratedFile } from './gen-github-domains';
-import { GITHUB_ACTIONS_DOMAINS } from '../config/github-domains.generated';
+import { GENERATED_FILE, generatedDomains, renderGeneratedFile } from './gen-github-domains.js';
+import { GITHUB_ACTIONS_DOMAINS } from '../config/github-domains.generated.js';
 
 describe('gen:domains', () => {
   it('is verbatim: only non-strings and duplicates are dropped (the runtime does the checks)', () => {

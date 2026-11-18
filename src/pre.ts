@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
-import { parseMode, readInputs } from './config/inputs';
-import { runSetup, setupCompleted } from './setup/run';
+import { parseMode, readInputs } from './config/inputs.js';
+import { runSetup, setupCompleted } from './setup/run.js';
 
 /**
  * Pre step: apply the full policy (not just monitoring) before any other step - including
