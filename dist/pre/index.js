@@ -2733,7 +2733,6 @@ exports.buildIp6FilterRules = buildIp6FilterRules;
 exports.buildContainerNatRules = buildContainerNatRules;
 exports.buildContainerForwardRules = buildContainerForwardRules;
 exports.buildIp6ContainerForwardRules = buildIp6ContainerForwardRules;
-exports.parseDefaultRouteInterfaces = parseDefaultRouteInterfaces;
 exports.parseDockerSubnets = parseDockerSubnets;
 exports.loggingRule = loggingRule;
 const constants_1 = __nccwpck_require__(8729);
@@ -2910,16 +2909,6 @@ function buildIp6ContainerForwardRules(o, hook = constants_1.DOCKER_USER_CHAIN) 
         ''
     ].join('\n');
 }
-/** Parse `ip -4 route show default` output into the interface names carrying the default route. */
-function parseDefaultRouteInterfaces(output) {
-    const out = [];
-    for (const line of output.split('\n')) {
-        const m = line.match(/^default\b.*\bdev\s+(\S+)/);
-        if (m)
-            out.push(m[1]);
-    }
-    return Array.from(new Set(out));
-}
 /** Parse `docker network inspect` JSON into the IPv4/IPv6 subnets of the local bridges. */
 function parseDockerSubnets(json) {
     const out = [];
@@ -3020,28 +3009,6 @@ async function setupLogging(h) {
     await (0, host_1.sudo)(['chown', 'syslog:adm', constants_1.FIREWALL_LOG], {}, h);
     await (0, host_1.sudo)(['chmod', '644', constants_1.FIREWALL_LOG], {}, h);
     await (0, host_1.sudo)(['systemctl', 'restart', 'rsyslog'], {}, h);
-}
-/**
- * Report where egress actually goes. Our rules are interface-agnostic so they fail closed
- * whatever the NIC is called; this is a loud diagnostic for the unexpected cases.
- */
-async function detectEgressInterface(h) {
-    const { stdout } = await h.output('ip', ['-4', 'route', 'show', 'default'], {
-        silent: true,
-        ignoreReturnCode: true
-    });
-    const ifaces = (0, config_1.parseDefaultRouteInterfaces)(stdout);
-    if (ifaces.length === 0) {
-        core.warning('No IPv4 default route found - egress rules are interface-agnostic and still apply.');
-    }
-    else if (ifaces.length > 1 || ifaces[0] !== 'eth0') {
-        core.warning(`Default route via ${ifaces.join(', ')} (expected eth0). Egress rules are interface-agnostic ` +
-            '(allow loopback + proxy path, reject the rest), so they still fail closed.');
-    }
-    else {
-        core.info('Default route via eth0');
-    }
-    return ifaces;
 }
 /** Remove our chains and jumps if present (idempotency for a re-run in the main step). */
 async function removeFirewall(h) {
@@ -3192,7 +3159,6 @@ async function logFirewall(h) {
  */
 async function configure(h, o, _after) {
     await setupLogging(h);
-    await detectEgressInterface(h);
     const { containerRules } = await applyFirewall(h, o);
     await killPreexistingConnections(h);
     if (containerRules)

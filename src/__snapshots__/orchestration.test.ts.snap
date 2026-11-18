@@ -357,7 +357,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -778,7 +777,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -1185,7 +1183,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -1591,7 +1588,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -2016,7 +2012,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -2468,7 +2463,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -2917,7 +2911,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -3364,7 +3357,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -3827,7 +3819,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -4240,7 +4231,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -F SAFER_RUNNER_NAT [ignore-rc] [silent]
 $ sudo iptables -t nat -X SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -4688,7 +4678,6 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo ip6tables -t filter -n -L DOCKER-USER [ignore-rc] [silent]
 $ sudo iptables -t nat -D OUTPUT -j SAFER_RUNNER_NAT [ignore-rc] [silent]
@@ -4850,6 +4839,5 @@ $ sudo touch /var/log/safer-runner/firewall.log
 $ sudo chown syslog:adm /var/log/safer-runner/firewall.log
 $ sudo chmod 644 /var/log/safer-runner/firewall.log
 $ sudo systemctl restart rsyslog
-$ ip -4 route show default [ignore-rc] [silent]
 $ sudo iptables -t filter -n -L DOCKER-USER [ignore-rc] [silent]"
 `;

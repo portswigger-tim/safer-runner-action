@@ -398,8 +398,6 @@ class FakeHost {
           return { code: 2, stderr: 'ip6tables-restore: line 3 failed' };
         this.iptablesGeneration++;
         return ok();
-      case 'ip':
-        return ok('default via 10.1.0.1 dev eth0 proto dhcp src 10.1.0.4 metric 100\n');
       case 'docker':
         return this.dockerCli(a, root);
       case 'conntrack':
